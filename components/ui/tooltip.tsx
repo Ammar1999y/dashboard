@@ -23,7 +23,7 @@ const TouchContext = createContext<{
 });
 const useOpen = () => useContext(TouchContext);
 
-export const TouchProvider = (props: PropsWithChildren) => {
+const TouchProvider = (props: PropsWithChildren) => {
   const [isOpen, setOpen] = useState<boolean>(false);
   const [canClose, setCanClose] = useState<boolean>(true);
   React.useEffect(() => {

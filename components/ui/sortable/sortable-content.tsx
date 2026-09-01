@@ -17,7 +17,7 @@ interface SortableContentProps extends React.ComponentProps<'div'> {
   withoutSlot?: boolean;
 }
 
-function SortableContent(props: SortableContentProps) {
+export function SortableContent(props: SortableContentProps) {
   const {
     strategy: strategyProp,
     asChild,
@@ -55,6 +55,3 @@ function SortableContent(props: SortableContentProps) {
     </SortableContentContext.Provider>
   );
 }
-
-export { SortableContent };
-export type { SortableContentProps };

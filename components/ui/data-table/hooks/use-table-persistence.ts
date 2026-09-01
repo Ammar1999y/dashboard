@@ -163,4 +163,4 @@ const useTablePersistence = (
   }, [debouncedSave]);
 };
 
-export { useTablePersistence, createStorageKey };
+export { useTablePersistence };

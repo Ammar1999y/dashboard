@@ -147,7 +147,6 @@ export {
   useColumnOrder,
   useGlobalFilter,
   useColumnFilters,
-  useReRender,
   useUpdateRows,
   useTableData,
   cleaner,

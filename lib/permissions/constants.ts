@@ -51,7 +51,7 @@ export type DashboardPage = keyof typeof DASHBOARD_PAGES;
 export type PermissionAction = keyof typeof PERMISSION_ACTIONS;
 export type DashboardPageValues =
   (typeof DASHBOARD_PAGES)[keyof typeof DASHBOARD_PAGES];
-export type PermissionObject = Record<
+type PermissionObject = Record<
   DashboardPage,
   Record<PermissionAction, boolean>
 >;
@@ -66,7 +66,7 @@ export const OWN_ACTION_MAP = {
   delete: 'deleteOwn',
 } as const satisfies Partial<Record<PermissionAction, PermissionAction>>;
 
-export type AllScopedAction = keyof typeof OWN_ACTION_MAP;
+type AllScopedAction = keyof typeof OWN_ACTION_MAP;
 export type OwnScopedAction = (typeof OWN_ACTION_MAP)[AllScopedAction];
 
 /**

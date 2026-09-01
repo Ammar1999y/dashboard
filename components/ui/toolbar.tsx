@@ -33,7 +33,7 @@ export function Toolbar({
   );
 }
 
-export function ToolbarToggleGroup({
+function ToolbarToggleGroup({
   className,
   ...props
 }: React.ComponentProps<typeof ToolbarPrimitive.ToolbarToggleGroup>) {
@@ -252,7 +252,7 @@ export function ToolbarSplitButtonSecondary({
   );
 }
 
-export function ToolbarToggleItem({
+function ToolbarToggleItem({
   className,
   size = 'sm',
   variant,
@@ -366,5 +366,3 @@ export function ToolbarMenuGroup({
     </>
   );
 }
-
-export { TooltipContent } from '@/components/ui/tooltip';

@@ -5,7 +5,7 @@ import imageCompression from 'browser-image-compression';
 
 import { MAX_IMAGE_SIZE } from './config';
 
-export enum ImageFormat {
+enum ImageFormat {
   WEBP = 'image/webp',
   PNG = 'image/png',
 }
@@ -151,5 +151,3 @@ export class ImageCompressionService {
     }
   }
 }
-
-export default ImageCompressionService;

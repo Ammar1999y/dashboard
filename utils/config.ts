@@ -7,7 +7,19 @@
  * (server) and client bundles without circular-dependency risk.
  */
 
-export type PhoneNumberMode = 'required' | 'optional' | 'disabled';
+/**
+ * Authoritative calendar timezone for date filtering and reporting.
+ *
+ * A "created on 2 Aug" filter has to mean the same rows for every viewer and
+ * for the server, so calendar boundaries are resolved in ONE declared zone
+ * rather than in whatever zone the browser or the host happens to run in.
+ * Without this the client sent local midnight and the server re-derived
+ * start/end-of-day in its own zone, shifting the selected day by the offset
+ * between them.
+ */
+export const BUSINESS_TIMEZONE = 'Asia/Riyadh';
+
+type PhoneNumberMode = 'required' | 'optional' | 'disabled';
 
 /**
  * Controls the role of the phone number across the whole app:
@@ -23,7 +35,7 @@ export type PhoneNumberMode = 'required' | 'optional' | 'disabled';
  * gates the `chk_phone_required` / `chk_phone_verified_requires_phone` CHECK
  * constraints and the `phone_number` nullability on the users table.
  */
-export const PHONE_NUMBER_MODE = 'optional' as PhoneNumberMode;
+const PHONE_NUMBER_MODE = 'optional' as PhoneNumberMode;
 
 /** Phone participates in the app at all (present in some form). */
 export const PHONE_ENABLED = PHONE_NUMBER_MODE !== 'disabled';

@@ -5,7 +5,7 @@ import { createPlatePlugin } from 'platejs/react';
 
 // Custom plugin for text direction (dir) attribute on block elements
 // Uses inject.nodeProps to apply direction style based on 'dir' property
-export const DirPlugin = createPlatePlugin({
+const DirPlugin = createPlatePlugin({
   key: 'dir',
   inject: {
     nodeProps: {

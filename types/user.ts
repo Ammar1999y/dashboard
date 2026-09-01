@@ -1,13 +1,14 @@
-import { RoleScopes } from '@/db/schema';
+import type { RoleScope } from '@/lib/permissions/constants';
+
+import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
 
 import { EntityID } from '.';
 import { PagePermission } from './permission';
-import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
 
-export interface UserRole {
+interface UserRole {
   id: EntityID;
   roleName: string;
-  scope?: RoleScopes;
+  scope?: RoleScope;
 }
 
 export interface UserClient {

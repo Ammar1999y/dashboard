@@ -9,12 +9,12 @@ interface HslColor {
   alpha?: number;
 }
 
-export const formatNumber = (num?: number) => {
+const formatNumber = (num?: number) => {
   if (!num) return '0';
   return num % 1 === 0 ? num : num.toFixed(4);
 };
 
-export const formatHsl = (hsl: HslColor, includeAlpha: boolean = true) => {
+const formatHsl = (hsl: HslColor, includeAlpha: boolean = true) => {
   const h = formatNumber(hsl.h);
   const s = formatNumber(hsl.s * 100);
   const l = formatNumber(hsl.l * 100);

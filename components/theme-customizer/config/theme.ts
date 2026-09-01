@@ -74,7 +74,7 @@ export const defaultLightThemeStyles = {
 };
 
 // Default dark theme styles
-export const defaultDarkThemeStyles = {
+const defaultDarkThemeStyles = {
   ...defaultLightThemeStyles,
 
   background: '0 0% 4%',

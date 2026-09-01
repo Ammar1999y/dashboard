@@ -148,6 +148,6 @@ export const EditorKit = [
   ...FloatingToolbarKit,
 ];
 
-export type MyEditor = TPlateEditor<Value, (typeof EditorKit)[number]>;
+type MyEditor = TPlateEditor<Value, (typeof EditorKit)[number]>;
 
 export const useEditor = () => useEditorRef<MyEditor>();

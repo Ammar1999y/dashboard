@@ -148,7 +148,7 @@ const itemLinkSchema = z.preprocess(
     .max(ITEM_LINK_MAX, `الرابط يجب أن لا يتجاوز ${ITEM_LINK_MAX} حرفاً`)
 );
 
-export const keySchema = z.preprocess(
+const keySchema = z.preprocess(
   slugPreprocess,
   z
     .string()

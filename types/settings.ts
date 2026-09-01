@@ -82,16 +82,8 @@ interface Setting {
   media: string;
 }
 
-interface APISettingResponse {
+export interface APISettingResponse {
   data: Setting[];
 }
 
-export type {
-  SettingsClient,
-  SettingsFonts,
-  SocialAccountItem,
-  ContactInfoItem,
-  NavLinkItem,
-  Setting,
-  APISettingResponse,
-};
+export type { SettingsClient, SocialAccountItem, ContactInfoItem, NavLinkItem };

@@ -48,11 +48,11 @@ const ComboboxContext = React.createContext<ComboboxContextProps>({
   required: false,
 });
 
-export const useComboboxContext = () => React.useContext(ComboboxContext);
+const useComboboxContext = () => React.useContext(ComboboxContext);
 
-export type ComboboxType = 'single' | 'multiple';
+type ComboboxType = 'single' | 'multiple';
 
-export interface ComboboxBaseProps
+interface ComboboxBaseProps
   extends
     React.ComponentProps<typeof PopoverPrimitive.Root>,
     Omit<
@@ -71,27 +71,30 @@ export interface ComboboxBaseProps
   required?: boolean;
 }
 
-export type ComboboxValue<T extends ComboboxType = 'single'> =
-  T extends 'single' ? string : T extends 'multiple' ? string[] : never;
+type ComboboxValue<T extends ComboboxType = 'single'> = T extends 'single'
+  ? string
+  : T extends 'multiple'
+    ? string[]
+    : never;
 
-export interface ComboboxSingleProps {
+interface ComboboxSingleProps {
   type: 'single';
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
 }
 
-export interface ComboboxMultipleProps {
+interface ComboboxMultipleProps {
   type: 'multiple';
   value?: string[];
   defaultValue?: string[];
   onValueChange?: (value: string[]) => void;
 }
 
-export type ComboboxProps = ComboboxBaseProps &
+type ComboboxProps = ComboboxBaseProps &
   (ComboboxSingleProps | ComboboxMultipleProps);
 
-export const Combobox = React.forwardRef(
+const Combobox = React.forwardRef(
   <T extends ComboboxType = 'single'>(
     {
       type = 'single' as T,
@@ -311,7 +314,7 @@ export const ComboboxTagGroupItemRemove = React.forwardRef<
 });
 ComboboxTagGroupItemRemove.displayName = 'ComboboxTagGroupItemRemove';
 
-export const ComboboxInput = React.forwardRef<
+const ComboboxInput = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Input>,
   Omit<
     React.ComponentProps<typeof CommandPrimitive.Input>,
@@ -384,7 +387,7 @@ export const ComboboxInput = React.forwardRef<
 });
 ComboboxInput.displayName = 'ComboboxInput';
 
-export const ComboboxClear = React.forwardRef<
+const ComboboxClear = React.forwardRef<
   React.ElementRef<typeof Primitive.button>,
   React.ComponentPropsWithoutRef<typeof Primitive.button>
 >(({ onClick, ...props }, ref) => {
@@ -411,13 +414,13 @@ export const ComboboxClear = React.forwardRef<
 });
 ComboboxClear.displayName = 'ComboboxClear';
 
-export const ComboboxTrigger = PopoverPrimitive.Trigger;
+const ComboboxTrigger = PopoverPrimitive.Trigger;
 
-export const ComboboxAnchor = PopoverPrimitive.Anchor;
+const ComboboxAnchor = PopoverPrimitive.Anchor;
 
-export const ComboboxPortal = PopoverPrimitive.Portal;
+const ComboboxPortal = PopoverPrimitive.Portal;
 
-export const ComboboxContent = React.forwardRef<
+const ComboboxContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(({ children, onOpenAutoFocus, onInteractOutside, ...props }, ref) => (
@@ -445,11 +448,11 @@ export const ComboboxContent = React.forwardRef<
 ));
 ComboboxContent.displayName = 'ComboboxContent';
 
-export const ComboboxEmpty = CommandPrimitive.Empty;
+const ComboboxEmpty = CommandPrimitive.Empty;
 
-export const ComboboxLoading = CommandPrimitive.Loading;
+const ComboboxLoading = CommandPrimitive.Loading;
 
-export interface ComboboxItemProps extends Omit<
+interface ComboboxItemProps extends Omit<
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>,
   'value'
 > {
@@ -479,7 +482,7 @@ const findComboboxItemText = (children: React.ReactNode) => {
   return text;
 };
 
-export const ComboboxItem = React.forwardRef<
+const ComboboxItem = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Item>,
   ComboboxItemProps
 >(({ value: valueProp, children, onMouseDown, ...props }, ref) => {
@@ -526,7 +529,7 @@ export const ComboboxItem = React.forwardRef<
 });
 ComboboxItem.displayName = 'ComboboxItem';
 
-export const ComboboxItemIndicator = React.forwardRef<
+const ComboboxItemIndicator = React.forwardRef<
   React.ElementRef<typeof Primitive.span>,
   React.ComponentPropsWithoutRef<typeof Primitive.span>
 >((props, ref) => {
@@ -540,27 +543,27 @@ export const ComboboxItemIndicator = React.forwardRef<
 });
 ComboboxItemIndicator.displayName = 'ComboboxItemIndicator';
 
-export interface ComboboxItemTextProps extends React.ComponentPropsWithoutRef<
+interface ComboboxItemTextProps extends React.ComponentPropsWithoutRef<
   typeof React.Fragment
 > {
   children: string;
 }
 
-export const ComboboxItemText = (props: ComboboxItemTextProps) => (
+const ComboboxItemText = (props: ComboboxItemTextProps) => (
   <React.Fragment {...props} />
 );
 ComboboxItemText.displayName = 'ComboboxItemText';
 
-export const ComboboxGroup = CommandPrimitive.Group;
+const ComboboxGroup = CommandPrimitive.Group;
 
-export const ComboboxSeparator = CommandPrimitive.Separator;
+const ComboboxSeparator = CommandPrimitive.Separator;
 
 const Root = Combobox;
-const TagGroup = ComboboxTagGroup;
-const TagGroupItem = ComboboxTagGroupItem;
-const TagGroupItemRemove = ComboboxTagGroupItemRemove;
+export const TagGroup = ComboboxTagGroup;
+export const TagGroupItem = ComboboxTagGroupItem;
+export const TagGroupItemRemove = ComboboxTagGroupItemRemove;
 const Input = ComboboxInput;
-const Clear = ComboboxClear;
+export const Clear = ComboboxClear;
 const Trigger = ComboboxTrigger;
 const Anchor = ComboboxAnchor;
 const Portal = ComboboxPortal;
@@ -575,11 +578,7 @@ const Separator = ComboboxSeparator;
 
 export {
   Root,
-  TagGroup,
-  TagGroupItem,
-  TagGroupItemRemove,
   Input,
-  Clear,
   Trigger,
   Anchor,
   Portal,

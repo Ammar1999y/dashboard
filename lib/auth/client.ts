@@ -1,3 +1,16 @@
+import { createAuthClient } from 'better-auth/react';
+
+import { API_URL } from '@/lib/env';
+
+export const authClient = createAuthClient({
+  baseURL: API_URL,
+  fetchOptions: {
+    credentials: 'include',
+  },
+});
+
+
+/** TODO
 import type { auth } from '../auth';
 
 import { inferAdditionalFields } from 'better-auth/client/plugins';
@@ -16,3 +29,5 @@ export const authClient = createAuthClient({
 });
 
 export type Session = typeof authClient.$Infer.Session;
+ * 
+ *  */

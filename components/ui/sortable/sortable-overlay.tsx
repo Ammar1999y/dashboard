@@ -31,7 +31,7 @@ interface SortableOverlayProps extends Omit<
     | React.ReactNode;
 }
 
-function SortableOverlay(props: SortableOverlayProps) {
+export function SortableOverlay(props: SortableOverlayProps) {
   const { container: containerProp, children, ...overlayProps } = props;
 
   const context = useSortableContext(OVERLAY_NAME);
@@ -62,6 +62,3 @@ function SortableOverlay(props: SortableOverlayProps) {
     container
   );
 }
-
-export { SortableOverlay };
-export type { SortableOverlayProps };

@@ -1,20 +1,20 @@
 import type { Column, FilterFn, Table } from '@tanstack/react-table';
 
-export type ColumnMeta = {
+type ColumnMeta = {
   title: string;
   filterType?: 'search' | 'select';
   filterVariant?: 'text' | 'dateRange' | 'number' | 'numberRange' | 'select';
   options?: { label: string; value: string }[];
 };
 
-export interface SearchableColumn {
+interface SearchableColumn {
   id: string;
   label: string;
   filterVariant: 'text' | 'dateRange' | 'number' | 'numberRange';
   column: Column<any, unknown> | null;
 }
 
-export interface SelectFilter {
+interface SelectFilter {
   column: Column<any, unknown>;
   columnId: string;
   title: string;
@@ -38,9 +38,7 @@ export const getSearchableColumns = <TData>(
     })) as SearchableColumn[];
 };
 
-export const getSelectFilters = <TData>(
-  table: Table<TData>
-): SelectFilter[] => {
+export const getSelectFilters = <TData>(table: Table<TData>): SelectFilter[] => {
   return table
     .getAllColumns()
     .filter((column) => {

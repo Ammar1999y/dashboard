@@ -13,7 +13,7 @@ import { breakpointsTokens } from '@/utils/breakpoints';
  * @returns example: 16, 16.5, -16, 16, 16
  * @throws Error if value is invalid
  */
-export const removePx = (value: string | number): number => {
+const removePx = (value: string | number): number => {
   if (typeof value === 'number') return value;
 
   if (!value) {

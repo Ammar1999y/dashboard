@@ -19,7 +19,7 @@ const headingVariants = cva('relative mb-1', {
   },
 });
 
-export function HeadingElement({
+function HeadingElement({
   variant = 'h1',
   ...props
 }: PlateElementProps & VariantProps<typeof headingVariants>) {

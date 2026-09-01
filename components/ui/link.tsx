@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 
 import { buttonVariants } from './button';
 
-export interface LinkProps
+interface LinkProps
   extends
     React.ComponentPropsWithoutRef<'a'>,
     VariantProps<typeof buttonVariants> {

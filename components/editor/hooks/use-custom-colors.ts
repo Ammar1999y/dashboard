@@ -5,7 +5,7 @@ export type TColor = {
   value: string;
 };
 
-export const CUSTOM_COLORS_STORAGE_KEY = 'plate-editor-custom-colors';
+const CUSTOM_COLORS_STORAGE_KEY = 'plate-editor-custom-colors';
 
 export const DEFAULT_COLORS = [
   {

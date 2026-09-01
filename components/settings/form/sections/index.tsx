@@ -34,7 +34,7 @@ export const MAIN_TABS: TabConfig[] = [
   { id: 'navLinks', label: 'الروابط' },
 ];
 
-export const TabContent = memo(({ activeTab }: { activeTab: MainTab }) => {
+const TabContent = memo(({ activeTab }: { activeTab: MainTab }) => {
   switch (activeTab) {
     case 'images':
       return <ImagesSection />;

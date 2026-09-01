@@ -20,7 +20,7 @@ declare module '@tanstack/react-table' {
   }
 }
 
-export interface QueryKeys {
+interface QueryKeys {
   page: string;
   perPage: string;
   sort: string;
@@ -28,10 +28,17 @@ export interface QueryKeys {
   joinOperator: string;
 }
 
-export interface Option {
+interface Option {
   label: string;
   value: string;
   count?: number;
+}
+
+export interface PaginationMeta {
+  page: number;
+  perPage: number;
+  total: number;
+  pageCount: number;
 }
 
 export type FilterOperator = DataTableConfig['operators'][number];

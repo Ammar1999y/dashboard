@@ -1,9 +1,9 @@
-export type NavItemOptionsProps = {
+type NavItemOptionsProps = {
   depth?: number;
   hasChild?: boolean;
 };
 
-export type NavItemStateProps = {
+type NavItemStateProps = {
   open?: boolean;
   active?: boolean;
   disabled?: boolean;

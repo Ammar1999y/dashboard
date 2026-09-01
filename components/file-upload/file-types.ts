@@ -1,6 +1,6 @@
 import type { UploadedFile } from '@/hooks/use-upload-file';
 
-export type FileMetadata = UploadedFile & {
+type FileMetadata = UploadedFile & {
   id: string;
   mimeType?: string; // UploadedFile has 'type'
 };

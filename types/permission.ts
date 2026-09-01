@@ -1,9 +1,8 @@
 import type {
   DashboardPage,
   PermissionAction,
+  RoleScope,
 } from '@/lib/permissions/constants';
-
-import { RoleScopes } from '@/db/schema';
 
 import { EntityID } from '.';
 
@@ -17,7 +16,7 @@ export interface PermissionClient {
   roleName: string;
   description?: string | null;
   isActive: boolean;
-  scope: RoleScopes;
+  scope: RoleScope;
   usersCount?: number;
   createdAt?: string; // timestamp with time zone in Postgres
   updatedAt?: string; // timestamp with time zone in Postgres

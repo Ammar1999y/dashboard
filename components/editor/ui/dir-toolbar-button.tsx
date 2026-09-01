@@ -18,7 +18,7 @@ import {
 import { ToolbarButton } from '@/components/ui/toolbar';
 import TextDirectionIcon from '@/components/icons/text-direction';
 
-export type DirValue = 'auto' | 'ltr' | 'rtl';
+type DirValue = 'auto' | 'ltr' | 'rtl';
 
 const items: {
   icon: React.ReactElement;

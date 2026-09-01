@@ -9,7 +9,7 @@ import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { MainTabsAnimatedBackground } from './main-tabs-animated-background';
 import { useTabsStore } from './store';
 
-export interface TabConfig {
+interface TabConfig {
   id: string;
   label: string;
 }

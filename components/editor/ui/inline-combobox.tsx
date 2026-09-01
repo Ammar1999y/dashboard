@@ -13,7 +13,6 @@ import {
   ComboboxItem,
   ComboboxPopover,
   ComboboxProvider,
-  ComboboxRow,
   Portal,
   useComboboxContext,
   useComboboxStore,
@@ -358,7 +357,7 @@ const InlineComboboxEmpty = ({
   );
 };
 
-const InlineComboboxRow = ComboboxRow;
+export { ComboboxRow as InlineComboboxRow } from '@ariakit/react';
 
 function InlineComboboxGroup({
   className,
@@ -398,5 +397,4 @@ export {
   InlineComboboxGroupLabel,
   InlineComboboxInput,
   InlineComboboxItem,
-  InlineComboboxRow,
 };

@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/shallow';
 
 import { ThemeLayout } from '@/components/theme-customizer/types/enum';
 
-export type SettingsType = {
+type SettingsType = {
   themeLayout: ThemeLayout;
 };
 type SettingStore = {

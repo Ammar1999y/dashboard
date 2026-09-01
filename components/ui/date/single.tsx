@@ -121,5 +121,3 @@ export const SingleDatePicker: FC<SingleDatePickerProps> = memo(
 );
 
 SingleDatePicker.displayName = 'SingleDatePicker';
-
-export default SingleDatePicker;

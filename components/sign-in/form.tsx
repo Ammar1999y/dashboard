@@ -24,7 +24,9 @@ import {
 import PasswordInput from '@/components/sign-in/password-input';
 
 import TurnstileWidget from './turnstile';
-import { otpMsg } from '@/app/api/auth/otp/messages';
+
+const CAPTCHA_FAILED_MESSAGE =
+  'حدث خطاء اثناء التحقق من انك انسان، اعد المحاولة';
 
 interface FormProps {
   onSuccess: () => void;
@@ -69,7 +71,7 @@ const Form = ({ onSuccess }: FormProps) => {
           error instanceof CustomError
             ? error.message
             : error?.message?.toLowerCase?.()?.includes('captcha')
-              ? otpMsg.captchaFailed
+              ? CAPTCHA_FAILED_MESSAGE
               : 'حدث خطاء، اعد المحاوله',
           {
             duration: 8000,

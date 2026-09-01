@@ -3,6 +3,8 @@ import { useCallback, useState } from 'react';
 
 import { toast } from 'sonner';
 
+import { apiFetch } from '@/lib/api';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import Label from '@/components/ui/label';
@@ -31,7 +33,7 @@ export default function Page() {
       e.preventDefault();
       setLoading(true);
       try {
-        const res = await fetch('/api/dev/sign-up', {
+        const res = await apiFetch('/api/dev/sign-up', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(form),

@@ -35,7 +35,7 @@ import {
 import { ToolbarButton, ToolbarMenuGroup } from '@/components/ui/toolbar';
 import { getBlockType, setBlockType } from '@/components/editor/transforms';
 
-export const turnIntoItems = [
+const turnIntoItems = [
   {
     icon: <PilcrowIcon />,
     keywords: ['paragraph'],

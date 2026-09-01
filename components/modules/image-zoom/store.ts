@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 import { FileWithPreview } from '@/components/file-upload';
 
-export interface ZoomImageStore {
+interface ZoomImageStore {
   zoomFile: FileWithPreview | null;
   activeId: string | null;
   setZoomFile: (file: FileWithPreview | null) => void;

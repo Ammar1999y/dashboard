@@ -65,7 +65,7 @@ export const ComboboxInput = React.forwardRef<
 ));
 ComboboxInput.displayName = 'ComboboxInput';
 
-export const ComboboxTagsInput = React.forwardRef<
+const ComboboxTagsInput = React.forwardRef<
   React.ElementRef<typeof ComboboxPrimitive.Input>,
   React.ComponentPropsWithoutRef<typeof ComboboxPrimitive.Input> & {
     icon?: React.ReactNode;
@@ -86,7 +86,7 @@ export const ComboboxTagsInput = React.forwardRef<
 ));
 ComboboxTagsInput.displayName = 'ComboboxTagsInput';
 
-export const ComboboxTag = React.forwardRef<
+const ComboboxTag = React.forwardRef<
   React.ElementRef<typeof ComboboxPrimitive.ComboboxTagGroupItem>,
   React.ComponentPropsWithoutRef<typeof ComboboxPrimitive.ComboboxTagGroupItem>
 >(({ children, className, ...props }, ref) => (
@@ -140,7 +140,7 @@ export const ComboboxEmpty = React.forwardRef<
 ));
 ComboboxEmpty.displayName = 'ComboboxEmpty';
 
-export const ComboboxLoading = React.forwardRef<
+const ComboboxLoading = React.forwardRef<
   React.ElementRef<typeof ComboboxPrimitive.Loading>,
   React.ComponentPropsWithoutRef<typeof ComboboxPrimitive.Loading>
 >(({ className, ...props }, ref) => (
@@ -154,7 +154,7 @@ export const ComboboxLoading = React.forwardRef<
 ));
 ComboboxLoading.displayName = 'ComboboxLoading';
 
-export const ComboboxGroup = React.forwardRef<
+const ComboboxGroup = React.forwardRef<
   React.ElementRef<typeof ComboboxPrimitive.Group>,
   React.ComponentPropsWithoutRef<typeof ComboboxPrimitive.Group>
 >(({ className, ...props }, ref) => (
@@ -181,7 +181,7 @@ const ComboboxSeparator = React.forwardRef<
 ));
 ComboboxSeparator.displayName = 'ComboboxSeparator';
 
-export const comboboxItemStyle = cva(
+const comboboxItemStyle = cva(
   'relative flex w-full cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[disabled=true]:opacity-50'
 );
 

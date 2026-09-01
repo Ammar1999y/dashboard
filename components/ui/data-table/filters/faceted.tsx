@@ -11,7 +11,6 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
 } from '@/components/ui/command';
 import {
   Popover,
@@ -271,7 +270,7 @@ function FacetedItem(props: FacetedItemProps) {
   );
 }
 
-const FacetedSeparator = CommandSeparator;
+export { CommandSeparator as FacetedSeparator } from '@/components/ui/command';
 
 export {
   Faceted,
@@ -282,6 +281,5 @@ export {
   FacetedInput,
   FacetedItem,
   FacetedList,
-  FacetedSeparator,
   FacetedTrigger,
 };

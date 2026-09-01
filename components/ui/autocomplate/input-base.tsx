@@ -93,12 +93,12 @@ export const InputBaseControl = React.forwardRef<
 });
 InputBaseControl.displayName = 'InputBaseControl';
 
-export interface InputBaseAdornmentProps extends React.ComponentPropsWithoutRef<'div'> {
+interface InputBaseAdornmentProps extends React.ComponentPropsWithoutRef<'div'> {
   asChild?: boolean;
   disablePointerEvents?: boolean;
 }
 
-export const InputBaseAdornment = React.forwardRef<
+const InputBaseAdornment = React.forwardRef<
   React.ElementRef<'div'>,
   InputBaseAdornmentProps
 >(({ className, disablePointerEvents, asChild, children, ...props }, ref) => {

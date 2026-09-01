@@ -37,7 +37,7 @@ interface SortableItemProps extends React.ComponentProps<'div'> {
   disabled?: boolean;
 }
 
-function SortableItem(props: SortableItemProps) {
+export function SortableItem(props: SortableItemProps) {
   const {
     value,
     style,
@@ -146,7 +146,7 @@ interface SortableItemHandleProps extends React.ComponentProps<'button'> {
   asChild?: boolean;
 }
 
-function SortableItemHandle(props: SortableItemHandleProps) {
+export function SortableItemHandle(props: SortableItemHandleProps) {
   const { asChild, disabled, className, ref, ...itemHandleProps } = props;
 
   const context = useSortableContext(ITEM_HANDLE_NAME);
@@ -192,6 +192,3 @@ function SortableItemHandle(props: SortableItemHandleProps) {
     />
   );
 }
-
-export { SortableItem, SortableItemHandle };
-export type { SortableItemProps, SortableItemHandleProps };

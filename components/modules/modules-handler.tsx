@@ -10,19 +10,19 @@ import { MODULE_ID as MOBILE_MENU_MODULE_ID } from '../layouts/dashboard/nav';
 import { MODULE_ID as THEME_MODULE_ID } from '../theme-customizer';
 import { MODULE_ID as IMAGE_MODULE_ID } from './image-zoom';
 
-export const modulesNames = [
+const modulesNames = [
   IMAGE_MODULE_ID,
   THEME_MODULE_ID,
   MOBILE_MENU_MODULE_ID,
 ] as const;
 export type ModulesNames = (typeof modulesNames)[number];
 
-export const VALID_MODULES = new Set<ModulesNames>(modulesNames);
+const VALID_MODULES = new Set<ModulesNames>(modulesNames);
 
-export function dedupe<T>(arr: T[]): T[] {
+function dedupe<T>(arr: T[]): T[] {
   return Array.from(new Set(arr));
 }
-export function buildUrlWithModules(nextOpenModules: ModulesNames[]): string {
+function buildUrlWithModules(nextOpenModules: ModulesNames[]): string {
   const url = new URL(location.href);
   url.searchParams.delete('module');
 

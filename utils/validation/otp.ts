@@ -12,8 +12,8 @@ import {
 // ── Channel Configuration ──
 // All supported channels — any change here requires a DB migration
 // (update the CHECK constraint chk_verification_channel on verification_sessions)
-export const OTP_CHANNELS = ['email', 'sms', 'whatsapp'] as const;
-export type OtpChannel = (typeof OTP_CHANNELS)[number];
+const OTP_CHANNELS = ['email', 'sms', 'whatsapp'] as const;
+type OtpChannel = (typeof OTP_CHANNELS)[number];
 
 // ── OTP Purpose ──
 // Every verification session is bound to exactly one purpose so an OTP proven
@@ -52,12 +52,15 @@ const envChannels: OtpChannel[] = (
 // must stay reachable. Email is always available; phone channels only when
 // phone is enabled.
 const bypassChannels: OtpChannel[] = OTP_AUTO_VERIFY
-  ? (['email', ...(PHONE_ENABLED ? (['sms', 'whatsapp'] as const) : [])] as OtpChannel[])
+  ? ([
+      'email',
+      ...(PHONE_ENABLED ? (['sms', 'whatsapp'] as const) : []),
+    ] as OtpChannel[])
   : [];
 
 // Enabled channels — exposed to the client via NEXT_PUBLIC_ so the UI adapts.
 // Empty array means OTP is completely disabled.
-export const ENABLED_OTP_CHANNELS: readonly OtpChannel[] = Array.from(
+const ENABLED_OTP_CHANNELS: readonly OtpChannel[] = Array.from(
   new Set([...envChannels, ...bypassChannels])
 );
 
@@ -79,7 +82,10 @@ export function channelEnabledRefine(
   ctx: z.RefinementCtx
 ) {
   if (!(ENABLED_OTP_CHANNELS as readonly string[]).includes(data.channel)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: MSG_CHANNEL_DISABLED });
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: MSG_CHANNEL_DISABLED,
+    });
   }
 }
 

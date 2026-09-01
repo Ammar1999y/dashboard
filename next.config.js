@@ -1,14 +1,14 @@
-const { PUBLIC_URL } = require('./lib/env');
+const { API_URL, PUBLIC_URL } = require('./lib/env');
 
 // TODO: clear the unuse
 const isDev = process.env.NODE_ENV !== 'production';
 const CSP = `
   base-uri 'self';
   default-src 'self';
-  script-src 'self' 'sha256-nne+twLvxGzokkKtrC/+Z9Mdq4l8OjukUCknsajUZSs=' https://challenges.cloudflare.com/turnstile/${isDev ? " 'unsafe-eval' 'unsafe-inline'" : ''};
+  script-src 'self' https://challenges.cloudflare.com/turnstile/${isDev ? " 'unsafe-eval' 'unsafe-inline'" : ''};
   style-src 'self' 'unsafe-inline';
   font-src 'self';
-  connect-src 'self';
+  connect-src 'self' ${API_URL};
   frame-src 'self' https://challenges.cloudflare.com/;
   worker-src 'self' blob:;
   img-src 'self' data: blob:;
@@ -158,6 +158,7 @@ const nextConfig = {
   reactStrictMode: true,
   reactCompiler: true,
   poweredByHeader: false,
+  transpilePackages: ['@platejs/math', 'react-tweet'],
   images: {
     unoptimized: true,
     remotePatterns: [
@@ -183,8 +184,8 @@ const nextConfig = {
       fullUrl: true,
     },
   },
-  experimental: {
-    scrollRestoration: false,
-  },
+  // experimental: {
+  //   scrollRestoration: false,
+  // },
 };
 module.exports = nextConfig;

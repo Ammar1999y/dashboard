@@ -12,7 +12,7 @@ import {
   SVG_MAX_ELEMENTS,
 } from './config';
 
-export { SVG_MAX_ELEMENTS, type SanitizeResult } from './config';
+export { type SanitizeResult } from './config';
 
 // 🟥 اذا مستقبلا قررت اسمح للانميشن انه يتم تمريره، اقوم بفك التعليق الخاص بالانميشن، واخلي المكتبه تسمح بمرور الانميشن
 

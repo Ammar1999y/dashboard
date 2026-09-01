@@ -279,4 +279,3 @@ function SortableRoot<T>(props: SortableRootProps<T>) {
 }
 
 export { SortableRoot };
-export type { SortableRootProps };

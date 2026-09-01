@@ -119,7 +119,7 @@ export const Editor = React.memo(
 
 Editor.displayName = 'Editor';
 
-export function EditorView({
+function EditorView({
   className,
   variant,
   ...props
