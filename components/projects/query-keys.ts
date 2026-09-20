@@ -3,7 +3,7 @@
  * Modify these keys in one place to update all usages
  */
 
-import { EntityID } from '@/types';
+import type { EntityID } from '@/types';
 
 export const PROJECTS_QUERY_KEYS = {
   /** Query key for projects list */

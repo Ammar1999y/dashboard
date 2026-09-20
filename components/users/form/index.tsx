@@ -1,11 +1,12 @@
+import type {
+  CreateUserFormData,
+  UpdateUserFormData,
+} from '@/utils/validation/auth';
+
 import { memo } from 'react';
 
 import { useFormContext } from 'react-hook-form';
 
-import {
-  CreateUserFormData,
-  UpdateUserFormData,
-} from '@/utils/validation/auth';
 import { PHONE_ENABLED, PHONE_REQUIRED } from '@/utils/config';
 
 import { Input } from '@/components/ui/input';

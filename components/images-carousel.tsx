@@ -33,46 +33,52 @@ const opts: CarouselOptions = {
   skipSnaps: false,
 };
 
-const Images = memo(({ images, title }: { images: any; title: string }) => {
-  const [plugins, setPlugins] = useState<CreatePluginType<any, any>[]>([]);
-  useEffect(() => {
-    if (!images || !images.length) return;
-    import('embla-carousel-autoplay').then((module) => {
-      setPlugins([
-        module.default({
-          delay: 4000,
-        }),
-      ]);
-    });
-  }, [images]);
-  if (!images || !images.length) return null;
-  if (images.length === 1)
+type CarouselImage = { url?: string | null };
+
+const Images = memo(
+  ({ images, title }: { images: CarouselImage[]; title: string }) => {
+    const [plugins, setPlugins] = useState<CreatePluginType<any, any>[]>([]);
+    useEffect(() => {
+      if (!images || !images.length) return;
+      import('embla-carousel-autoplay').then((module) => {
+        setPlugins([
+          module.default({
+            delay: 4000,
+          }),
+        ]);
+      });
+    }, [images]);
+    if (!images || !images.length) return null;
+    if (images.length === 1)
+      return (
+        <ImageItem image={images[0]} isFirst title={title} className='mb-4' />
+      );
     return (
-      <ImageItem image={images[0]} isFirst title={title} className='mb-4' />
-    );
-  return (
-    <Suspense fallback={<ImageItem isFirst image={images[0]} title={title} />}>
-      <Carousel
-        itemsLength={images.length}
-        className='relative mb-4 w-full'
-        opts={opts}
-        plugins={plugins}
+      <Suspense
+        fallback={<ImageItem isFirst image={images[0]} title={title} />}
       >
-        <CarouselContent>
-          {images.map((image, idx) =>
-            image.url ? (
-              <CarouselItem key={idx} className='group basis-full'>
-                <ImageItem image={image} title={title} isFirst={idx === 0} />
-              </CarouselItem>
-            ) : null
-          )}
-        </CarouselContent>
-        <CarouselPrevious />
-        <CarouselNext />
-      </Carousel>
-    </Suspense>
-  );
-});
+        <Carousel
+          itemsLength={images.length}
+          className='relative mb-4 w-full'
+          opts={opts}
+          plugins={plugins}
+        >
+          <CarouselContent>
+            {images.map((image, idx) =>
+              image.url ? (
+                <CarouselItem key={idx} className='group basis-full'>
+                  <ImageItem image={image} title={title} isFirst={idx === 0} />
+                </CarouselItem>
+              ) : null
+            )}
+          </CarouselContent>
+          <CarouselPrevious />
+          <CarouselNext />
+        </Carousel>
+      </Suspense>
+    );
+  }
+);
 
 const ImageItem = memo(
   ({

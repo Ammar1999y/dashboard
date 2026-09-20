@@ -1,3 +1,5 @@
+import type { Permission } from '../types';
+
 import { memo } from 'react';
 
 import { type CoreRow } from '@tanstack/react-table';
@@ -10,7 +12,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-import { Permission } from '../types';
 import { DeleteAction } from './delete-action';
 
 const EditIcon = memo(_EditIcon);

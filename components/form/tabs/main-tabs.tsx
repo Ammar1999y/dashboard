@@ -1,6 +1,8 @@
+import type { Transition } from 'framer-motion';
+
 import { memo, useCallback } from 'react';
 
-import { motion, Transition } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/shallow';
 import { cn } from '@/lib/utils';
 

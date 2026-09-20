@@ -1,6 +1,7 @@
 /** @type {import('prettier').Config} */
 module.exports = {
   importOrder: [
+    '<BUILTIN_MODULES>',
     '^types$',
     '^type$',
     '<TYPES>',
@@ -34,8 +35,8 @@ module.exports = {
   printWidth: 80,
   tabWidth: 2,
   importOrderTypeScriptVersion: '5.0.0',
-  tailwindConfig: './tailwind.config.ts',
-  proseWrap: 'always',
+  proseWrap: 'preserve',
   bracketSameLine: false,
   bracketSpacing: true,
+  tailwindConfig: './tailwind.config.ts',
 };

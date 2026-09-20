@@ -1,5 +1,7 @@
 'use client';
 
+import type { MediaType } from '@/components/editor/media-config';
+
 import { useState } from 'react';
 
 import {
@@ -17,7 +19,7 @@ import { useEditorReadOnly } from 'platejs/react';
 
 import { useKeyboardDetection } from '@/hooks/use-keyboard-detection';
 import { ToolbarButton, ToolbarGroup } from '@/components/ui/toolbar';
-import { mediaConfig, MediaType } from '@/components/editor/media-config';
+import { mediaConfig } from '@/components/editor/media-config';
 import { AlignToolbarButton } from '@/components/editor/ui/align-toolbar-button';
 import { DirToolbarButton } from '@/components/editor/ui/dir-toolbar-button';
 import { EmojiToolbarButton } from '@/components/editor/ui/emoji-toolbar-button';

@@ -98,7 +98,6 @@ export const ColorPickerContent = memo(
             rgba,
             hsla,
           });
-          setHexInputValue(newColor.toUpperCase());
         } else {
           const rgb = hexToRgb(newColor);
           const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
@@ -107,8 +106,8 @@ export const ColorPickerContent = memo(
             rgb,
             hsl,
           });
-          setHexInputValue(newColor.toUpperCase());
         }
+        setHexInputValue(newColor.toUpperCase());
       },
       [alpha]
     );

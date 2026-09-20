@@ -1,6 +1,7 @@
 /* eslint-disable unicorn/prefer-math-trunc */
+import type { EntityID } from '@/types';
+
 import { MAX_ID } from '@/constants';
-import { EntityID } from '@/types';
 import { v7 as uuidv7 } from 'uuid';
 
 export function normalizeArabicDigits(input: any): any {
@@ -84,7 +85,7 @@ function stripLogControlChars(value: string): string {
 function clampLogString(value: string): string {
   const clean = stripLogControlChars(value);
   return clean.length > LOG_MAX_STRING
-    ? clean.slice(0, LOG_MAX_STRING - 1) + '\u2026'
+    ? clean.slice(0, LOG_MAX_STRING - 1) + '\u{2026}'
     : clean;
 }
 

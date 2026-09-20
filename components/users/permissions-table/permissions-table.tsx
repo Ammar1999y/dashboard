@@ -1,4 +1,5 @@
 import type { PermissionsTableProps } from './types';
+import type { PermissionAction } from '@/lib/permissions/constants';
 
 import { memo, useMemo } from 'react';
 
@@ -7,7 +8,6 @@ import {
   DEFAULT_PAGE_PERMISSIONS,
   getAvailablePermissions,
   PERMISSION_ACTIONS,
-  PermissionAction,
 } from '@/lib/permissions/constants';
 import { cn } from '@/lib/utils';
 

@@ -1,14 +1,12 @@
+import type { CarouselApi, CarouselOptions } from '@/components/ui/carousel';
+
 import { memo, useCallback, useMemo, useState } from 'react';
 
 import AutoScroll from '@/lib/embla-carousel/auto-scroll';
 import { cn } from '@/lib/utils';
 
 import { useUserPresence } from '@/hooks/use-is-page-active';
-import {
-  Carousel,
-  CarouselApi,
-  CarouselOptions,
-} from '@/components/ui/carousel';
+import { Carousel } from '@/components/ui/carousel';
 
 const carouselStyle = {
   maskImage:

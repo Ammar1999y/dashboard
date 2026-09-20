@@ -1,3 +1,5 @@
+import type { Project } from '../types';
+
 import { type ColumnDef } from '@tanstack/react-table';
 
 import { Badge } from '@/components/ui/badge';
@@ -5,7 +7,6 @@ import { DataTableColumnHeader } from '@/components/ui/data-table';
 import { dateBetweenFilterFn } from '@/components/ui/data-table/utils/column-utils';
 import { tableFormatDate } from '@/components/ui/date/utils';
 
-import { Project } from '../types';
 import { TableActions } from './table-actions';
 
 export const columns: ColumnDef<Project>[] = [

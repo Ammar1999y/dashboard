@@ -1,12 +1,15 @@
+import type {
+  DragEndEvent,
+  DragStartEvent,
+  PointerActivationConstraint,
+  UniqueIdentifier,
+} from '@dnd-kit/core';
+
 import { useCallback, useState } from 'react';
 
 import {
-  DragEndEvent,
-  DragStartEvent,
   KeyboardSensor,
-  PointerActivationConstraint,
   PointerSensor,
-  UniqueIdentifier,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';

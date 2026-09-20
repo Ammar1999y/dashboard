@@ -1,9 +1,9 @@
+import type { LoginFormData } from '@/utils/validation/auth';
+
 import { memo, useCallback, useState } from 'react';
 
 import { Eye as _Eye, EyeClosed as _EyeClosed } from 'lucide-react';
 import { useFormContext } from 'react-hook-form';
-
-import { LoginFormData } from '@/utils/validation/auth';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

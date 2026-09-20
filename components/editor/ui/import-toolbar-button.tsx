@@ -21,6 +21,13 @@ import { ToolbarButton } from '@/components/ui/toolbar';
 
 type ImportType = 'html' | 'markdown';
 
+/**
+ * `useFilePicker`'s config is a union discriminated on `readAs`/`readFilesContent`,
+ * so omitting those leaves `onFilesSelected` without a contextual type. Only
+ * `plainFiles` is read here, and it is absent on the error branch.
+ */
+type PickedFiles = { plainFiles?: File[] };
+
 export function ImportToolbarButton(props: DropdownMenuProps) {
   const editor = useEditorRef();
   const [open, setOpen] = React.useState(false);
@@ -45,7 +52,7 @@ export function ImportToolbarButton(props: DropdownMenuProps) {
   const { openFilePicker: openMdFilePicker } = useFilePicker({
     accept: ['.md', '.mdx'],
     multiple: false,
-    onFilesSelected: async (data) => {
+    onFilesSelected: async (data: PickedFiles) => {
       if (!data.plainFiles || data.plainFiles.length === 0) return;
 
       const text = await data.plainFiles[0].text();
@@ -59,7 +66,7 @@ export function ImportToolbarButton(props: DropdownMenuProps) {
   const { openFilePicker: openHtmlFilePicker } = useFilePicker({
     accept: ['text/html'],
     multiple: false,
-    onFilesSelected: async (data) => {
+    onFilesSelected: async (data: PickedFiles) => {
       if (!data.plainFiles || data.plainFiles.length === 0) return;
 
       const text = await data.plainFiles[0].text();

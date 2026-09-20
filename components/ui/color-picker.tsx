@@ -1,12 +1,7 @@
 // https://github.com/vatsalpipalava/shadcn-input-color/blob/main/src/components/input-color.tsx
-import {
-  ChangeEvent,
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
+import type { ChangeEvent } from 'react';
+
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { HexAlphaColorPicker, HexColorPicker } from 'react-colorful';
 import { cn } from '@/lib/utils';
@@ -110,7 +105,6 @@ const InputColor = memo(
             rgba,
             hsla,
           });
-          setHexInputValue(newColor.toUpperCase());
         } else {
           const rgb = hexToRgb(newColor);
           const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
@@ -119,8 +113,8 @@ const InputColor = memo(
             rgb,
             hsl,
           });
-          setHexInputValue(newColor.toUpperCase());
         }
+        setHexInputValue(newColor.toUpperCase());
       },
       [alpha]
     );
@@ -259,11 +253,13 @@ const InputColor = memo(
     // Handle popover close
     const handlePopoverChange = useCallback(
       (open: boolean) => {
-        if (!open) {
-          validateAndResetColor();
-          setColorFormat('HEX');
-          onBlur?.();
+        if (open) {
+          return;
         }
+
+        validateAndResetColor();
+        setColorFormat('HEX');
+        onBlur?.();
       },
       [validateAndResetColor, onBlur]
     );
@@ -276,10 +272,12 @@ const InputColor = memo(
 
     useEffect(() => {
       // نقوم بالتحديث فقط إذا جاءت قيمة جديدة (ليست فارغة) ومختلفة عن الحالية
-      if (value && value !== hexInputValue && value !== defaultColor) {
-        updateColorValues(value);
-        setHexInputValue(value.toUpperCase());
+      if (!value || value === hexInputValue || value === defaultColor) {
+        return;
       }
+
+      updateColorValues(value);
+      setHexInputValue(value.toUpperCase());
     }, [value]);
     // Get current hex value for display
     const getCurrentHexValue = useMemo(() => {

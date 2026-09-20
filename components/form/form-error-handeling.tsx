@@ -10,7 +10,11 @@ export function showFormErrors(errors: Record<string, unknown>) {
   );
 }
 
-export function flattenErrors(data: any, path = '', result = {}) {
+export function flattenErrors(
+  data: any,
+  path = '',
+  result: Record<string, string> = {}
+) {
   if (!data) return result;
   if (Array.isArray(data)) {
     data.forEach((item, index) => {

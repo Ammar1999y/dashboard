@@ -1,10 +1,9 @@
+import type { EntityID } from '@/types';
+import type { ExtendedColumnSort } from '@/types/data-table';
 import type { ColumnDef, TableState } from '@tanstack/react-table';
 
 import dynamic from 'next/dynamic';
 import { memo, useMemo, useRef } from 'react';
-
-import { EntityID } from '@/types';
-import { ExtendedColumnSort } from '@/types/data-table';
 
 import { useQueryData } from '@/utils/query';
 
@@ -39,7 +38,6 @@ const ClientSideTable = memo(
     enabledQuery?: boolean;
     STORAGE_KEY: string;
     initialSorting?: ExtendedColumnSort<any>[] | undefined;
-    initialPin;
   }) => {
     const queryParams = useMemo(
       () => ({

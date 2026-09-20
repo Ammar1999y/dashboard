@@ -31,32 +31,34 @@ export function MediaResizePopover() {
 
   // Load current dimensions when dialog opens
   React.useEffect(() => {
-    if (isOpen) {
-      const currentWidth = element.width || '100%';
+    if (!isOpen) {
+      return;
+    }
 
-      if (typeof currentWidth === 'string' && currentWidth.includes('%')) {
-        // Current width is percentage
-        setPercentageWidth(currentWidth.replace('%', ''));
-        setPixelWidth('');
-        setPixelHeight('');
-      } else {
-        // Current width is pixels or need to calculate
-        setPercentageWidth('');
+    const currentWidth = element.width || '100%';
 
-        // Get actual image dimensions from DOM
-        const img = document.querySelector(
-          `[data-slate-node="element"] img[src="${element.url}"]`
-        ) as HTMLImageElement;
+    if (typeof currentWidth === 'string' && currentWidth.includes('%')) {
+      // Current width is percentage
+      setPercentageWidth(currentWidth.replace('%', ''));
+      setPixelWidth('');
+      setPixelHeight('');
+    } else {
+      // Current width is pixels or need to calculate
+      setPercentageWidth('');
 
-        if (img) {
-          const width = img.offsetWidth;
-          const height = img.offsetHeight;
-          const ratio = width / height;
+      // Get actual image dimensions from DOM
+      const img = document.querySelector(
+        `[data-slate-node="element"] img[src="${CSS.escape(String(element.url))}"]`
+      ) as HTMLImageElement;
 
-          setAspectRatio(ratio);
-          setPixelWidth(width.toString());
-          setPixelHeight(height.toString());
-        }
+      if (img) {
+        const width = img.offsetWidth;
+        const height = img.offsetHeight;
+        const ratio = width / height;
+
+        setAspectRatio(ratio);
+        setPixelWidth(width.toString());
+        setPixelHeight(height.toString());
       }
     }
   }, [isOpen, element]);

@@ -1,9 +1,10 @@
-import { COMMON_STYLES } from '@/components/theme-customizer/config/theme';
-import {
+import type {
   ThemeEditorState,
   ThemeStyleProps,
   ThemeStyles,
 } from '@/components/theme-customizer/types/theme';
+
+import { COMMON_STYLES } from '@/components/theme-customizer/config/theme';
 
 import { applyStyleToElement } from './apply-style-to-element';
 import { colorFormatter } from './color-converter';
@@ -33,20 +34,22 @@ const applyThemeColors = (
 ) => {
   Object.entries(themeStyles[mode]).forEach(([key, value]) => {
     if (
-      typeof value === 'string' &&
-      !COMMON_NON_COLOR_KEYS.includes(
+      typeof value !== 'string' ||
+      COMMON_NON_COLOR_KEYS.includes(
         key as (typeof COMMON_NON_COLOR_KEYS)[number]
       )
     ) {
-      if (value.startsWith('var(')) {
-        applyStyleToElement(root, key, value);
-        return;
-      }
-
-      const hslValue = colorFormatter(value, 'hsl', '4', true);
-
-      applyStyleToElement(root, key, hslValue);
+      return;
     }
+
+    if (value.startsWith('var(')) {
+      applyStyleToElement(root, key, value);
+      return;
+    }
+
+    const hslValue = colorFormatter(value, 'hsl', '4', true);
+
+    applyStyleToElement(root, key, hslValue);
   });
 };
 

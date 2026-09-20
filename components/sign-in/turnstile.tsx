@@ -1,3 +1,4 @@
+import type { LoginFormData } from '@/utils/validation/auth';
 import type { TurnstileInstance } from '@marsidev/react-turnstile';
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
@@ -9,7 +10,6 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useErrors } from '@/utils/store/errors';
-import { LoginFormData } from '@/utils/validation/auth';
 
 const Turnstile = memo(_Turnstile);
 
@@ -43,25 +43,29 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
   const [loaded, setLoaded] = useState(false);
   const { setValue } = useFormContext<LoginFormData>();
   useEffect(() => {
-    if (remove || errorMessage?.captcha) {
-      const script = document.getElementById(scriptOptions.id);
-      if (script) {
-        script?.remove();
-      }
-      setTimeout(() => {
-        ref.current?.render();
-        ref.current?.execute();
-        ref.current?.reset();
-        setRemove(false);
-      }, 500);
+    if (!(remove || errorMessage?.captcha)) {
+      return;
     }
+
+    const script = document.getElementById(scriptOptions.id);
+    if (script) {
+      script?.remove();
+    }
+    setTimeout(() => {
+      ref.current?.render();
+      ref.current?.execute();
+      ref.current?.reset();
+      setRemove(false);
+    }, 500);
   }, [remove, errorMessage]);
 
   useEffect(() => {
-    if (reset || Object.keys(errorMessage).length > 0) {
-      ref.current?.reset();
-      setReset(false);
+    if (!(reset || Object.keys(errorMessage).length > 0)) {
+      return;
     }
+
+    ref.current?.reset();
+    setReset(false);
   }, [reset, errorMessage, setReset]);
 
   const onSuccess = useCallback(

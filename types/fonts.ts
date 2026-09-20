@@ -1,4 +1,4 @@
-import { EntityID } from '.';
+import type { EntityID } from '.';
 
 /**
  * Font file for custom uploaded fonts (future use)

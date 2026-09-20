@@ -6,12 +6,18 @@ import { useEffect, useRef } from 'react';
  * @param {function} options.onLeave - Called when user leaves the page or tab.
  * @param {function} [options.onReturn] - Called when user returns to the page or tab.
  */
-export function useUserPresence({ onLeave, onReturn }) {
+export function useUserPresence({
+  onLeave,
+  onReturn,
+}: {
+  onLeave: () => void;
+  onReturn?: () => void;
+}) {
   const isPresentRef = useRef(
     typeof document !== 'undefined' && !document.hidden
   );
   useEffect(() => {
-    const handleStateChange = (isCurrentlyPresent) => {
+    const handleStateChange = (isCurrentlyPresent: boolean) => {
       if (isCurrentlyPresent === isPresentRef.current) return;
       isPresentRef.current = isCurrentlyPresent;
       if (isCurrentlyPresent) {

@@ -1,3 +1,5 @@
+import type { ModulesNames } from '../modules/modules-handler';
+
 import { useCallback } from 'react';
 
 import { useShallow } from 'zustand/shallow';
@@ -11,7 +13,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-import { ModulesNames } from '../modules/modules-handler';
 import { ScrollArea } from './scroll-area';
 
 export default function DialogWrapper({

@@ -338,7 +338,7 @@ const ComboboxInput = React.forwardRef<
 
   const composedRefs = useComposedRefs(ref, inputRef);
   const event = React.useCallback(
-    (event) => {
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
       if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !open) {
         event.preventDefault();
         onOpenChange(true);
@@ -366,7 +366,7 @@ const ComboboxInput = React.forwardRef<
           onOpenChange(true);
         }
         // Schedule input value change to the next tick.
-        setTimeout(() => onInputValueChange(search, 'inputChange'));
+        setTimeout(() => onInputValueChange(search, 'inputChange'), 0);
         if (!search && type === 'single') {
           onValueChange('');
         }
@@ -516,7 +516,7 @@ const ComboboxItem = React.forwardRef<
             onValueChange(valueProp);
             onInputValueChange(inputValue, 'itemSelect');
             // Schedule open change to the next tick.
-            setTimeout(() => onOpenChange(false));
+            setTimeout(() => onOpenChange(false), 0);
           }
         }}
         value={inputValue}

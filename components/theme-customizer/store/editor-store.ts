@@ -1,8 +1,9 @@
+import type { ThemeEditorState } from '../types/theme';
+
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import { defaultThemeState } from '../config/theme';
-import { ThemeEditorState } from '../types/theme';
 import { getPresetThemeStyles } from '../utils/theme-preset-helper';
 
 interface EditorState {

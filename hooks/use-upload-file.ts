@@ -1,3 +1,4 @@
+import type { MediaType } from '@/components/editor/media-config';
 import type { Options as CompressionOptions } from 'browser-image-compression';
 
 import * as React from 'react';
@@ -11,7 +12,7 @@ import {
 } from '@/utils/images/client-image-compression';
 import { sanitizeSvg, validateSvgFile } from '@/utils/images/svg-optimizer';
 
-import { mediaConfig, MediaType } from '@/components/editor/media-config';
+import { mediaConfig } from '@/components/editor/media-config';
 
 export interface UploadedFile {
   url: string;

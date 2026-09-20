@@ -1,6 +1,6 @@
-// 🟥🟥🟥🟥 اي تغير اقوم به على الالوان، لازم يتم مزامنته معا global.css
+import type { ThemeEditorState } from '../types/theme';
 
-import { ThemeEditorState } from '../types/theme';
+import { PRIMARY_THEME_VALUES } from '@/constants/theme';
 
 // Font scale configuration
 export const FONT_SCALE_CONFIG = {
@@ -31,9 +31,7 @@ export const defaultLightThemeStyles = {
   'card-foreground': '0 0% 4%',
   popover: '0 0% 100%',
   'popover-foreground': '0 0% 4%',
-  primary: '172 98% 40%',
-  'primary-light': '172 98% 48%',
-  'primary-dark': '172 98% 32%',
+  ...PRIMARY_THEME_VALUES,
   'primary-foreground': '0 0% 0%',
   secondary: '0 0% 96%',
   'secondary-foreground': '0 0% 9%',
@@ -83,9 +81,6 @@ const defaultDarkThemeStyles = {
   'card-foreground': '0 0% 98%',
   popover: '0 0% 9%',
   'popover-foreground': '0 0% 98%',
-  primary: '172 98% 40%',
-  'primary-light': '172 98% 48%',
-  'primary-dark': '172 98% 32%',
   'primary-foreground': '0 0% 0%',
   secondary: '0 0% 15%',
   'secondary-foreground': '0 0% 98%',

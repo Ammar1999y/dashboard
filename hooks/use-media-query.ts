@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { breakpointsTokens } from '@/utils/breakpoints';
+import { breakpointsTokens } from '@/constants/breakpoints';
 
 /**
  * remove px unit

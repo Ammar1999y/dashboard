@@ -134,7 +134,6 @@ const BlockCommentContent = ({
     selected ||
     (isCommenting && !!draftCommentNode && commentingCurrent);
 
-  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const anchorElement = React.useMemo(() => {
     let activeNode: NodeEntry | undefined;
 

@@ -1,4 +1,5 @@
-import { EntityID } from '@/types';
+import type { EntityID } from '@/types';
+
 import { apiFetch } from '@/lib/api';
 
 import { CustomError } from './error-class';

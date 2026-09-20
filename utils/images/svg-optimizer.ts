@@ -142,10 +142,12 @@ export function sanitizeSvg(
     const allElements = doc.querySelectorAll('*');
     allElements.forEach((element) => {
       DANGEROUS_ATTRIBUTES.forEach((attr) => {
-        if (element.hasAttribute(attr)) {
-          errors.push(`تم إزالة خاصية خطيرة: ${attr}`);
-          element.removeAttribute(attr);
+        if (!element.hasAttribute(attr)) {
+          return;
         }
+
+        errors.push(`تم إزالة خاصية خطيرة: ${attr}`);
+        element.removeAttribute(attr);
       });
 
       Array.from(element.attributes).forEach((attr) => {
@@ -170,16 +172,14 @@ export function sanitizeSvg(
     const shouldConvertColor = (value: string | null | undefined): boolean => {
       if (!value || !convertColor) return false;
       const normalized = value.toLowerCase().trim();
-      if (
+      return !(
         !normalized ||
         normalized.startsWith('url(') ||
         normalized === 'currentcolor' ||
         normalized === 'inherit' ||
         normalized === 'transparent' ||
         normalized === 'none'
-      )
-        return false;
-      return true;
+      );
     };
 
     const styleElements = doc.querySelectorAll('style');
@@ -214,21 +214,25 @@ export function sanitizeSvg(
     const allElementsWithColors = svgElement.querySelectorAll('*');
     allElementsWithColors.forEach((element) => {
       ['fill', 'stroke'].forEach((attr) => {
-        if (element.hasAttribute(attr)) {
-          const value = element.getAttribute(attr);
-          if (shouldConvertColor(value)) {
-            element.setAttribute(attr, 'currentColor');
-          }
+        if (!element.hasAttribute(attr)) {
+          return;
+        }
+
+        const value = element.getAttribute(attr);
+        if (shouldConvertColor(value)) {
+          element.setAttribute(attr, 'currentColor');
         }
       });
     });
 
     ['fill', 'stroke'].forEach((attr) => {
-      if (svgElement.hasAttribute(attr)) {
-        const value = svgElement.getAttribute(attr);
-        if (shouldConvertColor(value)) {
-          svgElement.setAttribute(attr, 'currentColor');
-        }
+      if (!svgElement.hasAttribute(attr)) {
+        return;
+      }
+
+      const value = svgElement.getAttribute(attr);
+      if (shouldConvertColor(value)) {
+        svgElement.setAttribute(attr, 'currentColor');
       }
     });
 

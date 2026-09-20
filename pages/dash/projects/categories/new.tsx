@@ -1,5 +1,8 @@
 import type { Category } from '@/components/categories/types';
-import type { CreateCategoryInput } from '@/utils/validation/categories';
+import type {
+  CreateCategoryInput,
+  CreateCategoryOutput,
+} from '@/utils/validation/categories';
 import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
@@ -14,10 +17,7 @@ import { cn } from '@/lib/utils';
 import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
 import { useErrors } from '@/utils/store/errors';
-import {
-  CreateCategoryOutput,
-  createCategorySchema,
-} from '@/utils/validation/categories';
+import { createCategorySchema } from '@/utils/validation/categories';
 
 import { CategoryForm } from '@/components/categories/form';
 import { CATEGORIES_QUERY_KEYS } from '@/components/categories/query-keys';

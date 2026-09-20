@@ -1,3 +1,4 @@
+import type { EntityID } from '@/types';
 import type {
   CreateProjectInput,
   UpdateProjectInput,
@@ -13,7 +14,6 @@ import {
   useState,
 } from 'react';
 
-import { EntityID } from '@/types';
 import { validID } from '@/utils';
 import {
   CheckIcon as _CheckIcon,
@@ -169,15 +169,17 @@ const Content = memo(({ selectedValue, onSelect, isOpen }: ContentProps) => {
   useEffect(() => {
     (async () => {
       if (
-        isOpen &&
-        !isLoading &&
-        !isFetching &&
-        !isPending &&
-        !isRefetched.current
+        !isOpen ||
+        isLoading ||
+        isFetching ||
+        isPending ||
+        isRefetched.current
       ) {
-        isRefetched.current = true;
-        await refetch();
+        return;
       }
+
+      isRefetched.current = true;
+      await refetch();
     })();
   }, [isOpen, refetch]);
 

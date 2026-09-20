@@ -1,10 +1,9 @@
+import type { EntityID } from '.';
 import type {
   DashboardPage,
   PermissionAction,
   RoleScope,
 } from '@/lib/permissions/constants';
-
-import { EntityID } from '.';
 
 export interface PagePermission {
   name: DashboardPage;

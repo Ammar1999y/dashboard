@@ -1,8 +1,7 @@
 import type { CreateOptionsType } from 'embla-carousel';
 
 export type RootNodeType =
-  | null
-  | ((emblaRoot: HTMLElement) => HTMLElement | null);
+  null | ((emblaRoot: HTMLElement) => HTMLElement | null);
 
 export type OptionsType = CreateOptionsType<{
   direction: 'forward' | 'backward';

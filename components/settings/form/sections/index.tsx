@@ -1,3 +1,5 @@
+import type { MainTab, TabConfig } from '../../types';
+
 import { memo } from 'react';
 
 import { useShallow } from 'zustand/shallow';
@@ -5,7 +7,6 @@ import { useShallow } from 'zustand/shallow';
 import { AnimatedContent } from '@/components/animated-content';
 import { useTabsStore } from '@/components/form/tabs/store';
 
-import { MainTab, TabConfig } from '../../types';
 import { BasicInfoSection } from './basic';
 import { ContactInfoSection } from './contact-info';
 import { FontsSection } from './fonts';

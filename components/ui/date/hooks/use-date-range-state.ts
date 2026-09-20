@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { breakpointsTokens } from '@/utils/breakpoints';
+import { breakpointsTokens } from '@/constants/breakpoints';
 
 import { PRESETS } from '../constants';
 import { getDateAdjustedForTimezone, getPresetRange } from '../utils';

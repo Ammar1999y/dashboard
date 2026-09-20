@@ -48,7 +48,7 @@ function measureAndSetHeight(
       ? maxHeight
       : typeof maxRows === 'number'
         ? maxRows * lineHeight + borderHeight + paddingHeight
-        : Number.POSITIVE_INFINITY;
+        : Infinity;
 
   // scrollHeight includes padding but not borders
   const scrollHeight = textarea.scrollHeight;

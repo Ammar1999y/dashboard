@@ -1,3 +1,4 @@
+import type { User } from '../types';
 import type { ExtendedColumnSort } from '@/types/data-table';
 import type { TableState } from '@tanstack/react-table';
 
@@ -11,7 +12,6 @@ import Header from '@/components/ui/data-table/client-side-table/header';
 import { useDataTable } from '@/components/ui/data-table/hooks/use-data-table';
 
 import { USERS_QUERY_KEYS } from '../query-keys';
-import { User } from '../types';
 import { columns } from './columns';
 
 const cta = { href: '/dash/users/new', label: 'إضافة مستخدم جديد' };

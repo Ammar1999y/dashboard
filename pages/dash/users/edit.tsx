@@ -1,4 +1,5 @@
 import type { User } from '@/components/users/types';
+import type { PermissionAction } from '@/lib/permissions/constants';
 import type {
   UpdateUserInput,
   UpdateUserOutput,
@@ -13,10 +14,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { FormProvider, useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
+import { useSession } from '@/lib/auth/use-session';
 import {
   CUSTOM_ROLE_VALUE,
   PERMISSION_ACTIONS,
-  PermissionAction,
 } from '@/lib/permissions/constants';
 import { cn } from '@/lib/utils';
 
@@ -64,6 +65,10 @@ const EditUser = () => {
     refetch,
   } = useQueryData<User>(queryParams);
 
+  const { data: session } = useSession();
+  // Which server schema this PUT will be validated against.
+  const isSelfEdit = !!id && session?.user?.id === id;
+
   const methods = useForm<UpdateUserInput>({
     resolver: zodResolver(updateUserSchema),
     disabled: loading,
@@ -78,34 +83,33 @@ const EditUser = () => {
 
   // Reset form when user data is loaded
   useEffect(() => {
-    if (userData) {
-      reset({
-        ...userData,
-        roleId: userData.roleId || undefined,
-        phoneNumber: userData.phoneNumber ?? '',
-      });
-      initialDataRef.current = userData;
+    if (!userData) {
+      return;
+    }
 
-      // Initialize permissions table store for custom role users
-      if (
-        userData.roleId === CUSTOM_ROLE_VALUE &&
-        userData.permissions?.length
-      ) {
-        const ACTIONS_ARRAY = Object.keys(
-          PERMISSION_ACTIONS
-        ) as PermissionAction[];
-        usePermissionsTableStore.getState().initializeStates(
-          userData.permissions.map((p) => ({
-            name: p.name,
-            permissions: Object.fromEntries(
-              ACTIONS_ARRAY.map((action) => [
-                action,
-                Boolean(p.permissions[action]),
-              ])
-            ),
-          }))
-        );
-      }
+    reset({
+      ...userData,
+      roleId: userData.roleId || undefined,
+      phoneNumber: userData.phoneNumber ?? '',
+    });
+    initialDataRef.current = userData;
+
+    // Initialize permissions table store for custom role users
+    if (userData.roleId === CUSTOM_ROLE_VALUE && userData.permissions?.length) {
+      const ACTIONS_ARRAY = Object.keys(
+        PERMISSION_ACTIONS
+      ) as PermissionAction[];
+      usePermissionsTableStore.getState().initializeStates(
+        userData.permissions.map((p) => ({
+          name: p.name,
+          permissions: Object.fromEntries(
+            ACTIONS_ARRAY.map((action) => [
+              action,
+              Boolean(p.permissions[action]),
+            ])
+          ),
+        }))
+      );
     }
   }, [userData, reset]);
 
@@ -118,20 +122,29 @@ const EditUser = () => {
         // After validation, data is guaranteed to match UpdateUserOutput
         const validatedData = data as UpdateUserOutput;
 
-        const payload: Partial<UpdateUserOutput> = {
-          id: validatedData.id,
-          name: validatedData.name,
-          email: validatedData.email,
-          phoneNumber: validatedData.phoneNumber,
-          isActive: validatedData.isActive,
-          roleId: validatedData.roleId,
-          password: validatedData.password,
-        };
+        // Editing your own row hits the self-edit branch of PUT /users/:id,
+        // whose contract is `{ id, name }` and nothing else — it rejects
+        // unknown keys. Sending the admin payload there was a guaranteed 422,
+        // so the ordinary "edit my own profile" path never worked. The wire
+        // payload has to match the schema the endpoint will actually pick.
+        const payload: Partial<UpdateUserOutput> = isSelfEdit
+          ? { id: validatedData.id, name: validatedData.name }
+          : {
+              id: validatedData.id,
+              name: validatedData.name,
+              email: validatedData.email,
+              phoneNumber: validatedData.phoneNumber,
+              isActive: validatedData.isActive,
+              roleId: validatedData.roleId,
+              password: validatedData.password,
+            };
 
         // Only include permissions if:
-        // 1. Role is custom AND permissions exist AND
-        // 2. Either role changed to/from custom OR permissions actually changed
+        // 1. Not a self-edit (that contract carries name only) AND
+        // 2. Role is custom AND permissions exist AND
+        // 3. Either role changed to/from custom OR permissions actually changed
         if (
+          !isSelfEdit &&
           validatedData.roleId === CUSTOM_ROLE_VALUE &&
           validatedData.permissions
         ) {
@@ -155,34 +168,16 @@ const EditUser = () => {
           href: `/api/dash/users/${validatedData.id}`,
           method: 'PUT',
           data: payload,
-          onSuccess: (serverData) => {
-            const { password: _, ...data } = validatedData;
-
-            const updatedUser: User = {
-              ...data,
-              role: userData?.role || null,
-              updatedAt: serverData.updatedAt || new Date().toISOString(),
-              createdAt: userData?.createdAt || new Date().toISOString(),
-            };
-
-            // Update detail cache
-            queryClient.setQueryData(
-              USERS_QUERY_KEYS.detail(validatedData.id),
-              updatedUser
-            );
-
-            // Update list cache
-            const existingList = queryClient.getQueryData<User[]>(
-              USERS_QUERY_KEYS.list
-            );
-            if (existingList) {
-              queryClient.setQueryData(
-                USERS_QUERY_KEYS.list,
-                existingList.map((item) =>
-                  item.id === validatedData.id ? updatedUser : item
-                )
-              );
-            }
+          onSuccess: () => {
+            // Invalidate, don't patch. The list lives under EXPANDED keys
+            // (`[...list, page, perPage, sort, filters, joinOperator, search]`)
+            // holding `{ data, meta }`, so `getQueryData(list)` was always
+            // undefined and the patch below it silently did nothing — the table
+            // kept serving the pre-edit rows for the whole stale window. And
+            // rebuilding the row from form state guessed at fields the server
+            // owns (updatedAt, verified flags, the role after a custom edit).
+            // `list` is a prefix of `detail`, so one call covers both.
+            queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEYS.list });
           },
         });
 
@@ -198,7 +193,7 @@ const EditUser = () => {
         setLoading(false);
       }
     },
-    [userData, queryClient, router]
+    [isSelfEdit, queryClient, router]
   );
 
   const onError = useCallback((errors: FieldErrors<UpdateUserInput>) => {
@@ -218,6 +213,10 @@ const EditUser = () => {
       <form
         className={cn('transition-[max-width,opacity]', loading && 'disabled')}
         inert={loading}
+        // `onSubmit` reads `initialDataRef.current`, but react-hook-form's
+        // `handleSubmit` only wraps it into a submit handler and never invokes
+        // it during render, so the ref is read on submit only.
+        // eslint-disable-next-line react-hooks/refs
         onSubmit={handleSubmit(onSubmit, onError)}
       >
         <Header

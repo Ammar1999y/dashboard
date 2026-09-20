@@ -1,13 +1,13 @@
 import Head from 'next/head';
 import { memo } from 'react';
 
-import { primaryColor } from '@/constants';
+import { PRIMARY_HEX } from '@/constants/theme';
 import { PUBLIC_URL } from '@/lib/env';
 
 // TODO
 const metadata = {
   appCapable: 'yes',
-  themeColor: primaryColor,
+  themeColor: PRIMARY_HEX,
   appleTouchIcon: '/public/images/logo180.png',
   mobileWebAppCapable: 'yes',
   og: {

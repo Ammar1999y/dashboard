@@ -232,7 +232,7 @@ const InlineComboboxInput = ({
           aria-hidden='true'
           className='invisible overflow-hidden text-nowrap'
         >
-          {value || '\u200B'}
+          {value || '\u{200B}'}
         </span>
 
         <Combobox

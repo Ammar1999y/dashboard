@@ -18,13 +18,13 @@ export function validateRedirectPath(path: string, fallback = '/dash'): string {
   // prettier-ignore
   // eslint-disable-next-line security/detect-non-literal-regexp
   const dangerousCharsPattern = new RegExp([
-    '[\u0000-\u001F\u007F]',       // Control characters
-    '[\u00AD]',                     // Soft hyphen (invisible)
-    '[\u200B-\u200F]',              // Zero-width chars
-    '[\u2028-\u202F]',              // Line/paragraph separators, bidirectional
-    '[\uFEFF]',                     // BOM
-    '[\uFF20]',                     // Fullwidth @ (＠)
-    '[\u2215\u2044\uFF0F\u29F8]',   // Unicode slashes (∕, ⁄, ／, ⧸)
+    '[\u{0}-\u{1F}\u{7F}]',       // Control characters
+    '[\u{AD}]',                     // Soft hyphen (invisible)
+    '[\u{200B}-\u{200F}]',              // Zero-width chars
+    '[\u{2028}-\u{202F}]',              // Line/paragraph separators, bidirectional
+    '[\u{FEFF}]',                     // BOM
+    '[\u{FF20}]',                     // Fullwidth @ (＠)
+    '[\u{2215}\u{2044}\u{FF0F}\u{29F8}]',   // Unicode slashes (∕, ⁄, ／, ⧸)
   ].join('|'));
   if (dangerousCharsPattern.test(path)) return fallback;
 

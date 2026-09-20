@@ -1,14 +1,14 @@
-import type { MeasuringConfiguration } from '@dnd-kit/core';
+import type { DropAnimation, MeasuringConfiguration } from '@dnd-kit/core';
 import type { Table } from '@tanstack/react-table';
+import type { RefObject } from 'react';
 
-import { memo, RefObject, useEffect } from 'react';
+import { memo, useEffect } from 'react';
 
 import {
   closestCenter,
   defaultDropAnimationSideEffects,
   DndContext,
   DragOverlay,
-  DropAnimation,
   MeasuringStrategy,
 } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';

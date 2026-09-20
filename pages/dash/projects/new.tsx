@@ -1,5 +1,8 @@
 import type { Project } from '@/components/projects/types';
-import type { CreateProjectInput } from '@/utils/validation/projects';
+import type {
+  CreateProjectInput,
+  CreateProjectOutput,
+} from '@/utils/validation/projects';
 import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
@@ -14,10 +17,7 @@ import { cn } from '@/lib/utils';
 import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
 import { useErrors } from '@/utils/store/errors';
-import {
-  CreateProjectOutput,
-  createProjectSchema,
-} from '@/utils/validation/projects';
+import { createProjectSchema } from '@/utils/validation/projects';
 
 import {
   flattenErrors,

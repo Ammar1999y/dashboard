@@ -1,9 +1,12 @@
+import type { MediaType } from '@/components/editor/media-config';
+import type { FileRejection } from 'react-dropzone';
+
 import React, { useCallback, useState } from 'react';
 
 import { insertImage, insertMediaEmbed } from '@platejs/media';
 import { LinkIcon, Loader2Icon, UploadCloudIcon } from 'lucide-react';
 import { useEditorRef } from 'platejs/react';
-import { FileRejection, useDropzone } from 'react-dropzone';
+import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 
 import { useUploadFile } from '@/hooks/use-upload-file';
@@ -18,7 +21,7 @@ import {
 import { Input } from '@/components/ui/input';
 import Label from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { mediaConfig, MediaType } from '@/components/editor/media-config';
+import { mediaConfig } from '@/components/editor/media-config';
 
 interface MediaUploadDialogProps {
   open: boolean;

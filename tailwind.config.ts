@@ -1,9 +1,9 @@
 import type { Config } from 'tailwindcss';
 
+import { breakpointsTokens } from '@/constants/breakpoints';
+import { PRIMARY_CSS_VARIABLES } from '@/constants/theme';
 import animate from 'tailwindcss-animate';
 import plugin from 'tailwindcss/plugin';
-
-import { breakpointsTokens } from './utils/breakpoints';
 
 // Generate spacing values using CSS calc with --spacing variable
 // This mimics Tailwind v4's dynamic spacing behavior
@@ -274,6 +274,9 @@ const config: Config = {
     space: false,
   },
   plugins: [
+    plugin(function ({ addBase }) {
+      addBase({ ':root': PRIMARY_CSS_VARIABLES });
+    }),
     plugin(function ({ addVariant }) {
       addVariant('touch', '@media (hover: none)');
       addVariant('hover-device', '@media (hover: hover)');

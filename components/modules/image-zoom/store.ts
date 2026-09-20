@@ -1,6 +1,6 @@
-import { create } from 'zustand';
+import type { FileWithPreview } from '@/components/file-upload';
 
-import { FileWithPreview } from '@/components/file-upload';
+import { create } from 'zustand';
 
 interface ZoomImageStore {
   zoomFile: FileWithPreview | null;

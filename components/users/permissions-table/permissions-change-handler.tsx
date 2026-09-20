@@ -20,28 +20,29 @@ const PermissionsChangeHandler = memo(
   ({ onPermissionsChange }: PermissionsChangeHandlerProps) => {
     const checkboxStates = usePermissionsTableStore((s) => s.checkboxStates);
     useEffect(() => {
-      if (onPermissionsChange) {
-        const permissionsData: PagePermission[] = permissionPages.map(
-          (page, index) => {
-            const pageConfig = DEFAULT_PAGE_PERMISSIONS[index];
-            const permissions: Partial<Record<PermissionAction, boolean>> = {};
-
-            ACTIONS_ARRAY.forEach((action, colIndex) => {
-              if (pageConfig?.availablePermissions.includes(action)) {
-                permissions[action] =
-                  checkboxStates[index]?.[colIndex] ?? false;
-              }
-            });
-
-            return {
-              name: page.name,
-              permissions,
-            };
-          }
-        );
-
-        onPermissionsChange(permissionsData);
+      if (!onPermissionsChange) {
+        return;
       }
+
+      const permissionsData: PagePermission[] = permissionPages.map(
+        (page, index) => {
+          const pageConfig = DEFAULT_PAGE_PERMISSIONS[index];
+          const permissions: Partial<Record<PermissionAction, boolean>> = {};
+
+          ACTIONS_ARRAY.forEach((action, colIndex) => {
+            if (pageConfig?.availablePermissions.includes(action)) {
+              permissions[action] = checkboxStates[index]?.[colIndex] ?? false;
+            }
+          });
+
+          return {
+            name: page.name,
+            permissions,
+          };
+        }
+      );
+
+      onPermissionsChange(permissionsData);
     }, [checkboxStates, onPermissionsChange]);
     return null;
   }

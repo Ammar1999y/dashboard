@@ -1,3 +1,5 @@
+import type { FileWithPreview } from './file-types';
+
 import { memo, useCallback } from 'react';
 
 import { Expand as _Expand } from 'lucide-react';
@@ -6,8 +8,6 @@ import { useShallow } from 'zustand/shallow';
 import { MODULE_ID as IMAGE_MODULE_ID } from '@/components/modules/image-zoom';
 import { useZoomImageStore } from '@/components/modules/image-zoom/store';
 import ModuleTrigger from '@/components/modules/module-trigger';
-
-import { FileWithPreview } from './file-types';
 
 const Expand = memo(_Expand);
 Expand.displayName = 'Expand';

@@ -1,3 +1,4 @@
+import type { User } from '../types';
 import type { CoreRow } from '@tanstack/react-table';
 
 import { memo } from 'react';
@@ -11,7 +12,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-import { User } from '../types';
 import { DeleteAction } from './delete-action';
 
 const EditIcon = memo(_EditIcon);

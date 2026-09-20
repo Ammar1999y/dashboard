@@ -1,4 +1,4 @@
-import type { SortableRootContextValue } from './constants';
+import type { ITEM_HANDLE_NAME, SortableRootContextValue } from './constants';
 
 import * as React from 'react';
 
@@ -9,7 +9,6 @@ import {
 
 import {
   CONTENT_NAME,
-  ITEM_HANDLE_NAME,
   ITEM_NAME,
   OVERLAY_NAME,
   ROOT_NAME,

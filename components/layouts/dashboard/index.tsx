@@ -26,10 +26,12 @@ export default function DashboardLayout({
   const { replace, asPath } = useRouter();
   const { data: session, isPending } = useSession();
   useEffect(() => {
-    if (!isPending && !session?.user?.id) {
-      replace('/dash/sign-in');
-      localStorage.setItem('redirect-path', asPath);
+    if (isPending || session?.user?.id) {
+      return;
     }
+
+    replace('/dash/sign-in');
+    localStorage.setItem('redirect-path', asPath);
   }, [session?.user?.id, replace, isPending, asPath]);
   if (isPending || !session?.user?.id) return null;
   return (

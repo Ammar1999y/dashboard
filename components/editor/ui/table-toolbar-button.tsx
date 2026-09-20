@@ -208,7 +208,7 @@ function TablePicker() {
   const { editor, tf } = useEditorPlugin(TablePlugin);
 
   const [tablePicker, setTablePicker] = React.useState({
-    grid: Array.from({ length: 8 }, () => Array.from({ length: 8 }).fill(0)),
+    grid: Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => 0)),
     size: { colCount: 0, rowCount: 0 },
   });
 

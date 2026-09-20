@@ -1,6 +1,7 @@
+import type { ThemePreset } from '../types/theme';
+
 import { create } from 'zustand';
 
-import { ThemePreset } from '../types/theme';
 import { defaultPresets } from '../utils/theme-presets';
 
 interface ThemePresetStore {

@@ -1,3 +1,5 @@
+import type { FileWithPreview } from './file-types';
+
 import { memo } from 'react';
 
 import { Download, GripVertical, Trash2 } from 'lucide-react';
@@ -6,7 +8,6 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { SortableHandle } from '@/components/sortable';
 
-import { FileWithPreview } from './file-types';
 import { formatBytes, getFileIcon } from './file-utils';
 import { FileZoomButton } from './file-zoom-button';
 

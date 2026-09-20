@@ -1,4 +1,5 @@
-import { Item } from '@/types/sections';
+import type { Item } from '@/types/sections';
+
 import * as z from 'zod';
 
 import {

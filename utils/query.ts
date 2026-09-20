@@ -1,8 +1,8 @@
+import type { EntityID } from '@/types';
 import type { PaginationMeta } from '@/types/data-table';
 
 import { useRouter } from 'next/router';
 
-import { EntityID } from '@/types';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useShallow } from 'zustand/shallow';
 import { apiFetch } from '@/lib/api';

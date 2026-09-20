@@ -1,5 +1,6 @@
 /* eslint-disable unicorn/no-typeof-undefined */
-import {
+import type { OptionsType } from './options';
+import type {
   CreatePluginType,
   EmblaCarouselType,
   EngineType,
@@ -7,7 +8,7 @@ import {
   ScrollBodyType,
 } from 'embla-carousel';
 
-import { defaultOptions, OptionsType } from './options';
+import { defaultOptions } from './options';
 import { getAutoScrollRootNode } from './utils';
 
 declare module 'embla-carousel' {
@@ -259,10 +260,12 @@ function AutoScroll(userOptions: AutoScrollOptionsType = {}): AutoScrollType {
   }
 
   function reset(): void {
-    if (autoScrollActive) {
-      stopAutoScroll();
-      startAutoScrollOnSettle();
+    if (!autoScrollActive) {
+      return;
     }
+
+    stopAutoScroll();
+    startAutoScrollOnSettle();
   }
 
   function isPlaying(): boolean {

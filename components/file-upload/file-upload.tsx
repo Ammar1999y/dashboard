@@ -1,13 +1,15 @@
 'use client';
 
+import type { FileWithPreview } from './file-types';
+import type { Modifiers } from '@dnd-kit/core';
+import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
+import type { FileRejection } from 'react-dropzone';
+
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
-import {
-  AnimateLayoutChanges,
-  defaultAnimateLayoutChanges,
-} from '@dnd-kit/sortable';
+import { defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CloudUpload as _CloudUpload, Trash2 as _Trash2 } from 'lucide-react';
-import { ErrorCode, FileRejection, useDropzone } from 'react-dropzone';
+import { ErrorCode, useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 import { ACCEPT_IMAGES_SVG_AND_PDF } from '@/lib/constants/file-types';
 import { cn } from '@/lib/utils';
@@ -27,7 +29,6 @@ import {
 } from '@/components/sortable';
 
 import { FileCardContent } from './file-card';
-import { FileWithPreview } from './file-types';
 import { formatBytes } from './file-utils';
 
 const CloudUpload = memo(_CloudUpload);
@@ -68,7 +69,7 @@ interface FileUploadProps {
   inputID?: string;
 }
 // const modifiers = [restrictToWindowEdges, restrictToFirstScrollableAncestor];
-const modifiers = [];
+const modifiers: Modifiers = [];
 export const FileUpload = memo(
   ({
     maxFiles = 10,

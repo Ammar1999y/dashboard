@@ -1,13 +1,12 @@
 import type { PagePermission } from '@/components/users/permissions-table/types';
+import type {
+  CreatePermissionFormData,
+  UpdatePermissionFormData,
+} from '@/utils/validation/permissions';
 
 import { memo, useCallback } from 'react';
 
 import { useFormContext } from 'react-hook-form';
-
-import {
-  CreatePermissionFormData,
-  UpdatePermissionFormData,
-} from '@/utils/validation/permissions';
 
 import { AutosizeTextarea } from '@/components/ui/auto-resize-textarea';
 import { Input } from '@/components/ui/input';

@@ -3,7 +3,7 @@ class CustomError extends Error {
   public responseHeaders?: Record<string, string>;
 
   constructor(
-    public message: string,
+    public override message: string,
     public status?: number,
     public code?: string
   ) {

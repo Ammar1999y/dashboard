@@ -1,9 +1,11 @@
 'use client';
 
+import type { UniqueIdentifier } from '@dnd-kit/core';
+import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
+
 import React, { useMemo } from 'react';
 
-import { UniqueIdentifier } from '@dnd-kit/core';
-import { AnimateLayoutChanges, useSortable } from '@dnd-kit/sortable';
+import { useSortable } from '@dnd-kit/sortable';
 import { cn } from '@/lib/utils';
 
 // ============================================

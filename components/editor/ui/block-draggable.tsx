@@ -102,10 +102,12 @@ function Draggable(props: PlateElementProps) {
   const mouseDownPos = React.useRef<{ x: number; y: number } | null>(null);
 
   const resetPreview = () => {
-    if (previewRef.current) {
-      previewRef.current.replaceChildren();
-      previewRef.current?.classList.add('hidden');
+    if (!previewRef.current) {
+      return;
     }
+
+    previewRef.current.replaceChildren();
+    previewRef.current?.classList.add('hidden');
   };
 
   // clear up virtual multiple preview when drag end

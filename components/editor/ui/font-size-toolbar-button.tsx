@@ -125,10 +125,12 @@ export function FontSizeToolbarButton() {
               setInputValue(toUnitLess(cursorFontSize));
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleInputChange();
+              if (e.key !== 'Enter') {
+                return;
               }
+
+              e.preventDefault();
+              handleInputChange();
             }}
             type='text'
             value={displayValue}

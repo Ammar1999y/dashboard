@@ -1,11 +1,10 @@
 'use client';
 
+import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
+
 import { useMemo, useState } from 'react';
 
-import {
-  AnimateLayoutChanges,
-  defaultAnimateLayoutChanges,
-} from '@dnd-kit/sortable';
+import { defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
 
 import {
   MeasuringStrategy,

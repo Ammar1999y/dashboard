@@ -1,4 +1,5 @@
 import type { Permission } from '@/components/permissions/types';
+import type { RoleOption } from '@/components/users/form/role';
 import type {
   UpdatePermissionInput,
   UpdatePermissionOutput,
@@ -13,7 +14,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { FormProvider, useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
-import { CUSTOM_ROLE_VALUE, ROLE_SCOPE } from '@/lib/permissions/constants';
+import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
 import { cn } from '@/lib/utils';
 
 import { CustomError } from '@/utils/error-class';
@@ -31,7 +32,6 @@ import { Header } from '@/components/form/header';
 import LoadingPage from '@/components/loading-page';
 import PermissionsForm from '@/components/permissions/permissions-form';
 import { PERMISSIONS_QUERY_KEYS } from '@/components/permissions/query-keys';
-import { RoleOption } from '@/components/users/form/role';
 import { usePermissionsTableStore } from '@/components/users/permissions-table/store';
 import {
   ROLES_QUERY_KEYS,
@@ -78,14 +78,16 @@ const EditPermission = () => {
 
   // Reset form when permission data is loaded
   useEffect(() => {
-    if (permissionData) {
-      reset(permissionData);
-      initialDataRef.current = permissionData;
-
-      usePermissionsTableStore
-        .getState()
-        .initializeStates(permissionData.permissions);
+    if (!permissionData) {
+      return;
     }
+
+    reset(permissionData);
+    initialDataRef.current = permissionData;
+
+    usePermissionsTableStore
+      .getState()
+      .initializeStates(permissionData.permissions);
   }, [permissionData, reset]);
 
   const onSubmit = useCallback(
@@ -118,36 +120,15 @@ const EditPermission = () => {
           href: `/api/dash/permissions/${validatedData.id}`,
           method: 'PUT',
           data: payload,
-          onSuccess: (serverData) => {
-            const updatedPermission: Permission = {
-              ...validatedData,
-              scope: ROLE_SCOPE.STANDARD,
-              permissions:
-                validatedData.permissions || permissionData?.permissions || [],
-              updatedAt: serverData.updatedAt || new Date().toISOString(),
-              createdAt: permissionData?.createdAt || new Date().toISOString(),
-            };
-
-            // Update detail cache
-            queryClient.setQueryData(
-              PERMISSIONS_QUERY_KEYS.detail(validatedData.id),
-              updatedPermission
-            );
-
-            // Update list cache
-            const existingList = queryClient.getQueryData<Permission[]>(
-              PERMISSIONS_QUERY_KEYS.list
-            );
-            if (existingList) {
-              queryClient.setQueryData(
-                PERMISSIONS_QUERY_KEYS.list,
-                existingList.map((item) =>
-                  item.id === validatedData.id
-                    ? { ...item, ...updatedPermission }
-                    : item
-                )
-              );
-            }
+          onSuccess: () => {
+            // Invalidate rather than patch: the list is keyed by
+            // page/sort/filters/search with a `{ data, meta }` value, so the
+            // old `getQueryData(list)` patch never landed, and rebuilding the
+            // row from form state guessed `updatedAt`/`usersCount`. `list` is a
+            // prefix of `detail`, so this covers both.
+            queryClient.invalidateQueries({
+              queryKey: PERMISSIONS_QUERY_KEYS.list,
+            });
 
             // Handle roles cache updates
             const existingRoles = queryClient.getQueryData<RoleOption[]>(
@@ -235,6 +216,10 @@ const EditPermission = () => {
       <form
         className={cn('transition-[max-width,opacity]', loading && 'disabled')}
         inert={loading}
+        // `onSubmit` reads `initialDataRef.current`, but react-hook-form's
+        // `handleSubmit` only wraps it into a submit handler and never invokes
+        // it during render, so the ref is read on submit only.
+        // eslint-disable-next-line react-hooks/refs
         onSubmit={handleSubmit(onSubmit, onError)}
       >
         <Header

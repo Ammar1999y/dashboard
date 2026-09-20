@@ -1,9 +1,6 @@
-import type { RoleScope } from '@/lib/permissions/constants';
-
-import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
-
-import { EntityID } from '.';
-import { PagePermission } from './permission';
+import type { EntityID } from '.';
+import type { PagePermission } from './permission';
+import type { CUSTOM_ROLE_VALUE, RoleScope } from '@/lib/permissions/constants';
 
 interface UserRole {
   id: EntityID;

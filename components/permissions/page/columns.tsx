@@ -1,3 +1,5 @@
+import type { Permission } from '../types';
+
 import { humanReadableNumber } from '@/utils';
 import { type ColumnDef } from '@tanstack/react-table';
 
@@ -6,7 +8,6 @@ import { DataTableColumnHeader } from '@/components/ui/data-table';
 import { dateBetweenFilterFn } from '@/components/ui/data-table/utils/column-utils';
 import { tableFormatDate } from '@/components/ui/date/utils';
 
-import { Permission } from '../types';
 import { TableActions } from './table-actions';
 
 export const columns: ColumnDef<Permission>[] = [

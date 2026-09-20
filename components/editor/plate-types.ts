@@ -29,10 +29,7 @@ export interface MyBlockElement extends TElement, TListProps {
 export interface MyTextBlockElement
   extends TElement, TLineHeightProps, TTextAlignProps {
   children: (
-    | MyLinkElement
-    | MyMentionElement
-    | MyMentionInputElement
-    | RichText
+    MyLinkElement | MyMentionElement | MyMentionInputElement | RichText
   )[];
 }
 

@@ -1,12 +1,13 @@
-import { CSSProperties, useCallback } from 'react';
+import type { ModulesNames } from '../modules/modules-handler';
+import type { CSSProperties } from 'react';
+
+import { useCallback } from 'react';
 
 import { Drawer as DrawerPrimitive } from 'vaul';
 import { useShallow } from 'zustand/shallow';
 import { cn } from '@/lib/utils';
 
 import { useModules } from '@/utils/store/modules';
-
-import { ModulesNames } from '../modules/modules-handler';
 
 const Drawer = ({
   name,

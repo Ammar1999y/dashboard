@@ -1,5 +1,8 @@
 import type { User } from '@/components/users/types';
-import type { CreateUserInput } from '@/utils/validation/auth';
+import type {
+  CreateUserInput,
+  CreateUserOutput,
+} from '@/utils/validation/auth';
 import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
@@ -14,7 +17,7 @@ import { cn } from '@/lib/utils';
 import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
 import { useErrors } from '@/utils/store/errors';
-import { CreateUserOutput, createUserSchema } from '@/utils/validation/auth';
+import { createUserSchema } from '@/utils/validation/auth';
 
 import {
   flattenErrors,
@@ -61,30 +64,12 @@ const NewUser = () => {
           href: '/api/dash/users',
           method: 'POST',
           data: validatedData,
-          onSuccess: (serverData) => {
-            const { password: _, ...data } = validatedData;
-            const newUser: User = {
-              ...data,
-              role: null,
-              id: serverData.id,
-              createdAt: serverData.createdAt || new Date().toISOString(),
-            };
-
-            const existingUsers = queryClient.getQueryData<User[]>(
-              USERS_QUERY_KEYS.list
-            );
-
-            queryClient.setQueryData(
-              USERS_QUERY_KEYS.detail(serverData.id),
-              newUser
-            );
-
-            if (existingUsers) {
-              queryClient.setQueryData(USERS_QUERY_KEYS.list, [
-                newUser,
-                ...existingUsers,
-              ]);
-            }
+          onSuccess: () => {
+            // Server-authoritative refetch instead of prepending a locally
+            // assembled row: the list is keyed by page/sort/filters/search
+            // (value `{ data, meta }`), so the prepend never landed, and the
+            // fabricated row carried `role: null` for a user who has one.
+            queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEYS.list });
           },
         });
 

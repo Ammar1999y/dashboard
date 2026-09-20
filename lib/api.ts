@@ -5,7 +5,7 @@ function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
 
   const normalizedPath = path.startsWith('/') ? path.slice(1) : path;
-  return new URL(normalizedPath, `${API_URL}/`).toString();
+  return new URL(normalizedPath, `${API_URL}/`).href;
 }
 
 /** Fetch from the standalone backend and include its session cookie. */

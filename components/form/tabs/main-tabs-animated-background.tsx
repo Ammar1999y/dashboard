@@ -1,6 +1,8 @@
+import type { Variants } from 'framer-motion';
+
 import { memo } from 'react';
 
-import { AnimatePresence, motion, Variants } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useShallow } from 'zustand/shallow';
 
 import { useTabsStore } from './store';

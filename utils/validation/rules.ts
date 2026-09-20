@@ -1,4 +1,5 @@
-import { EntityID } from '@/types';
+import type { EntityID } from '@/types';
+
 import * as z from 'zod';
 
 import { normalizeArabicDigits, positiveInt, validID } from '..';
@@ -86,7 +87,13 @@ export const datePreprocess = (val: any) => {
   return date ? date.toISOString() : null;
 };
 
-export const fileUploadSchema = ({ max, withPdf = false }) =>
+export const fileUploadSchema = ({
+  max,
+  withPdf = false,
+}: {
+  max: number;
+  withPdf?: boolean;
+}) =>
   z
     .file(`قم برفع صور ${withPdf ? 'أو ملف PDF' : ''} صحيحة`)
     .min(1000, `حجم الصورة  ${withPdf ? 'أو ملف PDF' : ''} صغير للغايه`)

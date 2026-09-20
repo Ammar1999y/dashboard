@@ -1,3 +1,6 @@
+import type { EntityID } from '@/types';
+import type { CreateUserFormData } from '@/utils/validation/auth';
+
 import {
   memo,
   useCallback,
@@ -8,7 +11,6 @@ import {
   useState,
 } from 'react';
 
-import { EntityID } from '@/types';
 import { validID } from '@/utils';
 import {
   CheckIcon as _CheckIcon,
@@ -19,7 +21,6 @@ import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
 import { cn } from '@/lib/utils';
 
 import { useQueryData } from '@/utils/query';
-import { CreateUserFormData } from '@/utils/validation/auth';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -161,15 +162,17 @@ const Content = memo(({ selectedValue, onSelect, isOpen }: ContentProps) => {
   useEffect(() => {
     (async () => {
       if (
-        isOpen &&
-        !isLoading &&
-        !isFetching &&
-        !isPending &&
-        !isRefetched.current
+        !isOpen ||
+        isLoading ||
+        isFetching ||
+        isPending ||
+        isRefetched.current
       ) {
-        isRefetched.current = true;
-        await refetch();
+        return;
       }
+
+      isRefetched.current = true;
+      await refetch();
     })();
   }, [isOpen, refetch]);
 
@@ -213,7 +216,9 @@ interface RoleItemProps {
 
 const RoleItem = memo(({ role, isSelected, onSelect }: RoleItemProps) => {
   const handleSelect = useCallback(() => {
-    onSelect(role.id === CUSTOM_ROLE_VALUE ? CUSTOM_ROLE_VALUE : validID(role.id));
+    onSelect(
+      role.id === CUSTOM_ROLE_VALUE ? CUSTOM_ROLE_VALUE : validID(role.id)
+    );
   }, [role.id, onSelect]);
 
   const checkIconClassName = useMemo(

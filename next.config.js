@@ -158,6 +158,7 @@ const nextConfig = {
   reactStrictMode: true,
   reactCompiler: true,
   poweredByHeader: false,
+  devIndicators: false,
   transpilePackages: ['@platejs/math', 'react-tweet'],
   images: {
     unoptimized: true,

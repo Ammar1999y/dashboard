@@ -6,6 +6,8 @@ export type ThemeStyleProps = {
   popover: string;
   'popover-foreground': string;
   primary: string;
+  'primary-light': string;
+  'primary-dark': string;
   'primary-foreground': string;
   secondary: string;
   'secondary-foreground': string;

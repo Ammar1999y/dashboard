@@ -2,7 +2,6 @@ import { useRouter } from 'next/router';
 import { useCallback, useState } from 'react';
 
 import { toast } from 'sonner';
-
 import { apiFetch } from '@/lib/api';
 
 import { Button } from '@/components/ui/button';

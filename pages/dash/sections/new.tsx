@@ -1,5 +1,8 @@
 import type { Section } from '@/components/sections/types';
-import type { CreateSectionInput } from '@/utils/validation/sections';
+import type {
+  CreateSectionInput,
+  CreateSectionOutput,
+} from '@/utils/validation/sections';
 import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
@@ -14,10 +17,7 @@ import { cn } from '@/lib/utils';
 import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
 import { useErrors } from '@/utils/store/errors';
-import {
-  CreateSectionOutput,
-  createSectionSchema,
-} from '@/utils/validation/sections';
+import { createSectionSchema } from '@/utils/validation/sections';
 
 import {
   flattenErrors,

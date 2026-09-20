@@ -210,13 +210,15 @@ export function DataTableFilterList<TData>({
 
   const onTriggerKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>) => {
-      if (
+      if (!(
         REMOVE_FILTER_SHORTCUTS.includes(event.key.toLowerCase()) &&
         draftFilters.length > 0
-      ) {
-        event.preventDefault();
-        onFilterRemove(draftFilters[draftFilters.length - 1]?.filterId ?? '');
+      )) {
+        return;
       }
+
+      event.preventDefault();
+      onFilterRemove(draftFilters[draftFilters.length - 1]?.filterId ?? '');
     },
     [draftFilters, onFilterRemove]
   );

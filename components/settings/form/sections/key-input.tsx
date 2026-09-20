@@ -1,9 +1,10 @@
 import type { SettingsInput } from '@/utils/validation/settings';
+import type { FieldPath } from 'react-hook-form';
 
 import { memo } from 'react';
 
 import { HelpCircle } from 'lucide-react';
-import { FieldPath, useFormContext } from 'react-hook-form';
+import { useFormContext } from 'react-hook-form';
 
 import { Input } from '@/components/ui/input';
 import Label from '@/components/ui/label';

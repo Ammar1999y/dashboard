@@ -4,11 +4,12 @@ import '@/components/theme-customizer/circular-transition.css';
 import '@/styles/app-style.css';
 import '@/styles/icons.css';
 import '@/styles/table.css';
+
+import type { NextComponentType, NextPageContext } from 'next';
 // Import local storage handlers to register them
 
 import type { AppProps } from 'next/app';
 
-import { NextComponentType, NextPageContext } from 'next';
 import dynamic from 'next/dynamic';
 import { Cairo } from 'next/font/google';
 import { useEffect, useMemo } from 'react';

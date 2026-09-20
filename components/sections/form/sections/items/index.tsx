@@ -1,13 +1,14 @@
+import type { Item } from '@/types/sections';
+import type { CreateSectionInput } from '@/utils/validation/sections';
+import type { DragEndEvent } from '@dnd-kit/core';
+
 import { memo, useCallback, useEffect, useMemo } from 'react';
 
-import { Item } from '@/types/sections';
 import { generateUUIDv7 } from '@/utils';
-import { DragEndEvent, MeasuringStrategy } from '@dnd-kit/core';
+import { MeasuringStrategy } from '@dnd-kit/core';
 import { defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
 import { Plus } from 'lucide-react';
 import { useFieldArray } from 'react-hook-form';
-
-import { CreateSectionInput } from '@/utils/validation/sections';
 
 import { Button } from '@/components/ui/button';
 import { useStore } from '@/components/smooth-height-container';

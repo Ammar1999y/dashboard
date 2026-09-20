@@ -216,10 +216,12 @@ export function Comment(props: {
                 }, 0);
               }}
               onRemoveComment={() => {
-                if (discussionLength === 1) {
-                  tf.comment.unsetMark({ id: comment.discussionId });
-                  void removeDiscussion(comment.discussionId);
+                if (discussionLength !== 1) {
+                  return;
                 }
+
+                tf.comment.unsetMark({ id: comment.discussionId });
+                void removeDiscussion(comment.discussionId);
               }}
               setDropdownOpen={setDropdownOpen}
               setEditingId={setEditingId}
@@ -573,10 +575,12 @@ export function CommentCreateForm({
               autoFocus={autoFocus}
               className='min-h-6 grow pe-8 pt-0.5'
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  onAddComment();
+                if (e.key !== 'Enter' || e.shiftKey) {
+                  return;
                 }
+
+                e.preventDefault();
+                onAddComment();
               }}
               placeholder={placeholderText}
               variant='comment'

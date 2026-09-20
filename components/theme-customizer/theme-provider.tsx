@@ -21,17 +21,19 @@ const ThemeSync = memo(() => {
   const { resolvedTheme } = useNextTheme();
 
   useIsomorphicLayoutEffect(() => {
-    if (
+    if (!(
       resolvedTheme &&
       (resolvedTheme === 'dark' || resolvedTheme === 'light')
-    ) {
-      const storeMode = useEditorStore.getState().themeState;
-      if (storeMode.currentMode !== resolvedTheme)
-        useEditorStore.getState().setThemeState({
-          ...useEditorStore.getState().themeState,
-          currentMode: resolvedTheme,
-        });
+    )) {
+      return;
     }
+
+    const storeMode = useEditorStore.getState().themeState;
+    if (storeMode.currentMode !== resolvedTheme)
+      useEditorStore.getState().setThemeState({
+        ...useEditorStore.getState().themeState,
+        currentMode: resolvedTheme,
+      });
   }, [resolvedTheme]);
 
   return null;

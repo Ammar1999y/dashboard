@@ -1,12 +1,13 @@
+import type { ModulesNames } from './modules-handler';
+import type { ButtonProps } from '@/components/ui/button';
+
 import { useCallback, useEffect, useRef } from 'react';
 
 import { useShallow } from 'zustand/shallow';
 
 import { useModules } from '@/utils/store/modules';
 
-import { Button, ButtonProps } from '@/components/ui/button';
-
-import { ModulesNames } from './modules-handler';
+import { Button } from '@/components/ui/button';
 
 type ModuleTriggerProps = {
   name: ModulesNames;

@@ -1,3 +1,5 @@
+import type { FileWithPreview } from './file-types';
+
 import { memo } from 'react';
 
 import {
@@ -9,8 +11,6 @@ import {
   FileVideo,
   Image as ImageIcon,
 } from 'lucide-react';
-
-import { FileWithPreview } from './file-types';
 
 // Memoize icons for performance
 const FileTextIcon = memo(FileText);

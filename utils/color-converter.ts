@@ -181,9 +181,7 @@ const isCompleteColorFormat = (colorValue: string): boolean => {
     'initial',
     'unset',
   ];
-  if (cssColorKeywords.includes(trimmed.toLowerCase())) return true;
-
-  return false;
+  return cssColorKeywords.includes(trimmed.toLowerCase());
 };
 
 export const colorFormatter = (

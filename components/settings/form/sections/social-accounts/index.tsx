@@ -1,10 +1,11 @@
 import type { SocialAccountItem } from '@/types/settings';
 import type { SettingsInput } from '@/utils/validation/settings';
+import type { DragEndEvent } from '@dnd-kit/core';
 
 import { memo, useCallback, useEffect, useMemo } from 'react';
 
 import { generateUUIDv7 } from '@/utils';
-import { DragEndEvent, MeasuringStrategy } from '@dnd-kit/core';
+import { MeasuringStrategy } from '@dnd-kit/core';
 import { defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
 import { Plus } from 'lucide-react';
 import { useFieldArray } from 'react-hook-form';

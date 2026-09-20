@@ -165,13 +165,15 @@ export function DataTableSortList<TData>({
 
   const onTriggerKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>) => {
-      if (
+      if (!(
         REMOVE_SORT_SHORTCUTS.includes(event.key.toLowerCase()) &&
         sorting.length > 0
-      ) {
-        event.preventDefault();
-        onSortingReset();
+      )) {
+        return;
       }
+
+      event.preventDefault();
+      onSortingReset();
     },
     [sorting.length, onSortingReset]
   );

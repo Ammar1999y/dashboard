@@ -1,6 +1,6 @@
-import { create } from 'zustand';
+import type { ModulesNames } from '@/components/modules/modules-handler';
 
-import { ModulesNames } from '@/components/modules/modules-handler';
+import { create } from 'zustand';
 
 interface ModulesStore {
   openModules: ModulesNames[];
@@ -13,7 +13,7 @@ interface ModulesStore {
   resetModules: () => void;
 }
 
-const EMPTY_ARRAY = [];
+const EMPTY_ARRAY: ModulesNames[] = [];
 export const useModules = create<ModulesStore>((set) => ({
   openModules: [],
   showDrawer: false,

@@ -1,6 +1,7 @@
 /* eslint-disable unicorn/prefer-switch */
 'use client';
 
+import type { MediaType } from '@/components/editor/media-config';
 import type { TPlaceholderElement } from 'platejs';
 import type { PlateElementProps } from 'platejs/react';
 
@@ -18,7 +19,6 @@ import { useFilePicker } from 'use-file-picker';
 import { cn } from '@/lib/utils';
 
 import { useUploadFile } from '@/hooks/use-upload-file';
-import { MediaType } from '@/components/editor/media-config';
 
 const CONTENT: Record<
   string,
@@ -71,7 +71,7 @@ export const PlaceholderElement = withHOC(
     const { openFilePicker } = useFilePicker({
       accept: currentContent.accept,
       multiple: true,
-      onFilesSelected: (data) => {
+      onFilesSelected: (data: { plainFiles?: File[] }) => {
         if (!data.plainFiles || data.plainFiles.length === 0) return;
 
         const firstFile = data.plainFiles[0];
@@ -80,7 +80,13 @@ export const PlaceholderElement = withHOC(
         replaceCurrentPlaceholder(firstFile);
 
         if (restFiles.length > 0) {
-          editor.getTransforms(PlaceholderPlugin).insert.media(restFiles);
+          // `insert.media` is declared as taking a `FileList`, but it only ever
+          // iterates the argument (`for…of` / `Array.from`), so the `File[]`
+          // that `useFilePicker` hands us is fine. The typing of `data` used to
+          // be `any`, which hid this mismatch.
+          editor
+            .getTransforms(PlaceholderPlugin)
+            .insert.media(restFiles as unknown as FileList);
         }
       },
     });

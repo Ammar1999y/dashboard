@@ -1,24 +1,24 @@
 'use client';
 
-import React from 'react';
-
-import {
-  closestCenter,
-  defaultDropAnimationSideEffects,
-  DndContext,
+import type {
   DragEndEvent,
-  DragOverlay,
   DragStartEvent,
   DropAnimation,
   MeasuringConfiguration,
   Modifiers,
   UniqueIdentifier,
 } from '@dnd-kit/core';
+import type { SortingStrategy } from '@dnd-kit/sortable';
+
+import React from 'react';
+
 import {
-  rectSortingStrategy,
-  SortableContext,
-  SortingStrategy,
-} from '@dnd-kit/sortable';
+  closestCenter,
+  defaultDropAnimationSideEffects,
+  DndContext,
+  DragOverlay,
+} from '@dnd-kit/core';
+import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
 import { createPortal } from 'react-dom';
 
 const dropAnimationConfig: DropAnimation = {

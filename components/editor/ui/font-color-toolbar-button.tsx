@@ -1,5 +1,6 @@
 'use client';
 
+import type { TColor } from '@/components/editor/hooks/use-custom-colors';
 import type {
   DropdownMenuItemProps,
   DropdownMenuProps,
@@ -24,7 +25,6 @@ import {
 import { ToolbarButton, ToolbarMenuGroup } from '@/components/ui/toolbar';
 import {
   DEFAULT_COLORS,
-  TColor,
   useCustomColors,
 } from '@/components/editor/hooks/use-custom-colors';
 
@@ -63,14 +63,16 @@ export function FontColorToolbarButton({
 
   const updateColor = React.useCallback(
     (value: string) => {
-      if (editor.selection) {
-        setSelectedColor(value);
-
-        editor.tf.select(editor.selection);
-        editor.tf.focus();
-
-        editor.tf.addMarks({ [nodeType]: value });
+      if (!editor.selection) {
+        return;
       }
+
+      setSelectedColor(value);
+
+      editor.tf.select(editor.selection);
+      editor.tf.focus();
+
+      editor.tf.addMarks({ [nodeType]: value });
     },
     [editor, nodeType]
   );
@@ -84,16 +86,18 @@ export function FontColorToolbarButton({
   );
 
   const clearColor = React.useCallback(() => {
-    if (editor.selection) {
-      editor.tf.select(editor.selection);
-      editor.tf.focus();
-
-      if (selectedColor) {
-        editor.tf.removeMarks(nodeType);
-      }
-
-      onToggle();
+    if (!editor.selection) {
+      return;
     }
+
+    editor.tf.select(editor.selection);
+    editor.tf.focus();
+
+    if (selectedColor) {
+      editor.tf.removeMarks(nodeType);
+    }
+
+    onToggle();
   }, [editor, selectedColor, onToggle, nodeType]);
 
   React.useEffect(() => {

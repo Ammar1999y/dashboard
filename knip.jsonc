@@ -1,0 +1,31 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  // Next's Pages Router is the runtime graph's root: every file under `pages/`
+  // is reachable by routing rather than by an import edge, so knip cannot infer
+  // them. Declaring `entry` REPLACES knip's defaults, which is why the test and
+  // script roots have to be spelled out too.
+  "entry": [
+    "pages/**/*.{ts,tsx}",
+    "scripts/**/*.ts",
+    // `.mjs` as well: `scripts/require-bun.mjs` is the `preinstall` hook, run
+    // from a package.json script string, so no import edge reaches it. It is
+    // plain `.mjs` because it must run before `node_modules` exists.
+    "scripts/**/*.mjs",
+    "tests/**/*.test.{ts,tsx}",
+    // Loaded by `bunfig.toml`'s `[test] preload`, and the helpers it pulls in.
+    "tests/setup/*.ts",
+    "tests/helpers/*.ts",
+    "tests/fixtures/*.mjs",
+  ],
+  "project": ["**/*.{ts,tsx,js,mjs}"],
+  // Only the plugins loaded by NAME through `FlatCompat.extends()` in
+  // eslint.config.mjs. Knip resolves imports statically, so it cannot see a
+  // string-addressed plugin. Everything else is deliberately absent: knip
+  // recognises prettier, postcss, tailwind and the React Compiler itself, and
+  // reports a redundant entry as a configuration hint.
+  "ignoreDependencies": [
+    "eslint-plugin-no-unsanitized",
+    "eslint-plugin-security",
+    "eslint-plugin-import",
+  ],
+}

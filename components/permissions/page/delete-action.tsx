@@ -1,3 +1,6 @@
+import type { Permission } from '../types';
+import type { RoleOption } from '@/components/users/form/role';
+
 import { memo, useCallback, useState } from 'react';
 
 import { validID } from '@/utils';
@@ -19,11 +22,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { RoleOption } from '@/components/users/form/role';
 import { ROLES_QUERY_KEYS } from '@/components/users/query-keys';
 
 import { PERMISSIONS_QUERY_KEYS } from '../query-keys';
-import { Permission } from '../types';
 
 const Trash2Icon = memo(_Trash2Icon);
 

@@ -1,7 +1,7 @@
+import type { NavItemDataProps } from '../types';
+
 import { usePathname } from 'next/navigation';
 import { useCallback, useMemo, useState } from 'react';
-
-import { NavItemDataProps } from '../types';
 
 export function useNavItemState(data: NavItemDataProps, depth: number = 0) {
   const pathname = usePathname();

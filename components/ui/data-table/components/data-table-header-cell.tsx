@@ -58,10 +58,12 @@ const SortButton = memo(({ columnId }: SortButtonProps) => {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLButtonElement>) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        handleSort();
+      if (!(e.key === 'Enter' || e.key === ' ')) {
+        return;
       }
+
+      e.preventDefault();
+      handleSort();
     },
     [handleSort]
   );

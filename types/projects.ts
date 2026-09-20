@@ -1,4 +1,4 @@
-import { EntityID } from '.';
+import type { EntityID } from '.';
 
 export interface ProjectClient {
   id: EntityID;

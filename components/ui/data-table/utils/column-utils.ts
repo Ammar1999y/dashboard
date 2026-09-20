@@ -7,7 +7,7 @@ type ColumnMeta = {
   options?: { label: string; value: string }[];
 };
 
-interface SearchableColumn {
+export interface SearchableColumn {
   id: string;
   label: string;
   filterVariant: 'text' | 'dateRange' | 'number' | 'numberRange';
@@ -38,7 +38,9 @@ export const getSearchableColumns = <TData>(
     })) as SearchableColumn[];
 };
 
-export const getSelectFilters = <TData>(table: Table<TData>): SelectFilter[] => {
+export const getSelectFilters = <TData>(
+  table: Table<TData>
+): SelectFilter[] => {
   return table
     .getAllColumns()
     .filter((column) => {
@@ -77,8 +79,8 @@ export const dateBetweenFilterFn: FilterFn<any> = (row, columnId, value) => {
 
   const rowDate = new Date(date);
   if (start && !end) return rowDate >= new Date(start);
-  else if (!start && end) return rowDate <= new Date(end);
-  else if (start && end)
+  if (!start && end) return rowDate <= new Date(end);
+  if (start && end)
     return rowDate >= new Date(start) && rowDate <= new Date(end);
   return true;
 };
