@@ -69,9 +69,9 @@ export const useDateRangeState = ({
   );
 
   const [isSmallScreen, setIsSmallScreen] = useState(
-    typeof window !== 'undefined'
-      ? window.innerWidth < Number(breakpointsTokens.lg.slice(0, -2))
-      : false
+    typeof window === 'undefined'
+      ? false
+      : window.innerWidth < Number(breakpointsTokens.lg.slice(0, -2))
   );
 
   useEffect(() => {

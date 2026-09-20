@@ -14,7 +14,7 @@ const getSaveRowLength = (table: Table<any>) => {
   try {
     return table.getRowModel().rows.length;
   } catch {
-    return undefined;
+    return;
   }
 };
 

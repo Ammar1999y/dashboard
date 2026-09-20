@@ -9,14 +9,14 @@ export function useIsMobile() {
 
   React.useEffect(() => {
     const mql =
-      typeof window !== 'undefined'
-        ? window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-        : null;
+      typeof window === 'undefined'
+        ? null
+        : globalThis.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
     const onChange = () => {
       setIsMobile(
-        typeof window !== 'undefined'
-          ? window.innerWidth < MOBILE_BREAKPOINT
-          : false
+        typeof window === 'undefined'
+          ? false
+          : window.innerWidth < MOBILE_BREAKPOINT
       );
     };
 
@@ -24,9 +24,9 @@ export function useIsMobile() {
       mql.addEventListener('change', onChange);
     }
     setIsMobile(
-      typeof window !== 'undefined'
-        ? window.innerWidth < MOBILE_BREAKPOINT
-        : false
+      typeof window === 'undefined'
+        ? false
+        : window.innerWidth < MOBILE_BREAKPOINT
     );
 
     return () => {

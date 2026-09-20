@@ -37,18 +37,24 @@ export const MAIN_TABS: TabConfig[] = [
 
 const TabContent = memo(({ activeTab }: { activeTab: MainTab }) => {
   switch (activeTab) {
-    case 'images':
+    case 'images': {
       return <ImagesSection />;
-    case 'fonts':
+    }
+    case 'fonts': {
       return <FontsSection />;
-    case 'socialAccounts':
+    }
+    case 'socialAccounts': {
       return <SocialAccountsSection />;
-    case 'contactInfo':
+    }
+    case 'contactInfo': {
       return <ContactInfoSection />;
-    case 'navLinks':
+    }
+    case 'navLinks': {
       return <NavLinksSection />;
-    default:
+    }
+    default: {
       return <BasicInfoSection />;
+    }
   }
 });
 

@@ -121,17 +121,17 @@ const DataTableFacetedFilter = memo<DataTableFacetedFilterProps<any, any>>(
                         } else {
                           newSelectedValues.push(option.value);
                         }
-                        if (!newSelectedValues?.length) {
-                          useColumnFilters
-                            .getState()
-                            .removeColumnFilter(column.id);
-                        } else
-                          useColumnFilters
+                        if (newSelectedValues?.length) {useColumnFilters
                             .getState()
                             .updateColumnFilter(
                               column.id,
                               newSelectedValues as string[]
-                            );
+                            );} else
+                          {
+                          useColumnFilters
+                            .getState()
+                            .removeColumnFilter(column.id);
+                        }
                       }}
                     >
                       <div

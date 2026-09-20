@@ -64,8 +64,8 @@ const UrlSync = memo(({ defaultSort }: UrlSyncProps) => {
 
       const searchStr = params.toString();
       const newUrl = searchStr
-        ? `${window.location.pathname}?${searchStr}`
-        : window.location.pathname;
+        ? `${location.pathname}?${searchStr}`
+        : location.pathname;
 
       history.replaceState(null, '', newUrl);
     }, DEBOUNCE_MS);

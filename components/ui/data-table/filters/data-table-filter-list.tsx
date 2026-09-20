@@ -204,8 +204,8 @@ export function DataTableFilterList<TData>({
       }
     }
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    globalThis.addEventListener('keydown', onKeyDown);
+    return () => globalThis.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const onTriggerKeyDown = React.useCallback(
@@ -382,14 +382,8 @@ function DataTableFilterItem<TData>({
 
   const onItemKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
-
-      if (showFieldSelector || showOperatorSelector || showValueSelector) {
+      if (event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement || showFieldSelector || showOperatorSelector || showValueSelector) {
         return;
       }
 

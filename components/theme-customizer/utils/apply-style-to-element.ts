@@ -8,7 +8,7 @@ export function applyStyleToElement(
   const cleanedStyle = currentStyle
     .replace(
       // eslint-disable-next-line security/detect-non-literal-regexp
-      new RegExp(`--${key}:\\s*[^;]+;?`, 'g'),
+      new RegExp(String.raw`--${key}:\s*[^;]+;?`, 'g'),
       ''
     )
     .trim();

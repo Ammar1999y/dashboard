@@ -150,7 +150,7 @@ export function sanitizeSvg(
         element.removeAttribute(attr);
       });
 
-      Array.from(element.attributes).forEach((attr) => {
+      [...element.attributes].forEach((attr) => {
         const name = attr.name;
         const value = attr.value;
 

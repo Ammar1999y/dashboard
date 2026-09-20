@@ -79,8 +79,8 @@ export function useSortableList<T = UniqueIdentifier>({
     [items, getId]
   );
 
-  const activeIndex = activeId != null ? getIndex(activeId) : -1;
-  const activeItem = activeIndex !== -1 ? items[activeIndex] : null;
+  const activeIndex = activeId == null ? -1 : getIndex(activeId);
+  const activeItem = activeIndex === -1 ? null : items[activeIndex];
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     if (!event.active) return;

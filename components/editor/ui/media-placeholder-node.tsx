@@ -1,4 +1,4 @@
-/* eslint-disable unicorn/prefer-switch */
+ 
 'use client';
 
 import type { MediaType } from '@/components/editor/media-config';

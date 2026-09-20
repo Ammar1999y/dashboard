@@ -122,12 +122,12 @@ const DataTableContent = memo(
           ) : null}
         </div>
         <DragOverlay dropAnimation={dropAnimation}>
-          {activeHeader != null ? (
+          {activeHeader == null ? null : (
             <div className='flex min-h-10 max-w-32 translate-x-2.5 translate-y-2.5 animate-dnd-pop cursor-grabbing items-center rounded bg-card p-2 text-foreground shadow-lg'>
               {(activeHeader.column.columnDef.meta as any)?.label ??
                 activeHeader.column.id}
             </div>
-          ) : null}
+          )}
         </DragOverlay>
       </DndContext>
     );

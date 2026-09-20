@@ -348,8 +348,7 @@ const useResolvedDiscussion = (
       const commentsPathMap = getOption('uniquePathMap');
       const firstBlockPath = commentsPathMap.get(item.id);
 
-      if (!firstBlockPath) return false;
-      if (!PathApi.equals(firstBlockPath, blockPath)) return false;
+      if (!firstBlockPath || !PathApi.equals(firstBlockPath, blockPath)) return false;
 
       return (
         api.comment.has({ id: item.id }) &&

@@ -37,7 +37,7 @@ const saveRowCheck = <TData>(table: Table<TData>) => {
   try {
     return table.getRowModel().rows;
   } catch {
-    return undefined;
+    return;
   }
 };
 
@@ -187,16 +187,18 @@ export function useDataTable<TData>(props: UseDataTableProps<TData>) {
       const columnSize = header.column.getSize();
       storeSizing[`headerId-${header.id}`] = headerSize;
       storeSizing[`columnId-${header.column.id}`] = columnSize;
-      if (tableContainerRef.current) {
-        tableContainerRef.current.style.setProperty(
-          `--header-${header.id}-size`,
-          `${headerSize}`
-        );
-        tableContainerRef.current.style.setProperty(
-          `--col-${header.column.id}-size`,
-          `${columnSize}`
-        );
+      if (!tableContainerRef.current) {
+      	continue;
       }
+
+      tableContainerRef.current.style.setProperty(
+        `--header-${header.id}-size`,
+        `${headerSize}`
+      );
+      tableContainerRef.current.style.setProperty(
+        `--col-${header.column.id}-size`,
+        `${columnSize}`
+      );
     }
     useColumnSizing.getState().setColumnSizing(storeSizing);
     useColumnSizing.getState().setTotalSize(table.getTotalSize());

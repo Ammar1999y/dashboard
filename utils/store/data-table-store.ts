@@ -80,7 +80,7 @@ function parseUrlParams(): DataTableState {
     };
   }
 
-  const params = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams(location.search);
 
   const page = positiveInt(params.get(URL_KEYS.page), MAX_PAGE) || 1;
   const perPage = positiveInt(params.get(URL_KEYS.perPage), MAX_PER_PAGE) || 10;

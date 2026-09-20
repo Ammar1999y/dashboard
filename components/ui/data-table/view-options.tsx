@@ -88,7 +88,7 @@ const DataTableViewOptions = memo(
 
     // Ordered columns list
     const orderedColumns = useMemo(() => {
-      if (!columnOrder.length) return columns;
+      if (columnOrder.length === 0) return columns;
       const orderMap = new Map(columnOrder.map((id, i) => [id, i]));
       return [...columns].sort((a, b) => {
         const aIdx = orderMap.get(a.id) ?? Infinity;

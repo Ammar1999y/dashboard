@@ -67,8 +67,7 @@ function parseSortItem(raw: unknown): ParsedSortItem | null {
   const obj = raw as Record<string, unknown>;
 
   const id = safeString(obj.id, MAX_ID_LENGTH);
-  if (!id) return null;
-  if (typeof obj.desc !== 'boolean') return null;
+  if (!id || (typeof obj.desc !== 'boolean')) return null;
 
   return { id, desc: obj.desc };
 }

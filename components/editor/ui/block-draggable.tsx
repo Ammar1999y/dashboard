@@ -183,7 +183,7 @@ function Draggable(props: PlateElementProps) {
                         const contextMenuEvent = new MouseEvent('contextmenu', {
                           bubbles: true,
                           cancelable: true,
-                          view: window,
+                          view: globalThis,
                           clientX: e.clientX,
                           clientY: e.clientY,
                           screenX: e.screenX,
@@ -416,7 +416,7 @@ const createDragPreviewElements = (
    * elements incorrectly.
    */
   const removeDataAttributes = (element: HTMLElement) => {
-    Array.from(element.attributes).forEach((attr) => {
+    [...element.attributes].forEach((attr) => {
       if (
         attr.name.startsWith('data-slate') ||
         attr.name.startsWith('data-block-id')
@@ -425,7 +425,7 @@ const createDragPreviewElements = (
       }
     });
 
-    Array.from(element.children).forEach((child) => {
+    [...element.children].forEach((child) => {
       removeDataAttributes(child as HTMLElement);
     });
   };
@@ -458,7 +458,7 @@ const createDragPreviewElements = (
         }
 
         // Apply the original element's styles to maintain appearance
-        const originalStyles = window.getComputedStyle(original);
+        const originalStyles = globalThis.getComputedStyle(original);
         cloned.style.padding = '0';
         innerContainer.style.padding = originalStyles.padding;
 
@@ -521,7 +521,7 @@ const calculatePreviewTop = (
   const firstDomNode = editor.api.toDOMNode(firstSelectedChild)!;
   // Get editor's top padding
   const editorPaddingTop = Number(
-    window.getComputedStyle(editable).paddingTop.replace('px', '')
+    globalThis.getComputedStyle(editable).paddingTop.replace('px', '')
   );
 
   // Calculate distance from first selected node to editor top
@@ -531,7 +531,7 @@ const calculatePreviewTop = (
     editorPaddingTop;
 
   // Get margin top of first selected node
-  const firstMarginTopString = window.getComputedStyle(firstDomNode).marginTop;
+  const firstMarginTopString = globalThis.getComputedStyle(firstDomNode).marginTop;
   const marginTop = Number(firstMarginTopString.replace('px', ''));
 
   // Calculate distance from current node to editor top
@@ -540,7 +540,7 @@ const calculatePreviewTop = (
     editable.getBoundingClientRect().top -
     editorPaddingTop;
 
-  const currentMarginTopString = window.getComputedStyle(child).marginTop;
+  const currentMarginTopString = globalThis.getComputedStyle(child).marginTop;
   const currentMarginTop = Number(currentMarginTopString.replace('px', ''));
 
   const previewElementsTopDistance =
@@ -555,7 +555,7 @@ const calculatePreviewTop = (
 const calcDragButtonTop = (editor: PlateEditor, element: TElement): number => {
   const child = editor.api.toDOMNode(element)!;
 
-  const currentMarginTopString = window.getComputedStyle(child).marginTop;
+  const currentMarginTopString = globalThis.getComputedStyle(child).marginTop;
   const currentMarginTop = Number(currentMarginTopString.replace('px', ''));
 
   return currentMarginTop;

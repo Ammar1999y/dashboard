@@ -108,8 +108,7 @@ function AutoScroll(userOptions: AutoScrollOptionsType = {}): AutoScrollType {
   }
 
   function startAutoScroll(): void {
-    if (destroyed) return;
-    if (autoScrollActive) return;
+    if (destroyed || autoScrollActive) return;
     emblaApi.emit('autoScroll:play');
 
     const engine = emblaApi.internalEngine();
@@ -124,8 +123,7 @@ function AutoScroll(userOptions: AutoScrollOptionsType = {}): AutoScrollType {
   }
 
   function stopAutoScroll(): void {
-    if (destroyed) return;
-    if (!autoScrollActive) return;
+    if (destroyed || !autoScrollActive) return;
     emblaApi.emit('autoScroll:stop');
 
     const engine = emblaApi.internalEngine();

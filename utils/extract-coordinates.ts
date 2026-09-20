@@ -61,8 +61,8 @@ function extractDirectCoordinates(input: string): Coordinates | null {
 
     if (match) {
       return {
-        latitude: parseFloat(match[1]),
-        longitude: parseFloat(match[2]),
+        latitude: Number.parseFloat(match[1]),
+        longitude: Number.parseFloat(match[2]),
       };
     }
 
@@ -159,8 +159,8 @@ function extractFromStandardUrl(url: string): Coordinates | null {
 
       if (lngMatch) {
         return {
-          latitude: parseFloat(latMatch[1]),
-          longitude: parseFloat(lngMatch[1]),
+          latitude: Number.parseFloat(latMatch[1]),
+          longitude: Number.parseFloat(lngMatch[1]),
         };
       }
     }
@@ -172,8 +172,8 @@ function extractFromStandardUrl(url: string): Coordinates | null {
 
     if (match2) {
       return {
-        latitude: parseFloat(match2[1]),
-        longitude: parseFloat(match2[2]),
+        latitude: Number.parseFloat(match2[1]),
+        longitude: Number.parseFloat(match2[2]),
       };
     }
 
@@ -185,8 +185,8 @@ function extractFromStandardUrl(url: string): Coordinates | null {
 
     if (searchMatch) {
       return {
-        latitude: parseFloat(searchMatch[1]),
-        longitude: parseFloat(searchMatch[2]),
+        latitude: Number.parseFloat(searchMatch[1]),
+        longitude: Number.parseFloat(searchMatch[2]),
       };
     }
 
@@ -199,8 +199,8 @@ function extractFromStandardUrl(url: string): Coordinates | null {
 
     if (match1) {
       return {
-        latitude: parseFloat(match1[1]),
-        longitude: parseFloat(match1[2]),
+        latitude: Number.parseFloat(match1[1]),
+        longitude: Number.parseFloat(match1[2]),
       };
     }
 

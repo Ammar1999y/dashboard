@@ -8,7 +8,7 @@ export function useIsTouchDevice() {
   React.useEffect(() => {
     function onResize() {
       setIsTouchDevice(
-        'ontouchstart' in window ||
+        'ontouchstart' in globalThis ||
           navigator.maxTouchPoints > 0 ||
           navigator.maxTouchPoints > 0
       );

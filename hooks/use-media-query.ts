@@ -117,7 +117,7 @@ export const useMediaQuery = (config: MediaQueryConfig | string) => {
   const mediaQueryString = useMemo(() => buildMediaQuery(config), [config]);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia(mediaQueryString);
+    const mediaQuery = globalThis.matchMedia(mediaQueryString);
     setMatches(mediaQuery.matches);
 
     const handler = (e: MediaQueryListEvent) => setMatches(e.matches);

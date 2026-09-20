@@ -20,7 +20,7 @@ export type ModulesNames = (typeof modulesNames)[number];
 const VALID_MODULES = new Set<ModulesNames>(modulesNames);
 
 function dedupe<T>(arr: T[]): T[] {
-  return Array.from(new Set(arr));
+  return [...new Set(arr)];
 }
 function buildUrlWithModules(nextOpenModules: ModulesNames[]): string {
   const url = new URL(location.href);
@@ -41,7 +41,7 @@ const ModulesHandler = memo(() => {
   const pathname = usePathname();
 
   const prevPathnameRef = useRef<string>(
-    typeof window !== 'undefined' ? location.pathname : ''
+    typeof window === 'undefined' ? '' : location.pathname
   );
   const { locale } = router;
   const prevLocaleRef = useRef<string | undefined>(locale);
@@ -101,8 +101,8 @@ const ModulesHandler = memo(() => {
       }, 100);
     };
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+    globalThis.addEventListener('popstate', handlePopState);
+    return () => globalThis.removeEventListener('popstate', handlePopState);
   }, []);
 
   // close modules when user clicks on link in the modules

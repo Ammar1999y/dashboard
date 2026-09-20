@@ -6,7 +6,7 @@ export function showFormErrors(errors: Record<string, unknown>) {
     .slice(0, 3);
 
   toast.error(
-    messages.length ? messages.join('\n') : 'تحقق من صحه جميع الخانات'
+    messages.length > 0 ? messages.join('\n') : 'تحقق من صحه جميع الخانات'
   );
 }
 

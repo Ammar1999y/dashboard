@@ -69,13 +69,9 @@ const isValidParts = (d: DParts) => {
   const day = Number(d.day);
   const month = Number(d.month);
   const year = Number(d.year);
-  if (
-    !Number.isInteger(day) ||
+  if (!Number.isInteger(day) ||
     !Number.isInteger(month) ||
-    !Number.isInteger(year)
-  )
-    return false;
-  if (year < 1000 || year > 9999 || month < 1 || month > 12) return false;
+    !Number.isInteger(year) || year < 1000 || year > 9999 || month < 1 || month > 12) return false;
   return day >= 1 && day <= daysInMonth(year, month);
 };
 

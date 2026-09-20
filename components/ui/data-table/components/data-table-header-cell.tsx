@@ -166,7 +166,7 @@ const DataTableHeaderCell = memo(
 
     const insertPosition = useMemo(() => {
       if (!over || over.id !== columnId || activeIndex === -1) {
-        return undefined;
+        return;
       }
       return index >= activeIndex ? Position.After : Position.Before;
     }, [over, columnId, index, activeIndex]);

@@ -23,7 +23,7 @@ function useColumnDnd<TData>(table: Table<TData>) {
   // Get column order for calculating activeIndex
   const columnOrder = useColumnOrder((s) => s.columnOrder);
   const activeIndex = useMemo(
-    () => (activeId != null ? columnOrder.indexOf(activeId as string) : -1),
+    () => (activeId == null ? -1 : columnOrder.indexOf(activeId as string)),
     [activeId, columnOrder]
   );
 

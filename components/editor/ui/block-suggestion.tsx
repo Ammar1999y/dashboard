@@ -305,8 +305,7 @@ export const useResolveSuggestion = (
 
       const path = map.get(id);
 
-      if (!path || !PathApi.isPath(path)) return;
-      if (!PathApi.equals(path, blockPath)) return;
+      if (!path || !PathApi.isPath(path) || !PathApi.equals(path, blockPath)) return;
 
       const entries = [
         ...editor.api.nodes<TElement | TSuggestionText>({

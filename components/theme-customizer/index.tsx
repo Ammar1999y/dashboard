@@ -61,13 +61,13 @@ const FullscreenButton = memo(() => {
       screenfull.on('change', onFullscreenChange);
     }
 
-    window.addEventListener('keydown', handleKeyDown);
+    globalThis.addEventListener('keydown', handleKeyDown);
 
     return () => {
       if (screenfull.isEnabled) {
         screenfull.off('change', onFullscreenChange);
       }
-      window.removeEventListener('keydown', handleKeyDown);
+      globalThis.removeEventListener('keydown', handleKeyDown);
     };
   }, []);
 

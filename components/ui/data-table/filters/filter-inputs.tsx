@@ -337,15 +337,19 @@ function FilterInput<TData>(props: FilterInputProps<TData>) {
       }
       return <FilterTextInput {...props} />;
     }
-    case 'boolean':
+    case 'boolean': {
       return <FilterBooleanSelect {...props} />;
+    }
     case 'select':
-    case 'multiSelect':
+    case 'multiSelect': {
       return <FilterFacetedSelect {...props} />;
-    case 'date':
+    }
+    case 'date': {
       return <FilterDateInput {...props} />;
-    default:
+    }
+    default: {
       return null;
+    }
   }
 }
 

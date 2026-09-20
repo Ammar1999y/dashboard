@@ -168,19 +168,23 @@ export const FileUpload = memo(
 
           for (const error of errors) {
             switch (error.code) {
-              case ErrorCode.FileTooLarge:
+              case ErrorCode.FileTooLarge: {
                 toast.error(
                   `الملف "${file.name}" كبير جداً (الحد الأقصى: ${maxSizeMB} MB)`
                 );
                 break;
-              case ErrorCode.FileInvalidType:
+              }
+              case ErrorCode.FileInvalidType: {
                 toast.error(`الملف "${file.name}" نوعه غير مدعوم`);
                 break;
-              case ErrorCode.TooManyFiles:
+              }
+              case ErrorCode.TooManyFiles: {
                 toast.error(`يمكنك رفع بحد أقصى ${maxFiles} ملفات فقط`);
                 break;
-              default:
+              }
+              default: {
                 toast.error(`خطأ في الملف "${file.name}": ${error.message}`);
+              }
             }
           }
         }

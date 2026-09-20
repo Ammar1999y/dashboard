@@ -51,18 +51,21 @@ export function MediaUploadDialog({
     if (!mediaUrl) return;
 
     switch (type) {
-      case 'image':
+      case 'image': {
         insertImage(editor, mediaUrl);
         break;
+      }
       case 'video':
       case 'audio':
-      case 'file':
+      case 'file': {
         // For now using insertMediaEmbed for video/audio as a placeholder
         // You might want to use specific insert functions for video/audio if available in your setup
         insertMediaEmbed(editor, { url: mediaUrl, type });
         break;
-      default:
+      }
+      default: {
         break;
+      }
     }
   };
 
@@ -84,17 +87,21 @@ export function MediaUploadDialog({
       let errorMessage: string;
 
       switch (errorCode) {
-        case 'file-too-large':
+        case 'file-too-large': {
           errorMessage = `حجم الملف يتجاوز الحد الأقصى (${config.maxSize}MB)`;
           break;
-        case 'file-invalid-type':
+        }
+        case 'file-invalid-type': {
           errorMessage = 'صيغة الملف غير مدعومة';
           break;
-        case 'too-many-files':
+        }
+        case 'too-many-files': {
           errorMessage = 'يمكن رفع ملف واحد فقط';
           break;
-        default:
+        }
+        default: {
           errorMessage = 'فشل في رفع الملف';
+        }
       }
 
       toast.error('خطأ في الملف', { description: errorMessage });

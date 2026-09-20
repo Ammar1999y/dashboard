@@ -53,7 +53,7 @@ const defaultFilter: FilterFn = (
     [value, ...keywords, group, label].filter(Boolean)
   );
 
-  return Array.from(uniqueTerms).some((keyword) =>
+  return [...uniqueTerms].some((keyword) =>
     filterWords(keyword!, search)
   );
 };

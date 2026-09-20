@@ -63,7 +63,7 @@ export default function DialogWrapper({
         )}
         side={side}
       >
-        {!!TitleComponent ? (
+        {TitleComponent ? (
           TitleComponent
         ) : title ? (
           <DialogTitle className='max-w-[90%] pb-1 ps-6 pt-6'>

@@ -85,8 +85,8 @@ function TooltipTrigger({
     const listener = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape' || ev.code === 'Escape') setCanClose(true);
     };
-    window.addEventListener('keydown', listener);
-    return () => window.removeEventListener('keydown', listener);
+    globalThis.addEventListener('keydown', listener);
+    return () => globalThis.removeEventListener('keydown', listener);
   }, [setCanClose]);
   return (
     <TooltipPrimitive.Trigger

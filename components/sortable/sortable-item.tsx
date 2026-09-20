@@ -71,7 +71,7 @@ export function SimpleSortableItem({
   return (
     <Component
       ref={setNodeRef}
-      {...(!useHandle ? listeners : {})}
+      {...(useHandle ? {} : listeners)}
       {...attributes}
       className={cn('noSelect', className)}
       style={combinedStyle}

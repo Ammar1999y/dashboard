@@ -346,7 +346,7 @@ const ComboboxInput = React.forwardRef<
       if (type !== 'multiple') {
         return;
       }
-      if (event.key === 'ArrowLeft' && !inputValue && value.length) {
+      if (event.key === 'ArrowLeft' && !inputValue && value.length > 0) {
         tagGroupRef.current?.focus();
       }
       if (event.key === 'Backspace' && !inputValue) {
@@ -394,7 +394,7 @@ const ComboboxClear = React.forwardRef<
   const { value, onValueChange, inputValue, onInputValueChange, type } =
     useComboboxContext();
 
-  const isValueEmpty = type === 'single' ? !value : !value.length;
+  const isValueEmpty = type === 'single' ? !value : value.length === 0;
 
   return (
     <Primitive.button

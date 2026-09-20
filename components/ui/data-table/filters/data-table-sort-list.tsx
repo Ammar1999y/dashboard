@@ -159,8 +159,8 @@ export function DataTableSortList<TData>({
       }
     }
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    globalThis.addEventListener('keydown', onKeyDown);
+    return () => globalThis.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const onTriggerKeyDown = React.useCallback(
@@ -317,14 +317,8 @@ function DataTableSortItem({
 
   const onItemKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
-
-      if (showFieldSelector || showDirectionSelector) {
+      if (event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement || showFieldSelector || showDirectionSelector) {
         return;
       }
 

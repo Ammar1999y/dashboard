@@ -3,7 +3,7 @@ export async function fastestFetchWithin(
   timeoutMs = 3000,
   fetchOptions: RequestInit = {}
 ): Promise<Response | null> {
-  if (!urls.length) return null;
+  if (urls.length === 0) return null;
 
   const ctrls = urls.map(() => new AbortController());
 

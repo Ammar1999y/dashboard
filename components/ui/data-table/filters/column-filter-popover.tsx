@@ -115,10 +115,10 @@ function ColumnFilterPopoverInner<TData>({
       filterId: draftFilterId || generateId({ length: 8 }),
     };
 
-    if (existingIndex !== -1) {
-      filters[existingIndex] = newFilter;
-    } else {
+    if (existingIndex === -1) {
       filters.push(newFilter);
+    } else {
+      filters[existingIndex] = newFilter;
     }
 
     setFilters(filters);

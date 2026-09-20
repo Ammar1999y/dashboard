@@ -205,8 +205,7 @@ export function useUploadFile({
           throw fetchError;
         }
       } catch (error) {
-        if (signal.aborted) return;
-        if (error instanceof Error && error.name === 'AbortError') return;
+        if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) return;
 
         const message =
           error instanceof Error ? error.message : 'Upload failed';

@@ -39,7 +39,7 @@ const Images = memo(
   ({ images, title }: { images: CarouselImage[]; title: string }) => {
     const [plugins, setPlugins] = useState<CreatePluginType<any, any>[]>([]);
     useEffect(() => {
-      if (!images || !images.length) return;
+      if (!images || images.length === 0) return;
       import('embla-carousel-autoplay').then((module) => {
         setPlugins([
           module.default({
@@ -48,7 +48,7 @@ const Images = memo(
         ]);
       });
     }, [images]);
-    if (!images || !images.length) return null;
+    if (!images || images.length === 0) return null;
     if (images.length === 1)
       return (
         <ImageItem image={images[0]} isFirst title={title} className='mb-4' />

@@ -1,8 +1,6 @@
 /* eslint-disable unicorn/prefer-math-trunc */
 import type { EntityID } from '@/types';
 
-import { MAX_ID } from '@/constants';
-import { v7 as uuidv7 } from 'uuid';
 
 export function normalizeArabicDigits(input: any): any {
   if (typeof input !== 'string') return input;
@@ -233,19 +231,25 @@ function serializeLogValue(
   if (value === null) return null;
 
   switch (typeof value) {
-    case 'undefined':
+    case 'undefined': {
       return undefined;
-    case 'boolean':
+    }
+    case 'boolean': {
       return value;
-    case 'number':
+    }
+    case 'number': {
       return Number.isFinite(value) ? value : String(value);
-    case 'bigint':
+    }
+    case 'bigint': {
       return `${value}n`;
-    case 'string':
+    }
+    case 'string': {
       return clampLogString(value);
+    }
     case 'function':
-    case 'symbol':
+    case 'symbol': {
       return `[${typeof value}]`;
+    }
   }
 
   const obj = value as object;
@@ -358,16 +362,16 @@ export function sanitizeForLog(input: any, maxLength = 1024) {
 
 const returnNumber = (value: string | undefined | number | null) => {
   const num = Number(value);
-  return !Number.isNaN(num) ? num : 0;
+  return Number.isNaN(num) ? 0 : num;
 };
 export const returnNumberOrNull = (
   value: string | undefined | number | null
 ) => {
   const num = Number(value);
-  return !Number.isNaN(num) ? num : null;
+  return Number.isNaN(num) ? null : num;
 };
 
-export const positiveInt = (val: any, maxValue = MAX_ID) => {
+export const positiveInt = (val: any, maxValue = Number.MAX_SAFE_INTEGER) => {
   const num = Number(val);
   if (!Number.isFinite(num) || num <= 0 || num > maxValue) return 0;
   return num | 0;

@@ -40,7 +40,7 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
           '[contenteditable="true"]'
         );
         if (editorElement) {
-          Array.from(editorElement.querySelectorAll('*')).forEach((element) => {
+          [...editorElement.querySelectorAll('*')].forEach((element) => {
             const existingStyle = element.getAttribute('style') || '';
             element.setAttribute(
               'style',
@@ -59,7 +59,7 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
     const response = await fetch(url);
 
     const blob = await response.blob();
-    const blobUrl = window.URL.createObjectURL(blob);
+    const blobUrl = URL.createObjectURL(blob);
 
     const link = document.createElement('a');
     link.href = blobUrl;
@@ -69,7 +69,7 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
     link.remove();
 
     // Clean up the blob URL
-    window.URL.revokeObjectURL(blobUrl);
+    URL.revokeObjectURL(blobUrl);
   };
 
   const exportToPdf = async () => {

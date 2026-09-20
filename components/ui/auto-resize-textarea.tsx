@@ -25,7 +25,7 @@ function measureAndSetHeight(
   // Reset to auto to measure the intrinsic scroll height
   textarea.style.height = 'auto';
 
-  const style = window.getComputedStyle(textarea);
+  const style = globalThis.getComputedStyle(textarea);
   const borderHeight =
     parsePx(style.borderTopWidth) + parsePx(style.borderBottomWidth);
   const paddingHeight =

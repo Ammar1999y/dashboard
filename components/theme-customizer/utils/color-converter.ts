@@ -71,7 +71,7 @@ export const colorFormatter = (
           h: hslObj.h || 0,
           s: hslObj.s / 100,
           l: hslObj.l / 100,
-          alpha: alpha !== 1 ? alpha : undefined,
+          alpha: alpha === 1 ? undefined : alpha,
         };
 
         const h = formatNumber(hsl.h);
@@ -92,12 +92,15 @@ export const colorFormatter = (
         }
         return values;
       }
-      case 'rgb':
+      case 'rgb': {
         return parsedColor.rgb().string(); // e.g., "rgb(64, 128, 192)"
-      case 'hex':
+      }
+      case 'hex': {
         return parsedColor.hex(); // e.g., "#4080c0"
-      default:
+      }
+      default: {
         return colorValue;
+      }
     }
   } catch (error) {
     console.error(`Failed to convert color: ${colorValue}`, error);

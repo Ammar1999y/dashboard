@@ -47,7 +47,7 @@ const PinningOptions = memo(({ column }: ColumnOptionsProps) => {
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={handleUnpin}
-          className={!isPinned ? 'bg-muted text-muted-foreground' : ''}
+          className={isPinned ? '' : 'bg-muted text-muted-foreground'}
         >
           <PinOff className='ml-2 h-4 w-4' />
           <span>غير مثبت</span>

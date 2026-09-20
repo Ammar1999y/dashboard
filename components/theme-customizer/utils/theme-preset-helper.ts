@@ -18,12 +18,12 @@ export function getPresetThemeStyles(name: string): ThemeStyles {
   return {
     light: {
       ...defaultTheme.light,
-      ...(preset.styles.light || {}),
+      ...preset.styles.light,
     },
     dark: {
       ...defaultTheme.dark,
-      ...(preset.styles.light || {}),
-      ...(preset.styles.dark || {}),
+      ...preset.styles.light,
+      ...preset.styles.dark,
     },
   };
 }

@@ -303,7 +303,7 @@ const InputColor = memo(
           <Input
             dir='ltr'
             // يظهر "اختر لون" فقط إذا كان النص فارغاً
-            placeholder={!hexInputValue ? 'اختر لون' : label}
+            placeholder={hexInputValue ? label : 'اختر لون'}
             // الربط مع الدالة المحسوبة وليس الـ prop
             value={getCurrentHexValue}
             onChange={handleHexChange}
