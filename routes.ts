@@ -1,0 +1,848 @@
+/**
+ * The route table, as data.
+ *
+ * Framework-free on purpose: this file imports no server library, so it is the
+ * one artefact a move to Hono keeps unchanged. `app.ts` iterates it and does the
+ * Elysia-specific registration; the 405 boundary and the unused-file scanner
+ * read the manifest derived from it.
+ *
+ * Paths are reproduced verbatim from the Next file-system routes so no client
+ * contract changes: `app/api/dash/users/[id]/route.ts` became
+ * `/api/dash/users/:id`, and so on.
+ *
+ * Every row states its request and response policies explicitly. Required
+ * fields make omission a compile error rather than an unsafe default.
+ *
+ * `auth` is read off the handler, not guessed: `requirePermission` /
+ * `requireAnyPermission` / `requireDashboardAccess` are `permission`,
+ * `requireSession` alone is `session`, and a handler that calls none of them is
+ * `public`. It is what publishes each operation's 401 and 403 in
+ * `lib/http/openapi.ts`.
+ *
+ * Order matters only for readability here. Elysia resolves static segments
+ * before wildcards regardless of registration order, which is why
+ * `/api/dash/users/me/...` still wins over `/api/dash/users/:id`.
+ */
+import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
+import type { RouteDefinition, RoutePrefix } from '@/lib/http/route-manifest';
+
+import * as authForgotComplete from '@/app/api/auth/forgot-password/complete/handler';
+import * as authForgotReset from '@/app/api/auth/forgot-password/reset/handler';
+import * as authForgotSecondFactorSend from '@/app/api/auth/forgot-password/second-factor/send/handler';
+import * as authForgotSend from '@/app/api/auth/forgot-password/send/handler';
+import * as authOtpSend from '@/app/api/auth/otp/send/handler';
+import * as authOtpVerify from '@/app/api/auth/otp/verify/handler';
+import * as authPasswordlessSend from '@/app/api/auth/passwordless/send/handler';
+import * as dashAuthReauth from '@/app/api/dash/auth/reauth/handler';
+import * as dashMediaFilesId from '@/app/api/dash/media/files/[id]/handler';
+import * as dashMediaFilesIdPublish from '@/app/api/dash/media/files/[id]/publish/handler';
+import * as dashMediaFilesIdUnpublish from '@/app/api/dash/media/files/[id]/unpublish/handler';
+import * as dashMediaFiles from '@/app/api/dash/media/files/handler';
+import * as dashMediaFoldersId from '@/app/api/dash/media/folders/[id]/handler';
+import * as dashMediaFolders from '@/app/api/dash/media/folders/handler';
+import * as dashMedia from '@/app/api/dash/media/handler';
+import * as dashPermissionsId from '@/app/api/dash/permissions/[id]/handler';
+import * as dashPermissions from '@/app/api/dash/permissions/handler';
+import * as dashRoles from '@/app/api/dash/roles/handler';
+import * as dashUsersId from '@/app/api/dash/users/[id]/handler';
+import * as dashUsersIdSessions from '@/app/api/dash/users/[id]/sessions/handler';
+import {
+  SESSION_CURSOR_MAX_LENGTH,
+  SESSION_CURSOR_PATTERN,
+  SESSIONS_MAX_PAGE_SIZE,
+} from '@/app/api/dash/users/[id]/sessions/pagination';
+import * as dashUsersIdTwoFactor from '@/app/api/dash/users/[id]/two-factor/handler';
+import * as dashUsers from '@/app/api/dash/users/handler';
+import * as meChangeEmail from '@/app/api/dash/users/me/change-email/handler';
+import * as meChangeEmailVerify from '@/app/api/dash/users/me/change-email/verify/handler';
+import * as meChangePassword from '@/app/api/dash/users/me/change-password/handler';
+import * as meChangePhone from '@/app/api/dash/users/me/change-phone/handler';
+import * as meChangePhoneVerify from '@/app/api/dash/users/me/change-phone/verify/handler';
+import * as mePreferences from '@/app/api/dash/users/me/preferences/handler';
+import * as devSignUp from '@/app/api/dev/sign-up/handler';
+import * as healthStorage from '@/app/api/health/storage/handler';
+import * as uploadFile from '@/app/api/upload/file/handler';
+import { UUID_V7_PATTERN } from '@/utils';
+import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
+import {
+  describeFilterColumns,
+  filterColumnIds,
+} from '@/lib/data-table/column-specs';
+import { dataTableConfig } from '@/lib/data-table/config';
+import {
+  DEFAULT_PER_PAGE,
+  MAX_FILTER_ITEMS,
+  MAX_FILTER_VALUES,
+  MAX_FILTERS_RAW_LENGTH,
+  MAX_ID_LENGTH,
+  MAX_PAGE,
+  MAX_PER_PAGE,
+  MAX_SEARCH_LENGTH,
+  MAX_SORT_ITEMS,
+  MAX_SORT_RAW_LENGTH,
+  MAX_VALUE_LENGTH,
+  MIN_SEARCH_LENGTH,
+} from '@/lib/data-table/parsers';
+import { openApiRouteHandler } from '@/lib/http/openapi';
+import {
+  toPublishedManifest,
+  toRegisteredRoutes,
+} from '@/lib/http/route-manifest';
+// Types and constants only, so the framework-free property above holds.
+import { PURPOSE_NAME_MAX, PURPOSE_NAME_PATTERN } from '@/lib/media/policy';
+// A plain frozen object of page keys — no server library, so the framework-free
+// property above holds.
+import { DASHBOARD_PAGE_NAMES } from '@/lib/permissions/constants';
+
+import { FOLDER_RECURSIVE_DELETE_MAX } from '@/utils/validation/constants';
+
+/**
+ * The idle-timeout ceiling for the media routes that call R2 in the request.
+ *
+ * A CHOSEN bound, not a derived worst case, and the distinction matters because
+ * this comment used to claim the second. The arithmetic runs past 120 s: the
+ * visibility saga makes three R2 calls before the flip and a fourth plus a purge
+ * after it (`lib/media/visibility.ts`), which at the client's 45 s per call —
+ * `maxAttempts` 3 × a 15 s request timeout — plus the purge module's own 25 s
+ * budget is 205 s; a two-bucket bulk delete (`lib/media/lifecycle.ts`) is
+ * 2 × (45 + 25) = 140 s.
+ *
+ * 120 s covers the healthy path with a wide margin and is deliberately short of
+ * those numbers. Past it the connection is dropped with the destructive half
+ * already logged, and the remainder is left to the retention sweep — which is
+ * the accepted residual risk, not an oversight. The global ceiling
+ * (`IDLE_TIMEOUT_SECONDS`, 60 s) is what this replaces: it dropped the
+ * connection mid-operation on the healthy path.
+ *
+ * SIX routes carry it, and the count is load-bearing: it is the largest term in
+ * `MAX_ROUTE_TIMEOUT_SECONDS`, which sets the shutdown drain window
+ * (`lib/shutdown.ts`). Raising it lengthens every deploy.
+ */
+const MEDIA_ROUTE_TIMEOUT_SECONDS = 120;
+
+/**
+ * The list-query parameters for one route, DERIVED from the descriptor map the
+ * handler actually enforces.
+ *
+ * It used to take a hand-written comma-separated string of column ids, kept
+ * beside the real map rather than taken from it, and published none of the item
+ * or value caps — so the document accepted a 21-filter request the runtime
+ * answers 422 to, and a column added to one list and not the other was
+ * invisible. `specs` is the same object passed to `parseDataTableParams`, so
+ * the two cannot disagree.
+ */
+const dataTableQuery = (
+  specs: FilterColumnSpecs
+): NonNullable<RouteDefinition['query']> => [
+  {
+    name: 'maxPerPage',
+    required: false,
+    description: `Upper bound applied to perPage for this request. Lowering it below the default (${DEFAULT_PER_PAGE}) also lowers the page size used when perPage is omitted.`,
+    type: 'integer',
+    minimum: 1,
+    maximum: MAX_PER_PAGE,
+  },
+  {
+    name: 'page',
+    required: false,
+    description: 'One-based page number.',
+    type: 'integer',
+    minimum: 1,
+    maximum: MAX_PAGE,
+  },
+  {
+    name: 'perPage',
+    required: false,
+    // A dependency between two parameters, which no OpenAPI keyword expresses.
+    description: `Rows per page, defaulting to ${DEFAULT_PER_PAGE}. A \`maxPerPage\` on the same request lowers this ceiling; a value above the effective ceiling is rejected, not clamped.`,
+    type: 'integer',
+    minimum: 1,
+    maximum: MAX_PER_PAGE,
+  },
+  {
+    name: 'sort',
+    required: false,
+    description: `JSON array of { id, desc } objects, at most ${MAX_SORT_ITEMS}, each id at most ${MAX_ID_LENGTH} characters. An id outside the list below is ignored and the route's default sort applies. Allowed ids: ${filterColumnIds(specs)}.`,
+    maxLength: MAX_SORT_RAW_LENGTH,
+    example: '[{"id":"createdAt","desc":true}]',
+  },
+  {
+    name: 'filters',
+    required: false,
+    description: `JSON array of { id, value, variant, operator, filterId } objects, at most ${MAX_FILTER_ITEMS}; \`id\` and \`filterId\` at most ${MAX_ID_LENGTH} characters, each value at most ${MAX_VALUE_LENGTH}, and at most ${MAX_FILTER_VALUES} values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. Columns: ${describeFilterColumns(specs, MIN_SEARCH_LENGTH)}.`,
+    maxLength: MAX_FILTERS_RAW_LENGTH,
+  },
+  {
+    name: 'joinOperator',
+    required: false,
+    description: 'How multiple structured filters are combined.',
+    enum: [...dataTableConfig.joinOperators],
+  },
+  // No `maxLength`, unlike the parameters above: this is the one the parser
+  // ignores rather than rejects, and a bound the server does not enforce makes
+  // a generated client refuse a request this API accepts.
+  {
+    name: 'search',
+    required: false,
+    description: `Quick search. Terms outside ${MIN_SEARCH_LENGTH}–${MAX_SEARCH_LENGTH} characters, and terms carrying no letters or digits the trigram index can key on, are ignored rather than rejected, so the response is the unfiltered list.`,
+  },
+];
+
+export const ROUTES: readonly RouteDefinition[] = [
+  // ---- auth ---------------------------------------------------------------
+  {
+    method: 'POST',
+    path: '/api/auth/forgot-password/reset',
+    handler: authForgotReset.POST,
+    preAuth: 'ip-limit',
+    auth: 'public',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  // The two halves of a reset for an account that holds a second factor. No
+  // captcha: reaching either needs a recovery grant, which follows a solved
+  // captcha and a verified code, so the gate in front is stronger than one.
+  {
+    method: 'POST',
+    path: '/api/auth/forgot-password/second-factor/send',
+    handler: authForgotSecondFactorSend.POST,
+    preAuth: 'ip-limit',
+    auth: 'public',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/auth/forgot-password/complete',
+    handler: authForgotComplete.POST,
+    preAuth: 'ip-limit',
+    auth: 'public',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/auth/forgot-password/send',
+    handler: authForgotSend.POST,
+    preAuth: 'ip-limit',
+    auth: 'public',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  // No pre-auth limit: the OTP endpoints carry their own per-identifier and
+  // per-destination budgets, which are tighter than the coarse per-IP one.
+  {
+    method: 'POST',
+    path: '/api/auth/otp/send',
+    handler: authOtpSend.POST,
+    preAuth: 'none',
+    auth: 'public',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/auth/otp/verify',
+    handler: authOtpVerify.POST,
+    preAuth: 'none',
+    auth: 'public',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/auth/passwordless/send',
+    handler: authPasswordlessSend.POST,
+    preAuth: 'ip-limit',
+    auth: 'public',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+
+  // ---- dashboard: permissions & roles -------------------------------------
+  {
+    method: 'GET',
+    path: '/api/dash/permissions',
+    handler: dashPermissions.GET,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+    query: dataTableQuery(dashPermissions.PERMISSIONS_FILTER_COLUMNS),
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/permissions',
+    handler: dashPermissions.POST,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'GET',
+    path: '/api/dash/permissions/:id',
+    handler: dashPermissionsId.GET,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+  },
+  {
+    method: 'PUT',
+    path: '/api/dash/permissions/:id',
+    handler: dashPermissionsId.PUT,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/dash/permissions/:id',
+    handler: dashPermissionsId.DELETE,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+  },
+  {
+    method: 'GET',
+    path: '/api/dash/roles',
+    handler: dashRoles.GET,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+  },
+
+  // ---- dashboard: self-service (static, so it wins over /:id) -------------
+  {
+    method: 'POST',
+    path: '/api/dash/users/me/change-email',
+    handler: meChangeEmail.POST,
+    preAuth: 'ip-limit',
+    auth: 'session',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/users/me/change-email/verify',
+    handler: meChangeEmailVerify.POST,
+    preAuth: 'ip-limit',
+    auth: 'session',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/users/me/change-password',
+    handler: meChangePassword.POST,
+    preAuth: 'ip-limit',
+    auth: 'session',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/users/me/change-phone',
+    handler: meChangePhone.POST,
+    preAuth: 'ip-limit',
+    auth: 'session',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/users/me/change-phone/verify',
+    handler: meChangePhoneVerify.POST,
+    preAuth: 'ip-limit',
+    auth: 'session',
+    captcha: true,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'GET',
+    path: '/api/dash/users/me/preferences',
+    handler: mePreferences.GET,
+    preAuth: 'ip-limit',
+    auth: 'session',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+  },
+  {
+    method: 'PUT',
+    path: '/api/dash/users/me/preferences',
+    handler: mePreferences.PUT,
+    preAuth: 'ip-limit',
+    auth: 'session',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+
+  // ---- dashboard: users ---------------------------------------------------
+  {
+    method: 'GET',
+    path: '/api/dash/users',
+    handler: dashUsers.GET,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+    query: dataTableQuery(dashUsers.USERS_FILTER_COLUMNS),
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/users',
+    handler: dashUsers.POST,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'GET',
+    path: '/api/dash/users/:id',
+    handler: dashUsersId.GET,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+  },
+  {
+    method: 'PUT',
+    path: '/api/dash/users/:id',
+    handler: dashUsersId.PUT,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/dash/users/:id',
+    handler: dashUsersId.DELETE,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+  },
+  {
+    method: 'GET',
+    path: '/api/dash/users/:id/sessions',
+    handler: dashUsersIdSessions.GET,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+    query: [
+      {
+        name: 'limit',
+        required: false,
+        description: 'Page size.',
+        type: 'integer',
+        minimum: 1,
+        maximum: SESSIONS_MAX_PAGE_SIZE,
+      },
+      {
+        name: 'cursor',
+        required: false,
+        description:
+          'Cursor returned by the previous page: ISO-8601 UTC milliseconds, a pipe, then a UUIDv7.',
+        maxLength: SESSION_CURSOR_MAX_LENGTH,
+        pattern: SESSION_CURSOR_PATTERN,
+      },
+    ],
+  },
+  // Opens the administrator re-authentication window the `D12` class reads.
+  // `auth: 'session'`: it is not itself a permission-bearing action — it only
+  // proves the caller is still who their session says.
+  {
+    method: 'POST',
+    path: '/api/dash/auth/reauth',
+    handler: dashAuthReauth.POST,
+    preAuth: 'ip-limit',
+    auth: 'session',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/users/:id/two-factor/reset',
+    handler: dashUsersIdTwoFactor.POST,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+  },
+  // The only DELETE with a body: it takes the session ids to revoke.
+  {
+    method: 'DELETE',
+    path: '/api/dash/users/:id/sessions',
+    handler: dashUsersIdSessions.DELETE,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+
+  // ---- dashboard: media library -------------------------------------------
+  // Folders and files are addressed by id, never by path: a folder path would
+  // need a `/` inside a path parameter, which `:param` cannot carry.
+  {
+    method: 'GET',
+    path: '/api/dash/media',
+    handler: dashMedia.GET,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+    query: [
+      {
+        name: 'folder',
+        required: false,
+        description:
+          'The folder to list. Omitted means the root, which holds folders only.',
+        pattern: UUID_V7_PATTERN,
+      },
+      {
+        name: 'scope',
+        required: false,
+        description:
+          '`folder` (default) lists one folder with its breadcrumbs and subfolders; `all` searches every library file and, when `search` is given, folder names; `unfiled` lists active files in no folder that no record references, which are deleted `retentionDays` after they were first found unfiled unless moved into a folder.',
+        enum: dashMedia.MEDIA_SCOPES,
+      },
+      ...dataTableQuery(dashMedia.MEDIA_FILTER_COLUMNS),
+    ],
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/media/files',
+    handler: dashMediaFiles.POST,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'multipart',
+    response: 'envelope',
+    // Read from the query, not the form: it is checked before the multipart
+    // body is parsed.
+    query: [
+      {
+        name: 'folder',
+        required: true,
+        description: 'The folder the file is uploaded into.',
+        pattern: UUID_V7_PATTERN,
+      },
+    ],
+    // Image processing, then the upload itself; same ceiling, same reasoning.
+    timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
+  },
+  {
+    method: 'PUT',
+    path: '/api/dash/media/files',
+    handler: dashMediaFiles.PUT,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/dash/media/files',
+    handler: dashMediaFiles.DELETE,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+    timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
+  },
+  {
+    method: 'GET',
+    path: '/api/dash/media/files/:id',
+    handler: dashMediaFilesId.GET,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+  },
+  {
+    method: 'PUT',
+    path: '/api/dash/media/files/:id',
+    handler: dashMediaFilesId.PUT,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/media/files/:id/publish',
+    handler: dashMediaFilesIdPublish.POST,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+    timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/media/files/:id/unpublish',
+    handler: dashMediaFilesIdUnpublish.POST,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+    timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/media/folders',
+    handler: dashMediaFolders.POST,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'PUT',
+    path: '/api/dash/media/folders/:id',
+    handler: dashMediaFoldersId.PUT,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'json',
+    response: 'envelope',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/dash/media/folders/:id',
+    handler: dashMediaFoldersId.DELETE,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'none',
+    response: 'envelope',
+    timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
+    query: [
+      {
+        name: 'recursive',
+        required: false,
+        description: `Delete the folder with everything under it, up to ${FOLDER_RECURSIVE_DELETE_MAX} descendants — subfolders plus their files, not counting the folder itself. Omitted, only an empty folder is deleted.`,
+        enum: ['true', 'false'],
+      },
+    ],
+  },
+
+  // ---- upload -------------------------------------------------------------
+  // A `multipart` route whose body is read lazily — the handler authorises the
+  // caller and runs its own per-user limiter before calling `readFormData()`.
+  //
+  // `ip-limit`, like every other authenticated surface: the handler performs a
+  // session lookup and a permissions read, so unauthenticated traffic must be
+  // bounded before it can force either. Its own limiter is keyed per user, which
+  // by definition cannot bound a caller that has no session yet.
+  {
+    method: 'POST',
+    path: '/api/upload/file',
+    handler: uploadFile.POST,
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: true,
+    body: 'multipart',
+    response: 'envelope',
+    // Required, and read from the query rather than the form because the
+    // permission check on it has to run before the multipart body is parsed.
+    query: [
+      {
+        name: 'resource',
+        required: true,
+        description:
+          'Dashboard resource the file is for. The caller must hold create or edit on it.',
+        enum: DASHBOARD_PAGE_NAMES,
+      },
+      {
+        name: 'purpose',
+        required: false,
+        description:
+          'One of the purposes this deployment declares for the resource above; it decides which bucket the file goes to and which kinds are admitted. Omitted: private, any admitted kind.',
+        maxLength: PURPOSE_NAME_MAX,
+        pattern: PURPOSE_NAME_PATTERN,
+      },
+    ],
+    // Image processing, then the upload itself; same ceiling, same reasoning.
+    timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
+  },
+
+  // ---- operations ---------------------------------------------------------
+  // `preAuth: 'none'` and no handler limiter, and neither is an omission: the
+  // handler refuses every request without `x-maintenance-token` before it
+  // touches a store, and a per-IP limiter would answer 503 to the container's
+  // own probe, which carries no trusted proxy header. `auth: 'public'` says
+  // "no session", which is what this table can express — the gate is the token.
+  {
+    method: 'GET',
+    path: '/api/health/storage',
+    handler: healthStorage.GET,
+    preAuth: 'none',
+    auth: 'public',
+    captcha: false,
+    handlerRateLimit: false,
+    body: 'none',
+    response: 'storage-health',
+    query: [
+      {
+        name: 'deep',
+        required: false,
+        description:
+          'Set to 1 to run SQLite integrity and write probes. Other values use the cheap probe.',
+        example: '1',
+      },
+    ],
+  },
+
+  // ---- dev-only -----------------------------------------------------------
+  // Present in the table, ABSENT from `REGISTERED_ROUTES` outside development —
+  // see `toRegisteredRoutes`. It stays here so the registration scanner can see
+  // its handler and so `bun run build` publishes the same filtered document
+  // whatever the building machine's NODE_ENV is.
+  {
+    method: 'POST',
+    path: '/api/dev/sign-up',
+    handler: devSignUp.POST,
+    preAuth: 'none',
+    auth: 'public',
+    captcha: false,
+    handlerRateLimit: false,
+    body: 'json',
+    response: 'envelope',
+  },
+
+  // ---- contract ------------------------------------------------------------
+  // In the table, not registered separately on the framework instance. A route
+  // outside the table is invisible to everything the table drives: it got no
+  // 405 boundary, no trailing-slash redirect and no route-aware OPTIONS, and it
+  // would not have appeared in its own document. `ROUTES` is referenced lazily
+  // inside the handler, which runs long after this array is built.
+  {
+    method: 'GET',
+    path: '/openapi.json',
+    handler: openApiRouteHandler(() => toPublishedManifest(REGISTERED_ROUTES)),
+    preAuth: 'ip-limit',
+    auth: 'permission',
+    captcha: false,
+    handlerRateLimit: false,
+    body: 'none',
+    response: 'openapi-document',
+  },
+];
+
+/**
+ * What `app.ts` actually serves.
+ *
+ * The environment decision is taken ONCE, here, rather than inside each
+ * development-only handler: outside development those paths are not registered at
+ * all, so they answer 404 on every method with no `Allow` and no OPTIONS answer,
+ * exactly like any other unknown path.
+ */
+export const REGISTERED_ROUTES = toRegisteredRoutes(ROUTES);
+
+/**
+ * Better Auth owns its own sub-routing under `/api/auth`, so it is a prefix
+ * rather than a set of routes.
+ *
+ * The reachable surface is exact in both dimensions — path AND method — from the
+ * same table `lib/auth.ts` enforces and `lib/http/openapi.ts` publishes. Not the
+ * whole prefix and not one method set for all of it: Better Auth 404s every path
+ * outside the list and every method a path does not declare, so anything broader
+ * made the 405 boundary claim operations the handler itself rejects.
+ */
+export const ROUTE_PREFIXES: readonly RoutePrefix[] = [
+  {
+    prefix: '/api/auth',
+    // Better Auth reads every path it serves as TEXT — JSON, or the
+    // URL-encoded form its sign-in also accepts. Nothing under here takes a
+    // file, so the prefix takes the parsed-into-memory ceiling and a caller
+    // cannot claim the upload allowance on `/sign-in/email`.
+    body: 'json',
+    paths: BETTER_AUTH_ENDPOINTS,
+  },
+];

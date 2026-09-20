@@ -1,0 +1,120 @@
+import type { Handler } from '@/lib/http/contract';
+
+import { and, eq, isNull } from 'drizzle-orm';
+
+import { db } from '@/db';
+import { userContactColumn } from '@/db/queries';
+import { users } from '@/db/schema';
+import { sanitizeForLog } from '@/utils';
+import { verifyTurnstileRequest } from '@/lib/captcha';
+import { enqueueAfterResponse } from '@/lib/http/after-response';
+import {
+  enforceOtpSurfaceSendQuota,
+  enforceRateLimit,
+  ipIdentifier,
+} from '@/lib/rate-limit';
+
+import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@/utils/api-messages';
+import {
+  apiSuccess,
+  handleApiError,
+  requireJsonBody,
+} from '@/utils/api-response';
+import { CustomError } from '@/utils/error-class';
+import { OTP_BASE_RESEND_DELAY_S, processOtpSend } from '@/utils/otp';
+import { OTP_ENABLED, sendOtpSchema } from '@/utils/validation/otp';
+
+import { ensureMinDelay, otpMsg } from '../../otp/messages';
+
+// Same privacy-preserving generic payload as otp/send.
+const GENERIC_SEND_DATA = { nextAllowedIn: OTP_BASE_RESEND_DELAY_S };
+
+/**
+ * Forgot-password step 1: send a code (purpose=forgot_password) to whichever
+ * enabled channel the user chose. Always uses a REAL code — the OTP_AUTO_VERIFY
+ * bypass never short-circuits password recovery. Response is identical for
+ * known / unknown identifiers (no account enumeration).
+ */
+export const POST: Handler = async (ctx) => {
+  const start = Date.now();
+  try {
+    if (!OTP_ENABLED)
+      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+
+    // Per-IP cap BEFORE captcha so the outbound siteverify call is bounded per
+    // IP. The IP-level 429 is pre-lookup and leaks nothing about existence.
+    await enforceRateLimit({
+      scope: 'forgot.send.ip',
+      identifier: ipIdentifier(ctx.headers),
+      limit: 60,
+      window: 60,
+      failClosed: true,
+    });
+
+    const captchaOk = await verifyTurnstileRequest(ctx.headers);
+    if (!captchaOk)
+      return handleApiError(
+        new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN)
+      );
+
+    const body = requireJsonBody(await ctx.readJson());
+    const parsed = sendOtpSchema.safeParse(body);
+    if (!parsed.success)
+      throw new CustomError(otpMsg.invalidInput, HTTP_STATUS.UNPROCESSABLE);
+
+    const { channel } = parsed.data;
+    const identifier =
+      channel === 'email' ? parsed.data.email : parsed.data.phoneNumber;
+    const entityName = channel === 'email' ? 'البريد الإلكتروني' : 'رقم الهاتف';
+
+    await enforceOtpSurfaceSendQuota({
+      channel,
+      destination: identifier,
+      surface: 'recovery',
+    });
+
+    const genericResponse = () =>
+      apiSuccess({ message: otpMsg.sendSuccess, data: GENERIC_SEND_DATA });
+
+    const [userData] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(
+          eq(userContactColumn(channel), identifier),
+          isNull(users.deletedAt),
+          eq(users.isActive, true)
+        )
+      )
+      .limit(1);
+
+    if (!userData) {
+      await ensureMinDelay(Date.now() - start);
+      return genericResponse();
+    }
+
+    try {
+      await processOtpSend({
+        userId: userData.id,
+        identifier,
+        channel,
+        purpose: 'forgot_password',
+        sendTo: identifier,
+        entityName,
+
+        deferDelivery: (task) => enqueueAfterResponse(ctx.rawRequest, task),
+      });
+    } catch (error) {
+      // Swallow delivery/throttle failures so they can't be used as an
+      // account-existence oracle.
+      console.error(sanitizeForLog({ msg: 'forgot.send.failed', error }));
+    }
+
+    await ensureMinDelay(Date.now() - start);
+    return genericResponse();
+  } catch (error) {
+    await ensureMinDelay(Date.now() - start);
+
+    return handleApiError(error, otpMsg.sendError);
+  }
+};

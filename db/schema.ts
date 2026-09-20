@@ -1,0 +1,1250 @@
+// Unique indexes follow 'ux_<table>_<column>' convention (e.g. ux_users_email).
+// Violation resolvers match against the full index name — keep names unique across tables.
+//
+// ⚠️ IMPORTANT: When adding new columns that will be searchable via ILIKE in the
+// data-table UI, you MUST also add a corresponding trigram (GIN) index in:
+//   db/migrations/001_add_trgm_indexes.sql
+// Without a trgm index, ILIKE '%text%' queries will cause full table scans.
+import type {
+  PermissionAction,
+  SessionMetadata,
+} from '@/lib/permissions/constants';
+import type { StoredPreferences } from '@/utils/validation/preferences';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
+
+import { relations, sql } from 'drizzle-orm';
+import {
+  bigint,
+  boolean,
+  check,
+  customType,
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
+
+import { API_PATH_MAX, USER_AGENT_MAX } from '@/lib/audit/constants';
+import { generateUuidV7 as generateId } from '@/lib/id';
+import {
+  CUSTOM_ROLE_VALUE,
+  DASHBOARD_PAGE_NAMES,
+  REQUIRE_ROLE_FOR_LOGIN,
+  ROLE_SCOPE,
+} from '@/lib/permissions/constants';
+
+import { CREDENTIAL_ISSUER } from '@/utils/api-messages';
+import { PHONE_NUMBER_MODE, PHONE_REQUIRED } from '@/utils/config';
+import {
+  CREDENTIAL_ID_MAX,
+  EMAIL_MAX,
+  FOLDER_NAME_MAX,
+  MEDIA_DISPLAY_NAME_MAX,
+  NAME_MAX,
+  OTP_IDENTIFIER_MAX,
+  OTP_MAX_ATTEMPTS,
+  OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+  OTP_MAX_VERIFY_ATTEMPTS,
+  PHONE_NUMBER_MAX,
+  ROLE_DESCRIPTION_MAX,
+  ROLE_NAME_MAX,
+  URL_MAX,
+  VERIFICATION_IDENTIFIER_MAX,
+} from '@/utils/validation/constants';
+import {
+  OTP_CHANNELS,
+  OTP_PURPOSES,
+  TWO_FACTOR_METHODS,
+} from '@/utils/validation/enums';
+
+/**
+ * `jsonb`, replacing `drizzle-orm/pg-core`'s — which double-encodes under
+ * `bun:sql`.
+ *
+ * Drizzle's own `jsonb` returns `JSON.stringify(value)` from
+ * `mapToDriverValue`, because most PostgreSQL drivers want JSON *text* for a
+ * jsonb parameter. `bun:sql` does not: it JSON-encodes whatever JS value it is
+ * given, so an already-serialised string is encoded a second time and the column
+ * stores a jsonb STRING SCALAR rather than an object. Measured on Bun:
+ * `insert into t (j) values (${'{"a":1}'})` stores `"{\"a\":1}"`, while the
+ * same statement with the object stores `{"a":1}`.
+ *
+ * Drizzle's read path hid it — `mapFromDriverValue` JSON-parses a string, so the
+ * double encode round-tripped invisibly through the ORM. What did not survive
+ * was every SQL-level jsonb operation, because none of them go through that
+ * mapper. `refreshRoleSessions` and `refreshUserSessions`
+ * (`lib/permissions/utils.ts`) merge with `metadata || $1::jsonb`, and `||` on
+ * two jsonb strings CONCATENATES INTO AN ARRAY instead of merging objects:
+ * reproduced, `sessions.metadata` became
+ * `["{\"keepMe\":…}","{\"roleName\":…}"]` and the permission patch was lost.
+ * Anything reading these columns outside Drizzle — `db.execute`, `->`/`->>`,
+ * `@>`, a jsonb index, psql — saw the same.
+ *
+ * So the value is passed through and encoded exactly once, by the driver. This
+ * shadows the drizzle export deliberately: every column here keeps its
+ * declaration, and the broken one is no longer in scope to be used by accident.
+ * `dataType` still reports `jsonb`, so the generated DDL is unchanged.
+ *
+ * NOTE it is `prepare: true` that makes the bug reachable — without a prepared
+ * statement Bun does not know the parameter is jsonb and sends it as text, which
+ * PostgreSQL then parses correctly. Do not read a passing test under
+ * `prepare: false` as evidence that this helper is unnecessary.
+ *
+ * **`fromDriver` is a pass-through, and that is a decision.** Drizzle's builtin
+ * JSON-parses a string on the way out, which is precisely what hid the double
+ * encode above: write twice, read twice, same object back, nothing to see. This
+ * reports what the column actually holds. So these five columns TRUST THEIR
+ * WRITERS — a jsonb string scalar reaching one of them (a `psql` fix-up, a script
+ * that pre-stringifies) reads back as a `string` wearing the column's declared
+ * type, and nothing complains. On the permission path that fails CLOSED (a
+ * lookup on a string yields `undefined`, which denies), but it fails quietly.
+ *
+ * Throwing here instead was considered and rejected. `mapFromDriverValue` runs on
+ * READ, so one bad row would 500 every request that touches it — a role-wide
+ * auth outage to report a write-time mistake — and three of these columns
+ * (`audit_logs`' `old_data`, `new_data`, `changed_fields`) are typed `unknown`,
+ * where jsonb legitimately admits arrays and scalars; `changed_fields` already
+ * stores an array. Refusing a non-object on read would assert an invariant the
+ * type does not carry. A database CHECK constraint is the correct boundary for
+ * any write-time invariant added here.
+ */
+const jsonb = customType<{ data: unknown; driverData: unknown }>({
+  dataType: () => 'jsonb',
+  toDriver: (value) => value,
+  fromDriver: (value) => value,
+});
+
+/**
+ * PARTIAL by contract: `normalizeActionsForPage` keeps only the actions a page
+ * offers, so a stored matrix names a subset of the actions and an absent key
+ * means "not granted". Readers go through `sanitizePermissions`, which fills the
+ * total shape; nothing may treat a row as total before that.
+ */
+export type PermissionActions = Partial<Record<PermissionAction, boolean>>;
+
+// bun:sql returns `timestamptz` as Date; string mode would reapply host offset.
+const timestamps = {
+  createdAt: timestamp('created_at', {
+    withTimezone: true,
+    precision: 2,
+  })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp('updated_at', {
+    withTimezone: true,
+    precision: 2,
+  })
+    .defaultNow()
+    .$onUpdate(() => sql`now()`)
+    .notNull(),
+};
+
+export const bucketTypeEnum = ['public', 'private'] as const;
+export const pageNameValues = DASHBOARD_PAGE_NAMES;
+/**
+ * Role Scope Values:
+ * - 'system': Protected/immutable roles created by developer (e.g., superAdmin) - cannot be modified or deleted
+ * - 'standard': Normal roles created via dashboard - fully editable and visible in permissions page
+ * - 'custom': User-specific roles - only visible/editable when editing that specific user
+ */
+export const roleScopeValues = [
+  ROLE_SCOPE.SYSTEM,
+  ROLE_SCOPE.STANDARD,
+  ROLE_SCOPE.CUSTOM,
+] as const;
+export const bucketType = pgEnum('bucket_type', bucketTypeEnum);
+export const auditLogActionEnum = ['INSERT', 'UPDATE', 'DELETE'] as const;
+export const auditLogAction = pgEnum('audit_log_action', auditLogActionEnum);
+export const pageName = pgEnum('page_name', pageNameValues);
+export const roleScope = pgEnum('role_scope', roleScopeValues);
+export const otpChannel = pgEnum('otp_channel', OTP_CHANNELS);
+export const otpPurpose = pgEnum('otp_purpose', OTP_PURPOSES);
+// The full method set, not the env-enabled subset: a deployment turning a method
+// off must not make existing rows unreadable.
+// ⚠️ Changing this list requires a DB migration (two_factor_method pgEnum).
+export const twoFactorMethod = pgEnum('two_factor_method', TWO_FACTOR_METHODS);
+// Whitelist of supported auth providers — extend here when adding OAuth.
+// Constraining the column to a known set prevents direct writes from
+// introducing provider IDs that downstream code cannot handle.
+export const providerIdEnumValues = ['credential', 'google'] as const;
+export const providerId = pgEnum('provider_id', providerIdEnumValues);
+/**
+ * The upload saga's durable step marker (see `lib/media/lifecycle.ts`):
+ * `pending` between the row insert and the activation that follows the object
+ * write, `active` once listable and linkable, `deleting` once a delete has
+ * committed to removing the object. Referrers may point only at `active` rows —
+ * enforced by the composite unique below, not by application code.
+ */
+export const fileStatusEnum = ['pending', 'active', 'deleting'] as const;
+export const fileStatus = pgEnum('file_status', fileStatusEnum);
+export const fileKindEnum = ['image', 'document'] as const;
+export const fileKind = pgEnum('file_kind', fileKindEnum);
+/**
+ * A visibility change in flight: the object is being copied to the other
+ * bucket (`to_public`/`to_private`), or the copy is done and the stale one
+ * awaits deletion (`cleanup`). `NULL` is the settled state.
+ */
+export const fileTransitionEnum = [
+  'to_public',
+  'to_private',
+  'cleanup',
+] as const;
+export const fileTransition = pgEnum('file_transition', fileTransitionEnum);
+
+export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
+
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    name: varchar('name', { length: NAME_MAX }).notNull(),
+    email: varchar('email', { length: EMAIL_MAX }).notNull(),
+    // Nullability is driven by PHONE_NUMBER_MODE (see @/utils/config). When the
+    // mode is 'required' the column is NOT NULL; otherwise it is optional.
+    phoneNumber: PHONE_REQUIRED
+      ? varchar('phone_number', { length: PHONE_NUMBER_MAX }).notNull()
+      : varchar('phone_number', { length: PHONE_NUMBER_MAX }),
+    emailVerified: boolean('email_verified').default(false).notNull(),
+    authRevokedAt: timestamp('auth_revoked_at', {
+      withTimezone: true,
+      precision: 3,
+    }),
+    phoneNumberVerified: boolean('phone_number_verified')
+      .default(false)
+      .notNull(),
+    // The property name is what Better Auth reads (not the SQL column), so it
+    // must stay `twoFactorEnabled`.
+    //
+    // "The user turned 2FA on", not "the user has a usable second factor" — see
+    // the downgrade path in lib/auth/two-factor-challenge.ts.
+    twoFactorEnabled: boolean('two_factor_enabled').default(false).notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
+    roleId: uuid('role_id').references(() => roles.id, {
+      onDelete: REQUIRE_ROLE_FOR_LOGIN ? 'restrict' : 'set null',
+    }),
+    createdBy: uuid('created_by').references((): AnyPgColumn => users.id, {
+      onDelete: 'set null',
+    }),
+    // TODO: Remove failedLoginAttempts & lockedUntil, and convert it to Redis or any KV store
+    failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
+    lockedUntil: timestamp('locked_until', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    // Soft delete, and it stays soft. There is deliberately NO sweep that hard-
+    // deletes these rows: `auditLogs.userId` is `onDelete: 'restrict'`, so a
+    // purge would fail for exactly the users who did anything, and succeed only
+    // for the ones with no history — the opposite of a useful rule. Every read
+    // path already filters `isNull(deletedAt)`, and the partial unique indexes
+    // below release the email and phone for reuse, so the row costs a row.
+    // Erasing a user for real is a data-subject request, not a cron job: it has
+    // to decide what happens to their audit trail, which is a policy question.
+    deletedAt: timestamp('deleted_at', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('ux_users_email')
+      .on(t.email)
+      .where(sql`deleted_at IS NULL`),
+    uniqueIndex('ux_users_phone_number')
+      .on(t.phoneNumber)
+      .where(sql`deleted_at IS NULL AND phone_number IS NOT NULL`),
+    index('idx_users_role_active')
+      .on(t.roleId)
+      .where(sql`deleted_at IS NULL`),
+    index('idx_users_created_at')
+      .on(t.createdAt)
+      .where(sql`deleted_at IS NULL`),
+    index('idx_users_created_by')
+      .on(t.createdBy)
+      .where(sql`deleted_at IS NULL AND created_by IS NOT NULL`),
+    check('chk_email_lowercase', sql`email = LOWER(email)`),
+    check(
+      'chk_failed_login_attempts_non_negative',
+      sql`failed_login_attempts >= 0`
+    ),
+    check(
+      'chk_deleted_user_inactive',
+      sql`deleted_at IS NULL OR is_active = false`
+    ),
+    check(
+      'chk_phone_number_format',
+      sql`phone_number IS NULL OR phone_number ~ '^9665[0-9]{8}$'`
+    ),
+    // Phone-mode invariants (see @/utils/config PHONE_NUMBER_MODE):
+    // - disabled: phone must never be set or verified.
+    // - optional/required: a verified flag requires a present number, so the
+    //   "verified but NULL phone" state (DATA-1) can never arise.
+    ...(PHONE_NUMBER_MODE === 'disabled'
+      ? [
+          check(
+            'chk_phone_disabled',
+            sql`phone_number IS NULL AND phone_number_verified = false`
+          ),
+        ]
+      : [
+          check(
+            'chk_phone_verified_requires_phone',
+            sql`phone_number_verified = false OR phone_number IS NOT NULL`
+          ),
+        ]),
+    ...(REQUIRE_ROLE_FOR_LOGIN
+      ? [
+          check(
+            'chk_active_user_has_role',
+            sql`deleted_at IS NOT NULL OR role_id IS NOT NULL`
+          ),
+        ]
+      : []),
+  ]
+);
+
+// Retention: `db/maintenance.ts` deletes rows 30 days past `expiresAt`, on the
+// `database-retention-sweep` schedule in `lib/schedule.ts`. Not a correctness
+// boundary — every read already filters on `expiresAt` — so the sweep only
+// reclaims disk, and the 30-day tail keeps a just-expired session inspectable
+// while someone is asking why a user was logged out.
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    expiresAt: timestamp('expires_at', {
+      withTimezone: true,
+      precision: 2,
+    }).notNull(),
+    token: varchar('token', { length: 500 }).notNull(),
+    ipAddress: varchar('ip_address', { length: 45 }),
+    userAgent: varchar('user_agent', { length: USER_AGENT_MAX }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Session metadata for caching permissions
+    metadata: jsonb('metadata').$type<SessionMetadata>(),
+    ...timestamps,
+  },
+  (t) => [
+    index('idx_sessions_user_expires_created').on(
+      t.userId,
+      t.expiresAt,
+      t.createdAt
+    ),
+    uniqueIndex('ux_sessions_token').on(t.token),
+  ]
+);
+
+export const accounts = pgTable(
+  'accounts',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    accountId: varchar('account_id', { length: 255 }).notNull(),
+    // Better Auth 1.7 identifies an account by (issuer, accountId); `provider_id`
+    // alone no longer resolves one. `/sign-in/email` requires this to equal
+    // `local:credential` and answers a plain 401 otherwise, so the column is NOT
+    // NULL with a default rather than nullable: a row that reaches this table
+    // without it is an unauthenticatable user. See CREDENTIAL_ISSUER.
+    issuer: varchar('issuer', { length: 255 })
+      .notNull()
+      .default(CREDENTIAL_ISSUER),
+    providerId: providerId('provider_id').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    password: varchar('password', { length: 255 }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('ux_accounts_provider_user').on(t.providerId, t.userId),
+    uniqueIndex('ux_accounts_provider_account').on(t.providerId, t.accountId),
+    // The uniqueness Better Auth itself assumes over the pair it looks accounts
+    // up by. Redundant with ux_accounts_provider_account while `provider_id` has
+    // one possible value; the two diverge as soon as a second provider exists,
+    // and only this one matches the library's own index.
+    uniqueIndex('ux_accounts_issuer_account').on(t.issuer, t.accountId),
+    index('idx_accounts_user_id').on(t.userId),
+    check(
+      'chk_password_hash_length',
+      sql`password IS NULL OR char_length(password) >= 50`
+    ),
+    // Credential-provider records must have a password hash
+    check(
+      'chk_credential_password',
+      sql`provider_id <> 'credential' OR password IS NOT NULL`
+    ),
+    // Pins the pair the sign-in lookup matches on. The column default already
+    // supplies the value; this is what stops a caller from writing a different
+    // one, which would be a silent login outage rather than an error.
+    //
+    // The literals are duplicated from CREDENTIAL_PROVIDER_ID / CREDENTIAL_ISSUER
+    // deliberately, and this is the one place that cannot be deduplicated:
+    // drizzle-kit DROPS interpolated params from a check constraint instead of
+    // inlining them. `sql\`... = ${CREDENTIAL_ISSUER}\`` generates
+    // `CHECK (provider_id <>  OR issuer = )` — measured — which is invalid DDL
+    // the migration only fails on when applied. Same reason the sibling
+    // constraints above spell 'credential' out.
+    check(
+      'chk_credential_issuer',
+      sql`provider_id <> 'credential' OR issuer = 'local:credential'`
+    ),
+    // Text comparison allows this check in the same migration transaction that adds the enum value.
+    check(
+      'chk_google_account',
+      sql`provider_id::text <> 'google' OR (issuer = 'https://accounts.google.com' AND password IS NULL)`
+    ),
+  ]
+);
+
+/**
+ * Better Auth's generic single-use key/value store, reached only through
+ * `internalAdapter.{create,find,consume,delete}VerificationValue`.
+ *
+ * Carries three unrelated lifetimes keyed by `identifier`: `2fa-<random>` (the
+ * pending challenge, value = user id), `2fa-attempts-<key>` (that challenge's
+ * failure counter), and the passkey plugin's WebAuthn ceremonies. Trusted
+ * devices are NOT here — they are ours, in `trusted_devices`.
+ *
+ * ⚠️ `identifier` is indexed but NOT unique. `consumeVerificationValue` returns
+ * the latest row for an identifier, and the attempt counter is re-armed by
+ * INSERTING a fresh row, so a unique index turns a concurrent 2FA retry into a
+ * constraint violation.
+ *
+ * `value` is `text` because the passkey ceremony stores a JSON document whose
+ * length the library decides.
+ */
+export const verifications = pgTable(
+  'verifications',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    identifier: varchar('identifier', {
+      length: VERIFICATION_IDENTIFIER_MAX,
+    }).notNull(),
+    value: text('value').notNull(),
+    expiresAt: timestamp('expires_at', {
+      withTimezone: true,
+      precision: 2,
+    }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index('idx_verifications_identifier').on(t.identifier),
+    index('idx_verifications_expires_at').on(t.expiresAt),
+  ]
+);
+
+/**
+ * The TOTP secret and the encrypted backup-code set, one row per user, written
+ * only by the plugin's own endpoints.
+ *
+ * Both secrets are encrypted under `BETTER_AUTH_SECRET`, so rotating that key
+ * strands every row here — the reason it has no rotation story in
+ * `lib/env.server.ts`.
+ *
+ * ⚠️ The export name must match `twoFactorTable` in `lib/auth.ts`: the adapter
+ * resolves the plugin's `twoFactor` model as `schema[modelName]`, and renaming
+ * one without the other makes every 2FA read throw.
+ *
+ * ⚠️ A row here does NOT mean 2FA is on, and its absence does NOT mean it is
+ * off: enabling OTP-only creates no row, which is why the plugin's lockout
+ * columns below never engage for an OTP-only user.
+ */
+export const twoFactorCredentials = pgTable(
+  'two_factor_credentials',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    secret: text('secret').notNull(),
+    backupCodes: text('backup_codes').notNull(),
+    // `false` until an enrolment code proves the authenticator. Defaulting it
+    // true made an unconfirmed secret a usable factor the moment the row
+    // existed.
+    verified: boolean('verified').default(false).notNull(),
+    failedVerificationCount: integer('failed_verification_count')
+      .default(0)
+      .notNull(),
+    lockedUntil: timestamp('locked_until', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    // Ours: until the user confirms they stored the codes, `backup_code` is not
+    // offered as a method.
+    backupCodesAcknowledgedAt: timestamp('backup_codes_acknowledged_at', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    /**
+     * ⚠️ Acknowledgement is bound to a SET, not to the column above.
+     * Regenerating replaces every code and mints a new id; an acknowledgement
+     * naming the previous set then no longer matches, so the method stops being
+     * offered until the user confirms the new codes. Without the pairing, one
+     * acknowledgement in 2023 kept advertising whatever set exists today.
+     *
+     * An ID rather than a counter, because the counter restarted: this row is
+     * deleted by `/two-factor/disable` and recreated by the next generation, so
+     * a per-row sequence hands set two of the new row the same name as set one
+     * of the old — and an acknowledgement held by a stale tab then lands on a
+     * set the user never saw. NULL until the first generation.
+     */
+    backupCodesSetId: uuid('backup_codes_set_id'),
+    backupCodesAcknowledgedSetId: uuid('backup_codes_acknowledged_set_id'),
+    // How many of that set are unspent. An exhausted set is not recovery
+    // material, and the encrypted blob cannot be counted without the key, so the
+    // count is kept here. See `lib/auth/two-factor-enrolment.ts` for who writes
+    // it and which direction it fails in.
+    backupCodesRemaining: integer('backup_codes_remaining')
+      .default(0)
+      .notNull(),
+    /**
+     * The highest TOTP time step this credential has ever accepted.
+     *
+     * RFC 6238 §5.2: a one-time password must be usable once, and a code stays
+     * arithmetically valid for its whole period plus the ±1 window either side.
+     * Advanced under a guarded UPDATE, so two requests holding the same code
+     * cannot both claim it.
+     *
+     * `bigint` because a step is `floor(unixSeconds / 30)`, and `number` mode
+     * because that value stays inside `Number.MAX_SAFE_INTEGER` for the next
+     * 8.5 billion years.
+     */
+    lastTotpStep: bigint('last_totp_step', { mode: 'number' }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('ux_two_factor_credentials_user').on(t.userId),
+    check(
+      'chk_two_factor_failed_count_non_negative',
+      sql`failed_verification_count >= 0`
+    ),
+    check(
+      'chk_two_factor_backup_codes_remaining_non_negative',
+      sql`backup_codes_remaining >= 0`
+    ),
+  ]
+);
+
+/**
+ * Which second factors a user has TURNED ON. Ours entirely: the plugin models
+ * one boolean and re-derives the method list from server configuration, so
+ * enabling OTP server-side would otherwise add an email/SMS fallback to every
+ * user who deliberately enrolled only TOTP.
+ *
+ * **A row is INTENT, not capability.** A challenge offers the intersection of
+ * three independent terms: server-enabled (`NEXT_PUBLIC_ENABLED_2FA_METHODS`),
+ * user intent (this table), and capability (a verified TOTP secret, an
+ * acknowledged backup-code set, a registered passkey, a verified contact).
+ *
+ * Keeping them separate is what makes a stale row harmless, and it is what the
+ * "cannot remove your last method" rule counts — a transient capability loss
+ * must not silently un-enrol anyone.
+ *
+ * `channel` carries where the user chose to receive codes, which is what lets a
+ * passwordless sign-in compare possessions.
+ */
+export const twoFactorMethods = pgTable(
+  'two_factor_methods',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    method: twoFactorMethod('method').notNull(),
+    channel: otpChannel('channel'),
+    // What an OTP row actually proves, derived from its transport exactly as
+    // `verification_sessions.contact_kind` is. `sms` and `whatsapp` reach one
+    // phone, so they are ONE enrolment with a delivery preference, while email
+    // is a second, independent one. Generated, so no insert can contradict it.
+    contactKind: text('contact_kind').generatedAlwaysAs(
+      sql`CASE WHEN channel IS NULL THEN NULL WHEN channel = 'email' THEN 'email' ELSE 'phone' END`
+    ),
+    // The method the challenge routes to first. At most one row per user, and
+    // only ever a reorder WITHIN what the user has enrolled — see `D9`.
+    isDefault: boolean('is_default').default(false).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    // ⚠️ Two partial indexes, not one over `(user_id, method)`. A user may hold
+    // an OTP enrolment per CONTACT KIND — email and phone are different
+    // possessions — but only one row of every other method. A single key on
+    // `(user_id, method)` made a second OTP channel REPLACE the first through
+    // `recordMethodIntent`'s upsert. Both conflict targets in that function must
+    // stay in step with these two predicates.
+    uniqueIndex('ux_two_factor_methods_user_otp_contact')
+      .on(t.userId, t.contactKind)
+      .where(sql`method = 'otp'`),
+    uniqueIndex('ux_two_factor_methods_user_method')
+      .on(t.userId, t.method)
+      .where(sql`method <> 'otp'`),
+    uniqueIndex('ux_two_factor_methods_default')
+      .on(t.userId)
+      .where(sql`is_default`),
+    // An equivalence so neither direction can drift: no channel on a TOTP row,
+    // and no OTP row without a destination to send to.
+    check(
+      'chk_two_factor_method_channel',
+      sql`(method = 'otp') = (channel IS NOT NULL)`
+    ),
+  ]
+);
+
+/**
+ * WebAuthn credentials, used in this deployment ONLY as a second factor.
+ *
+ * ⚠️ The plugin's own authentication endpoints
+ * (`/passkey/generate-authenticate-options`, `/passkey/verify-authentication`)
+ * must stay absent from `BETTER_AUTH_ENDPOINTS`: they resolve a credential by
+ * `credentialID` alone and issue a session to whoever owns it. The second factor
+ * is proven through `/two-factor/passkey/*`, which binds the assertion to the
+ * pending challenge's user.
+ *
+ * `aaguid` identifies the authenticator MODEL, not the device or the user.
+ */
+export const passkeys = pgTable(
+  'passkeys',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: NAME_MAX }),
+    publicKey: text('public_key').notNull(),
+    credentialID: varchar('credential_id', {
+      length: CREDENTIAL_ID_MAX,
+    }).notNull(),
+    counter: integer('counter').default(0).notNull(),
+    deviceType: varchar('device_type', { length: 32 }).notNull(),
+    backedUp: boolean('backed_up').default(false).notNull(),
+    transports: varchar('transports', { length: 255 }),
+    aaguid: varchar('aaguid', { length: 64 }),
+    ...timestamps,
+  },
+  (t) => [
+    // Unique, not indexed: a duplicate would make which account an assertion
+    // proves depend on row order.
+    uniqueIndex('ux_passkeys_credential_id').on(t.credentialID),
+    index('idx_passkeys_user_id').on(t.userId),
+    check('chk_passkeys_counter_non_negative', sql`counter >= 0`),
+  ]
+);
+
+/**
+ * Devices allowed to skip the second factor, and the ONLY mechanism in this
+ * application that does so. Entirely ours — see `lib/auth/trusted-device.ts`.
+ *
+ * `trustIdentifier` is the random half of the signed cookie, whose other half is
+ * an HMAC over `<userId>!<trustIdentifier>`, so the cookie alone does not let a
+ * holder name a different user's row.
+ *
+ * Revoked by the user from settings, and by every credential rotation
+ * (`lib/auth/rotation.ts`).
+ */
+export const trustedDevices = pgTable(
+  'trusted_devices',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    trustIdentifier: varchar('trust_identifier', {
+      length: VERIFICATION_IDENTIFIER_MAX,
+    }).notNull(),
+    userAgent: varchar('user_agent', { length: USER_AGENT_MAX }),
+    ipAddress: varchar('ip_address', { length: 45 }),
+    lastUsedAt: timestamp('last_used_at', {
+      withTimezone: true,
+      precision: 2,
+    })
+      .defaultNow()
+      .notNull(),
+    expiresAt: timestamp('expires_at', {
+      withTimezone: true,
+      precision: 2,
+    }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('ux_trusted_devices_identifier').on(t.trustIdentifier),
+    index('idx_trusted_devices_user').on(t.userId, t.expiresAt),
+    // Leading `expires_at`, for the retention sweep, which filters on it alone.
+    // `idx_trusted_devices_user` cannot serve that scan: its leading column is
+    // `user_id`.
+    index('idx_trusted_devices_expires_at').on(t.expiresAt),
+  ]
+);
+
+/**
+ * Not a key in `sessions.metadata`: that rail is the permission cache that
+ * `refreshRoleSessions` merges into and must stay unreachable with
+ * caller-supplied keys. The cascade never fires — `users` rows are soft-deleted,
+ * never purged — so the user DELETE handler removes this row itself.
+ */
+export const userPreferences = pgTable(
+  'user_preferences',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    ui: jsonb('ui').$type<StoredPreferences>().notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('ux_user_preferences_user').on(t.userId),
+    // Literal, not a constant: see `chk_credential_issuer`.
+    check('chk_user_preferences_ui_size', sql`pg_column_size(ui) <= 4096`),
+  ]
+);
+
+/**
+ * The media library's tree. Pure organisation: a folder carries no visibility
+ * and no object-store counterpart, so renaming or moving one is a single
+ * `UPDATE` and no URL changes (`reports/file-manager-plan.md`, section 1).
+ *
+ * Depth (≤ `FOLDER_MAX_DEPTH`) and fan-out (≤ `FOLDER_MAX_CHILDREN`) are
+ * enforced in `lib/media/folders.ts` under a `FOR UPDATE` on the parent — a
+ * CHECK cannot see other rows.
+ */
+export const folders = pgTable(
+  'folders',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    parentId: uuid('parent_id').references((): AnyPgColumn => folders.id),
+    name: varchar('name', { length: FOLDER_NAME_MAX }).notNull(),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    ...timestamps,
+  },
+  (t) => [
+    // Case-insensitive within a parent; two partial indexes because NULLs are
+    // distinct to a unique index, so one over `(parent_id, lower(name))` would
+    // admit any number of root folders with the same name.
+    uniqueIndex('ux_folders_parent_name')
+      .on(t.parentId, sql`lower(${t.name})`)
+      .where(sql`parent_id IS NOT NULL`),
+    uniqueIndex('ux_folders_root_name')
+      .on(sql`lower(${t.name})`)
+      .where(sql`parent_id IS NULL`),
+    index('idx_folders_parent').on(t.parentId),
+    check(
+      'chk_folders_name',
+      sql`name = btrim(name) AND name <> '' AND position('/' in name) = 0`
+    ),
+    check('chk_folders_not_self', sql`parent_id IS NULL OR parent_id <> id`),
+  ]
+);
+
+/**
+ * One row per stored object, in whichever bucket `bucket_type` names, under the
+ * key `m/<yyyy>/<mm>/<id>.<ext>` — the same key in both buckets, so a
+ * visibility change never changes the path component of a URL.
+ *
+ * `(id, status)` is UNIQUE so that a referencing table can declare
+ * `foreign key (file_id, file_status) references files (id, status)` with a
+ * `file_status` column fixed to `'active'`. That composite FK is what makes
+ * deletion safe without a transaction open across the object store: marking a
+ * row `deleting` fails while any referrer exists, and a referrer cannot be
+ * created against a row that is not `active` — both directions measured under
+ * concurrency, see `reports/file-manager-plan.md` section 13. Every referrer in
+ * a project MUST use that shape; `lib/media/usages.ts` is where it is listed.
+ *
+ * A `pending` row past its TTL is swept by `db/maintenance.ts` together with its
+ * object. A row is `pending` between the insert and the object write's
+ * confirmation (library uploads), or until an entity form claims it
+ * (`claimFiles`). A `deleting` row is one whose delete has committed to going
+ * ahead; the sweep finishes it if the request that started it did not.
+ */
+export const files = pgTable(
+  'files',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    r2Key: varchar('r2_key', { length: URL_MAX }).notNull(),
+    bucketType: bucketType('bucket_type').notNull(),
+    status: fileStatus('status').notNull().default('pending'),
+    kind: fileKind('kind').notNull(),
+    transition: fileTransition('transition'),
+    /**
+     * Which ATTEMPT owns the transition above.
+     *
+     * The marker alone is a value, not an identity, and two actors legitimately
+     * write the same value: the request performing a publish, and the sweep
+     * recovering one it believes was abandoned. Re-reading the marker before an
+     * external delete is a check, not a fence — the flip can land while that
+     * delete is in flight, leaving an active row with neither object. Every
+     * destructive step is guarded on still holding this token, so exactly one of
+     * the two proceeds.
+     *
+     * NULL exactly when `transition` is NULL (`chk_files_transition_owner`).
+     */
+    transitionId: uuid('transition_id'),
+    /**
+     * How many times a caller that could NOT claim the row has asked whoever
+     * owns it to delete the copy in the bucket the row does not name.
+     *
+     * A losing caller has a copy to remove and no marker to hand it to. Bumping
+     * this in the same statement that fails to claim is what makes the demand
+     * durable: the owner reads the counter before it issues its delete and may
+     * only clear its marker while the value is unchanged, so a copy that landed
+     * during that delete cannot be forgotten by the clear that follows it.
+     * Monotonic — the value itself means nothing, only that it moved.
+     */
+    cleanupRequests: integer('cleanup_requests').notNull().default(0),
+    folderId: uuid('folder_id').references(() => folders.id),
+    displayName: varchar('display_name', {
+      length: MEDIA_DISPLAY_NAME_MAX,
+    }).notNull(),
+    mimeType: varchar('mime_type', { length: 100 }).notNull(),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
+    // Hex. Verifies a cross-bucket copy (an R2 ETag is not a content hash for a
+    // multipart object) and is the hook for any future duplicate detection.
+    sha256: varchar('sha256', { length: 64 }),
+    width: integer('width'),
+    height: integer('height'),
+    blurhash: varchar('blurhash', { length: 100 }),
+    uploadedBy: uuid('uploaded_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    // Stamped by the retention sweep when the file is active, in no folder and
+    // referenced by no registered owner; cleared when it is filed or linked.
+    // `UNFILED_RETENTION_DAYS` (`lib/media/lifecycle.ts`) after the stamp the
+    // sweep deletes the file.
+    unfiledAt: timestamp('unfiled_at', { withTimezone: true, precision: 2 }),
+    ...timestamps,
+  },
+  (t) => [
+    index('idx_files_uploaded_by').on(t.uploadedBy),
+    uniqueIndex('ux_files_r2_key').on(t.r2Key),
+    unique('ux_files_id_status').on(t.id, t.status),
+    index('idx_files_unfiled')
+      .on(t.unfiledAt)
+      .where(sql`unfiled_at IS NOT NULL`),
+    index('idx_files_folder_created').on(t.folderId, t.createdAt, t.id),
+    index('idx_files_folder_name').on(
+      t.folderId,
+      sql`lower(${t.displayName})`,
+      t.id
+    ),
+    // The sweep's two predicates: pending rows by age, deleting rows by age.
+    index('idx_files_status_created')
+      .on(t.status, t.createdAt)
+      .where(sql`status <> 'active'`),
+    index('idx_files_transition')
+      .on(t.transition, t.updatedAt)
+      .where(sql`transition IS NOT NULL`),
+    // The token exists exactly while a transition does, so neither an
+    // unowned saga nor an orphaned token can be written by any path.
+    check(
+      'chk_files_transition_owner',
+      sql`(transition IS NULL) = (transition_id IS NULL)`
+    ),
+    check('chk_size_bytes_positive', sql`size_bytes >= 0`),
+    check('chk_width_positive', sql`width IS NULL OR width > 0`),
+    check('chk_height_positive', sql`height IS NULL OR height > 0`),
+    check(
+      'chk_files_sha256_hex',
+      sql`sha256 IS NULL OR sha256 ~ '^[0-9a-f]{64}$'`
+    ),
+  ]
+);
+
+/**
+ * Objects that must leave the store, and have no `files` row left to carry the
+ * demand.
+ *
+ * One situation reaches this, and it is the one the transition token cannot
+ * cover. A publish whose saga `retryTransitions` took over lands its copy AFTER
+ * an ordinary delete has swept that bucket and removed the row. The writer
+ * notices and deletes what it wrote (`removeStaleCopy` in
+ * `lib/media/visibility.ts`) — but a refused delete, or a public URL the edge
+ * cache would not drop, then has nowhere to go: the transition marker, the
+ * cleanup counter and the `deleting` status all lived on the row that is gone.
+ * `ux_files_r2_key` proves the key belongs to nobody; it does not remember that
+ * removing it is still owed.
+ *
+ * Deliberately NOT a `files` row. A row there asserts a display name, a kind, a
+ * size and an uploader, none of which is true of anything any more, and it would
+ * resurrect a primary key the audit trail has already recorded a DELETE for.
+ *
+ * Written BEFORE the delete is attempted and removed only once it has succeeded,
+ * so a crash in between leaves the demand rather than losing the object. Drained
+ * by `sweepOrphanedObjects`: an attempt that fails reports the retention sweep
+ * `degraded`, and rows a bounded pass never reached report `hasMore`.
+ *
+ * `updated_at` doubles as the drain's queue position — it takes the least
+ * recently touched rows and restamps whatever it could not finish, so a failing
+ * prefix cannot hold the batch against the work behind it.
+ */
+export const orphanedObjects = pgTable(
+  'orphaned_objects',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    r2Key: varchar('r2_key', { length: URL_MAX }).notNull(),
+    bucketType: bucketType('bucket_type').notNull(),
+    /**
+     * How many writers have recorded this same leftover.
+     *
+     * The unique index identifies the OBJECT; it does not identify which write
+     * a successful delete covered. Two abandoned writers can hold a copy of the
+     * same key in the same bucket, and the second one's demand arrives while
+     * the first one's delete is already in flight — so the first one's clear
+     * would remove the retry the second was promised and the object would be
+     * owed to nobody. Every enqueue advances this, and every clear is refused
+     * unless the value is still the one its own enqueue saw. Monotonic — the
+     * value itself means nothing, only that it moved. Same fence as
+     * `files.cleanupRequests`, for the same reason.
+     */
+    cleanupRequests: integer('cleanup_requests').notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    // One ROW per object, however many writers demand it; `cleanup_requests`
+    // is what counts the demands on it.
+    uniqueIndex('ux_orphaned_objects_key_bucket').on(t.r2Key, t.bucketType),
+  ]
+);
+
+/**
+ * Retention: NOTHING deletes from this table, and that is a decision, not a gap.
+ *
+ * The retention sweep in `db/maintenance.ts` deliberately skips it. Two reasons,
+ * and either alone is sufficient:
+ *
+ * 1. **It is the trail everything else is measured against.** The
+ *    `verification_sessions` sweep is only safe because every flow that consumes
+ *    a proof writes its row here — contact change, password reset, passwordless
+ *    sign-in. Expiring these rows at 30 days would delete the history that
+ *    justifies expiring those, leaving neither.
+ * 2. **`userId` is `onDelete: 'restrict'`**, so these rows are also what pins a
+ *    soft-deleted user's identity in place. See `users.deletedAt`.
+ *
+ * If volume ever forces the issue, the options in preference order are
+ * partitioning with `pg_partman` and detaching cold partitions, or archiving to
+ * R2 before deletion — never a bare `DELETE`. Revisit on measured table size,
+ * not on a calendar.
+ */
+export const auditLogs = pgTable(
+  'audit_logs',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    userId: uuid('user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
+    userEmail: varchar('user_email', { length: EMAIL_MAX }).notNull(),
+    tableName: varchar('table_name', { length: 50 }).notNull(),
+    recordId: varchar('record_id', { length: 100 }).notNull(),
+    action: auditLogAction('action').notNull(),
+    oldData: jsonb('old_data'),
+    newData: jsonb('new_data'),
+    changedFields: jsonb('changed_fields'),
+    ipAddress: varchar('ip_address', { length: 45 }),
+    userAgent: varchar('user_agent', { length: USER_AGENT_MAX }),
+    apiPath: varchar('api_path', { length: API_PATH_MAX }),
+    createdAt: timestamp('created_at', {
+      withTimezone: true,
+      precision: 2,
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index('idx_audit_logs_table_record').on(t.tableName, t.recordId)]
+);
+
+// Roles Table (defined first for FK reference)
+// A future role-version column could invalidate assigned users after role changes.
+export const roles = pgTable(
+  'roles',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    roleName: varchar('role_name', { length: ROLE_NAME_MAX })
+      .notNull()
+      .unique('ux_roles_role_name'),
+    description: varchar('description', { length: ROLE_DESCRIPTION_MAX }),
+    isActive: boolean('is_active').default(true).notNull(),
+    scope: roleScope('scope').notNull().default(ROLE_SCOPE.STANDARD),
+    createdBy: uuid('created_by').references((): AnyPgColumn => users.id, {
+      onDelete: 'set null',
+    }),
+    ...timestamps,
+  },
+  (t) => [
+    index('idx_roles_scope_active_created').on(
+      t.scope,
+      t.isActive,
+      t.createdAt
+    ),
+    index('idx_roles_created_by')
+      .on(t.createdBy)
+      .where(sql`created_by IS NOT NULL`),
+    check(
+      'chk_custom_prefix_scope',
+      sql.raw(
+        `(role_name ILIKE '${CUSTOM_ROLE_VALUE}-%' AND scope = '${CUSTOM_ROLE_VALUE}') OR (role_name NOT ILIKE '${CUSTOM_ROLE_VALUE}-%' AND scope <> '${CUSTOM_ROLE_VALUE}')`
+      )
+    ),
+  ]
+);
+
+export const rolePermissions = pgTable(
+  'role_permissions',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id, { onDelete: 'cascade' }),
+    pageName: pageName('page_name').notNull(),
+    permissions: jsonb('permissions').$type<PermissionActions>().notNull(),
+    createdAt: timestamp('created_at', {
+      withTimezone: true,
+      precision: 2,
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    // No `(role_id)` index: it is a strict PREFIX of the unique index below,
+    // which serves every role-keyed read and the per-page upsert's conflict
+    // target alike, so a second one only costs a write and the storage.
+    uniqueIndex('ux_role_permissions_role_page').on(t.roleId, t.pageName),
+  ]
+);
+
+export const verificationSessions = pgTable(
+  'verification_sessions',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Delivery transport of the most recent code. Informational after the fact:
+    // nothing reads it to decide behaviour, and it is NOT part of the key.
+    channel: otpChannel('channel').notNull(),
+    // What is actually being proven, derived from the transport so the two can
+    // never disagree. sms and whatsapp reach the same phone number, so keying
+    // sessions on the transport gave each one its own send cycle, its own
+    // 5-guess budget and its own 6-hour block — switching transport reset all
+    // three. Generated rather than written by the app: an INSERT cannot set it,
+    // so no code path can produce a row whose kind contradicts its channel.
+    contactKind: text('contact_kind')
+      .notNull()
+      .generatedAlwaysAs(
+        sql`CASE WHEN channel = 'email' THEN 'email' ELSE 'phone' END`
+      ),
+    identifier: varchar('identifier', { length: OTP_IDENTIFIER_MAX }).notNull(),
+    // Binds the session to a single reason so a code proven for one purpose can
+    // never authorize a different sensitive action.
+    purpose: otpPurpose('purpose').notNull().default('verify_contact'),
+    // For change_email / change_phone: the NEW contact whose ownership is being
+    // proven and which is committed to the user on success. NULL for every
+    // other purpose (the target is the user's existing contact in `identifier`).
+    targetIdentifier: varchar('target_identifier', {
+      length: OTP_IDENTIFIER_MAX,
+    }),
+    attemptNumber: integer('attempt_number').notNull().default(0),
+    verifyAttemptNumber: integer('verify_attempt_number').notNull().default(0),
+    // Failed verifies in a 24h window ANCHORED at verifyAttemptWindowStart —
+    // a fixed window, not a rolling one: every failure on this row ages out
+    // together when the anchor passes 24h. Unlike verifyAttemptNumber it is
+    // NOT reset on resend, which closes the send-cycle-reset bypass. It lives
+    // on the proof row, so it is also lost when the row is deleted (a
+    // verify_contact success, or a credential rotation).
+    verifyAttemptDaily: integer('verify_attempt_daily').notNull().default(0),
+    verifyAttemptWindowStart: timestamp('verify_attempt_window_start', {
+      withTimezone: true,
+      precision: 2,
+    })
+      .notNull()
+      .defaultNow(),
+    lastSentAt: timestamp('last_sent_at', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    nextAllowedAt: timestamp('next_allowed_at', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    isBlocked: boolean('is_blocked').notNull().default(false),
+    blockedUntil: timestamp('blocked_until', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    // Single-use proof lifecycle for sensitive-action OTPs (change_email/phone).
+    // `verifiedAt` is stamped when the code matches; `consumedAt` when the proof
+    // is spent to commit the action. Both are written in the SAME transaction as
+    // the action, so there is no verify→action replay window.
+    verifiedAt: timestamp('verified_at', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    consumedAt: timestamp('consumed_at', {
+      withTimezone: true,
+      precision: 2,
+    }),
+    ...timestamps,
+  },
+  (t) => [
+    // One in-flight session per (user, CONTACT KIND, purpose). Keyed on the
+    // contact kind, not the transport, so sms and whatsapp for one phone share
+    // a single cycle, block and verify budget. `purpose` stays in the key or a
+    // change_email send would clobber an in-flight verify_contact code. The
+    // send upsert's onConflict target MUST match this key.
+    uniqueIndex('ux_verification_sessions_user_contact_purpose').on(
+      t.userId,
+      t.contactKind,
+      t.purpose
+    ),
+    check('chk_attempt_number_non_negative', sql`attempt_number >= 0`),
+    check(
+      'chk_attempt_number_max',
+      sql.raw(`attempt_number <= ${OTP_MAX_ATTEMPTS}`)
+    ),
+    check(
+      'chk_verify_attempt_number_max',
+      sql.raw(`verify_attempt_number <= ${OTP_MAX_VERIFY_ATTEMPTS}`)
+    ),
+    check(
+      'chk_verify_attempt_daily_max',
+      sql.raw(`verify_attempt_daily <= ${OTP_MAX_DAILY_VERIFY_ATTEMPTS}`)
+    ),
+    check(
+      'chk_verify_attempt_number_non_negative',
+      sql`verify_attempt_number >= 0`
+    ),
+    check(
+      'chk_verify_attempt_daily_non_negative',
+      sql`verify_attempt_daily >= 0`
+    ),
+    check(
+      'chk_blocked_has_until',
+      sql`is_blocked = false OR blocked_until IS NOT NULL`
+    ),
+    check(
+      'chk_unblocked_no_until',
+      sql`is_blocked = true OR blocked_until IS NULL`
+    ),
+    // A target identifier exists iff the purpose is a contact-change. Keeps the
+    // "new contact to commit" coherent with the reason it was collected.
+    check(
+      'chk_change_purpose_has_target',
+      sql`(purpose IN ('change_email', 'change_phone')) = (target_identifier IS NOT NULL)`
+    ),
+    // consumedAt cannot precede verifiedAt existing — a proof must be verified
+    // before it can be spent.
+    check(
+      'chk_consumed_requires_verified',
+      sql`consumed_at IS NULL OR verified_at IS NOT NULL`
+    ),
+  ]
+);
+
+export const verificationCodes = pgTable(
+  'verification_codes',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => verificationSessions.id, { onDelete: 'cascade' }),
+    // Stored as a keyed HMAC envelope via hashOtpCode, never plaintext.
+    code: varchar('code', { length: 255 }).notNull(),
+    expiresAt: timestamp('expires_at', {
+      withTimezone: true,
+      precision: 2,
+    }).notNull(),
+    createdAt: timestamp('created_at', {
+      withTimezone: true,
+      precision: 2,
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [uniqueIndex('ux_verification_codes_session').on(t.sessionId)]
+);
+
+export const verificationSessionsRelations = relations(
+  verificationSessions,
+  ({ many }) => ({
+    codes: many(verificationCodes),
+  })
+);
+
+export const verificationCodesRelations = relations(
+  verificationCodes,
+  ({ one }) => ({
+    session: one(verificationSessions, {
+      fields: [verificationCodes.sessionId],
+      references: [verificationSessions.id],
+    }),
+  })
+);
+
+export const usersRelations = relations(users, ({ one }) => ({
+  role: one(roles, {
+    fields: [users.roleId],
+    references: [roles.id],
+  }),
+}));
+
+export const rolesRelations = relations(roles, ({ many }) => ({
+  users: many(users),
+  rolePermissions: many(rolePermissions),
+}));
+
+export const rolePermissionsRelations = relations(
+  rolePermissions,
+  ({ one }) => ({
+    role: one(roles, {
+      fields: [rolePermissions.roleId],
+      references: [roles.id],
+    }),
+  })
+);
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, {
+    fields: [sessions.userId],
+    references: [users.id],
+  }),
+}));
+
+export const accountsRelations = relations(accounts, ({ one }) => ({
+  user: one(users, {
+    fields: [accounts.userId],
+    references: [users.id],
+  }),
+}));
+
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+export type Role = typeof roles.$inferSelect;
+export type NewRole = typeof roles.$inferInsert;
+export type Session = typeof sessions.$inferSelect;
+export type NewSession = typeof sessions.$inferInsert;
+export type Account = typeof accounts.$inferSelect;
+export type NewAccount = typeof accounts.$inferInsert;
+export type File = typeof files.$inferSelect;
+export type NewFile = typeof files.$inferInsert;
+export type Folder = typeof folders.$inferSelect;
+export type NewFolder = typeof folders.$inferInsert;
+export type FileStatus = (typeof fileStatusEnum)[number];
+export type FileKind = (typeof fileKindEnum)[number];
+export type FileTransition = (typeof fileTransitionEnum)[number];
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type NewAuditLog = typeof auditLogs.$inferInsert;
+export type RolePermission = typeof rolePermissions.$inferSelect;
+export type NewRolePermission = typeof rolePermissions.$inferInsert;
+export type VerificationSession = typeof verificationSessions.$inferSelect;
+export type NewVerificationSession = typeof verificationSessions.$inferInsert;
+export type VerificationCode = typeof verificationCodes.$inferSelect;
+export type NewVerificationCode = typeof verificationCodes.$inferInsert;
+
+// User with role included (for queries with relations)
+export type UserWithRole = User & { role: Role | null };
+
+export type RoleScopes = (typeof roleScopeValues)[number];

@@ -1,0 +1,2163 @@
+# Coolify deployment: ElysiaJS, `bun:sql`, `bun:sqlite`
+
+Updated: 2026-09-04
+
+> **Nothing here has been executed against a live Coolify instance since the
+> Elysia migration.** Treat it as revised instructions, not a verified
+> deployment. The PostgreSQL and SQLite behaviour was verified locally
+> (PostgreSQL 18.6 on Bun 1.4.0); the Coolify wiring was not.
+
+## Topology
+
+One Coolify application on one VPS:
+
+- **Runtime:** Bun 1.4.0 — runtime, package manager and TypeScript loader. No
+  Node process, no bundle, no `node-gyp`.
+- **Business data:** PostgreSQL via `bun:sql`. One pooled client in
+  `db/index.ts`; `withTransaction` runs on it.
+- **Rate limits and cache:** local SQLite via `bun:sqlite` on a persistent
+  volume.
+- **Ingress:** Cloudflare → Coolify/Traefik.
+- **Process model:** one container, one `bun server.ts` process.
+
+No Dockerfile, so the build uses Nixpacks. Add a Dockerfile if the exact Bun
+version cannot be reproduced — the risk matters more now that Bun is the
+runtime, not just the build tool.
+[Nixpacks configuration](https://coolify.io/docs/applications/build-packs/nixpacks) ·
+[Deploy Elysia to production](https://elysiajs.com/patterns/deploy)
+
+## Settled decisions
+
+Instructions below depend on these. Revisiting one changes the marked sections.
+
+| Decision             | Choice                                                        | Affects |
+| -------------------- | ------------------------------------------------------------- | ------- |
+| Expiry sweep         | In-process `Bun.cron`, every 15 minutes                       | §9      |
+| Retention sweep      | In-process `Bun.cron`, daily                                  | §9      |
+| Power-loss RPO       | `synchronous = NORMAL` on the limiter DB, incl. daily OTP cap | §4      |
+| Retained WAL ceiling | `journal_size_limit = 64 MiB` retained size, peak monitored   | §4, §10 |
+| Sweep trigger        | In-process `Bun.cron` (`lib/schedule.ts`)                     | §9      |
+
+**The sweep-trigger decision was re-opened and reversed. Both sweeps now run
+in-process on `Bun.cron` — see §9.** The original decision was taken against
+`@elysia/cron`, whose load-bearing objection was "another Elysia coupling while
+the Elysia-versus-Hono question is open"; `Bun.cron` is a **runtime** API that
+survives a framework change untouched, and its single-process precondition was
+already satisfied by `reusePort: false`. That deleted both `/api/internal/*`
+routes and the whole maintenance attack surface behind them.
+`SQLITE_MAINTENANCE_TOKEN` survives, guarding the whole of
+`GET /api/health/storage`, and now has a 32-character floor and is required in
+production. The trade — losing the scheduled task's own failure alerting
+— is paid by the structured per-run log described in §9.
+
+## Open gates
+
+Do not expose production traffic until these are resolved.
+
+1. ~~**Pin `TZ=UTC` (§3).**~~ **CLOSED IN CODE — no host or database setting is
+   required.** Kept here because it was the most severe gate in this runbook and
+   an operator reading an older copy will look for it.
+
+   The defect was `mode: 'string'` on all 25 `timestamptz` columns in
+   `db/schema.ts`. `bun:sql` hands drizzle a `Date`, so string-mode's
+   `typeof value === 'string'` early return never fired and the branch below it
+   took the UTC wall clock and appended the **process-local** offset — naming a
+   different instant from the one stored. Four abuse controls failed **open** as
+   a result (login lockout, OTP verify block, OTP send block, resend cooldown),
+   session-list pagination silently skipped rows, and Better Auth evaluated
+   session expiry at the wrong instant.
+
+   The columns now carry no `mode`, so the driver's `Date` reaches callers
+   untouched and every comparison is on an absolute instant. Two consequences
+   for deployment:
+
+   - **`TZ` on the container no longer affects any security decision.** The one
+     remaining host-zone-sensitive function (`formatDate`, `utils/index.ts`) has
+     no caller; `utils/time.ts` declares `BUSINESS_TIMEZONE` explicitly for
+     every calendar-day conversion. Setting `TZ=UTC` is still reasonable hygiene
+     for log readability — it is no longer load-bearing.
+   - **No PostgreSQL-side setting is required, on this host or any other.**
+     Verified against the live database: `timestamptz` decodes to the same
+     absolute instant under server `TimeZone` values `UTC`, `Asia/Riyadh`,
+     `America/Sao_Paulo` and `+05:30`. The fix therefore survives a move to a
+     managed host (Neon and similar) with no configuration to carry across.
+
+   Regression cover: `tests/integration/timezone-auth-behavior.test.ts`. The
+   integration job in `.github/workflows/ci.yml` runs it under
+   `TZ: Asia/Riyadh` with `REQUIRE_NON_UTC_TZ: '1'`, and the suite's first test
+   fails if either is missing — so a UTC runner cannot pass this class silently.
+
+   Client-visible contract change that shipped with it: `createdAt` / `updatedAt`
+   on the dashboard read endpoints and the `updatedAt` returned by
+   `PUT /api/dash/permissions/:id` are now ISO-8601 UTC
+   (`2026-08-21T12:02:00.000Z`) instead of PostgreSQL's rendering with a local
+   offset (`2026-08-21 12:02:00.000+03`).
+
+2. ~~**Path-prefix edge rules are bypassable.**~~ **CLOSED IN CODE.** Elysia
+   1.4.29 finds the path by string arithmetic from a fixed offset of 11
+   characters, not by URL parsing. With a hostname below 4 characters the real
+   path-start slash sat below that offset and the router dispatched on a
+   _suffix_ — measured over raw TCP: `Host: x` plus
+   `POST /zz/api/internal/sqlite-sweep` reached the sweep handler while matching
+   **none** of the `/api/internal/` prefix rules in §5, and the same trick gave
+   every request a fresh per-IP limiter bucket, bypassing the 120/60 s admission
+   gate on all 22 `ip-limit` routes.
+
+   `app.ts` now refuses any request whose hostname is shorter than 4 characters,
+   in `onRequest`, before anything reads the path. **Not** with
+   `handler: { standardHostname: false }`, which the original finding suggested:
+   offset 7 is correct only for the 7-character `http://` and lands on the second
+   slash of `//` under `https://`, yielding `/example.com/api/…` — measured. The
+   hostname floor is scheme-independent, and no real deployment approaches it
+   (`localhost` is 9, an IPv4 literal is 7). Covered by
+   `tests/process/host-routing.test.ts`.
+
+   Step 6 of §5 — block non-Cloudflare origin traffic at the VPS firewall —
+   remains correct, but it is defence in depth again rather than the control this
+   depended on.
+
+3. **`secure_delete` is undecided.** Both databases run `secure_delete=OFF`, so
+   deleted rows keep their bytes until the pages are reused — and those bytes
+   are limiter keys embedding raw IPs, emails and phone numbers. A raw-file
+   probe confirmed a marker containing all three survived deletion plus a
+   truncating checkpoint under `OFF`, and was absent under `FAST`. Either set
+   `secure_delete=FAST` in [`applyPragmas`](../lib/sqlite/database.ts) or record
+   retention as accepted policy. The default silently chooses retention.
+   (`bench/sqlite/FINAL-REPORT.md` → "Open security decision".)
+4. ~~**Schedule both sweeps, and generate `SQLITE_MAINTENANCE_TOKEN`
+   properly.**~~ **MOSTLY CLOSED IN CODE.** Both sweeps run in-process now, so
+   there is nothing to schedule and no unset-token failure mode that silently
+   stops them (§9). The token guards `GET /api/health/storage` alone — the whole
+   route, not only `?deep=1` — and is required in production, because the health
+   check carries it (§7).
+
+   What remains yours: **use `openssl rand -hex 32` and nothing else.** The
+   generated value is the entire control. A short token is now refused at boot —
+   `lib/env.server.ts` requires at least 32 characters when the variable is set —
+   and a failed attempt is logged (`maintenance token rejected`, with the reason
+   class and never the value). The comparison short-circuits on length before its
+   constant-time compare, which is exactly why the floor exists: the length is
+   recoverable before any content guessing.
+
+5. **Cloudflare ingress is mandatory.** The code trusts `cf-connecting-ip` and
+   nothing else; Traefik's `x-forwarded-for` is deliberately not accepted
+   because it is client-controllable whenever the origin is directly reachable.
+   Direct Coolify traffic makes IP-protected handlers return 503. Proxy DNS
+   through Cloudflare and block direct origin access (§5).
+
+   The header is trusted on **syntax alone** — nothing verifies the socket peer
+   is Cloudflare/Traefik. Deferred until the edge is final; sites carry a
+   greppable `TODO(proxy-trust)`, resolution in `reports/should-ignore.md` #63.
+
+6. **Choose deployment overlap policy** — stop-first is the safe default (§6).
+7. **Confirm no secret is scoped to the build.** The build stage is
+   `tsc --noEmit`, which reads no environment, so every secret is runtime-only.
+   A build-scoped secret stays visible in image history unless BuildKit secrets
+   are in use, for no benefit.
+8. **Decide rate-limit backup RPO.** With no off-host SQLite backup, host loss
+   resets the daily OTP spend counter. If exact continuity is mandatory,
+   single-VPS SQLite is insufficient — use durable shared storage.
+9. ~~**Decide whether readiness should cover PostgreSQL.**~~ **DECIDED AND
+   CLOSED IN CODE: a bounded `SELECT 1` on the SHALLOW path** (§7). It asserted
+   `ok` on SQLite alone, so an unreachable database kept the container in
+   rotation while every login, dashboard route and OTP send failed.
+
+   The choice between `?deep=1` and the shallow path went to shallow, because a
+   readiness probe that cannot see the primary database is not a readiness probe
+   — and the two costs `?deep=1` exists to separate are a structural scan and a
+   write lock, neither of which `SELECT 1` on a pooled connection is. It carries
+   a 2 s timeout so an unreachable host produces a 503 rather than a hang the
+   orchestrator reads as a timeout. Reported as `checks.postgres`, by name, so a
+   degraded body says WHICH store failed.
+
+10. **Run the SQLite checks against a copy of the live volume.** Migration,
+    busy-handling, crash-recovery and backup/restore have only been verified
+    against freshly created databases on a developer machine.
+
+**Resolved:** `utils/config.ts` now sets `OTP_AUTO_VERIFY = false`, so the OTP
+bypass gate is closed. (`NEXT_PUBLIC_OTP_AUTO_VERIFY` is referenced only in a
+comment; no code reads it.)
+
+## 1. Prepare release
+
+- Commit and push every runtime file. Coolify builds the Git commit, not the
+  working tree. Never commit `.env`, `data/`, `*.db`, `*-wal`, `*-shm`.
+- Run CI and `bun run build` before tagging.
+- **Apply PostgreSQL migrations through a controlled workflow, not Coolify.**
+  Coolify's pre-deployment command runs in the _old_ container. The command is
+  `bun run db:migrate`, which applies both phases — generated migrations in
+  `db/drizzle/`, then the hand-written SQL in `db/migrations/` (`pg_trgm` and
+  the GIN indexes). It needs only `DATABASE_URL`, so it is safe to run from a
+  maintenance shell — **except for the `0013`–`0019` release, which must not
+  serve between the migration and the swap. Read §13.4a before deploying it.**
+- **`db:migrate` now refuses BEFORE it applies anything** when the ledger in
+  `drizzle.__drizzle_migrations` disagrees with `db/drizzle/meta/_journal.json`
+  over an already-applied entry — an edited migration file, a row for a
+  migration this checkout does not have, or more rows than journal entries. The
+  message names the file. Nothing is applied, so the database is exactly as the
+  command found it and the deployment can be held while the divergence is
+  resolved; do not work around it by editing the ledger without first knowing
+  which statements the database actually ran.
+- **A file delete now addresses every configured R2 bucket and purges the key's
+  public URL**, not only the bucket the row names — a stale visibility transition
+  can leave a copy in the other one. Budget for it: one extra `DeleteObjects` per
+  delete batch, and a Cloudflare purge call on private deletes too where
+  `CLOUDFLARE_CACHE_PURGE_TOKEN` is configured (batched at 30 URLs per call,
+  charged against the same outbound ceiling as every other purge). The purge is
+  submitted on the PUBLIC delete's own result, so an unrelated private-bucket
+  outage does not hold back the eviction of content already gone from the origin.
+- **Never unset `R2_PUBLIC_BUCKET` or `R2_PRIVATE_BUCKET` while rows still name
+  that visibility.** The variable is the only thing that goes; the objects and
+  the rows stay. Deleting such a file answers 200 with the id under `pending`
+  rather than `deleted`, the row keeps its `deleting` marker, and the nightly
+  retention sweep reports `scheduled sweep degraded` with
+  `media.delete row names a bucket this deployment cannot address` on every pass
+  until the bucket is configured again. That is deliberate — the alternative is
+  dropping the last record of a key whose object is still stored, and for the
+  public bucket, still readable. To retire a bucket, move its files to the other
+  visibility first, then remove the variable.
+- Before routing traffic, run `bun run preflight:credentials` with production
+  `DATABASE_URL` and password-pepper variables. It fails if any credential uses
+  a malformed envelope or a pepper ID missing from the deployed keyring.
+- Before NARROWING `NEXT_PUBLIC_ENABLED_2FA_METHODS` or
+  `NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS` on an existing deployment, run
+  `bun run preflight:two-factor -- <methods> [channels]`. It counts the accounts
+  the change would leave two-factor-enabled with nothing to prove it with — each
+  one an administrative reset — and exits non-zero when that count is not zero.
+  See the two-factor section below.
+- Image encoding admits one active job and four queued jobs per process. Benchmark
+  on the VPS before increasing either limit; raising them is capacity tuning, not
+  required deployment configuration.
+- Record the release commit, Coolify environment, PostgreSQL migration version
+  and SQLite `user_version`.
+- For the Upstash cutover, follow §11.
+
+If CI fails on `find:unused-files`, "unregistered handler" means a `handler.ts`
+exists under `app/api/` that no `routes.ts` entry imports — dead code, not
+broken configuration.
+
+## 2. Create the Coolify application
+
+**Configuration > General:**
+
+| Field           | Value                                           |
+| --------------- | ----------------------------------------------- |
+| Build Pack      | `Nixpacks`                                      |
+| Base Directory  | `/`                                             |
+| Static Site     | Off                                             |
+| Ports Exposes   | `3000`                                          |
+| Port Mappings   | Empty                                           |
+| Install Command | `bun install --frozen-lockfile`                 |
+| Build Command   | `bun run build`                                 |
+| Start Command   | `bun scripts/build-openapi.ts && bun run start` |
+
+`bun run build` is `bun scripts/build-openapi.ts && tsc --noEmit`. There is no
+bundle. The script generates `build/openapi.json` from the **production-filtered**
+route table, which is the only place a route table inconsistent with its request
+schemas can be caught: that filter withholds `/api/dev/*`, and the mismatch it
+created made `GET /openapi.json` return 500 for every authorised caller in
+production while every development check passed. The artefact is served by
+nothing — the runtime route reads it and still requires a live dashboard session
+— so `build/` must never be exposed as a static directory.
+
+`bun run start` is `NODE_ENV=production bun --bun server.ts`. **If the start
+command is overridden in Coolify, `NODE_ENV=production` must be carried over** —
+HSTS, the production env validation in `lib/env.server.ts`, the
+absolute-`SQLITE_DIR` rule and the dev-only endpoint gates all key off it.
+
+The start command above regenerates OpenAPI using runtime configuration before
+starting the server. Apply this rule to every deployment: all environment-gated
+routes, including 2FA methods and OAuth providers, must agree with the served
+document. Keep `NODE_ENV=production` set as a runtime variable for both commands.
+Build with secrets and optional providers absent; runtime secrets do not belong
+in the image. Never expose the generated `build/` directory as static content.
+
+If OpenAPI generation fails, `&&` prevents the server from starting; the new
+container cannot serve requests. Inspect its startup log, correct the runtime
+configuration (or the reported schema/build error), and redeploy. Keep the
+generation step in the start command so the served document matches the runtime
+routes.
+
+**Consider adding `--no-env-file`.** Bun auto-loads `.env` from the working
+directory. Measured precedence is the safe direction — a real process variable
+wins over a `.env` entry, under `NODE_ENV=production` too — so a stray file
+cannot _override_ a Coolify-configured value. The residual risk is narrower and
+real: it can **supply** a variable the platform deliberately left unset. The
+obvious one is `SQLITE_MAINTENANCE_TOKEN` (gate 4), where a committed or
+image-baked development value would silently become the production maintenance
+secret. `PUBLIC_URL` fails loudly instead, because two disagreeing names are a
+boot failure. One flag removes the input; §1's "never commit `.env`" is the
+other half.
+
+### Startup refuses to boot on five conditions
+
+`server.ts` validates the runtime **before** importing the application. A
+rejected runtime exits non-zero after one line: `{"msg":"startup rejected",…}`.
+A container restart-looping with that line is misconfigured, not crashing.
+
+| Condition                                                | Why fatal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV` not exactly `development`/`test`/`production` | Every production guard is an exact string comparison. `NODE_ENV=prodution` previously disabled the Better Auth secret floor, the Turnstile requirement, the absolute-`SQLITE_DIR` rule and HSTS at once, and still served traffic.                                                                                                                                                                                                                                                                                                     |
+| `PORT` not a decimal integer in `1..65535`               | `Number(PORT)` accepted `''` as 0 and `3000abc` as `NaN`; Bun then bound an ephemeral port while the log reported the requested one.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Bun OLDER than the pinned `1.4.0`                        | Both DB drivers are compiled into the Bun binary. Through 1.3.x, a simple-protocol query concurrent with a not-yet-prepared parameterized one could return the **wrong query's rows** — and `withTransaction`'s `BEGIN`/`COMMIT`/`ROLLBACK` are simple-protocol (Bun #32772, fixed in 1.4.0). Also through 1.3.x, `Bun.randomUUIDv7()` wrapped its sub-millisecond counter at 4,096 ids, breaking the time ordering the session keyset cursor depends on. Bun NEWER than the pin boots and logs `bun version ahead of the tested pin`. |
+| `packageManager` not `bun@<major>.<minor>.<patch>`       | It is the only source for the pin (below). A malformed field is treated as a missing runtime contract, not as "no pin".                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `sqlite_version()` below `3.51.3`                        | The WAL-reset floor (§6), now asserted rather than eyeballed in the build log.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+
+So the Bun version check is a **floor**, enforced rather than advisory: anything
+below 1.4.0 refuses to start, anything above it boots with a warning line. It
+used to reject a differing minor in either direction, which turned a forward
+image bump into an outage; the floor is what the transaction defect actually
+requires.
+
+The pin now has exactly **one** home: `packageManager` in `package.json`.
+`server.ts` parses it at startup and `scripts/require-bun.mjs` reads the same
+field at install time, so moving the pin means editing that field and `bun.lock`
+— there is no longer an `EXPECTED_BUN_VERSION` constant to keep in sync.
+
+### The install command now runs a runtime guard
+
+`bun install --frozen-lockfile` runs the root `preinstall` script, which is
+`bun scripts/require-bun.mjs`. In the build container it enforces the same floor
+as startup, so a Nixpacks image with an older Bun fails at **install** with an
+actionable message instead of at container start.
+
+Two things the operator must know about it:
+
+- **It can reach the network.** If the image's Bun is older than the pin, the
+  guard runs Bun's official installer to correct it. That is right on a
+  developer machine and wrong in a build container, where the toolchain should
+  come from the image. It is suppressed whenever `CI` is set — which GitHub
+  Actions sets and **Coolify's Nixpacks build does not**. Set
+  `BUN_GUARD_NO_AUTO_INSTALL=1` as a build-time variable so the build fails with
+  instructions rather than mutating itself. Add it to the "Required" table if the
+  build ever runs on an image whose Bun is not pinned.
+- **It needs no Node.** The guard is plain `.mjs` but is invoked with `bun`, and
+  it imports nothing from `node_modules` — it runs before the tree exists.
+  `NIXPACKS_NODE_VERSION` stays absent (§3, "Must be absent").
+
+### Startup log
+
+```json
+{
+  "msg": "server started",
+  "port": 3000,
+  "hostname": "localhost",
+  "env": "production",
+  "bun": "1.4.0",
+  "idleTimeoutSeconds": 60,
+  "maxRouteTimeoutSeconds": 120,
+  "maxRequestBodyBytes": 8388608,
+  "shutdownTimeoutMs": 135000,
+  "gracefulStopMs": 5000
+}
+```
+
+Two fields mislead if read literally:
+
+- **`port` is the bound port**, not the requested one. They differ whenever the
+  kernel assigns one.
+- **`hostname` reads `localhost` and is not the bind scope.** `server.ts` passes
+  no hostname, so Bun binds `0.0.0.0` and `[::]` — the field is just what Bun
+  reports for `server.hostname`. Do not "fix" it by passing
+  `hostname: '0.0.0.0'`. Confirm the real bind once on the VPS with
+  `ss -ltnp | grep <port>`, because a loopback-only bind is what makes the
+  container unreachable through the proxy.
+
+Read `shutdownTimeoutMs` from this log when setting the stop grace period (§6).
+
+## 3. Configure environment
+
+Every variable below is **runtime-only**. `tsc --noEmit` reads no environment,
+so nothing belongs in the build scope. If you deliberately add a build-time
+consumer, enable **Use Docker Build Secrets** first and abort if the build log
+or image history shows Coolify fell back to `--build-arg`.
+[Environment-variable scopes](https://coolify.io/docs/knowledge-base/environment-variables)
+
+### Required
+
+| Variable                               | Secret | Notes                                                                                                                                                                                                                                                                                |
+| -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NODE_ENV=production`                  | No     | Enforced at boot — see §2.                                                                                                                                                                                                                                                           |
+| `TZ=UTC`                               | No     | Optional hygiene, not a control. It was load-bearing until the `timestamptz` columns dropped `mode: 'string'` (gate 1); no security decision reads the host zone now. Unrelated to `NEXT_PUBLIC_BUSINESS_TIMEZONE`, which is display only.                                           |
+| `PUBLIC_URL=https://<domain>`          | No     | Absolute origin: scheme required, no path/query/fragment/credentials, HTTPS in production. Used for both CORS and Better Auth's `baseURL`. `NEXT_PUBLIC_URL` is a legacy alias; setting both to different values is a boot failure.                                                  |
+| `DATABASE_URL`                         | Yes    | PostgreSQL connection string for `bun:sql`. Put `sslmode` in the URL — see §3.1.                                                                                                                                                                                                     |
+| `BETTER_AUTH_SECRET`                   | Yes    | ≥32 chars, no surrounding whitespace.                                                                                                                                                                                                                                                |
+| `PASSWORD_PEPPER_ACTIVE_ID`            | Yes    | Must name a key in the keyring.                                                                                                                                                                                                                                                      |
+| `PASSWORD_PEPPER_KEYRING`              | Yes    | One-line JSON; retain old keys still referenced by stored hashes.                                                                                                                                                                                                                    |
+| `OTP_HMAC_ACTIVE_ID`                   | Yes    | Must name a key in `OTP_HMAC_KEYRING`.                                                                                                                                                                                                                                               |
+| `OTP_HMAC_KEYRING`                     | Yes    | Same shape as the pepper keyring: `{"<id>":{"generation":1,"secret":"<32 bytes, unpadded base64url>"}}`. Generate with `openssl rand -base64 32 \| tr '+/' '-_' \| tr -d '='`. Malformed is a **boot** failure.                                                                      |
+| `TURNSTILE_SECRET_KEY`                 | Yes    | Production Cloudflare secret.                                                                                                                                                                                                                                                        |
+| `SQLITE_DIR=/app/data`                 | No     | Absolute; no production default — the app refuses to boot without it.                                                                                                                                                                                                                |
+| `SQLITE_MAINTENANCE_TOKEN`             | Yes    | Gates the WHOLE of `GET /api/health/storage`, and nothing else. `openssl rand -hex 32`. **At least 32 characters** — a shorter value refuses to boot, and so does an absent one in production, because the health check cannot pass without it. Failed attempts are logged by class. |
+| `NEXT_PUBLIC_ENABLED_OTP_CHANNELS`     | No     | Comma list: `email`, `sms`, `whatsapp`.                                                                                                                                                                                                                                              |
+| `NEXT_PUBLIC_ENABLED_2FA_METHODS`      | No     | Comma list: `totp`, `otp`, `backup_code`, `passkey`. Unset disables two-factor entirely and every `/two-factor/*` and `/passkey/*` path answers 404. Parsed strictly — an unknown name, a duplicate or a trailing comma is a **boot** failure.                                       |
+| `NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS` | No     | Comma list from the same set as the OTP channels, and deliberately a SEPARATE variable. Where the second-factor codes go. Required when `otp` is in the methods list; a missing provider credential for an enabled channel is a boot failure in production.                          |
+
+### Two-factor configuration
+
+Two rules the boot enforces, each of which fails the deploy rather than
+degrading quietly:
+
+1. `otp` in `NEXT_PUBLIC_ENABLED_2FA_METHODS` with no
+   `NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS` is refused — the method would be
+   offered in settings, enabled by users, and then fail to deliver at the one
+   moment it is needed, at their next sign-in, with no session to fix it from.
+2. Every enabled 2FA OTP channel must have its provider credentials in
+   production, exactly as the account-verification channels must.
+
+And one it now **warns** about rather than refusing. `NEXT_PUBLIC_ENABLED_2FA_METHODS=otp`
+alone, with every 2FA OTP channel reaching a contact kind
+`NEXT_PUBLIC_ENABLED_OTP_CHANNELS` also reaches, logs
+`twoFactor.otpOverlapsRecovery` and boots. It used to fail the boot; that was the
+right rule in the wrong place. Disjointness is enforced on the authentication
+CHAIN — password recovery now proves a second factor from a set that excludes the
+contact its own code arrived on, and refuses outright when nothing survives — so
+refusing to start only made a supported deployment unstartable. **Read the
+warning:** in that configuration recovery refuses for every enrolled user, and
+the administrative reset is their only route back.
+
+**Recommended shape.** Keep `backup_code` enabled: it is the only self-service
+recovery from a lost authenticator, and without it the administrative reset is
+the only exit. Point `NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS` at a
+DIFFERENT contact kind from account recovery — recovery on `email`, second
+factor on `sms` — which is what the separate variable exists for. `totp` and
+`passkey` need no delivery provider; `passkey` additionally needs nothing beyond
+`PUBLIC_URL`, whose hostname becomes the WebAuthn Relying Party id.
+
+### Before narrowing the 2FA method or channel list — run the preflight
+
+```bash
+# inside the container, or anywhere DATABASE_URL reaches the production database
+bun run preflight:two-factor -- totp,backup_code            # methods only
+bun run preflight:two-factor -- totp,otp sms                # methods + 2FA OTP channels
+```
+
+Read-only. It counts the accounts that hold `two_factor_enabled` and would have
+NO usable method left under the **proposed** configuration, prints a bounded
+sample, and exits non-zero when that count is greater than zero.
+
+This is not advisory. Removing a method or a channel does not downgrade the
+accounts that used it — it makes their next sign-in a hard `403`, and each one
+then needs `POST /api/dash/users/:id/two-factor/reset` performed by an
+administrator. An unsized narrowing is an outage whose size you learn from
+support tickets. Run it, resolve the listed accounts, then change the variable.
+
+The one exception is emptying `NEXT_PUBLIC_ENABLED_2FA_METHODS` completely: with
+no method configured there is no second factor to enforce, so every enrolled
+account signs in with its first factor alone. That is a **downgrade**, not a
+lockout, it is recorded per account in `audit_logs` under
+`two_factor_downgraded_feature_disabled`, and the boot logs it as well.
+
+### `OTP_DELIVERY` must be unset in production
+
+`OTP_DELIVERY=outbox` is the test transport: every OTP "send" succeeds and the
+code goes to an in-memory outbox instead of a provider, which is how the
+`matrix` test tier exercises every channel and purpose without a provider
+account. The boot **refuses** it under `NODE_ENV=production` — leave the variable
+unset (or `provider`). If it ever appears in a Coolify environment, the deploy
+fails at startup with `OTP_DELIVERY=outbox is a test transport`, which is the
+intended outcome: a deployment that accepts sends and delivers nothing is worse
+than one that does not start.
+
+### Application-level switches with no environment variable
+
+These are code constants in `utils/config.ts`, not env vars, and each needs a
+deploy to change. Listed here because each is an operational decision:
+
+| Constant               | Default | What it decides                                                                                                                                                                                          |
+| ---------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PASSWORDLESS_ENABLED` | `true`  | Serves `/api/auth/passwordless/*`. Turn it OFF to remove the weakest first-factor route without switching off the OTP machinery that contact verification, recovery and the second factor all depend on. |
+| `HONOUR_REMEMBER_ME`   | `true`  | Whether a submitted `rememberMe: false` shortens the session. `false` pins every session to the long lifetime regardless of what the client asks for.                                                    |
+
+**Changing `PUBLIC_URL`'s hostname invalidates every registered passkey.** A
+credential is scoped to the RP id it was registered under, so a domain move is a
+re-enrolment for every passkey user. Plan it with a notice, or leave `passkey`
+out of the method list until the domain is final.
+
+**`BETTER_AUTH_SECRET` encrypts TOTP secrets and backup codes.** Rotating it
+strands every enrolled authenticator and every backup-code set — the same
+one-way property the password pepper keyring exists to avoid, and there is no
+keyring for this value. Treat it as unrotatable once users have enrolled, or
+plan a forced re-enrolment.
+
+A missing `SQLITE_MAINTENANCE_TOKEN` **stops a production boot**. It gates the
+whole readiness route, so an unset value leaves the orchestrator polling an
+endpoint that answers 401 forever — a container that never turns healthy, for a
+reason visible only in the application log. Readiness itself still reports
+nothing about the token: a request that gets a body has already presented one.
+Outside production it stays optional, and an unset value simply makes the route
+unreachable — `maintenanceTokenMatches` refuses an empty configured value rather
+than treating it as "no auth required".
+
+`SQLITE_DIR` is fatal at boot instead, because a defaulted value would let an
+unmounted volume boot happily and write to the container layer, where every
+redeploy silently resets the auth, API and daily OTP counters. Boot validation
+still cannot prove the volume is mounted — only the persistence proof in §8 can.
+
+### Optional
+
+| Variable                        | Notes                                             |
+| ------------------------------- | ------------------------------------------------- |
+| `NEXT_PUBLIC_BUSINESS_TIMEZONE` | Valid IANA zone; defaults to `Asia/Riyadh`        |
+| `PORT`                          | Supplied by Coolify; `server.ts` defaults to 3000 |
+
+### Feature-dependent
+
+- Email OTP: `SMTP_USER`, `SMTP_PASS`, optional `SMTP_FROM`
+- SMS OTP: `DEEWAN_SMS_TOKEN`, `DEEWAN_SENDER_NAME`
+- WhatsApp OTP: `WHATSAPP_API_KEY`
+- R2 uploads: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+  `R2_PUBLIC_BUCKET`, `R2_PRIVATE_BUCKET`, `R2_PUBLIC_URL`
+
+  **The first three are now REQUIRED in production and checked at module load.**
+  R2 used to be the one env group with no boot-time validation at all —
+  `lib/r2/client.ts` read every variable straight from `process.env` and none of
+  them appeared in `lib/env.server.ts` — so a deploy missing them booted green,
+  passed the health check, and failed on the first upload while the retention
+  sweep silently deleted no R2 objects. The three BUCKET/URL variables stay
+  feature-dependent: each is read at its point of use and raises an error naming
+  itself, and a bucket that is configured but WRONG is a runtime fault no
+  boot check can catch.
+
+### Must be absent
+
+| Variable                             | Why                                                                                                                                                                              |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TEST_DATABASE_URL`                  | The variable the destructive test harness resolves its target from. Treat as forbidden, not merely unused — if it appears, delete it and find out who added it.                  |
+| `BETTER_AUTH_SECRETS`                | Rejected in production; it would override `BETTER_AUTH_SECRET`.                                                                                                                  |
+| `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` | There are no Server Actions. Encrypts nothing.                                                                                                                                   |
+| `NIXPACKS_NODE_VERSION`              | Nothing runs under Node. The application, every script and the install guard all run under Bun; the only Node in the repository is one benchmark harness that is never deployed. |
+| `NEXT_TELEMETRY_DISABLED`            | No Next.js to opt out of.                                                                                                                                                        |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN`  | Superseded by local SQLite (§11).                                                                                                                                                |
+
+Use Coolify Normal view, lock secrets, and enable **Literal** for any value
+containing `$`. Never paste a local `.env` wholesale. After the build, confirm
+no secret appears in the deployment log or `docker history --no-trunc <image>`;
+rotate anything that does.
+
+### 3.1 `bun:sql` operational notes
+
+Verified locally against PostgreSQL 18.6 on Bun 1.4.0 — transactions on one
+backend PID, advisory transaction locks, `FOR UPDATE`/`FOR SHARE`, `RETURNING`,
+savepoints, the `pg_trgm` indexes, and the pool close. **Not verified against
+Coolify.**
+
+**a. `DATABASE_URL` is not proven at boot, but it is proven by the health
+check.** Bun opens the pool lazily, on the first query (an unreachable host
+constructs in ~1 ms), so a wrong or unreachable value is **not** a startup
+rejection — the container starts. It IS a health-check failure:
+`/api/health/storage` runs a bounded `SELECT 1` on every poll and reports it as
+`checks.postgres` (§7), so the orchestrator marks the container unhealthy within
+the health check's retries rather than routing traffic to it. Verify explicitly
+during first deploy (§8) all the same; a healthy body says the database
+answered, not that the schema matches.
+
+**b. Put `sslmode` in the URL.** Bun honours `PGSSLMODE`, but `?sslmode=` in the
+URL wins, so the environment cannot move it. `require` against a server without
+TLS now fails rather than silently connecting in plaintext. Same-host over the
+Docker network: decide deliberately. Remote: `require` or stricter.
+
+**c. Pool size against `max_connections`.** `MAX_POOL_CONNECTIONS` in
+`db/index.ts` is 10. That is the number of concurrent **transactions**, not a
+throughput knob — `withTransaction` reserves a connection for the whole block.
+`processOtpSend` commits before it calls the provider, so delivery latency holds
+no connection; a failed delivery opens a short refund transaction afterwards.
+Callers beyond 10 queue, then fail on Bun's 30 s `connectionTimeout`. Confirm
+the server's `max_connections` leaves headroom for a migration run and a `psql`
+session on top of the app's 10.
+
+**d. `prepare: true` is the default and is correct only here.** Bun creates
+named prepared statements on the server, which is right against PostgreSQL
+directly and wrong behind a transaction-pooling proxy — PgBouncer in transaction
+mode can split a two-round-trip query across backends. If a pooler is ever put
+in front of this database, set `prepare: false` in `db/index.ts`.
+
+### 3.2 Key retirement — the two keyrings have different horizons
+
+Both are parsed by `lib/auth/keyring.ts`, and in both a hash records the id of
+the key that produced it. Removing a key whose id is still referenced makes
+those values **unverifiable** — the lookup throws a configuration error that
+reaches the client as a 500, not as a failed login or a wrong code.
+
+| Keyring                   | A key may be removed once…                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PASSWORD_PEPPER_KEYRING` | every stored hash has been rehashed under a newer generation. Users rehash on next successful login, so **months** — and no event tells you it is done. |
+| `OTP_HMAC_KEYRING`        | no unexpired OTP was issued under it. Codes live 10 minutes (`OTP_EXPIRY_MINUTES`), so **an hour of grace is ample**.                                   |
+
+Add the new key with a higher `generation`, deploy, then remove the old one on
+the horizon above. Never remove and add in one step.
+
+**Rolling a rotation back is where this bites, and neither failure is loud.**
+
+- **Reverting `PASSWORD_PEPPER_KEYRING` to a version lacking the newest
+  generation** makes every password hashed under it unverifiable. That does not
+  surface as a failed login — it escapes sign-in as an **empty 500 with no
+  `content-type`**, and because the throw happens inside the transaction the
+  failed-attempt counter and the lockout audit row **roll back**, so those
+  accounts have no working lockout and nothing to diagnose from. Mid-rotation it
+  is also an account-existence oracle: 401 + JSON for an unknown address versus
+  500 + empty body for an existing one whose hash predates the revert.
+- **Reverting `PASSWORD_PEPPER_ACTIVE_ID` alone** — the common half-rollback — is
+  accepted silently. Nothing checks that the active id owns the _highest_
+  generation, and `generation` is read only as staleness, so `needsRehash`
+  evaluates to `false` forever: boot succeeds, logins keep working, and every
+  password set from then on is re-peppered with the **older** key with no error,
+  no log and no startup failure. After an emergency rotation away from a leaked
+  generation this quietly undoes it.
+
+So a pepper rollback is a two-variable operation in both directions. Roll the
+keyring and the active id together, and after any rotation confirm the active id
+names the highest generation present.
+
+## 4. Add persistent SQLite storage
+
+**Configuration > Persistent Storage:**
+
+| Field            | Value                      |
+| ---------------- | -------------------------- |
+| Type             | Named volume (recommended) |
+| Name             | `sqlite-data`              |
+| Destination Path | `/app/data`                |
+
+Coolify prefixes the actual volume name with the resource identifier. A bind
+mount is valid when host backup tooling needs a fixed path; the destination
+stays `/app/data`.
+[Persistent Storage](https://coolify.io/docs/knowledge-base/persistent-storage)
+
+Requirements:
+
+- **Real local VPS disk.** No NFS, CIFS, distributed volume or second host —
+  SQLite WAL requires same-host shared memory.
+  [WAL restrictions](https://www.sqlite.org/wal.html)
+- **Mount the directory, not the `.db` file.** SQLite creates `-wal` and `-shm`
+  beside each database.
+- Do not share the path with preview/staging applications.
+- One replica, one Bun process. No PM2 cluster, no Swarm replica increase, no
+  second VPS against this volume. Elysia defaults Bun's `reusePort` to `true`,
+  which would let a second process bind the same port and split traffic;
+  `app.ts` sets `reusePort: false`, so a second process on this host dies with
+  `EADDRINUSE`. A deploy failing that way is starting two processes; that is the
+  bug, not the setting.
+
+  **That guard covers a same-host double start and nothing else** — not a second
+  container mounting the same volume, not a script or `psql`-equivalent opened by
+  an operator, not a backup tool. Read the next section before doing any of
+  those.
+
+```text
+/app/data/rate-limit.db  durable rate limits and OTP global spend cap
+/app/data/cache.db       disposable cache; currently no call sites
+```
+
+The limiter database uses WAL with `synchronous=NORMAL`: process-crash-safe with
+local durability, but host/OS failure or power loss can lose recently committed
+transactions. Not a substitute for off-host backup or a durable shared store.
+
+### A second writer on `rate-limit.db` is a full authentication outage
+
+This is the operational rule that governs §10's checkpoint and backup commands,
+and it is not obvious from either of them.
+
+`bun:sqlite` is **synchronous**, so a contended statement blocks the whole event
+loop — not one request. Measured: one external process holding `BEGIN IMMEDIATE`
+for 4 s made a concurrent limiter call block for **2 282 ms** (the `busy_timeout`
+ceiling) and then return `degraded`. `enforceRateLimit` turns `degraded` into
+`503` on every fail-closed path, confirmed end to end:
+
+```text
+ip-limit route (dash/roles)  -> 503  Retry-After: 30
+otp send                     -> 503  Retry-After: 30
+health/storage               -> 503  {"status":"error"}
+better-auth get-session      -> 500
+```
+
+So the failure is bimodal: for ~2.3 s per contended statement the process serves
+**nothing at all**, and then sign-in, all five OTP surfaces and all 22 pre-auth
+routes answer 503 — while the health check also 503s, so the orchestrator may
+restart the container mid-incident. No attacker is involved; an operator action
+is enough.
+
+Practical rules that follow:
+
+- Run `PRAGMA wal_checkpoint(TRUNCATE)` (§10) and the backup script (§10) during
+  a maintenance window, not on a live deployment, and never on a schedule.
+- Do not point a second container, a staging app, or a shell session's `sqlite3`
+  at `/app/data` on a running deployment.
+- **Scaling to more than one replica needs a decision, not a replica count.**
+  Either give each replica its own `SQLITE_DIR` volume and accept that every
+  limit becomes per-replica, or move the limiter to a shared store. Sharing one
+  volume is the option that does not work: measured across 4 processes on one
+  key with `limit: 200`, the counters were shared and **exact** (200 admitted,
+  800 denied) — correct arithmetic, bought with exactly the writer contention
+  above on every request.
+
+Startup acquires an OS-backed ownership lock under `SQLITE_DIR`. A second
+cooperating app process fails before serving traffic. External SQLite tools do
+not honor this lock, so maintenance procedure still forbids them while live.
+
+### Permissions check
+
+After the first container start, in the Coolify Terminal:
+
+```sh
+id
+stat -c '%U:%G %a %n' /app/data
+test -w /app/data
+```
+
+The directory must be writable by the runtime UID, because WAL creates sidecars
+there. For a bind mount, set host ownership to the numeric UID from `id` — never
+`chmod 777`. Because the files hold raw identifiers, restrict the directory to
+the runtime identity (`0700`) after verifying ownership; that mode also protects
+newly created DB/WAL/SHM files. If the runtime identity cannot enforce it, fix
+ownership or the startup umask before production.
+
+## 5. Cloudflare ingress and edge rules
+
+### Ingress
+
+1. Add the domain in Coolify; do not publish a host port.
+2. Create a **proxied** (orange-cloud) DNS record.
+3. Use **Full (strict)** TLS with a valid Coolify origin certificate.
+4. **Rules > Transform Rules > Managed Transforms:** keep _Remove visitor IP
+   headers_ **off** — the code needs `CF-Connecting-IP`.
+5. **Network > Pseudo IPv4:** _Off_ (preferred) or _Add Header_. Never
+   _Overwrite Headers_ — it replaces `CF-Connecting-IP` for IPv6 visitors and
+   defeats the application's IPv6 `/64` grouping.
+6. At the VPS firewall, allow 80/443 from current Cloudflare ranges and trusted
+   admin sources only; block everything else.
+   [Cloudflare IP guidance](https://developers.cloudflare.com/fundamentals/concepts/cloudflare-ip-addresses/)
+7. Confirm the original visitor address arrives in `CF-Connecting-IP` for both
+   IPv4 and IPv6 clients.
+
+The header is trustworthy **only because** direct origin traffic is blocked. If
+Cloudflare is ever removed, stop and change the trust boundary first — do not
+simply add `x-forwarded-for`, which clients can spoof whenever the origin or an
+untrusted hop is reachable.
+
+[Request headers](https://developers.cloudflare.com/fundamentals/reference/http-headers/) ·
+[Managed transforms](https://developers.cloudflare.com/rules/transform/managed-transforms/reference/) ·
+[Pseudo IPv4](https://developers.cloudflare.com/network/pseudo-ipv4/) ·
+[Full (strict)](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/full-strict/)
+
+### Block `/api/internal/*`
+
+**No route serves this prefix any more** — the two sweeps moved in-process (§9).
+Keep the rule anyway: it costs nothing, and it means re-introducing a route under
+this prefix cannot silently arrive internet-reachable.
+
+**Rules > WAF > Custom rules:** URI Path _starts with_ `/api/internal/` →
+**Block**. Equivalently, exclude `PathPrefix(/api/internal/)` from the public
+Traefik router. Nothing in the repository can enforce this.
+
+Verify:
+
+```sh
+# outside the VPS — expect a Cloudflare block, not the app's 404
+curl -si https://<domain>/api/internal/sqlite-sweep -X POST | head -1
+# inside the container — expect the app's own 404 envelope
+wget -qO- --server-response --post-data='' \
+  "http://127.0.0.1:3000/api/internal/sqlite-sweep" 2>&1 | head -3
+```
+
+Apply the same to `/api/health/storage`. The whole route is token-gated and the
+container's own health check reaches it over loopback (§7 — a CMD check, not an
+HTTP one), so nothing legitimate crosses the edge to it. This is hardening on top
+of the token, not the control: it is the only surface `SQLITE_MAINTENANCE_TOKEN`
+guards, and the gate is in the application.
+
+Also block `/api/dev/` the same way. The prefix holds one endpoint today,
+`/api/dev/sign-up`, and outside `NODE_ENV=development` it is not registered at
+all (`toRegisteredRoutes`), so it answers the ordinary 404 — deliberately
+indistinguishable from an unrouted path, rather than the 403 that used to
+confirm the route exists. Blocking the prefix costs nothing and keeps that true
+for any dev endpoint added later, which will not get the filtering for free if
+it is registered outside the table.
+
+> **This whole section is prefix matching, and prefix matching is currently
+> bypassable — see gate 2.** A crafted request with a ≤3-character `Host`
+> reaches these handlers on a path that matches none of these rules. The
+> firewall rule in step 6 above is what keeps that unreachable, so treat it as
+> the primary control and these rules as the second line, not the reverse.
+
+### Proxy limits that must match the application
+
+| Setting                                                        | Must be              | Because                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloudflare proxy read timeout, Traefik `responseHeaderTimeout` | **> 120 s**          | The upload routes' ceiling. Cloudflare's free-plan 100 s limit is _below_ it — raise it on a paid plan or lower the application ceiling deliberately.                                                                                                                                                                                                                               |
+| Cloudflare native upload ceiling                               | **Plan ceiling**     | This is not the application limit. The `max_upload` zone setting starts at 100 MB; an exact body-size WAF rule requires Enterprise.                                                                                                                                                                                                                                                 |
+| Traefik upload-route body limit                                | **12,582,912 bytes** | 12 MiB: one 10 MB document plus multipart framing, the same bound as `MAX_REQUEST_BODY_BYTES`. The buffering middleware rejects an oversized request with 413 before forwarding it to Bun. Images are capped far lower (1 MiB) by the application.                                                                                                                                  |
+| Bun/Elysia server-wide body limit                              | **12 MiB**           | `MAX_REQUEST_BODY_BYTES` (`lib/http/request.ts`) is the final origin-wide ceiling. It is broader than any single route's contract and does not replace the upload-specific Traefik rule.                                                                                                                                                                                            |
+| JSON routes                                                    | **1 MiB, in code**   | `MAX_JSON_BODY_BYTES` (`lib/http/request.ts`), enforced while the body streams and answered with a 413 in the API envelope. NOTHING is needed at the proxy for it — it is listed so a 413 on a non-upload path is not mistaken for a Traefik refusal. A route may raise its own with `maxJsonBodyBytes` in `routes.ts`; the published document states each route's effective bound. |
+
+Configure an upload-only Traefik router and attach this middleware through
+Coolify's custom labels:
+
+```text
+traefik.http.middlewares.upload-body.buffering.maxRequestBodyBytes=12582912
+```
+
+Copy the generated host/TLS/service settings to a higher-priority router whose
+rule matches both upload routes — ``Path(`/api/upload/file`) ||
+Path(`/api/dash/media/files`)`` — and attach `upload-body` only to that
+router, leaving the generated catch-all router in place for every other path.
+The second path also serves `DELETE`, whose JSON body is tiny; the limit is a
+ceiling, not a target.
+Coolify controls the generated router/service names, so resolve them from the
+deployment's labels or Traefik dashboard rather than copying a name from this
+runbook. Verify the effective labels after every proxy configuration change.
+[Traefik buffering](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/buffering/) ·
+[Coolify custom middleware](https://coolify.io/docs/knowledge-base/proxy/traefik/custom-middlewares/redirects)
+
+Cloudflare still absorbs the public ingress and can add a path/IP rate rule for
+the two upload paths, subject to the zone's plan. Do not document or rely on a
+12 MiB Cloudflare body limit: the zone-setting schema accepts values from 100 MB,
+and `http.request.body.size` is Enterprise-only. On Enterprise, an exact-path
+body-size block may duplicate the 12,582,912-byte bound at the edge; otherwise
+Traefik is the first exact byte boundary. The VPS firewall must continue blocking
+direct origin access either way.
+[Cloudflare `max_upload` schema](https://developers.cloudflare.com/api/resources/zones/subresources/settings/methods/edit/) ·
+[Cloudflare body-size field](https://developers.cloudflare.com/ruleset-engine/rules-language/fields/reference/http.request.body.size/)
+
+Request ceilings, for reference:
+
+| Scope                             | Value | Where                                        |
+| --------------------------------- | ----- | -------------------------------------------- |
+| Server-wide idle timeout          | 60 s  | `IDLE_TIMEOUT_SECONDS` in `server.ts`        |
+| The six media routes listed below | 120 s | `MEDIA_ROUTE_TIMEOUT_SECONDS` in `routes.ts` |
+
+The six, every one of which calls R2 inside the request:
+
+- `POST /api/upload/file`
+- `POST /api/dash/media/files`
+- `DELETE /api/dash/media/files`
+- `POST /api/dash/media/files/:id/publish`
+- `POST /api/dash/media/files/:id/unpublish`
+- `DELETE /api/dash/media/folders/:id`
+
+**Neither number is measured on the target VPS** (`TODO.md` EM-1 — note that
+`TODO.md` is gitignored and therefore absent from a fresh clone, so every
+`TODO.md` reference in this runbook resolves only on a machine that already has
+it) — they are deliberately generous ceilings.
+
+Capacity planning for the upload route, all measured, none on the target host:
+
+- A 25 MP upload costs **~230 MB resident** (up from ~145 MB when the pipeline
+  moved from `sharp` to `Bun.Image`; the CPU work got 1.8–3.7× cheaper in the
+  same change).
+- **The encoder re-decodes the source once per measured ladder rung.** Binary
+  search reduced the current path to at most seven measured rungs, but did not
+  remove the repeated source decode or bound concurrent requests. A generated
+  56,346-byte 5000×5000 PNG took **5.22 s and seven decodes** on the audit host;
+  its output still missed the 0.2 MiB target. At 20 uploads per minute, one
+  authenticated account can request roughly 104 encoder-seconds of work per
+  wall minute. Re-measure both latency and peak RSS on the target VPS.
+- An adversarial **SVG** is worse in kind: entity expansion is fully synchronous,
+  so a 27 KB upload measured a **3.8 s freeze of the entire process** — every
+  other in-flight request included, and the health check with them. Size the
+  health check's 5 s timeout with that in mind (§7).
+
+Both are code defects being fixed, not settings; they are here because they set
+the floor on how much VPS this deployment needs and what a CPU alert will look
+like before then.
+
+The Traefik 12,582,912-byte limit is per **request**; the per-file limits still
+apply separately inside the handler, and they are much lower — 1 MiB for an
+image, `MAX_DOCUMENT_SIZE_MB` (10 MB) for a document. The 2 MiB between 10 MB and
+12 MiB is the multipart boundary and header allowance, not a second file. Test an
+exactly-at-limit accepted file and the first rejected request through the
+deployed domain before enabling the rule.
+
+Traefik documents a 413 response when its buffering limit is exceeded. That
+response is outside the API envelope because the request is not forwarded to
+Elysia. Do not assume a direct Bun rejection has identical status/body behavior;
+the real-listener Windows probe reset the client connection above the configured
+`maxRequestBodySize` rather than answering 413. Production
+verification must go through Cloudflare and Traefik, and must confirm that no R2
+or database work occurs on rejection.
+
+None of these byte limits fixes H4 by itself, and browser-side WebP/PNG
+conversion is an optimization a direct API client simply skips. Three of the four
+application-side bounds now exist in code: `MAX_IMAGE_PIXELS` (25 MP, from the
+header), `MAX_IMAGE_EDGE` (16 383 px per side, WebP's own ceiling — a 1000x20000
+PNG is 20 MP and 100 KiB, so it passed both the pixel cap and the 1 MiB file cap
+and then failed in the encoder as a 500), and a hard cap on the encode ladder.
+
+**Bounding CONCURRENT image work is the one that is deferred, and it is an
+operational decision.** Measured on the development machine, per request, with
+hand-built PNGs:
+
+| Input                    | Source  | Wall clock | Encodes |
+| ------------------------ | ------- | ---------- | ------- |
+| 5000x5000 flat           | 84 KiB  | ~1.0 s     | 1       |
+| 5000x5000 repeated-noise | 2.3 MiB | ~1.0 s     | 1       |
+| 5000x5000 pure noise     | 3.0 MiB | ~6.6 s     | 6       |
+
+Only the first is reachable through the route — the other two exceed the 1 MiB
+per-file limit — so the reachable worst case measured here is ~1 s of CPU per
+request, bounded further by the route's own 20-per-window per-USER limiter. Six
+encodes is the ladder's ceiling (a binary search over 32 rungs), not a tail.
+
+A one-job semaphore with a small bounded queue is the right shape IF the VPS
+cannot absorb that. Sizing it needs a number this repository cannot produce:
+concurrent 1 MiB uploads at the target vCPU count. Take that measurement on the
+VPS before adding the semaphore — a queue depth guessed from a developer laptop
+converts a CPU spike into a request timeout instead of preventing it.
+
+### HTTP behaviours a WAF or uptime check will see
+
+- **405 with `Allow`** on a known path called with an unregistered method, where
+  it used to be 404.
+- **308 on the trailing-slash form**, every method including `OPTIONS`:
+  `GET /api/health/storage/` → `308` with `Location: /api/health/storage`. Point
+  health checks and uptime monitors at the canonical path. An _unknown_ path
+  with a trailing slash is still a 404.
+- **`Allow` does not advertise `HEAD` under `/api/auth`** — Elysia derives `HEAD`
+  from table `GET` routes but not from the Better Auth wildcard, so those paths
+  advertise `GET, POST, OPTIONS`. Table routes still advertise `HEAD`.
+- **Unknown `/api/auth/*` paths return this API's envelope** and stop before
+  Better Auth reaches its plugins. Nothing to configure; it changes what the
+  edge sees. (This also closes the class where a plugin's `onRequest` runs ahead
+  of Better Auth's own hooks — see
+  `reports/better-auth-1.7-upgrade-review.md` §5.1.)
+
+### `/openapi.json` — now authenticated, and no longer a cost vector
+
+**Both halves of this are closed in code.** The section is kept because the old
+behaviour is what an operator reading an older runbook will expect to find.
+
+What it was: `preAuth: 'none'`, rebuilt on every request — measured **9.11 ms per
+request, ~96× the cost of a 404**, against 0.03–0.18 ms for every other
+`preAuth: 'none'` route, with `cache-control: no-store` so nothing upstream
+absorbed it. One unauthenticated client at modest concurrency saturated a core,
+which on a single-process deployment is the whole server, with ~1 100× bandwidth
+amplification from a ~90-byte GET. It also advertised every path, including both
+`/api/dev/*` routes with `/api/dev/sign-up`'s full request schema.
+
+What it is now:
+
+- **`preAuth: 'ip-limit'`**, so it is behind the same 120/60 s admission gate as
+  every other route.
+- **Requires dashboard access** — a live session whose role grants `view` on at
+  least one page. Authenticated is not sufficient: a role with every grant off is
+  refused 403.
+- **Built once per process and frozen.** A repeat request serves cached bytes.
+- **`/api/dev/*` is filtered out of the document in production**
+  (`toPublishedManifest`), so the document no longer undoes the decision
+  `toRegisteredRoutes` makes deliberately — 404 rather than 403,
+  "indistinguishable from an unrouted path in every other mode".
+
+A Cloudflare rate-limiting rule is still worth having, but it is hardening now
+rather than the only control.
+
+**The coupling that made this unsafe to do alone is also closed.**
+`POST /api/upload/file` validated `?resource=` _before_ the session check, so an
+unauthenticated caller got **400 for an unknown resource and 401 for a real page
+name** — harmless only while the document published those names to anyone.
+Closing the document without that would have turned the divergence into a working
+enumeration oracle. The session check now runs first, so every anonymous request
+to the upload route answers 401 with an identical body whatever `resource` says.
+Asserted from both sides:
+`tests/integration/upload-auth-gate.test.ts` and
+`tests/integration/openapi-access.test.ts`.
+
+**Where the contract-consistency gate went.** The boot smoke test used to fetch
+this route and assert 200, which was the check that caught a route declaring
+`body: 'json'` with no schema (two shipped that way before it existed). An
+authenticated route cannot serve that purpose, so the gate moved to
+`tests/unit/openapi-contract.test.ts` — no server, no database, fails on
+`bun run test` instead of on a deploy. `scripts/smoke.ts` now asserts the access
+boundary instead: anonymous must get 401 and no `"paths"` in the body.
+
+## 6. Single instance, update mode and shutdown
+
+### Stop-first (safe default)
+
+Enable **Consistent Container Names** (or a custom container name) so Coolify
+stops the old container before starting its replacement. Brief downtime, but no
+two app versions sharing SQLite.
+[Rolling Updates](https://next.coolify.io/docs/applications/deployments/rolling-updates)
+
+Keep replicas at `1` and process count at `1`.
+
+### Stop grace period
+
+`server.ts` handles `SIGTERM`/`SIGINT` — Elysia only wires
+`process.on('beforeExit')`, which is not a container signal handler, so without
+this, in-flight mutations, uploads and external calls were killed mid-flight.
+WAL keeps the _database_ consistent; it does not finish an _operation_ for the
+client, and an upload can reach R2 with no matching row.
+
+On signal:
+
+1. logs `{"msg":"server stopping","signal":"SIGTERM"}`
+2. `app.stop()` — **drains** in-flight requests rather than aborting them
+   (measured: a request 300 ms into a 2 s handler completed with 200, and
+   `stop()` resolved only afterwards); a connection that sent half a request
+   holds this open, so after the `SHUTDOWN_POLICY.gracefulStopMs` grace (policy
+   table below) it escalates to `app.stop(true)`. A stop that REJECTS does not
+   abort the sequence: `Bun.Server.stop()` closes the listening socket when it
+   is called, not when its promise settles (measured on Bun 1.4.0 — a connection
+   attempted while the promise was still pending was refused), so the drains and
+   the store close still run; the failure is logged and forces exit **1**
+3. waits for a running scheduled sweep to reach its next batch boundary
+   (`lib/schedule.ts`), for as long as the shutdown budget allows
+4. waits for queued post-response work (`lib/http/after-response.ts`), again
+   for the remainder of the budget. There is no fixed per-queue slice and no
+   reserved tail: both drains share the one deadline, `shutdownTimeoutMs`. The
+   contract is exactly this — the stop is clean when both drains have
+   **positively reported** quiescence and the stores have closed before that
+   deadline; anything unproven at the deadline is reported and the exit is 1.
+   "Positively reported" is the drain's own proof, not the moment the work ended:
+   the post-response queue has to observe itself empty for
+   `AFTER_RESPONSE_SETTLE_MS` before it says so, so work that ends inside that
+   last interval is still a forced exit. Every anonymous OTP send enqueues its
+   provider call here (5 s deadline, then a refund transaction on failure), so
+   this queue is never empty on a busy deploy.
+5. **only if both drains reported empty**: closes PostgreSQL first, then the
+   SQLite stores this process actually opened, logs
+   `{"msg":"server stopped",…}` and exits with the highest code any caller asked
+   for — **0** for a signal, **1** if an escaped fault arrived at any point,
+   including during the drain, or if a phase failed. Every store close is
+   attempted even when an earlier one throws; the failures are then raised
+   together (`{"msg":"store close failed","store":…}` per store, then
+   `{"msg":"stores did not close cleanly",…}`) and the exit is **1** — a store
+   the process could not close is not a clean stop
+6. **otherwise**: logs `{"msg":"stores left open for forced exit",…}`, leaves
+   every store open, and lets the forced-exit timer end the process at
+   `shutdownTimeoutMs` with exit **1**. Deliberate: a sweep or a delivery that
+   is still running may still touch a store, and closing underneath it produced
+   `Statement has finalized` and refunds opening transactions on a closed pool.
+   Exit 1 is the honest report of an unclean stop.
+
+**Set Coolify's stop grace period longer than the `shutdownTimeoutMs` in the
+startup log — currently 135 s.** A shorter grace period means the orchestrator
+kills the container mid-drain and the drain buys nothing.
+
+The bound is **derived** by `shutdownTimeoutMs()` in `lib/shutdown.ts`:
+`(max(IDLE_TIMEOUT_SECONDS, MAX_ROUTE_TIMEOUT_SECONDS) + SHUTDOWN_POLICY.headroomSeconds) * 1000`.
+Both terms matter — a route without its own `timeoutSeconds` may still run for the 60 s
+global ceiling. **If a 135 s deploy window is unacceptable, the lever is the
+route ceilings, not the bound.** Lowering the bound directly reintroduces the
+abort. Note that SIX routes sit at 120 s — the media routes listed in §5, all
+sharing `MEDIA_ROUTE_TIMEOUT_SECONDS` — and below 75 s
+the 60 s global ceiling becomes binding — meaning `IDLE_TIMEOUT_SECONDS` too. Both
+depend on the VPS measurement in `TODO.md` EM-1. `lib/shutdown.ts` owns the
+formula and `tests/unit/shutdown-coordinator.test.ts` asserts it, so changing a
+route ceiling will not silently invalidate it — but re-read `shutdownTimeoutMs`
+from the startup log afterwards.
+
+**The drift control for this section.** The coordinator itself is
+`lib/shutdown.ts`, wired by `server.ts` with the real stop, sweep, queue and
+store functions, and `tests/unit/shutdown-coordinator.test.ts` drives that same
+coordinator through the clean path, a task that finishes late but inside the
+budget, a task idle just before the deadline, a task that never finishes
+(stores left open, forced exit 1), a fault arriving mid-shutdown, a faulted
+`app.stop()`, and a store that fails to close. `tests/process/shutdown-lifecycle.test.ts` and
+`tests/process/schedule-drain.test.ts` cover the real store close and sweep
+drain, `tests/process/smtp-deadline.test.ts` and
+`tests/process/postgres-probe.test.ts` the two deadlines this section cites.
+
+The timing policy is `SHUTDOWN_POLICY` in `lib/shutdown.ts` plus the queue's
+settle proof in `lib/http/after-response.ts`; the same unit test reads this
+table AND the startup-log example above back, and fails when either disagrees
+with the code. Prose in this document names these rows rather than repeating the
+numbers, so there is no third copy:
+
+| Policy value                      | Current | Meaning                                                                 |
+| --------------------------------- | ------- | ----------------------------------------------------------------------- |
+| `SHUTDOWN_POLICY.gracefulStopMs`  | 5000    | how long `app.stop()` may wait on half-sent connections                 |
+| `SHUTDOWN_POLICY.headroomSeconds` | 15      | added to the longest request ceiling to form `shutdownTimeoutMs`        |
+| `AFTER_RESPONSE_SETTLE_MS`        | 50      | how long the post-response queue must stay empty before it reports idle |
+
+The derived budget (135 s today) depends on the route table as well, so it is
+not in the table; the startup log prints both `shutdownTimeoutMs` and
+`gracefulStopMs`, and the log is authoritative when this page disagrees.
+
+### Two stop-phase hazards, both now closed in code
+
+Both changed what a normal deploy looked like from the orchestrator's side. They
+are recorded because the OLD symptom is what an operator reading an older runbook
+will be looking for.
+
+- **One half-sent request made the whole grace period elapse.** On Bun 1.4
+  `server.stop()` stays pending on a connection that sent part of a request and
+  stopped — reproduced: `stop()` still pending after 3 000 ms, while
+  `stop(true)` resolved in 1 ms. A scanner, a client that died between headers, a
+  cut health probe or one deliberately held socket was enough. The consequences
+  compounded: the drain never started, the `finally` never ran, so the PostgreSQL
+  pool and both SQLite stores were never closed, and the forced shutdown fired at
+  the full `shutdownTimeoutMs` and exited **1** — a routine deploy reported as a
+  crash, from a cause outside the application.
+
+  `server.ts` now escalates: `app.stop()` under the `SHUTDOWN_POLICY.gracefulStopMs`
+  grace, then `app.stop(true)`. Well-behaved clients keep the drain semantics; a stalled
+  socket no longer holds the deploy. A stop that faults is contained to its own
+  step, so the queue drains still run and the stores still close on a quiet
+  queue. The forced-exit timer does NOT close the stores — see step 6 above for
+  why leaving them open is the deliberate choice.
+  `{"msg":"graceful stop timed out, closing active connections"}` is the tell
+  that the escalation fired — informational, not a failure.
+  Covered by `tests/process/shutdown-lifecycle.test.ts`.
+
+- **An escaped async error killed the process outright.** Nothing registered
+  `unhandledRejection` or `uncaughtException`, so one such error exited
+  immediately: `shutdown()` never ran, the stores were not closed, and the only
+  record was a raw multi-line stack trace on stdout rather than the single-line
+  JSON every other failure path emits.
+
+  Both events are registered now — both, not one: Bun 1.4 moved exceptions
+  thrown in `node:fs`, `node:dns` and `crypto.pbkdf2` callbacks to
+  `uncaughtException`, where an `unhandledRejection` handler no longer sees
+  them, and this codebase uses all three. The process still ends, but through
+  the same path a signal takes: `{"msg":"unhandled fault","event":…}` then the
+  normal stop sequence, **exit 1** so the orchestrator restarts rather than
+  treating it as a clean stop.
+
+The one measured caveat that **is** handled: post-response work can still be
+queued while the drain runs, so the drain waits for the queue to be _observably
+empty for `AFTER_RESPONSE_SETTLE_MS`_ (policy table above) rather than checking once.
+
+### Rolling updates
+
+Do not overlap releases that share `SQLITE_DIR`. Startup ownership rejects the
+new process while the old process holds the directory. Use stop-first deployment
+until SQLite state moves to a store designed for multi-process ownership.
+
+SQLite WAL supports same-host processes but only one writer at a time. Use
+**3.51.3 or newer** as the floor for the WAL-reset race (the fix was backported
+to 3.50.7 and 3.44.6, so not every lower version is vulnerable). The version is
+a property of the Bun build — check it with the command in §8.
+[WAL-reset notice](https://www.sqlite.org/wal.html#the_wal_reset_bug)
+
+## 7. Configure health check
+
+**Type: CMD, not HTTP.** The route requires `x-maintenance-token` on every
+request and an HTTP-type check has no header field. A CMD check runs inside the
+container with the container's environment, so it can send the token the
+deployment already holds.
+
+| Field        | Value |
+| ------------ | ----- |
+| Enabled      | Yes   |
+| Type         | `CMD` |
+| Interval     | `30s` |
+| Timeout      | `5s`  |
+| Retries      | `5`   |
+| Start period | `30s` |
+
+Command:
+
+```sh
+curl -fsS -H "x-maintenance-token: $SQLITE_MAINTENANCE_TOKEN" "http://127.0.0.1:3000/api/health/storage" || exit 1
+```
+
+`curl` must exist in the image — the HTTP variant required it too.
+[Coolify health checks](https://coolify.io/docs/knowledge-base/health-checks).
+
+> ⚠️ **An HTTP-type check here marks the container unhealthy forever.** It sends
+> no token, so every poll answers 401 and `curl -f` reports that as a failure.
+> A deploy that never turns healthy while the log shows
+> `maintenance token rejected` with `reason: "absent"` is this mistake.
+
+The route opens (and on first call migrates) `rate-limit.db`, then reads back
+its PRAGMAs. It returns 200 `{"status":"ok","checks":{...}}` only when every
+check holds, 503 `{"status":"degraded","checks":{...}}` when one fails, and 401
+`{"status":"unauthorized"}` to a caller without the token.
+
+**The WHOLE route requires `SQLITE_MAINTENANCE_TOKEN`**, not only `?deep=1`, and
+the variable is therefore REQUIRED in production (§3): an unset one makes the
+container permanently unhealthy, so the boot refuses instead of the probe.
+Two reasons for gating the cheap probe as well, and the second is the larger:
+
+- Naming the failing subsystem to the internet is a readiness probe telling an
+  attacker which dependency is down.
+- An anonymous probe needs a bound, and the only bound available here is
+  deployment-wide: `ipIdentifier` answers 503 without a trusted proxy header and
+  the container's own probe carries none, so a per-IP limiter would refuse
+  exactly the caller this route exists for. A shared budget is a restart switch
+  — spend it at 4 req/s and the orchestrator's own `curl -f` starts reading 429
+  — and it charged a SQLite write per poll, which is what the paragraph below
+  forbids. Authentication removes the need for either.
+
+To diagnose by hand, from inside the container:
+
+```bash
+curl -sS -H "x-maintenance-token: $SQLITE_MAINTENANCE_TOKEN" \
+  "http://127.0.0.1:3000/api/health/storage"
+# {"status":"degraded","checks":{...}}
+```
+
+The checks:
+
+| Check               | Requires                                                       |
+| ------------------- | -------------------------------------------------------------- |
+| `journalModeWal`    | `journal_mode` is `wal`                                        |
+| `schemaVersion`     | `user_version` equals the running build's schema version       |
+| `busyTimeout`       | `busy_timeout` is exactly `2000` — the value, not merely "set" |
+| `synchronousNormal` | `synchronous` is `1` (`NORMAL`)                                |
+| `postgres`          | a bounded `SELECT 1` answered within 2 s                       |
+
+`busyTimeout` and `synchronousNormal` compare **exact values** because a
+database opened by something other than `openDatabase` — an older build, or a
+manual `sqlite3` session that rewrote a persistent pragma — can be perfectly
+usable yet not configured the way the limiter's latency and durability
+assumptions require.
+
+Deliberately cheap enough to poll every 30 s: **PRAGMA reads plus one
+`SELECT 1`.** It does not run `quick_check` and **does not write to SQLite** —
+either would put the health check in write-lock contention with the limiter,
+which has been measured blocking for over two seconds (§4). The route carries no
+limiter of its own for the same reason: a limiter charge IS a SQLite write. It
+reports status only: no paths, schema contents or row counts.
+
+**PostgreSQL is checked now.** `checks.postgres` is a bounded `SELECT 1` on the
+CHEAP path — not behind `?deep=1`, because a readiness probe that cannot see the
+primary database is not a readiness probe, and `SELECT 1` on a pooled connection
+is not comparable to the structural scan and write lock that variant exists to
+separate. It carries a 2 s timeout, because the failure being tested is "does not
+answer": without one, an unreachable host makes the poll hang until the
+orchestrator's own deadline, which reads as a timeout rather than as a failure.
+
+Previously every check here was against the rate-limit SQLite store, so an
+unreachable database — a wrong `DATABASE_URL` after a rotation, the container not
+yet up, the pool exhausted — still answered `200 {"status":"ok"}` and the
+orchestrator kept routing traffic to a container on which every login, dashboard
+route and OTP send failed. The lazy pool (§3.1a) meant nothing else forced it to
+surface.
+
+**Two blind spots remain.**
+
+- **`cache.db` is never touched.** A broken or unwritable cache emits
+  `maintenance.cacheSweep failed`, followed by `scheduled sweep degraded` (§9).
+  Acceptable while the cache has no call sites; revisit when the first one is
+  added.
+- **A mounted volume is not proven.** SQLite creates the same path in the
+  container layer just as happily. Only §8 settles that.
+
+One interaction worth knowing when tuning the numbers above: the **5 s timeout**
+is generous today, but a synchronous stall in the process — an adversarial SVG
+upload measured 3.8 s (§5), or SQLite writer contention measured 2.3 s (§4) —
+delays this poll along with everything else. With `Retries: 5` at a 30 s interval
+a single stall cannot flip the container, which is the margin those settings buy.
+Do not lower `Retries` without re-reading those two numbers.
+
+For manual diagnosis, the deep variant adds `quick_check` and a write probe. It
+requires the token and must never be the polled check:
+
+```bash
+curl -fsS -H "x-maintenance-token: $SQLITE_MAINTENANCE_TOKEN" \
+  "http://127.0.0.1:3000/api/health/storage?deep=1"
+# {"status":"ok","checks":{...,"quickCheck":true,"writable":true}}
+```
+
+**Return code** is not a field of a CMD check and never was load-bearing: even
+for the HTTP type, Coolify's generated Nixpacks command uses `curl -f` with a
+`wget` fallback and decides health from the command's exit status — it does not
+interpolate `health_check_return_code`. The command above is explicit about it
+(`-f` plus `|| exit 1`). The external smoke test in §8 is what asserts the exact
+status.
+[Health checks](https://coolify.io/docs/knowledge-base/health-checks) ·
+[generator source](https://github.com/coollabsio/coolify/blob/v4.x/app/Jobs/ApplicationDeploymentJob.php#L3239-L3283)
+
+## 8. First deploy and verification
+
+Deploy manually. Keep auto-deploy off until the checklist passes.
+
+### Runtime
+
+```sh
+bun --version
+bun -e 'const {Database}=require("bun:sqlite");const d=new Database(":memory:");console.log(d.query("select sqlite_version() as v").get());d.close(false)'
+```
+
+Expect Bun 1.4.0 and SQLite ≥ 3.51.3. **Record the SQLite version** — it is a
+property of the Bun build, as are the WebP/PNG codecs and the image resampler.
+
+No native addon is on the request path: `bun:sqlite` replaced `better-sqlite3`
+and `Bun.Image` replaced `sharp`. Two remain in the tree — `argon2`, loaded on
+every password verify, and `sharp`, now a devDependency kept for `bench/image/`.
+`--production` cannot drop it because the build step needs TypeScript from
+devDependencies, so the win is that no request touches it, not that the bytes
+are gone.
+
+### Storage
+
+```sh
+test "$SQLITE_DIR" = /app/data
+test -d /app/data
+test -w /app/data
+wget -qO- "http://127.0.0.1:${PORT:-3000}/api/health/storage"
+ls -la /app/data
+bun - <<'BUN'
+const { Database } = require('bun:sqlite');
+
+if (process.env.SQLITE_DIR !== '/app/data') {
+  throw new Error('SQLITE_DIR must be exactly /app/data');
+}
+const file = '/app/data/rate-limit.db';
+// readonly implies no create, so a missing file fails here rather than being
+// silently created.
+const db = new Database(file, { readonly: true });
+const one = (sql) => Object.values(db.query(sql).get() ?? {})[0];
+try {
+  console.log({
+    file,
+    sqliteVersion: one('select sqlite_version() as v'),
+    journalMode: one('PRAGMA journal_mode'),
+    userVersion: one('PRAGMA user_version'),
+    quickCheck: one('PRAGMA quick_check'),
+    tables: db
+      .query("select name from sqlite_schema where type='table' order by name")
+      .all(),
+  });
+} finally {
+  db.close(false);
+}
+BUN
+```
+
+Expected: readiness `{"status":"ok"}` with every check `true`; `journalMode`
+`wal`; `userVersion` `1`; `quickCheck` `ok`; tables include `rate_limit` and
+`auth_rate_limit`. WAL/SHM sidecars may exist while a connection is open.
+`cache.db` may be absent — the cache has no call sites.
+
+### Persistence proof
+
+Database counters cannot prove persistence: the health counter rolls over and a
+new database recreates the same keys. Use a sentinel file.
+
+```sh
+bun - <<'BUN'
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const file = '/app/data/.coolify-volume-sentinel';
+
+if (process.env.SQLITE_DIR !== '/app/data') {
+  throw new Error('SQLITE_DIR must be exactly /app/data');
+}
+const value = crypto.randomUUID();
+fs.writeFileSync(file, `${value}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+console.log(value);
+BUN
+```
+
+Record the value, redeploy the same release, then:
+
+```sh
+test "$SQLITE_DIR" = /app/data
+cat /app/data/.coolify-volume-sentinel
+```
+
+The exact value must survive. If it is missing or changed, stop: the volume
+destination and `SQLITE_DIR` disagree, or storage is not persistent. Repeat
+after changing storage, host, application UUID or the restore procedure.
+
+**Keep the sentinel.** It costs nothing, holds nothing sensitive, and turns "is
+this still the same volume?" into a one-command answer at any later date.
+Record its value alongside the release commit.
+
+Nothing reads it automatically yet. A startup check verifying the sentinel, the
+exact path and the driver belongs in `server.ts` beside the existing assertions
+(`NODE_ENV`, `PORT`, `Bun.version`, `sqlite_version()`) — tracked in `TODO.md`.
+
+### External smoke checks
+
+- **PostgreSQL is reachable from the container.** The health check proves this
+  now — a bounded `SELECT 1` on the cheap path, reported as
+  `checks.postgres` — where every check it performed used to be against the
+  rate-limit SQLite store, so an unreachable database still answered
+  `200 {"status":"ok"}` and the orchestrator kept routing traffic to a container
+  on which every login, dashboard route and OTP send failed. Still worth a
+  separate external check, because the health endpoint proves reachability from
+  INSIDE the container only.
+- Turnstile, R2 and the enabled OTP provider egress work.
+- Public `/api/auth/get-session` returns exactly HTTP 200.
+- `GET /openapi.json` returns **401** to an anonymous caller, with no `"paths"`
+  in the body. It is authenticated now; a 200 here means the gate is off.
+- HTTPS certificate valid through Cloudflare; direct origin IP blocked on
+  80/443.
+- A protected request through the domain no longer logs
+  `missing client ip headers`.
+- Login/session and one non-delivery API flow work.
+- Coolify shows exactly one running app container.
+
+## 9. Scheduled tasks
+
+**There are none to configure, and any that exist must be DELETED.**
+
+Both sweeps run inside the application process (`lib/schedule.ts`, on
+`Bun.cron`). The two routes a Coolify scheduled task used to `curl` —
+`POST /api/internal/sqlite-sweep` and `POST /api/internal/db-sweep` — no longer
+exist; a task still pointing at either will 404 on every run.
+
+### Migrating an existing deployment
+
+1. Delete the `sqlite-expiry-sweep` and `postgres-retention-sweep` tasks in
+   Coolify **before or with** the deploy that ships this. Leaving them costs
+   nothing but a failing task every hour, and a failing task is exactly the
+   alert you want to still mean something.
+2. `SQLITE_MAINTENANCE_TOKEN` stays. It now guards one surface only,
+   `GET /api/health/storage` — the whole route — and **must be at least 32
+   characters** — `lib/env.server.ts` refuses to boot otherwise. The floor exists
+   because the comparison short-circuits on length before its constant-time
+   compare (it must; `timingSafeEqual` throws on a length mismatch), so a short
+   token leaks its own length before any content guessing. It is also REQUIRED in
+   production now: change the Coolify health check to the CMD form in §7 in the
+   same deploy, or the container will never report healthy.
+3. The `/api/internal/*` edge rules in §5 now match nothing. Keep them — they
+   cost nothing and re-adding such a route without them would be silent.
+
+### Why in-process rather than a scheduled `curl`
+
+The routes only ever existed as a trigger. Under Next the SQLite driver was
+`better-sqlite3`, which hard-panics under Bun, so `bun some-script.ts` was not a
+runnable command; on `bun:sqlite` that constraint is gone. Removing them removed
+two `preAuth: 'none'` routes, an unmetered guessing surface against the
+maintenance token, two paths from the public OpenAPI document, and the
+`/api/internal/*` half of the path-prefix bypass in gate 2.
+
+`Bun.cron` rather than `@elysiajs/cron`: it guarantees a job never overlaps
+itself — both sweeps are bounded batch loops holding a writer lock, and a second
+concurrent run is the contention that turns maintenance into an authentication
+outage — it adds no dependency, and it keeps the sweep independent of the web
+framework, which `lib/sqlite/maintenance.ts` states as its first line.
+
+### The schedule
+
+| Job                        | Expression     | Zone |
+| -------------------------- | -------------- | ---- |
+| `sqlite-expiry-sweep`      | `*/15 * * * *` | UTC  |
+| `database-retention-sweep` | `30 3 * * *`   | UTC  |
+
+Fifteen minutes, not hourly, and the arithmetic is below: 500 x 200 is 100 000
+rows per table per run, so four runs an hour raises the removal ceiling from
+~28 rows/second to ~111 without touching the batching or the writer lock it
+protects.
+
+The zone is passed explicitly. Bun 1.4 changed `Bun.cron` to interpret
+expressions in **local** time (it was UTC before), and nothing pins this
+container's zone — an inherited schedule would move with the host.
+
+### Shutdown, and why one process is an invariant
+
+`stop()` on a cron handle prevents future firings but does not cancel an active
+callback. Shutdown stops both handles and drains active work within its common
+deadline. If work cannot drain, forced process exit occurs without closing stores
+under the callback. Keep Coolify stop grace above `shutdownTimeoutMs`.
+
+**One app process is a scheduling invariant.** Startup ownership prevents a
+second cooperating process from reaching scheduler registration. Scaling past
+one replica requires per-replica stores or a shared store plus elected scheduler.
+
+### What to alert on
+
+The external scheduler's own failure alerting is what adopting this cost. The
+replacement is the log stream. One line per run:
+
+```
+{"msg":"scheduled sweep completed","job":"sqlite-expiry-sweep","status":"ok","durationMs":12,"hasMore":false}
+{"msg":"scheduled sweep degraded","job":"sqlite-expiry-sweep","status":"degraded","durationMs":12,"hasMore":true}
+{"msg":"scheduled sweep failed","job":"database-retention-sweep","errorClass":"..."}
+```
+
+- **`scheduled sweep failed`** — alert on any occurrence.
+- **`scheduled sweep degraded`** — alert on any occurrence. The job returned, but
+  a store it was asked to sweep was not swept.
+- **`hasMore: true` on consecutive runs of the same job** — alert. A single
+  occurrence is not a signal: the flag trips whenever a final batch happened to
+  be exactly full.
+- **Absence of `scheduled sweep completed` for a job over its period** — alert.
+  This is the case an external scheduler reported for free and an in-process one
+  does not.
+
+`maintenance schedule started` is logged once at boot with each job's next fire
+time; it is the fastest confirmation that the deploy actually scheduled anything.
+
+### Why `hasMore` matters, and the ceiling behind it
+
+Expiry is checked on read, so a missed sweep does not resurrect expired data —
+it causes unbounded stale-row and disk growth. Deletes run in bounded batches
+(500 rows per statement, at most 200 batches per table per run) and yield to the
+event loop between them, so even a large backlog cannot hold the sole writer
+lock long enough to stall the limiter.
+
+**Those bounds are also a throughput ceiling, and it is reachable.** 500 × 200 is
+**100 000 rows per table per run** — measured: 400 000 expired rows needed four
+runs, each returning `hasMore: true`. At `*/15` that caps removal at ~111
+rows/second; sustained creation above that outruns the sweep permanently and the
+backlog only grows. The end state is a full volume, at which point writes fail
+and every fail-closed limiter answers 503 — the same total-authentication outage
+as §4.
+
+**If `hasMore` trips on consecutive runs, raise the frequency further** in
+`lib/schedule.ts` (the sweep is cheap and idempotent) rather than waiting for the
+disk alert.
+
+A corrupt `cache.db` no longer fails the whole run: its half is contained, so the
+limiter deletions still commit. The run then reports `status: "degraded"` and
+logs `scheduled sweep degraded` (stderr) instead of `scheduled sweep completed`,
+alongside a `maintenance.cacheSweep failed` line carrying the error class; the
+result marks `hasMore: true` because a sweep that threw leaves an unknown backlog. Containment is not
+success — reporting `ok` here told every alert built on the completion line that
+maintenance had finished. A degraded run is the signal to **delete `cache.db`
+and restart**, which is what its own module header says to do and why the two
+databases are separate files.
+
+### The retention sweep is the load-bearing one
+
+Expired sessions, codes and proof rows are filtered on every read, so delaying
+those only costs disk — but **nothing else in the codebase ever deletes a
+temporary upload.** Unscheduled, R2 objects accumulate and are billed
+indefinitely. `hasMore` staying `true` while `removed.tempFiles.removed` stays
+`0` means R2 deletes are failing — check the R2 credentials, not the database.
+Rows are deliberately left in place in that state, so nothing is orphaned while
+it is broken.
+
+It deliberately does not touch `audit_logs` or user rows; both decisions are
+recorded on those tables in `db/schema.ts`.
+
+**`orphaned_objects` is a work queue, and a non-empty one is an alert.** A row
+there is an R2 object whose `files` row is already gone and whose delete (or
+whose public-URL purge) was refused — the one leftover no other sweep can find,
+because every other retry hangs off a row in `files`. The retention pass drains
+it and reports `status: "degraded"` while any row survives the attempt, so the
+existing `scheduled sweep degraded` alert covers it. If rows persist across runs,
+the store or the Cloudflare purge token is the thing to check; the objects are
+deliberately left in place until both answer. In normal operation the table is
+empty.
+
+Do not schedule `VACUUM`, and never remove a `-wal` file by hand while the
+database is open.
+
+## 10. Monitoring, backup and restore
+
+Enable Coolify notifications for deployment failure, container status, **server
+disk usage** and scheduled-task failure.
+[Notifications](https://coolify.io/docs/knowledge-base/notifications/)
+
+### Peak WAL size — `journal_size_limit` does not bound it
+
+The 64 MiB setting bounds the size a WAL is **truncated to when a checkpoint
+completes**. It is not a growth ceiling. While checkpointing is blocked the WAL
+grows without limit, and the two things that block it are a long-lived read
+snapshot and writers that never leave a gap.
+
+Measured, not theoretical: with one connection holding an open read snapshot the
+WAL reached **1.36 GB against the 64 MiB setting**, falling to zero the moment a
+truncating checkpoint could run. Saturating writes across two and four processes
+reached 906 MB and 745 MB. The application never holds a read transaction open —
+every read is a single statement — so the realistic trigger here is sustained
+concurrent writes, which is also why this deployment keeps one process.
+
+- The **server disk usage** notification is the backstop, whatever the cause.
+- Include the sidecars when checking size: `ls -la /app/data` and
+  `du -sh /app/data`.
+- If `rate-limit.db-wal` is _persistently_ rather than briefly large, a
+  checkpoint is blocked. Reclaim it manually — but **this command takes the
+  writer lock, and while it holds it the deployment answers 503 on sign-in,
+  every OTP surface and all 22 pre-auth routes, and serves nothing at all for up
+  to 2.3 s per contended statement (§4).** Run it in a maintenance window, never
+  on a schedule and never as a reflex during an incident:
+
+  ```sh
+  bun -e 'const {Database}=require("bun:sqlite");const d=new Database("/app/data/rate-limit.db");console.log(d.query("PRAGMA wal_checkpoint(TRUNCATE)").get());d.close(false)'
+  ```
+
+- **Do not respond by raising `busy_timeout`.** That trades errors for longer
+  synchronous event-loop stalls and adds no writer fairness.
+
+### Backup policy
+
+Coolify's instance backup does not include application volumes, and its managed
+database backup is for database _resources_, not an arbitrary app volume.
+[Backup/restore scope](https://coolify.io/docs/knowledge-base/how-to/backup-restore-coolify) ·
+[Managed database backups](https://coolify.io/docs/databases/backups)
+
+- **PostgreSQL:** back up through whatever owns that server. Self-hosted means
+  this is a backup you own and must schedule.
+- **`cache.db`:** never back up; rebuild it.
+- **`rate-limit.db`:** data expires within a day, but loss resets the paid OTP
+  daily cap. Choose an explicit RPO — no backup plus OTP shutdown after host
+  loss, periodic online backup, or a durable shared store.
+- **Treat the limiter database, its sidecars and every backup as sensitive.**
+  They contain raw IP addresses, email addresses and phone numbers. Restrict to
+  the runtime/backup identity, encrypt at rest and in transit, and set a short
+  retention policy consistent with the rate-limit window and legal requirements.
+
+Never copy a live `.db` alone — committed data may still be in the WAL, and a
+file-level copy is a second writer's worth of trouble for none of the benefit
+(§4). Mount a restricted staging filesystem **outside** `/app/data`, expose it as
+runtime-only `SQLITE_BACKUP_DIR`, and check host capacity first.
+
+Use `VACUUM INTO`, not a driver backup call: `bun:sqlite` has no equivalent of
+better-sqlite3's `Database#backup`, and `VACUUM INTO` is read-only with respect
+to the source, safe against a live writer, and produces a standalone compacted
+database with no WAL to replay. It is a **reader**, so it does not trip the
+writer contention in §4 — but it holds a read snapshot for its whole duration,
+and a long-lived read snapshot is one of the two things that block checkpointing
+and let the WAL grow without bound (measured at 1.36 GB above). On a large
+database, watch `/app/data` size while it runs. It refuses to overwrite an existing file, which
+is what makes the `.partial` staging safe. Verified on Bun 1.4.0 against a WAL
+database opened read-only.
+[VACUUM INTO](https://www.sqlite.org/lang_vacuum.html#vacuuminto)
+
+```sh
+bun - <<'BUN'
+const { Database } = require('bun:sqlite');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+
+process.umask(0o077);
+
+const dir = process.env.SQLITE_DIR;
+const backupDir = process.env.SQLITE_BACKUP_DIR;
+if (dir !== '/app/data') throw new Error('SQLITE_DIR must be exactly /app/data');
+if (!backupDir) throw new Error('SQLITE_BACKUP_DIR is required');
+
+const dataReal = fs.realpathSync(dir);
+const backupReal = fs.realpathSync(backupDir);
+const relative = path.relative(dataReal, backupReal);
+if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+  throw new Error('SQLITE_BACKUP_DIR must be outside /app/data');
+}
+
+const source = path.join(dir, 'rate-limit.db');
+const sourceBytes = fs.statSync(source).size;
+const stats = fs.statfsSync(backupReal);
+const availableBytes = stats.bavail * stats.bsize;
+const requiredBytes = Math.max(sourceBytes * 2, 128 * 1024 * 1024);
+if (availableBytes < requiredBytes) {
+  throw new Error(`insufficient backup space: need ${requiredBytes} bytes`);
+}
+
+const stamp = new Date().toISOString().replaceAll(':', '-');
+const suffix = crypto.randomUUID();
+const destination = path.join(backupReal, `rate-limit-backup-${stamp}-${suffix}.db`);
+const partial = `${destination}.partial`;
+
+// VACUUM INTO takes a string LITERAL, not a bound parameter, so the path is
+// escaped by SQL rules: a single quote is doubled.
+const sqlPath = (value) => `'${value.replaceAll("'", "''")}'`;
+
+try {
+  // readonly implies no create, so a missing source fails here rather than
+  // silently producing a backup of an empty database.
+  const db = new Database(source, { readonly: true });
+  try {
+    db.run(`VACUUM INTO ${sqlPath(partial)}`);
+  } finally {
+    db.close(false);
+  }
+
+  const check = new Database(partial, { readonly: true });
+  try {
+    const row = check.query('PRAGMA quick_check').get();
+    if (Object.values(row ?? {})[0] !== 'ok') {
+      throw new Error('SQLite backup quick_check failed');
+    }
+  } finally {
+    check.close(false);
+  }
+
+  fs.chmodSync(partial, 0o600);
+  fs.renameSync(partial, destination);
+  console.log(destination);
+} catch (error) {
+  fs.rmSync(partial, { force: true });
+  console.error(error);
+  process.exitCode = 1;
+}
+BUN
+```
+
+Copy the completed file off the VPS over an encrypted channel into encrypted
+storage, verify its checksum, then remove the staging copy. A second volume on
+the same VPS is not a disaster backup.
+
+### Restore
+
+Restore only from a verified standalone backup. Once the application is stopped
+its Coolify Terminal is unavailable, so arrange SSH access or a reviewed
+one-shot maintenance container mounting the same named volume **before**
+starting. Resolve and record the exact volume/resource UUID — do not guess from
+a partial Docker volume name.
+
+1. Stop the app; confirm no process holds the volume. There are no scheduled
+   tasks to stop — the sweeps live in the app process, and stopping it drains
+   them (§9).
+2. Archive the current `rate-limit.db`, `-wal` and `-shm` **together**. Do not
+   leave stale sidecars beside the replacement.
+3. Verify the backup with `quick_check`, place it as `/app/data/rate-limit.db`,
+   and apply runtime UID ownership plus mode `0600`.
+4. Do not restore the cache database.
+5. Start one container, run health and `quick_check`, verify `user_version`,
+   then reopen traffic.
+
+Practice on staging. For moving named volumes between hosts, follow
+[Coolify application migration](https://coolify.io/docs/knowledge-base/how-to/migrate-apps-different-host).
+
+## 11. Upstash cutover and rollback
+
+No automatic counter migration exists — Upstash sliding-window keys and SQLite
+fixed-window rows are different contracts, and the first SQLite request starts
+fresh counters.
+
+Cutover:
+
+1. Deploy and verify staging with its own volume.
+2. Provision the production volume and all non-Upstash variables.
+3. **Cut over just after 00:00 UTC** — the boundary of the fixed 86,400-second
+   daily window — or pause paid OTP delivery for the rest of the UTC day. This
+   prevents two independent stores each granting a full daily OTP budget.
+4. Deploy and run the persistence and external smoke checks (§8).
+5. Keep the Upstash database and credentials in a secure rollback record, but
+   remove `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` from the
+   container environment.
+6. After the rollback window and at least one full day of verification, revoke
+   the token and delete the Upstash resource.
+
+Rolling back to a pre-SQLite release needs the old Upstash credentials re-added
+before the old container starts, and only works while the prior image is still
+locally available.
+[Rollbacks](https://coolify.io/docs/applications/#rollbacks)
+
+Before any rollback:
+
+- verify the old release accepts the current PostgreSQL and SQLite schemas;
+- remember an image rollback reverses neither volume contents nor DB schema;
+- do not reactivate an independent Upstash counter within the same rate-limit
+  window — wait for the next UTC boundary or pause paid OTP delivery, otherwise
+  users receive a second full daily budget;
+- use a stop-first transition;
+- do not restore an older SQLite backup merely to roll code back;
+- re-run health, login/session, rate-limit persistence and Cloudflare-header
+  checks.
+
+For releases adding a SQLite migration, design a backward-compatible
+expand/contract change or accept downtime. The `user_version` guard only checks
+when a process opens the database; an already-open old process does not re-check
+after a new container migrates it.
+
+## 12. Testing constraints on this server
+
+The test suite is destructive by design — it truncates tables, creates and drops
+databases, exhausts rate-limit budgets and inserts users and sessions. It runs
+on developer machines and in GitHub Actions, never here.
+
+- **There is no test database.** Not a second database on the production
+  instance, not a second instance on the same box. Production credentials must
+  be the only database credentials the app environment holds.
+- **`TEST_DATABASE_URL` must never be set** (§3, "Must be absent").
+- **`NODE_ENV` stays `production`** — the harness refuses to run when it is,
+  which is the second line behind the first.
+
+A **read-only** smoke set may eventually run against production — health, the
+migration version, `GET /openapi.json` with a session, one known-good login — as a separate
+harness with a separate command. Not yet written; when it is, it gets its own
+scheduled task or post-deploy step and this section gets the command.
+
+Two CI details that touch this server:
+
+- The `test` job uses a `postgres:18-alpine` service container. **If the
+  server's PostgreSQL major is upgraded, update the CI image in the same
+  change** — otherwise a fidelity gap is traded, not closed. The VARIANT matters
+  as well as the major: `-alpine` is musl and the plain tag is glibc, and the two
+  do not classify Unicode identically. §15 is where that bites.
+- The **Boot smoke test** deliberately points `DATABASE_URL` at the unreachable
+  `db.example.com`. That is the only check proving the pool still connects
+  lazily (§3.1a). Do not "fix" it by giving it the service container.
+- **The integration job pins `TZ: Asia/Riyadh` and `REQUIRE_NON_UTC_TZ: '1'`**
+  (`ci.yml`), and `timezone-auth-behavior.test.ts` fails if either is missing.
+  Removing those two lines is what would make the timestamp class invisible to a
+  green pipeline again.
+
+## 13. Object storage for the media library (Cloudflare R2)
+
+Added 2026-09-04 with the media library (`reports/file-manager-plan.md`). None
+of this has been executed against Coolify yet.
+
+### 13.1 Buckets and token
+
+Two R2 buckets, one per visibility: `dash-public` and `dash-private`. A custom
+domain publishes a WHOLE bucket (Cloudflare offers no per-object or per-prefix
+restriction), which is why public and private objects cannot share one.
+
+Create an R2 API token with **Object Read & Write** on both buckets. A
+read-only token lists fine and fails on the first upload with `AccessDenied`
+(measured). Delete the read-only token that was issued during development on
+2026-09-04.
+
+The two variables must name two different buckets; one bucket under both names
+refuses to boot, because a publish would copy an object onto itself and then
+delete the only copy. The library (`POST /api/dash/media/files`) needs the
+private bucket: a deployment with only `dash-public` answers 422 to library
+uploads and accepts uploads only through purposes declared `public` in code.
+
+### 13.2 Public custom domain
+
+Attach a custom domain on the Cloudflare zone to `dash-public` and set it as
+`R2_PUBLIC_URL` (scheme + host, no path, no trailing slash). Requirements:
+
+- **Not `r2.dev`.** Cloudflare documents the `r2.dev` URL as rate-limited and
+  for development only; the application logs a warning at boot when it sees one
+  in production and otherwise accepts it.
+- **Cookie-isolated from the dashboard host.** The public bucket serves
+  sanitised SVG inline. Put it on a separate registrable domain, or at least a
+  host that shares no cookie scope with the application origin.
+- Public objects are cached at the edge under
+  `Cache-Control: public, max-age=31536000, immutable`. A deleted or unpublished
+  object is always removed from the origin; an edge copy is evicted only when
+  the purge below is configured, and a copy already in a browser stays readable
+  until that lifetime elapses, which nothing on the server can shorten.
+
+### 13.3 Environment
+
+| Variable                                                    | Value                                    | Rule                                                                                                                                                                           |
+| ----------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `R2_PUBLIC_BUCKET`                                          | `dash-public`                            | Optional; enables the `public` visibility and the `publish` action.                                                                                                            |
+| `R2_PUBLIC_URL`                                             | `https://<custom domain>`                | Required whenever `R2_PUBLIC_BUCKET` is set in production. Must be an https origin with no path/query/credentials.                                                             |
+| `R2_PRIVATE_BUCKET`                                         | `dash-private`                           | Optional; enables the `private` visibility. Every upload lands here by default, so a deployment without it can only accept uploads through purposes declared `public` in code. |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | from 13.1                                | Required when any bucket is set.                                                                                                                                               |
+| `CLOUDFLARE_ZONE_ID`                                        | zone of the custom domain                | Optional. Both purge variables or neither; a half-set pair refuses to boot.                                                                                                    |
+| `CLOUDFLARE_CACHE_PURGE_TOKEN`                              | API token with `Zone → Cache Purge` only | Optional. When set, deleted and unpublished public objects are purged by URL (batches of 30, best effort, logged).                                                             |
+
+Production refuses to boot with no bucket at all, with a public bucket and no
+`R2_PUBLIC_URL`, with a bucket and no credentials, or with one purge variable.
+Every environment refuses to boot with one bucket under both names.
+
+**`R2_PUBLIC_URL` set with no purge pair logs a warning at boot**
+(`media.cache-purge is not configured`) and keeps serving. That is the one
+combination where unpublish and delete are not what they appear: the origin
+object is removed and the route answers 200, but a cached edge copy stays
+readable for the whole `max-age=31536000`. Either set the pair, or confirm the
+public origin is genuinely uncached (a bare `r2.dev` URL is) and treat the
+warning as expected for that deployment.
+
+When the purge pair is set, a delete or unpublish whose purge fails keeps the
+row in its cleanup state and the nightly sweep retries both the object delete
+and the purge; the API reports such rows as `pending` (delete) or with
+`transition: "cleanup"` (unpublish). Without the pair, edge copies simply live
+out their lifetime and the API says so in its contract.
+
+### 13.4 Migration order
+
+`bun run db:migrate` applies `0008`, `0009` and `0010` (additions with
+backfills, drops, then `files.unfiled_at`) and the hand-written
+`002_media_trgm_indexes.sql` and `003_grant_media_to_system_roles.sql`. The
+grant runs in phase 2 on purpose: PostgreSQL refuses to use a new enum value
+(`media` in `page_name`) inside the transaction that added it. After the
+migration every `system`-scoped role holds the `media` page; standard roles get
+it through the permissions page.
+
+The grant file also patches the permission copy that live sessions carry in
+`sessions.metadata`, the same way the dashboard's own permission edits do, so an
+administrator signed in before the migration sees the `media` page once their
+five-minute session cookie cache refreshes, rather than after a re-login.
+
+`002_media_trgm_indexes.sql` REPLACES an index rather than only adding one: it
+drops `idx_files_display_name_trgm` and creates
+`idx_files_display_name_active_trgm` in its place, because the old predicate
+excluded the rows the `unfiled` scope searches. On a database that already has
+the old index this is a `DROP INDEX` plus a GIN build, neither of them
+`CONCURRENTLY` (phase-2 files run as one implicit transaction), so `files` is
+write-locked for the build. It is a non-event on a `files` table of any size
+this deployment has now; if it ever runs against a large one, take the brief
+write pause into account or run the two statements by hand with
+`DROP INDEX CONCURRENTLY` / `CREATE INDEX CONCURRENTLY` before deploying.
+
+### 13.4a `0013`–`0019`: the one release that must not serve between migrate and swap
+
+**Two of these seven migrations are backward-INCOMPATIBLE, so the deploy window
+has to be closed rather than merely short.** Everywhere else in this runbook
+`db:migrate` may be run from a maintenance shell well ahead of the container
+swap; for this release it must not be. Run `bun run db:migrate` and complete the
+stop-first swap (§6) as ONE step, and if the migration and the swap cannot be
+adjacent, stop the old container first and accept the longer downtime.
+
+Why, per file:
+
+- `0014_file_transition_owner.sql` adds `files.transition_id` and the CHECK
+  `chk_files_transition_owner`, `(transition IS NULL) = (transition_id IS NULL)`.
+  The previous release writes and clears `files.transition` alone
+  (`lib/media/visibility.ts`), so under the new constraint **every publish,
+  unpublish and stale-transition sweep fails with `23514`** — including the
+  clearing write that runs after the stale object was already deleted, which
+  leaves the row at `transition: 'cleanup'` until the nightly sweep of the NEW
+  release picks it up. The migration backfills a token for rows already mid-saga,
+  so nothing existing is refused; only the old code's writes are.
+- `0016_drop_backup_code_version.sql` drops `backup_codes_version` and
+  `backup_codes_acknowledged_version`. The previous release reads them in
+  `lib/auth/two-factor-challenge.ts`, `lib/auth/recovery-second-factor.ts` and
+  `lib/auth/two-factor-enrolment.ts`, so **every second-factor challenge,
+  enrolment and recovery request answers `42703`** for as long as it keeps
+  serving. `0015` must run before it — it is the hand-written backfill that gives
+  each existing set its `backup_codes_set_id` and carries the acknowledgement
+  across — and `db:migrate` applies them in journal order, so this only matters
+  if someone applies files by hand.
+
+The other five are additive and safe in either direction: `0013` adds a nullable
+`last_totp_step`, `0017` adds `files.cleanup_requests` with a default, `0018`
+creates `orphaned_objects` and `0019` adds a column to it.
+
+**Reverting this release means reverting the schema too.** Rolling the container
+back to the previous image without also restoring the database leaves exactly the
+failure above, permanently. There is no down migration; restore from backup
+(§10).
+
+### 13.5 Proxy limits
+
+`MAX_REQUEST_BODY_BYTES` is 12 MiB in code (10 MB documents plus multipart
+framing), and the upload-route Traefik buffering limit in §5 is set to the same
+12,582,912 bytes on both upload paths. Record the value actually applied on the
+proxy here when it is set.
+
+The 12 MiB reaches the two multipart routes only. Every JSON route stops at
+`MAX_JSON_BODY_BYTES` (1 MiB) inside the application, so a 413 on a non-upload
+path is the app's own envelope, not a proxy refusal — the two are told apart by
+whether the body carries the API envelope.
+
+### 13.6 No CORS, no direct uploads
+
+Every upload goes through the application; nothing fetches objects from the
+browser with `fetch()`. No CORS rule on either bucket is needed. If a future
+change introduces direct-to-R2 uploads or `fetch()`-based downloads, add the
+bucket CORS rule in the Cloudflare console — the API token cannot (measured
+`AccessDenied` on `GetBucketCors`).
+
+## Final checklist
+
+- [ ] Release committed, pushed, CI green.
+- [ ] Bun 1.4.0 in the build log; SQLite version recorded (§8).
+- [ ] Build `bun run build`, start `bun scripts/build-openapi.ts && bun run start`, `NODE_ENV=production` set as
+      a runtime variable; `--no-env-file` decided (§2).
+- [ ] Google project, only when `ENABLED_OAUTH_PROVIDERS` includes `google`:
+      publishing status **In production**, redirect URI registered for the
+      canonical origin, and, if the local-2FA bypass is wanted, **Authentication
+      strength claims** enabled with verification status **Verified** (§14).
+- [ ] Every secret scoped **runtime-only**; nothing in the "Must be absent"
+      table present, especially `TEST_DATABASE_URL`.
+- [ ] `SQLITE_MAINTENANCE_TOKEN` generated with `openssl rand -hex 32`.
+      Required in production; a value below 32 characters refuses to boot
+      (gate 4).
+- [ ] The health check is the **CMD** form in §7, carrying the token. An
+      HTTP-type check answers 401 on every poll and never turns healthy.
+- [ ] The `sqlite-expiry-sweep` and `postgres-retention-sweep` Coolify tasks
+      **deleted** — both sweeps run in-process now and their routes are gone (§9).
+- [ ] Log alerting configured on `scheduled sweep failed`, on
+      `scheduled sweep degraded`, on `hasMore: true` across consecutive runs, and
+      on a MISSING `scheduled sweep completed` for a job's period (§9).
+- [ ] Escalation on a persistent `hasMore: true` understood — raise the cron
+      frequency in `lib/schedule.ts` rather than waiting for the disk alert (§9).
+- [ ] Pepper keyring and active id understood as a **two-variable** rollback
+      (§3.2).
+- [ ] Named volume at `/app/data`; `SQLITE_DIR=/app/data`; directory `0700`.
+- [ ] One replica, one Bun process; no second writer on the volume, and the
+      replica-scaling decision recorded if more than one is ever wanted (§4).
+- [ ] Cloudflare proxied, Full (strict), visitor-IP removal off, Pseudo IPv4 not
+      overwriting headers, **direct origin blocked at the VPS firewall** —
+      defence in depth now that gate 2 is closed in code, and still the control
+      that keeps `cf-connecting-ip` trustworthy.
+- [ ] `/api/internal/*` and `/api/dev/*` blocked at Cloudflare or Traefik.
+- [ ] `/openapi.json` optionally rate-limited at the edge — hardening now: the
+      route is authenticated, `ip-limit`ed and built once (§5).
+- [ ] Proxy read timeout > 120 s; upload-only Traefik buffering limit set to
+      12,582,912 bytes — the same value as `MAX_REQUEST_BODY_BYTES` (§5) — and
+      verified at both sides of the boundary; Cloudflare plan ceiling/body-size
+      capability recorded separately (§5).
+- [ ] Stop-first/rolling decision recorded; stop grace period **longer than the
+      `shutdownTimeoutMs` in the startup log** (135 s today).
+- [ ] Health check passing on the canonical path (no trailing slash);
+      `quick_check=ok`; `Retries` left at 5.
+- [ ] PostgreSQL reachability confirmed in the health body (`checks.postgres`),
+      and verified once from OUTSIDE the container as well — the endpoint proves
+      reachability from inside only.
+- [ ] Persistence proven across a redeploy; sentinel retained and its value
+      recorded.
+- [ ] `secure_delete` decided and recorded.
+- [ ] Disk, task and deploy notifications enabled.
+- [ ] PostgreSQL and SQLite backup/RPO policies recorded; restore tested on
+      staging.
+- [ ] SQLite checks re-run against a copy of the live volume.
+- [ ] Upstash rollback window completed, credentials revoked.
+- [ ] R2: both buckets exist, the token holds Object Read & Write on both, the
+      development read-only token is deleted (§13.1).
+- [ ] `R2_PUBLIC_URL` is a custom domain, not `r2.dev`, and shares no cookie
+      scope with the dashboard host (§13.2).
+- [ ] Purge pair set together or not at all; purge verified once by deleting a
+      public file and re-fetching its URL (§13.3).
+- [ ] Traefik buffering limit raised before documents above the old cap are
+      allowed (§13.5).
+
+## 14. Google OAuth sign-in
+
+Added 2026-09-07. Local behavioral and migration tests are recorded in
+[oauth-sign-in-implementation.md](oauth-sign-in-implementation.md). These
+instructions have not been executed against a live Google project or Coolify VPS.
+
+### Configuration and migration
+
+OAuth is disabled by default. Leave `ENABLED_OAUTH_PROVIDERS` unset or empty to
+omit Google from public capabilities and make its start, callback and result
+routes unavailable. Password, OTP and existing local 2FA remain available according
+to their existing settings.
+
+To enable Google, set these runtime environment variables:
+
+| Variable                  | Value                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| `ENABLED_OAUTH_PROVIDERS` | `google`                                                                               |
+| `GOOGLE_CLIENT_ID`        | The web application's Google OAuth client ID, ending in `.apps.googleusercontent.com`. |
+| `GOOGLE_CLIENT_SECRET`    | That client's secret; server-only, never a public client variable.                     |
+
+An unknown provider or missing/malformed enabled-provider credentials refuses
+startup without printing the values. Keep Google credentials out of the image,
+repository, browser configuration and logs. Keep `BETTER_AUTH_SECRET` stable
+across a release so in-flight signed browser state remains verifiable.
+
+Apply `bun run db:migrate` before starting this code, even while OAuth is disabled.
+Migration `0011_greedy_paibok` extends the provider enum, adds
+`users.auth_revoked_at`, and enforces Google's issuer/password storage constraint.
+It creates no users and backfills no identities. The existing account uniqueness
+constraints enforce one provider link per user and unique provider/subject pairs.
+Do not deploy old application code after enabling Google without first accounting
+for its narrower provider enum contract. Disabling the environment switch is the
+operational rollback; it leaves stored links and password accounts intact.
+
+### Google project
+
+1. Configure a Google OAuth **web application** client and consent/audience setup
+   for this deployment. Register the exact redirect URI
+   `https://<PUBLIC_ORIGIN host>/api/auth/oauth/google/callback`. The origin must
+   be the application's canonical HTTPS origin, not an internal container name
+   or an alternate proxy host. Register development redirects separately.
+   Use **In production** for the live deployment. Google documents a
+   [Testing exception](https://support.google.com/cloud/answer/15549945?hl=en)
+   for basic identity scopes, so the application's `openid`/`email` request does
+   not require users to appear in the test-user list. Receiving `amr` has the
+   separate publication and verification prerequisites in step 3.
+2. Grant only `openid` and `email`. The server requests online access and no
+   incremental scopes. It does not call Google APIs or retain provider tokens.
+3. To make Google's MFA evidence available, enable **Authentication strength
+   claims** (`amr`) through Google Auth Platform → Settings → Advanced Settings.
+   Google's [security bundle setup](https://developers.google.com/identity/siwg/security-bundle)
+   requires the app's publishing status to be **In production** and verification
+   status **Verified**.
+   The server requests `amr` for sign-in. Missing `amr` uses local 2FA; the
+   optional claim is not required to enable Google sign-in. Google does not
+   support requests to reauthenticate a Google Account, so the owner approved
+   password/passkey reauthentication. Session age claims are not required.
+4. Allow outbound HTTPS to `oauth2.googleapis.com` and `www.googleapis.com` for
+   code exchange and Google signing keys. Browsers navigate to
+   `accounts.google.com`. Keep the VPS clock synchronized for Google token
+   validity. Proof start and credential-revocation comparisons both use the
+   database clock and do not depend on application/database clock alignment.
+
+### Build, proxy and client wiring
+
+Follow the build/start rule in §2 for all environment-gated routes, including
+OAuth and 2FA. The runtime start command regenerates the authenticated OpenAPI
+artifact using the same provider and factor configuration as capabilities and
+routes; Google secrets remain runtime-only.
+
+Preserve cookies on the full-page Google redirect and the callback. The callback
+is a top-level GET and does not carry a CAPTCHA header; do not add a proxy rule
+requiring one there. Keep the existing CAPTCHA and Origin protections on the
+start POST. Do not cache `/api/auth/*`. Exclude callback query strings,
+authorization headers, cookies and provider request/response bodies from proxy,
+APM and error logs. Callback queries contain short-lived authorization codes and
+state even though the application's request logger records only the path.
+
+The consuming client must implement the capability-driven Google button, its
+same-origin completion page, single-use result retrieval, the existing local 2FA
+challenge UI, and the list of usable reauthentication choices described in
+[docs/oauth-sign-in.md](../docs/oauth-sign-in.md). This repository has no frontend
+application to deploy. After a local email change the client must alert the user
+that the email changed and sign-in is required, clear authenticated state, and
+return to sign-in because every session, including the current one, is revoked.
+
+### Live rollout checks
+
+- With Google disabled, check that capabilities omit it and both start and
+  callback return 404.
+- With Google enabled, sign in an administrator-created, initially unverified
+  Gmail account. Check that the existing account is linked and verified without
+  email OTP, and that its password still works.
+- Check a local-2FA account with and without current Google MFA evidence. Confirm
+  that only the verified `mfa` case receives a direct session and that its bypass
+  is audited; ordinary Google sign-in must enter local 2FA even on a trusted device.
+- Verify password and enrolled passkey reauthentication with the real client.
+  Confirm that Google is offered only for sign-in and never opens a
+  sensitive-operation reauthentication window.
+- Complete a local email change and check that the link, all sessions and pending
+  proof state are invalidated. Check generic failures for unknown identities and
+  changed Google emails without logging the provider payload.
+
+## 15. Database ctype and the search floor
+
+The trigram floor in `lib/data-table/parsers.ts` decides whether a search term
+can be answered from the `pg_trgm` GIN index. pg_trgm classifies a character with
+the DATABASE's ctype (`t_isalpha || t_isdigit`, which is the C library's), not
+with Unicode — so the floor is a statement about the PostgreSQL this application
+talks to, and two images can disagree about it.
+
+`tests/integration/trigram-floor.test.ts` re-measures the class against whichever
+database the tier runs on. Its **admission** direction is strict: a character the
+floor lets through that the server will not index is a full table scan any
+authorized user can repeat, so that case fails the tier by name. The opposite
+direction — a character the floor refuses that the server would have indexed —
+is asserted only for the scripts this application's data actually uses; for the
+exotic families the floor errs toward refusing on purpose.
+
+**Record with the deployment, next to the PostgreSQL major:**
+
+- the image and variant, exactly (`postgres:18-alpine` is musl, `postgres:18` is
+  glibc);
+- `datcollate` / `datctype`.
+
+**Required once, and again on any major upgrade, image or variant change, or
+locale change:** run this file against the production-shaped database and keep it
+green. If CI's image and the deployment's differ, CI's green run is not evidence
+about the deployment.
+
+```sql
+-- What the database actually thinks, if the tier cannot be run there.
+select datcollate, datctype from pg_database where datname = current_database();
+show server_version;
+select extversion from pg_extension where extname = 'pg_trgm';
+```
+
+A failure here is not data corruption. Either the floor is refusing a search that
+would have worked — widen the class — or it is admitting a scan, which is the
+finding the floor exists for and the more urgent of the two.
+
+**Recorded for `postgres:18-alpine` (musl), 2026-09-17 — derived, not run.** No
+container runtime was available on the audit host, so this was settled against
+musl's own tables instead: `src/ctype/iswalpha.c` is a bitmap lookup into
+`src/ctype/alpha.h`, and evaluating that bitmap for every BMP code point gives
+musl's answer directly. Two things follow.
+
+- **The tier passes.** `iswalpha` is true for the two families the floor's class
+  was calibrated on glibc for — `Nl` (`Ⅳ` U+2163, `〇` U+3007) and non-ASCII `Nd`
+  (`١` U+0661) — and for every letter the test terms use. musl is in fact wider
+  than the class (it marks combining marks and `ⓐ` alpha, which the class
+  refuses); wider is the refusal direction, which costs a search and nothing
+  else. The image's `ENV LANG=en_US.utf8` is what keeps `iswalpha` in play at
+  all: musl keeps the requested locale NAME even though it loads C.UTF-8
+  behaviour, so `datctype` is not `C` and PostgreSQL does not fall back to
+  `isalpha` on the first byte — which WOULD make every non-ASCII term unindexed.
+  Check `datctype` with the query above before trusting this on a variant that
+  sets the locale differently.
+- **One residual, on musl only.** musl's table predates several Unicode
+  additions the floor's `\p{L}`/`\p{Nl}`/`\p{Nd}` class admits, so those
+  characters are admitted here and NOT indexed there — the scan direction. The
+  full BMP set is U+0870–U+0887, U+0889–U+088F, U+08B5, U+08BE–U+08C9,
+  U+0C5C–U+0C5D, U+0CDC–U+0CDD, U+0D04, U+0E2F, U+0E46, U+170D, U+171F, U+1B4C,
+  U+1C89–U+1C8A, U+2C2F, U+2C5F, U+31BB–U+31BF, U+4DB6–U+4DBF, U+9FF0–U+9FFF,
+  U+A7C0–U+A7C1, U+A7C7–U+A7DC, U+A7F1–U+A7F6, U+AB68–U+AB69 — Arabic
+  Extended-B, recent CJK ideograph additions and a handful of Latin/Cyrillic
+  extensions. None appear in this application's data or in the test set, and
+  narrowing the class to one libc version's vintage would refuse them on the
+  glibc images too; `postgres:18` (glibc) does not have this gap. Deploy on the
+  glibc image if the data will contain those scripts.

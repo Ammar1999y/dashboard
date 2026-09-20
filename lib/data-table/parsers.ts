@@ -1,0 +1,535 @@
+import type {
+  ExtendedColumnFilter,
+  ExtendedColumnSort,
+  FilterOperator,
+  FilterVariant,
+  JoinOperator,
+} from '@/types/data-table';
+
+import { OUT_OF_RANGE, positiveInt } from '@/utils';
+
+import { dataTableConfig } from './config';
+
+export const MAX_SORT_RAW_LENGTH = 4096;
+/** Filters carry values, so they get a larger raw budget than sorts. */
+export const MAX_FILTERS_RAW_LENGTH = MAX_SORT_RAW_LENGTH * 2;
+/**
+ * Exported because every one of these is ENFORCED — an over-cap request is a
+ * 422 — and a caller cannot see them otherwise. `routes.ts` publishes them, so
+ * a generated client can no longer build a request the document accepts and the
+ * runtime rejects.
+ */
+export const MAX_ID_LENGTH = 64;
+export const MAX_VALUE_LENGTH = 512;
+export const MAX_SORT_ITEMS = 10;
+export const MAX_FILTER_ITEMS = 20;
+/** Values inside one filter (`inArray` selections, range tuples). */
+export const MAX_FILTER_VALUES = 20;
+
+const validOperators = new Set<string>(dataTableConfig.operators);
+/**
+ * From `dataTableConfig`, like every other operator set in this file — not a
+ * third literal copy beside the one in `config.ts` and the one `routes.ts`
+ * published. `JoinOperator` is derived from the same array, so a value added
+ * there is accepted, documented and typed in one edit.
+ */
+const VALID_JOIN_OPERATORS = new Set<string>(dataTableConfig.joinOperators);
+
+/**
+ * Trigram floor for quick search / text filter operators. Declared here — the
+ * only data-table module both the browser and the server can import — so the
+ * client can honour the same bound without pulling the db layer into its
+ * bundle.
+ */
+export const MIN_SEARCH_LENGTH = 3;
+export const MAX_SEARCH_LENGTH = 200;
+
+/**
+ * Unicode code points, not UTF-16 code units: the floor exists to keep
+ * `ILIKE '%term%'` on the trigram index, and PostgreSQL counts characters.
+ * `'😀😀'.length` is 4, so `.length` clears the floor on a term for which
+ * `show_trgm` returns no trigrams at all and the planner falls back to a
+ * sequential scan.
+ */
+export function searchTermLength(term: string): number {
+  return [...term].length;
+}
+
+/** Where the pattern this term becomes puts its `%`, which decides its boundaries. */
+export type SearchAnchor = 'contains' | 'prefix' | 'suffix';
+
+/**
+ * pg_trgm's `ISWORDCHR`, as closely as a JavaScript class expresses it —
+ * `t_isalpha || t_isdigit` under the SERVER's ctype, which is why this is an
+ * approximation and not a definition.
+ *
+ * ⚠️ The ctype belongs to the deployment, not to this file, and the two
+ * directions of a mismatch do not cost the same. A character this admits that
+ * the server will NOT index is the scan an authorized user can repeat at will —
+ * the whole reason the floor exists. A character this refuses that the server
+ * would index only costs that search. So the class errs toward refusing:
+ * `\p{Nl}` and `\p{Nd}` are in because the server indexes Roman numerals and
+ * Arabic-Indic digits, `\p{No}` and the combining marks are out because it does
+ * not, and `\p{Alphabetic}` is not used because it carries `Other_Alphabetic` —
+ * the harakat and the circled letters, which the server treats as punctuation.
+ *
+ * `tests/integration/trigram-floor.test.ts` re-measures the class against
+ * whichever PostgreSQL it runs on, and its admission direction is strict: a
+ * ctype that indexes less than this admits fails the tier by name.
+ */
+const WORD_CHARACTER = /[\p{L}\p{Nl}\p{Nd}]/u;
+
+/** Above this, `wchar_t` is too narrow for the server to classify anything. */
+const BMP_MAX = 0xff_ff;
+
+/**
+ * The class, plus the one bound no property expresses.
+ *
+ * PostgreSQL passes each character through `char2wchar` before asking the C
+ * library about it, and where `wchar_t` is 16 bits — every Windows build —
+ * nothing above the BMP survives that conversion. pg_trgm therefore treats every
+ * astral code point as a separator, letters and digits alike, so admitting one
+ * is the scan this guard exists to refuse.
+ *
+ * A build with 32-bit `wchar_t` classifies them normally, and there this bound
+ * costs a search in a script this application's data does not contain — the
+ * cheaper of the two mistakes, which is the rule the class above follows too.
+ */
+function isWordCharacter(character: string): boolean {
+  return (
+    (character.codePointAt(0) ?? 0) <= BMP_MAX && WORD_CHARACTER.test(character)
+  );
+}
+
+/**
+ * Whether PostgreSQL can answer `ILIKE` over this term from the GIN trigram
+ * index, which is the property `MIN_SEARCH_LENGTH` was standing in for. Three
+ * code points are not enough on their own: `!!!`, `---` and `😀😀😀` all
+ * clear the floor and produce no trigram at all.
+ *
+ * pg_trgm pads each run of word characters with two leading and one trailing
+ * blank, but only where the boundary is KNOWN — and a `%` is not a boundary. So
+ * a run yields a trigram when it is three characters long, or one character
+ * against a known left boundary (`  b`), or two against a known right one
+ * (`ab `). An anchored operator supplies the missing edge: `startsWith` knows
+ * its left, `endsWith` its right.
+ */
+export function isTrigramIndexable(
+  term: string,
+  anchor: SearchAnchor = 'contains'
+): boolean {
+  const characters = [...term];
+  let runStart: number | null = null;
+
+  for (let index = 0; index <= characters.length; index++) {
+    const character = characters[index];
+    if (character !== undefined && isWordCharacter(character)) {
+      runStart ??= index;
+      continue;
+    }
+    if (runStart === null) continue;
+
+    const length = index - runStart;
+    const leftKnown = runStart > 0 || anchor === 'prefix';
+    const rightKnown = index < characters.length || anchor === 'suffix';
+    if (
+      length >= 3 ||
+      (leftKnown && length >= 1) ||
+      (rightKnown && length >= 2)
+    )
+      return true;
+    runStart = null;
+  }
+  return false;
+}
+
+const validVariants = new Set<string>(dataTableConfig.filterVariants);
+/** Operators that are complete without a value. */
+const VALUELESS_OPERATORS = new Set<string>(['isEmpty', 'isNotEmpty']);
+
+const CONTROL_CHARACTERS = /\p{Cc}/gu;
+
+/** Coerce any value to a trimmed string, or null if invalid/empty */
+function safeString(v: unknown, maxLen: number): string | null {
+  if (typeof v === 'string') {
+    const trimmed = v.replaceAll(CONTROL_CHARACTERS, '').trim();
+    return trimmed.length > 0 && trimmed.length <= maxLen ? trimmed : null;
+  }
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const str = String(v);
+    return str.length <= maxLen ? str : null;
+  }
+  return null;
+}
+
+function toKeySet(
+  columnIds: string[] | Set<string> | undefined
+): Set<string> | null {
+  if (!columnIds) return null;
+  return columnIds instanceof Set ? columnIds : new Set(columnIds);
+}
+
+interface ParsedSortItem {
+  id: string;
+  desc: boolean;
+}
+
+function parseSortItem(raw: unknown): ParsedSortItem | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const obj = raw as Record<string, unknown>;
+
+  const id = safeString(obj.id, MAX_ID_LENGTH);
+  if (!id) return null;
+  if (typeof obj.desc !== 'boolean') return null;
+
+  return { id, desc: obj.desc };
+}
+
+/**
+ * `JSON.parse` in the narrowest possible `try`, returning `null` for anything
+ * that is not a JSON array.
+ *
+ * Nothing caller-supplied may run inside that `try`. When the reporting callback
+ * was invoked from within it, the 422 it throws was caught by the parser's own
+ * `catch`, which then called the callback a second time — and the once-guard
+ * refused that second call, so the request fell through to an empty filter list
+ * and an unfiltered 200. A guard meant to stop double-counting turned an
+ * intended rejection into a silent success; the `try` being wide enough to catch
+ * our own control flow is the actual defect.
+ */
+function parseJsonArray(value: string): unknown[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  return Array.isArray(parsed) ? parsed : null;
+}
+
+function parseSortingState<TData>(
+  value: string | null | undefined,
+  columnIds?: string[] | Set<string>,
+  /**
+   * Reports a MALFORMED or over-cap sort, for the same reason filters report
+   * one. Dropping a sort is not cosmetic under pagination: it changes which
+   * rows land on page one, so a request whose ordering was silently discarded
+   * returns a different result set from the one that was asked for.
+   *
+   * An unknown column id is deliberately NOT reported — a renamed column in a
+   * bookmarked URL is a compatibility case, and the caller decides that
+   * separately (see `parseDataTableParams`).
+   */
+  onDropped?: () => void
+): ExtendedColumnSort<TData>[] {
+  if (!value) return [];
+  if (value.length > MAX_SORT_RAW_LENGTH) {
+    onDropped?.();
+    return [];
+  }
+
+  const parsed = parseJsonArray(value);
+  if (!parsed) {
+    onDropped?.();
+    return [];
+  }
+
+  const validKeys = toKeySet(columnIds);
+  const items: ExtendedColumnSort<TData>[] = [];
+
+  if (parsed.length > MAX_SORT_ITEMS) onDropped?.();
+
+  for (const raw of parsed.slice(0, MAX_SORT_ITEMS)) {
+    const item = parseSortItem(raw);
+    if (!item) {
+      onDropped?.();
+      continue;
+    }
+    if (validKeys && !validKeys.has(item.id)) continue;
+    items.push(item as ExtendedColumnSort<TData>);
+  }
+
+  return items;
+}
+
+export interface FilterItemSchema {
+  id: string;
+  value: string | string[];
+  variant: FilterVariant;
+  operator: FilterOperator;
+  filterId: string;
+}
+
+/** Sanitize a single value string, returning null if invalid */
+function safeValue(v: unknown): string | null {
+  return safeString(v, MAX_VALUE_LENGTH) || null;
+}
+
+/**
+ * Positions are preserved, empty slots included: `isBetween` reads
+ * `[lower, upper]` positionally, so compacting turned an upper-only range ("up
+ * to X") into a lower bound ("from X") — an inverted filter, not a narrower
+ * one. Operators with set semantics (`inArray`) drop the empty slots
+ * themselves.
+ *
+ * A member that is PRESENT but uncoercible (an object, an over-long string)
+ * invalidates the whole filter instead of becoming `''`. Coercing it produced an
+ * all-empty array, which the validator then classified as an unexpressed filter
+ * and skipped — so malformed input still ended up as no predicate and a 200.
+ * Over-length is rejected for the same reason, not truncated.
+ */
+function safeArrayValue(raw: unknown[]): string[] | null {
+  if (raw.length > MAX_FILTER_VALUES) return null;
+  const values: string[] = [];
+  for (const item of raw) {
+    // ONLY the empty string is a legitimate cleared slot. `null` and
+    // `undefined` were folded into it as well, which is how `[null]` became
+    // `['']` — an array the validator then read as an unexpressed filter and
+    // skipped, so malformed input still produced an unfiltered 200. No UI emits
+    // them: the range inputs build their tuple from a helper that returns `''`.
+    if (item === '') {
+      values.push('');
+      continue;
+    }
+    const value = safeValue(item);
+    if (value === null) return null;
+    values.push(value);
+  }
+  return values;
+}
+
+function parseFilterItem(raw: unknown): FilterItemSchema | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const obj = raw as Record<string, unknown>;
+
+  const id = safeString(obj.id, MAX_ID_LENGTH);
+  const filterId = safeString(obj.filterId, MAX_ID_LENGTH);
+  if (
+    !id ||
+    !filterId ||
+    typeof obj.variant !== 'string' ||
+    !validVariants.has(obj.variant) ||
+    typeof obj.operator !== 'string' ||
+    !validOperators.has(obj.operator)
+  )
+    return null;
+
+  // Value: string or string[]
+  let value: string | string[];
+
+  if (Array.isArray(obj.value)) {
+    const values = safeArrayValue(obj.value);
+    if (!values) return null;
+    value = values;
+  } else {
+    const s = safeValue(obj.value);
+    // isEmpty / isNotEmpty carry no value by definition — the UI submits an
+    // empty string for them. Dropping the whole filter on an empty value made
+    // those two operators permanently unreachable.
+    if (s === null) {
+      if (!VALUELESS_OPERATORS.has(obj.operator)) return null;
+      value = '';
+    } else {
+      value = s;
+    }
+  }
+
+  return {
+    id,
+    value,
+    variant: obj.variant as FilterVariant,
+    operator: obj.operator as FilterOperator,
+    filterId,
+  };
+}
+
+function parseFiltersState<TData>(
+  value: string | null | undefined,
+  columnIds?: string[] | Set<string>,
+  /**
+   * Called once per discarded item. The client leaves this unset and stays
+   * lenient; the server passes a handler that rejects, because a malformed
+   * filter silently vanishing here never reached the strict validator and came
+   * back as an unfiltered 200 instead of a 422.
+   */
+  onDropped?: () => void
+): ExtendedColumnFilter<TData>[] {
+  if (!value) return [];
+  // Over the raw cap the whole predicate set vanished without a word — the one
+  // discard path that skipped `onDropped`, so the request the server was meant
+  // to reject came back as an unfiltered 200.
+  if (value.length > MAX_FILTERS_RAW_LENGTH) {
+    onDropped?.();
+    return [];
+  }
+
+  const parsed = parseJsonArray(value);
+  if (!parsed) {
+    onDropped?.();
+    return [];
+  }
+
+  const validKeys = toKeySet(columnIds);
+  const items: ExtendedColumnFilter<TData>[] = [];
+
+  // Report the overflow, then parse the first N. Truncating a filter list is
+  // not a safe default: dropping an `and` condition widens the result set.
+  if (parsed.length > MAX_FILTER_ITEMS) onDropped?.();
+
+  for (const raw of parsed.slice(0, MAX_FILTER_ITEMS)) {
+    const item = parseFilterItem(raw);
+    if (!item) {
+      onDropped?.();
+      continue;
+    }
+    if (validKeys && !validKeys.has(item.id)) {
+      onDropped?.();
+      continue;
+    }
+    items.push(item as ExtendedColumnFilter<TData>);
+  }
+
+  return items;
+}
+
+export const MAX_PAGE = 10_000;
+export const MAX_PER_PAGE = 100;
+/**
+ * Page size when the caller asks for none. Never larger than the ceiling in
+ * force for the request: a caller that declares `?maxPerPage=5` and omits
+ * `perPage` was served 10 rows, so the bound it set for itself was exceeded by
+ * the default rather than by anything it sent.
+ */
+export const DEFAULT_PER_PAGE = 10;
+
+export interface GetDataSchema<T = Record<string, unknown>> {
+  page: number;
+  perPage: number;
+  sort: ExtendedColumnSort<T>[];
+  filters: ExtendedColumnFilter<T>[];
+  joinOperator: JoinOperator;
+  maxPerPage?: number;
+}
+
+/** Extract a single string value from params, ignoring arrays */
+function safeParam(value: string | string[] | undefined): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * Every top-level key this parser reads.
+ *
+ * Exported so the caller that owns the URL can refuse the ones it does NOT
+ * read. A misspelled `filtres` was accepted and ignored, and the response was a
+ * broad 200 that looked like a filtered result — the same failure the
+ * `onFilterDropped` contract exists to prevent, arriving one layer earlier.
+ */
+export const DATA_TABLE_PARAM_KEYS = new Set([
+  'maxPerPage',
+  'page',
+  'perPage',
+  'sort',
+  'filters',
+  'joinOperator',
+]);
+
+export interface ParseSearchParamsOptions<T> {
+  /** Applied when the request expresses no sort the allowlist accepts. */
+  defaultSort?: ExtendedColumnSort<T>;
+  /**
+   * The sortable column ids, so the fallback below is authoritative.
+   *
+   * Without them the parser installed `defaultSort` BEFORE the caller filtered
+   * the list against its allowlist, so a sort naming a real table column that
+   * is not in the spec map — or an unknown id — removed the handler's declared
+   * sort entirely and left only the primary-key tiebreaker. That is invisible
+   * on a table whose id is UUID v7, because v7 roughly follows creation time;
+   * it silently reorders every page anywhere else.
+   */
+  sortableColumnIds?: string[] | Set<string>;
+  /**
+   * Called once per discarded item. The client leaves this unset and stays
+   * lenient; the server passes a handler that rejects.
+   */
+  onFilterDropped?: () => void;
+}
+
+export function parseSearchParams<T = Record<string, unknown>>(
+  params: Record<string, string | string[] | undefined>,
+  {
+    defaultSort,
+    sortableColumnIds,
+    onFilterDropped,
+  }: ParseSearchParamsOptions<T> = {}
+): GetDataSchema<T> {
+  // Reported at most once per request. A throwing handler exits on the first
+  // call anyway, but a counting or logging one was invoked several times for a
+  // single malformed parameter.
+  let reported = false;
+  const reportOnce = onFilterDropped
+    ? () => {
+        if (reported) return;
+        reported = true;
+        onFilterDropped();
+      }
+    : undefined;
+
+  // Absent and unreadable are different answers. `positiveInt` returns 0 for
+  // both, so `?perPage=abc` and `?page=` used to serve the DEFAULT page size
+  // with a 200 — indistinguishable from a request that asked for no page size
+  // at all, and a caller who mistyped a bound got rows they never asked for.
+  const boundedInt = (
+    raw: string | string[] | undefined,
+    maxValue: number,
+    fallback: number
+  ): number => {
+    const supplied = safeParam(raw);
+    const parsed = positiveInt(supplied, maxValue);
+    if (parsed === OUT_OF_RANGE || (supplied !== null && parsed === 0)) {
+      reportOnce?.();
+      return fallback;
+    }
+    return parsed || fallback;
+  };
+
+  const maxPerPage = boundedInt(params.maxPerPage, MAX_PER_PAGE, MAX_PER_PAGE);
+  const page = boundedInt(params.page, MAX_PAGE, 1);
+  const perPage = boundedInt(
+    params.perPage,
+    maxPerPage,
+    Math.min(DEFAULT_PER_PAGE, maxPerPage)
+  );
+
+  const sort = parseSortingState<T>(
+    safeParam(params.sort),
+    sortableColumnIds,
+    reportOnce
+  );
+  const filters = parseFiltersState<T>(
+    safeParam(params.filters),
+    undefined,
+    reportOnce
+  );
+
+  // `and` is the default when absent, but anything else supplied is a client
+  // error, not a synonym for `and`: silently switching `or` semantics to `and`
+  // returns a different row set from the one that was requested.
+  const joinOperatorRaw = safeParam(params.joinOperator);
+  if (joinOperatorRaw !== null && !VALID_JOIN_OPERATORS.has(joinOperatorRaw))
+    reportOnce?.();
+  const joinOperator: JoinOperator = joinOperatorRaw === 'or' ? 'or' : 'and';
+
+  return {
+    page,
+    perPage,
+    sort:
+      sort.length > 0
+        ? sort
+        : [
+            defaultSort ||
+              ({ id: 'createdAt', desc: true } as ExtendedColumnSort<T>),
+          ],
+    filters,
+    joinOperator,
+  };
+}

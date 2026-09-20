@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    // "target": "ES2017", TODO: if the app support front-end
+    "target": "ESNext",
+    "module": "Preserve",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    // JavaScript admitted into the program must receive the same type checking.
+    "allowJs": true,
+    "checkJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "useDefineForClassFields": true,
+    "noImplicitAny": true,
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "noImplicitOverride": true,
+
+    "paths": {
+      "@/*": ["./*"]
+    },
+    "types": ["bun"]
+  },
+  "include": ["**/*.ts", "**/*.tsx", "**/*.mts"],
+  "exclude": ["node_modules", ".next", "dist"]
+}
