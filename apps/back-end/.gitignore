@@ -1,0 +1,78 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+# Written by the CI reporter flags; never committed.
+reports/junit-*.xml
+# Backstop for `tests/unit/lint-security-gate.test.ts`, which writes a
+# deliberately rule-violating probe into the tree and removes it in a `finally`.
+# If a removal ever fails (a Windows handle held by a just-exited grandchild did
+# it once), `git add -A` would commit source that fails everyone's lint gate.
+security-lint-probe-*.ts
+lib/floating-promise-probe-*.ts
+TODO*.md
+# next.js
+/.next/
+/out/
+/.git-old
+.git-old
+/.git-new
+.git-new
+
+# production
+/build
+/dist
+
+# misc
+.DS_Store
+*.pem
+
+# generated files
+/components/icon/generated-icons.json
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env
+.env.local
+# Loaded by `bun test` under NODE_ENV=test and holds the test database URL, so
+# it carries a credential even though nothing in it is production.
+.env.test
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+
+.claude
+CLAUDE.md
+.agents
+
+
+/prompt-*.md
+
+lefthook-local.yml
+
+/bench/**/results/
+
+# Local SQLite databases (rate limits + cache). Never commit these:
+# they hold IP addresses and contact destinations as keys.
+data/
+
+
+
+read.txt
+AGENTS.md
