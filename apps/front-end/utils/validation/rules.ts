@@ -82,8 +82,8 @@ export const idSchema = getIDSchema({ optional: false }) as z.ZodPipe<
 
 export const richTextSchema = z.any();
 
-export const datePreprocess = (val: any) => {
-  const date = safeDate(val);
+export const datePreprocess = (val: unknown) => {
+  const date = safeDate(val as string);
   return date ? date.toISOString() : null;
 };
 

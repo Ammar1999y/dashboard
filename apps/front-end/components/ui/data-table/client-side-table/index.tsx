@@ -3,7 +3,7 @@ import type { ExtendedColumnSort } from '@/types/data-table';
 import type { ColumnDef, TableState } from '@tanstack/react-table';
 
 import dynamic from 'next/dynamic';
-import { memo, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 
 import { useQueryData } from '@/utils/query';
 
@@ -19,82 +19,81 @@ const UrlSync = dynamic(
     ),
   { ssr: false }
 );
-const ClientSideTable = memo(
-  ({
+interface ClientSideTableProps<TData> {
+  columns: ColumnDef<TData>[];
+  queryKey: (string | number | EntityID)[];
+  href: string;
+  title?: string;
+  cta?: { href: string; label: string };
+  enabledQuery?: boolean;
+  STORAGE_KEY: string;
+  initialSorting?: ExtendedColumnSort<TData>[] | undefined;
+}
+
+function ClientSideTable<TData = unknown>({
+  columns,
+  queryKey,
+  href,
+  title,
+  cta,
+  enabledQuery = true,
+  STORAGE_KEY,
+  initialSorting,
+}: ClientSideTableProps<TData>) {
+  const queryParams = useMemo(
+    () => ({
+      queryKey,
+      href,
+      enabled: !!enabledQuery,
+    }),
+    [queryKey, href, enabledQuery]
+  );
+
+  const { data, isLoading, error, refetch } =
+    useQueryData<TData[]>(queryParams);
+
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const initialState:
+    | (Omit<Partial<TableState>, 'sorting'> & {
+        sorting?: ExtendedColumnSort<TData>[] | undefined;
+      })
+    | undefined = useMemo(
+    () => ({
+      sorting: initialSorting,
+      columnPinning: {
+        right: ['actions'],
+      },
+      columnVisibility: {},
+      columnOrder: columns.flatMap((col) => (col.id ? [col.id] : [])),
+    }),
+    [initialSorting, columns]
+  );
+  const { table } = useDataTable({
+    data: data || [],
     columns,
-    queryKey,
-    href,
-    title,
-    cta,
-    enabledQuery = true,
-    STORAGE_KEY,
-    initialSorting,
-  }: {
-    columns: ColumnDef<any>[];
-    queryKey: (string | number | EntityID)[];
-    href: string;
-    title?: string;
-    cta?: { href: string; label: string };
-    enabledQuery?: boolean;
-    STORAGE_KEY: string;
-    initialSorting?: ExtendedColumnSort<any>[] | undefined;
-  }) => {
-    const queryParams = useMemo(
-      () => ({
-        queryKey,
-        href,
-        enabled: !!enabledQuery,
-      }),
-      [queryKey, href, enabledQuery]
-    );
+    pageCount: 1,
+    storageKey: STORAGE_KEY,
+    tableContainerRef,
+    initialState,
+  });
 
-    const { data, isLoading, error, refetch } =
-      useQueryData<any[]>(queryParams);
+  return (
+    <>
+      <UrlSync defaultSort={initialSorting} />
 
-    const tableContainerRef = useRef<HTMLDivElement>(null);
-    const initialState:
-      | (Omit<Partial<TableState>, 'sorting'> & {
-          sorting?: ExtendedColumnSort<any>[] | undefined;
-        })
-      | undefined = useMemo(
-      () => ({
-        sorting: initialSorting,
-        columnPinning: {
-          right: ['actions'],
-        },
-        columnVisibility: {},
-        columnOrder: columns.map((col) => col.id!),
-      }),
-      [initialSorting, columns]
-    );
-    const { table } = useDataTable({
-      data: data || [],
-      columns,
-      pageCount: 1,
-      storageKey: STORAGE_KEY,
-      tableContainerRef,
-      initialState,
-    });
+      {!!title && <Header title={title} cta={cta} />}
 
-    return (
-      <>
-        <UrlSync defaultSort={initialSorting} />
+      <DataTableContent
+        table={table}
+        data={data}
+        isLoading={isLoading}
+        error={error}
+        refetch={refetch}
+        tableContainerRef={tableContainerRef}
+        STORAGE_KEY={STORAGE_KEY}
+      />
+    </>
+  );
+}
 
-        {!!title && <Header title={title} cta={cta} />}
-
-        <DataTableContent
-          table={table}
-          data={data}
-          isLoading={isLoading}
-          error={error}
-          refetch={refetch}
-          tableContainerRef={tableContainerRef}
-          STORAGE_KEY={STORAGE_KEY}
-        />
-      </>
-    );
-  }
-);
-
-ClientSideTable.displayName = 'ClientSideTable';
 export default ClientSideTable;

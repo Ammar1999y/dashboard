@@ -18,15 +18,18 @@ export function DateElementStatic(props: SlateElementProps<TDateElement>) {
               elementDate.getMonth() === today.getMonth() &&
               elementDate.getFullYear() === today.getFullYear();
 
+            if (isToday) return 'اليوم';
+
             const isYesterday =
               new Date(today.setDate(today.getDate() - 1)).toDateString() ===
               elementDate.toDateString();
+
+            if (isYesterday) return 'أمس';
+
             const isTomorrow =
               new Date(today.setDate(today.getDate() + 2)).toDateString() ===
               elementDate.toDateString();
 
-            if (isToday) return 'اليوم';
-            if (isYesterday) return 'أمس';
             if (isTomorrow) return 'غداً';
 
             return elementDate.toLocaleDateString('en-US', {

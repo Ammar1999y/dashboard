@@ -254,18 +254,15 @@ export const ComboboxTagGroupItem = React.forwardRef<
         onKeyDown={composeEventHandlers(onKeyDown, (event) => {
           if (event.key === 'Escape') {
             inputRef.current?.focus();
-          }
-          if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault();
             inputRef.current?.focus();
-          }
-          if (
-            event.key === 'ArrowRight' &&
-            currentTabStopId === lastItemValue
+          } else if (
+            currentTabStopId === lastItemValue &&
+            event.key === 'ArrowRight'
           ) {
             inputRef.current?.focus();
-          }
-          if (event.key === 'Backspace' || event.key === 'Delete') {
+          } else if (event.key === 'Backspace' || event.key === 'Delete') {
             onValueChange(value.filter((v) => v !== currentTabStopId));
             inputRef.current?.focus();
           }
@@ -339,17 +336,17 @@ const ComboboxInput = React.forwardRef<
   const composedRefs = useComposedRefs(ref, inputRef);
   const event = React.useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
-      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !open) {
+      if (!open && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
         event.preventDefault();
         onOpenChange(true);
       }
       if (type !== 'multiple') {
         return;
       }
-      if (event.key === 'ArrowLeft' && !inputValue && value.length > 0) {
+      if (!inputValue && event.key === 'ArrowLeft' && value.length > 0) {
         tagGroupRef.current?.focus();
       }
-      if (event.key === 'Backspace' && !inputValue) {
+      if (!inputValue && event.key === 'Backspace') {
         onValueChange(value.slice(0, -1));
       }
     },

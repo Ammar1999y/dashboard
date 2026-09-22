@@ -15,7 +15,7 @@ const ResizeOptions = memo(({ column }: ColumnOptionsProps) => {
 
   return (
     <DropdownMenuItem onClick={handleResetSize}>
-      <AutoSizeColumn className='ml-2 h-4 w-4' />
+      <AutoSizeColumn className='me-2 h-4 w-4' />
       <span>إعادة الحجم التلقائي</span>
     </DropdownMenuItem>
   );

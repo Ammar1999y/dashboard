@@ -29,7 +29,6 @@ export function CalloutElement({
 
   return (
     <PlateElement
-      // @ts-ignore
       attributes={{
         ...attributes,
         'data-plate-open-context-menu': true,
@@ -37,7 +36,7 @@ export function CalloutElement({
       }}
       className={cn('my-1 flex rounded-sm bg-muted p-4 ps-3', className)}
       style={{
-        backgroundColor: props.element.backgroundColor as any,
+        backgroundColor: props.element.backgroundColor as string | undefined,
       }}
       {...props}
     >
@@ -54,7 +53,7 @@ export function CalloutElement({
               }}
               variant='ghost'
             >
-              {(props.element.icon as any) || '💡'}
+              {(props.element.icon as string | undefined) || '💡'}
             </Button>
           }
         >

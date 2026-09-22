@@ -25,10 +25,9 @@ function HeadingElement({
 }: PlateElementProps & VariantProps<typeof headingVariants>) {
   return (
     <PlateElement
-      as={variant!}
+      as={variant ?? 'h1'}
       className={headingVariants({ variant })}
       {...props}
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-ltr-element': true,

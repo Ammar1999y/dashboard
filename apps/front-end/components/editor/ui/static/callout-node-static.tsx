@@ -12,7 +12,7 @@ export function CalloutElementStatic({
     <SlateElement
       className={cn('my-1 flex rounded-sm bg-muted p-4 ps-3', className)}
       style={{
-        backgroundColor: props.element.backgroundColor as any,
+        backgroundColor: props.element.backgroundColor as string | undefined,
       }}
       {...props}
     >
@@ -25,7 +25,7 @@ export function CalloutElementStatic({
           }}
         >
           <span data-plate-prevent-deserialization>
-            {(props.element.icon as any) || '💡'}
+            {(props.element.icon as string | undefined) || '💡'}
           </span>
         </div>
         <div className='w-full'>{children}</div>

@@ -85,7 +85,7 @@ const NewSection = () => {
         });
 
         toast.success(result.message || 'تم إنشاء القسم بنجاح');
-        router.push('/dash/sections');
+        void router.push('/dash/sections');
       } catch (error) {
         toast.error(
           error instanceof CustomError

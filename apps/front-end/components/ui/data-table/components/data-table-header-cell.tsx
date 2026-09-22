@@ -120,7 +120,8 @@ const DataTableHeaderCell = memo(
     const headerRef = useRef<HTMLDivElement>(null);
 
     const enableOrdering =
-      (header.column.columnDef.meta as any)?.enableOrdering ?? true;
+      (header.column.columnDef.meta as { enableOrdering?: boolean } | undefined)
+        ?.enableOrdering ?? true;
     const isOrderingEnabled = isDraggable && enableOrdering;
 
     const column = header.column;
@@ -165,7 +166,7 @@ const DataTableHeaderCell = memo(
     );
 
     const insertPosition = useMemo(() => {
-      if (!over || over.id !== columnId || activeIndex === -1) {
+      if (!over || activeIndex === -1 || over.id !== columnId) {
         return;
       }
       return index >= activeIndex ? Position.After : Position.Before;
@@ -185,8 +186,10 @@ const DataTableHeaderCell = memo(
           insertPosition !== undefined &&
             !isDragging &&
             "after:absolute after:bottom-0 after:top-0 after:w-0.5 after:bg-primary after:content-['']",
-          insertPosition === Position.Before && 'after:right-0.5',
-          insertPosition === Position.After && 'after:left-0.5'
+          insertPosition === Position.Before &&
+            'ltr:after:left-0.5 rtl:after:right-0.5',
+          insertPosition === Position.After &&
+            'ltr:after:right-0.5 rtl:after:left-0.5'
         )}
         style={style}
         ref={combinedRef}
@@ -200,7 +203,7 @@ const DataTableHeaderCell = memo(
 
         {/* Floating buttons container - absolute on hover devices, static on touch */}
         {(canSort || hasOptions || canFilter) && (
-          <div className='me-1 flex items-center gap-0.5 self-end hover-device:absolute hover-device:left-3 hover-device:top-1/2 hover-device:me-0 hover-device:-translate-y-1/2 hover-device:self-auto'>
+          <div className='me-1 flex items-center gap-0.5 self-end hover-device:absolute hover-device:top-1/2 hover-device:me-0 hover-device:-translate-y-1/2 hover-device:self-auto ltr:hover-device:right-3 rtl:hover-device:left-3'>
             {canFilter && <ColumnFilterPopover column={column} />}
             {canSort && <SortButton columnId={columnId} />}
             {hasOptions && (

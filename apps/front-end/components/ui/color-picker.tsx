@@ -76,15 +76,15 @@ const InputColor = memo(
           rgba,
           hsla,
         };
-      } else {
-        const rgb = hexToRgb(value || defaultColor);
-        const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-        return {
-          hex: value || defaultColor,
-          rgb,
-          hsl,
-        };
       }
+
+      const rgb = hexToRgb(value || defaultColor);
+      const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+      return {
+        hex: value || defaultColor,
+        rgb,
+        hsl,
+      };
     });
 
     const [hexInputValue, setHexInputValue] = useState<string>(value || '');
@@ -175,7 +175,7 @@ const InputColor = memo(
         const component = e.target.name;
         const value = e.target.value;
 
-        const numValue = Number.parseFloat(value) || 0;
+        const numValue = Number(value) || 0;
         const clampedValue =
           component === 'a' && alpha && colorValues.rgba
             ? Math.max(0, Math.min(1, numValue))
@@ -213,7 +213,7 @@ const InputColor = memo(
         const component = e.target.name;
         const value = e.target.value;
 
-        const numValue = Number.parseFloat(value) || 0;
+        const numValue = Number(value) || 0;
         // Handle alpha mode
         let clampedValue: number;
 
@@ -278,7 +278,7 @@ const InputColor = memo(
 
       updateColorValues(value);
       setHexInputValue(value.toUpperCase());
-    }, [value]);
+    }, [value, hexInputValue, updateColorValues]);
     // Get current hex value for display
     const getCurrentHexValue = useMemo(() => {
       if (!hexInputValue) return ''; // شرط جديد: إذا كان فارغاً أعد فارغاً
@@ -315,7 +315,7 @@ const InputColor = memo(
             <PopoverTrigger asChild>
               <Button
                 className={cn(
-                  'absolute right-0 top-1/2 h-full w-12 -translate-y-1/2 overflow-hidden border border-border opacity-90 shadow-none saturate-[.7] ltr:rounded-r-none rtl:rounded-l-none',
+                  'absolute top-1/2 h-full w-12 -translate-y-1/2 overflow-hidden border border-border opacity-90 shadow-none saturate-[.7] ltr:right-0 ltr:rounded-r-none rtl:left-0 rtl:rounded-l-none',
                   !hexInputValue && 'border-0'
                 )}
                 size={'icon'}

@@ -18,7 +18,7 @@ import useIsomorphicLayoutEffect from '@/hooks/use-layout-effect';
 import { CustomError } from './error-class';
 
 // Type for local storage query handlers
-type LocalStorageQueryHandler<TData = any> = {
+type LocalStorageQueryHandler<TData = unknown> = {
   getAll?: () => Promise<TData>;
   getById?: (id: EntityID) => Promise<TData>;
 };
@@ -90,8 +90,8 @@ function buildDataTableUrl(
   state: {
     page: number;
     perPage: number;
-    sort: any[];
-    filters: any[];
+    sort: unknown[];
+    filters: unknown[];
     joinOperator: string;
     search: string;
   }

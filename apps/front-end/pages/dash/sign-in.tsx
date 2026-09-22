@@ -78,10 +78,10 @@ const Shape2 = ({
 export default function Page() {
   return (
     <>
-      <div className='pointer-events-none absolute left-0 right-0 top-0 size-full select-none overflow-hidden'>
+      <div className='pointer-events-none absolute inset-x-0 top-0 size-full select-none overflow-hidden'>
         <div aria-hidden className='h-[150%] w-full opacity-55'>
-          <Shape className='absolute -left-16 top-0 h-[50vh] w-[850px] max-w-[130vw] overflow-visible' />
-          <Shape2 className='absolute -right-40 top-1/2 h-[715px] max-h-[100vh] w-[1327px] max-w-[130vw] -translate-y-[60%] overflow-visible' />
+          <Shape className='absolute top-0 h-[50vh] w-[850px] max-w-[130vw] overflow-visible ltr:-right-16 rtl:-left-16' />
+          <Shape2 className='absolute top-1/2 h-[715px] max-h-[100vh] w-[1327px] max-w-[130vw] -translate-y-[60%] overflow-visible ltr:-left-40 rtl:-right-40' />
         </div>
       </div>
       <SignInPage />

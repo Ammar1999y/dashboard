@@ -1,8 +1,11 @@
 /* eslint-disable unicorn/prefer-math-trunc */
 import type { EntityID } from '@/types';
 
+import { v7 as uuidv7 } from 'uuid';
 
-export function normalizeArabicDigits(input: any): any {
+export function normalizeArabicDigits(input: string): string;
+export function normalizeArabicDigits<T>(input: T): T;
+export function normalizeArabicDigits(input: unknown): unknown {
   if (typeof input !== 'string') return input;
   const ARNums = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
   return input.replace(/[٠-٩]/g, (n) => String(ARNums.indexOf(n)));
@@ -339,7 +342,7 @@ function serializeForLog(input: unknown, maxLength = 1024): string {
     : out.slice(0, maxLength - 3) + '...';
 }
 
-export function sanitizeForLog(input: any, maxLength = 1024) {
+export function sanitizeForLog(input: unknown, maxLength = 1024) {
   // Development still gets an expandable structure rather than a JSON string —
   // but a REDACTED one. Returning the raw value meant local, preview, and
   // accidentally development-configured deployments printed whatever the value
@@ -371,14 +374,25 @@ export const returnNumberOrNull = (
   return Number.isNaN(num) ? null : num;
 };
 
-export const positiveInt = (val: any, maxValue = Number.MAX_SAFE_INTEGER) => {
+export const positiveInt = (
+  val: unknown,
+  maxValue = Number.MAX_SAFE_INTEGER
+) => {
   const num = Number(val);
   if (!Number.isFinite(num) || num <= 0 || num > maxValue) return 0;
   return num | 0;
 };
 
+type DbErrorShape = {
+  code?: string;
+  constraint?: string;
+  cause?: { code?: string; constraint?: string };
+};
+
 export function isUniqueViolation(e: unknown): boolean {
-  const anyErr = e as any;
+  const anyErr = (
+    typeof e === 'object' && e !== null ? e : null
+  ) as DbErrorShape | null;
   // TODO: test this
   return (
     anyErr?.code === '23505' || anyErr?.cause?.code === '23505' /* ||
@@ -389,12 +403,16 @@ export function isUniqueViolation(e: unknown): boolean {
 
 // PostgreSQL FK violation code: 23503
 export function isForeignKeyViolation(e: unknown): boolean {
-  const anyErr = e as any;
+  const anyErr = (
+    typeof e === 'object' && e !== null ? e : null
+  ) as DbErrorShape | null;
   return anyErr?.code === '23503' || anyErr?.cause?.code === '23503';
 }
 
 export function getConstraintName(e: unknown): string {
-  const anyErr = e as any;
+  const anyErr = (
+    typeof e === 'object' && e !== null ? e : null
+  ) as DbErrorShape | null;
   return anyErr?.constraint ?? anyErr?.cause?.constraint ?? '';
 }
 
@@ -415,7 +433,7 @@ const UUID_V7_REGEX =
  * @param val - Value to validate
  * @returns The valid UUID v7 string, or empty string if invalid
  */
-export const validID = (val: any): string => {
+export const validID = (val: unknown): string => {
   if (typeof val !== 'string') return '';
   const trimmed = val.trim();
   return UUID_V7_REGEX.test(trimmed) ? trimmed : '';

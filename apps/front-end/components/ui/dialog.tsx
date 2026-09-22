@@ -46,6 +46,12 @@ function DialogContent({
   showCloseButton?: boolean;
   overlayClassName?: string;
 }) {
+  const isRight = side === 'right';
+  const isLeft = side === 'left';
+  const isTop = side === 'top';
+  const isBottom = side === 'bottom';
+  const isCenter = side === 'center';
+
   return (
     <DialogPortal>
       <DialogOverlay className={overlayClassName} />
@@ -59,16 +65,16 @@ function DialogContent({
         data-slot='sheet-content'
         className={cn(
           'fixed z-50 grid max-w-[calc(100vw-env(safe-area-inset-left)-env(safe-area-inset-right))] grid-rows-[auto_1fr_auto] gap-4 bg-background shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out',
-          side === 'right' &&
-            'inset-y-0 right-0 h-full w-3/4 border-l pr-[env(safe-area-inset-right)] data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
-          side === 'left' &&
-            'inset-y-0 left-0 h-full w-3/4 border-r pl-[env(safe-area-inset-left)] data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
-          side === 'top' &&
+          isRight &&
+            'inset-y-0 h-full w-3/4 border-e ps-[env(safe-area-inset-right)] data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right ltr:right-0 rtl:right-0',
+          isLeft &&
+            'inset-y-0 h-full w-3/4 border-s pe-[env(safe-area-inset-left)] data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left ltr:left-0 rtl:left-0',
+          isTop &&
             'inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
-          side === 'bottom' &&
+          isBottom &&
             'inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
-          side === 'center' &&
-            'left-[50%] top-[50%] max-h-[calc(100vh-40px-env(safe-area-inset-bottom)-env(safe-area-inset-top))] w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] -translate-x-1/2 -translate-y-1/2 overflow-x-hidden rounded-lg border duration-200 data-[state=closed]:duration-200 data-[state=open]:duration-200 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
+          isCenter &&
+            'top-[50%] max-h-[calc(100vh-40px-env(safe-area-inset-bottom)-env(safe-area-inset-top))] w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] -translate-x-1/2 -translate-y-1/2 overflow-x-hidden rounded-lg border duration-200 data-[state=closed]:duration-200 data-[state=open]:duration-200 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] ltr:left-[50%] rtl:left-[50%]',
           className
         )}
         {...props}
@@ -78,7 +84,7 @@ function DialogContent({
           <DialogPrimitive.Close asChild>
             <Button
               variant='ghost'
-              className='absolute left-4 top-4 h-fit px-2 py-2 text-gray-500 hover:text-gray-700'
+              className='absolute top-4 h-fit px-2 py-2 text-gray-500 hover:text-gray-700 ltr:right-4 rtl:left-4'
             >
               <X size={20} className='size-5' />
             </Button>

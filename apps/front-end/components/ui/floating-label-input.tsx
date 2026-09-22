@@ -73,7 +73,7 @@ const LabeledInput = memo(
         </label>
         <div className='relative'>
           {Icon && (
-            <Icon className='absolute left-3 top-1/2 -translate-y-1/2 text-gray-700' />
+            <Icon className='absolute top-1/2 -translate-y-1/2 text-gray-700 ltr:left-3 rtl:right-3' />
           )}
           <input
             dir={dir}
@@ -82,7 +82,7 @@ const LabeledInput = memo(
             type={type}
             className={cn(
               `w-full rounded-lg border border-gray-500 px-4 py-2 text-base font-medium caret-primary transition duration-300 placeholder:text-gray-500 hover:border-primary/80 hover:shadow-sm focus-visible:ring-4 focus-visible:ring-primary/30`,
-              Icon && 'pl-10'
+              Icon && 'ps-10'
             )}
             placeholder={placeholder}
           />

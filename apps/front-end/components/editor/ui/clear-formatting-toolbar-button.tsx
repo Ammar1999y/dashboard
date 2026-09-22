@@ -41,7 +41,9 @@ export function ClearFormattingToolbarButton() {
       {
         match: (n) =>
           'type' in n &&
-          BLOCK_TYPES_TO_RESET.includes((n as { type: string }).type as any),
+          (BLOCK_TYPES_TO_RESET as readonly string[]).includes(
+            (n as { type: string }).type
+          ),
       }
     );
 

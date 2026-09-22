@@ -67,7 +67,7 @@ export const ColumnElement = withHOC(
         {!readOnly && !isSelectionAreaVisible && (
           <div
             className={cn(
-              'absolute left-1/2 top-2 z-50 -translate-x-1/2 -translate-y-1/2',
+              'absolute top-2 z-50 -translate-x-1/2 -translate-y-1/2 ltr:right-1/2 rtl:left-1/2',
               'pointer-events-auto flex items-center',
               'opacity-0 transition-opacity group-hover/column:opacity-100'
             )}
@@ -79,7 +79,6 @@ export const ColumnElement = withHOC(
 
         <PlateElement
           {...props}
-          // @ts-ignore
           attributes={{
             ...props.attributes,
             'data-ltr-element': true,
@@ -129,16 +128,16 @@ function DropLine() {
 
   if (!dropLine) return null;
 
+  const dropLineClass =
+    dropLine === 'left'
+      ? 'inset-y-0 rtl:left-[-10.5px] ltr:right-[-10.5px] w-1 rtl:group-first/column:-left-1 ltr:group-first/column:-right-1'
+      : dropLine === 'right'
+        ? 'inset-y-0 rtl:right-[-11px] ltr:left-[-11px] w-1 rtl:group-last/column:-right-1 ltr:group-last/column:-left-1'
+        : undefined;
+
   return (
     <div
-      className={cn(
-        'slate-dropLine',
-        'absolute bg-primary/50',
-        dropLine === 'left' &&
-          'inset-y-0 left-[-10.5px] w-1 group-first/column:-left-1',
-        dropLine === 'right' &&
-          'inset-y-0 right-[-11px] w-1 group-last/column:-right-1'
-      )}
+      className={cn('slate-dropLine', 'absolute bg-primary/50', dropLineClass)}
     />
   );
 }
@@ -148,7 +147,6 @@ export function ColumnGroupElement(props: PlateElementProps) {
     <PlateElement
       className='mb-2'
       {...props}
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-ltr-element': true,

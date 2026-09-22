@@ -66,11 +66,10 @@ export default React.memo(function BreadCrumb({
         if (item.path === path) {
           return [item];
         }
-        if (item.children) {
-          const found = findPathInNavData(path, item.children);
-          if (found.length > 0) {
-            return [item, ...found];
-          }
+        if (!item.children) continue;
+        const found = findPathInNavData(path, item.children);
+        if (found.length > 0) {
+          return [item, ...found];
         }
       }
       return [];
@@ -139,10 +138,10 @@ export default React.memo(function BreadCrumb({
 
     // Show first item, ellipsis, and last maxItems-1 items
     const firstItem = breadCrumbs[0];
+    if (!firstItem) return null;
+
     const lastItems = breadCrumbs.slice(-(maxItems - 1));
     const hiddenItems = breadCrumbs.slice(1, -(maxItems - 1));
-
-    if (!firstItem) return null;
 
     return (
       <>

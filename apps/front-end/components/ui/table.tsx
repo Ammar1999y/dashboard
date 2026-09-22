@@ -31,7 +31,7 @@ function TableBody({ className, ...props }: React.ComponentProps<'tbody'>) {
     <tbody
       data-slot='table-body'
       className={cn(
-        '[&_td:first-child]:rounded-r-lg [&_td:last-child]:rounded-l-lg',
+        'ltr:[&_td:first-child]:rounded-l-lg rtl:[&_td:first-child]:rounded-r-lg ltr:[&_td:last-child]:rounded-r-lg rtl:[&_td:last-child]:rounded-l-lg',
         className
       )}
       {...props}

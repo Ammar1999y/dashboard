@@ -36,7 +36,8 @@ function generateId({ length = 12 }: { length?: number } = {}) {
   const bytes = crypto.getRandomValues(new Uint8Array(length));
   let id = '';
   for (let i = 0; i < length; i++) {
-    id += ALPHABET[bytes[i]! % ALPHABET.length];
+    const byte = bytes[i] ?? 0;
+    id += ALPHABET[byte % ALPHABET.length];
   }
   return id;
 }
@@ -121,7 +122,7 @@ function ColumnFilterPopoverInner<TData>({
       filters[existingIndex] = newFilter;
     }
 
-    setFilters(filters);
+    setFilters(filters as never);
     setOpen(false);
   }, [columnId, variant, draftOperator, draftValue, draftFilterId]);
 
@@ -131,7 +132,7 @@ function ColumnFilterPopoverInner<TData>({
       useDataTableStore.getState().filters as ExtendedColumnFilter<TData>[]
     ).filter((f) => f.id !== columnId);
 
-    setFilters(filters.length > 0 ? filters : null);
+    setFilters((filters.length > 0 ? filters : null) as never);
     setDraftOperator(getDefaultFilterOperator(variant));
     setDraftValue('');
     setDraftFilterId('');

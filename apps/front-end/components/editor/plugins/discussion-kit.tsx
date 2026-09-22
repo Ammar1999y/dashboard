@@ -1,10 +1,19 @@
 'use client';
 
-import type { TComment } from '@/components/editor/ui/comment';
+import type { Value } from 'platejs';
 
 import { createPlatePlugin } from 'platejs/react';
 
 import { BlockDiscussion } from '@/components/editor/ui/block-discussion';
+
+export type TComment = {
+  id: string;
+  contentRich: Value;
+  createdAt: Date;
+  discussionId: string;
+  isEdited: boolean;
+  userId: string;
+};
 
 export type TDiscussion = {
   id: string;

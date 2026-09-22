@@ -53,7 +53,7 @@ const CategoriesPage = () => {
         right: ['actions'],
       },
       columnVisibility: {},
-      columnOrder: columns.map((col) => col.id!),
+      columnOrder: columns.flatMap((col) => (col.id ? [col.id] : [])),
     }),
     []
   );

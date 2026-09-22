@@ -9,7 +9,6 @@ export function ParagraphElement(props: PlateElementProps) {
   return (
     <PlateElement
       {...props}
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-ltr-element': true,

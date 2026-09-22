@@ -30,8 +30,8 @@ const BasicInfoSection = memo(() => {
   const nativeLang = null;
   const inputDir = 'rtl';
   const handleDescriptionChange = useCallback(
-    (value: any) => {
-      setValue('description', value);
+    (value: unknown) => {
+      setValue('description', value as CreateSectionInput['description']);
     },
     [setValue]
   );

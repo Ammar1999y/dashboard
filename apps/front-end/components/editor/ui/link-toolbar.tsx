@@ -182,6 +182,7 @@ function LinkOpenButton() {
     }
     const [element] = entry;
     return getLinkAttributes(editor, element);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, selection]);
 
   return (

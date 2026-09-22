@@ -101,27 +101,27 @@ function Draggable(props: PlateElementProps) {
   const mouseDownTime = React.useRef<number>(0);
   const mouseDownPos = React.useRef<{ x: number; y: number } | null>(null);
 
-  const resetPreview = () => {
+  const resetPreview = React.useCallback(() => {
     if (!previewRef.current) {
       return;
     }
 
     previewRef.current.replaceChildren();
-    previewRef.current?.classList.add('hidden');
-  };
+    previewRef.current.classList.add('hidden');
+  }, [previewRef]);
 
   // clear up virtual multiple preview when drag end
   React.useEffect(() => {
     if (!isDragging) {
       resetPreview();
     }
-  }, [isDragging]);
+  }, [isDragging, resetPreview]);
 
   React.useEffect(() => {
     if (isAboutToDrag) {
       previewRef.current?.classList.remove('opacity-0');
     }
-  }, [isAboutToDrag]);
+  }, [isAboutToDrag, previewRef]);
 
   const [dragButtonTop, setDragButtonTop] = React.useState(0);
 
@@ -156,7 +156,7 @@ function Draggable(props: PlateElementProps) {
               )}
             >
               <Button
-                className='absolute left-0 h-6 w-full p-0'
+                className='absolute h-6 w-full p-0 ltr:right-0 rtl:left-0'
                 data-plate-prevent-deselect
                 onClick={(e) => {
                   e.preventDefault();
@@ -166,9 +166,9 @@ function Draggable(props: PlateElementProps) {
 
                   // إذا كان نقرة سريعة (أقل من 200ms) والماوس لم يتحرك كثيراً
                   if (
-                    timeSinceMouseDown < 200 &&
+                    !readOnly &&
                     mouseDownPos.current &&
-                    !readOnly
+                    timeSinceMouseDown < 200
                   ) {
                     const dx = Math.abs(e.clientX - mouseDownPos.current.x);
                     const dy = Math.abs(e.clientY - mouseDownPos.current.y);
@@ -183,7 +183,7 @@ function Draggable(props: PlateElementProps) {
                         const contextMenuEvent = new MouseEvent('contextmenu', {
                           bubbles: true,
                           cancelable: true,
-                          view: globalThis,
+                          view: globalThis as unknown as Window,
                           clientX: e.clientX,
                           clientY: e.clientY,
                           screenX: e.screenX,
@@ -218,7 +218,7 @@ function Draggable(props: PlateElementProps) {
       )}
 
       <div
-        className={cn('absolute left-0 hidden w-full')}
+        className={cn('absolute hidden w-full ltr:right-0 rtl:left-0')}
         contentEditable={false}
         ref={previewRef}
         style={{ top: `${-previewTop}px` }}
@@ -309,7 +309,7 @@ const DragHandle = React.memo(function DragHandle({
 
             // If current block is not in selection, use it as the starting point
             if (!selectionNodes.some(([node]) => node.id === element.id)) {
-              selectionNodes = [[element, editor.api.findPath(element)!]];
+              selectionNodes = [[element, editor.api.findPath(element) ?? []]];
             }
 
             // Process selection nodes to include list children
@@ -347,7 +347,7 @@ const DragHandle = React.memo(function DragHandle({
 
             // If current block is not in selection, use it as the starting point
             if (!selectedBlocks.some(([node]) => node.id === element.id)) {
-              selectedBlocks = [[element, editor.api.findPath(element)!]];
+              selectedBlocks = [[element, editor.api.findPath(element) ?? []]];
             }
 
             // Process selection to include list children
@@ -431,7 +431,8 @@ const createDragPreviewElements = (
   };
 
   const resolveElement = (node: TElement, index: number) => {
-    const domNode = editor.api.toDOMNode(node)!;
+    const domNode = editor.api.toDOMNode(node);
+    if (!domNode) return;
     const newDomNode = domNode.cloneNode(true) as HTMLElement;
 
     // Apply visual compensation for horizontal scroll
@@ -458,7 +459,7 @@ const createDragPreviewElements = (
         }
 
         // Apply the original element's styles to maintain appearance
-        const originalStyles = globalThis.getComputedStyle(original);
+        const originalStyles = getComputedStyle(original);
         cloned.style.padding = '0';
         innerContainer.style.padding = originalStyles.padding;
 
@@ -477,17 +478,19 @@ const createDragPreviewElements = (
     const lastDomNode = blocks[index - 1];
 
     if (lastDomNode) {
-      const lastDomNodeRect = editor.api
-        .toDOMNode(lastDomNode)!
-        .parentElement!.getBoundingClientRect();
+      const lastDomNodeParent =
+        editor.api.toDOMNode(lastDomNode)?.parentElement;
+      const domNodeParent = domNode.parentElement;
 
-      const domNodeRect = domNode.parentElement!.getBoundingClientRect();
+      if (lastDomNodeParent && domNodeParent) {
+        const lastDomNodeRect = lastDomNodeParent.getBoundingClientRect();
+        const domNodeRect = domNodeParent.getBoundingClientRect();
+        const distance = domNodeRect.top - lastDomNodeRect.bottom;
 
-      const distance = domNodeRect.top - lastDomNodeRect.bottom;
-
-      // Check if the two elements are adjacent (touching each other)
-      if (distance > 15) {
-        wrapper.style.marginTop = `${distance}px`;
+        // Check if the two elements are adjacent (touching each other)
+        if (distance > 15) {
+          wrapper.style.marginTop = `${distance}px`;
+        }
       }
     }
 
@@ -514,14 +517,19 @@ const calculatePreviewTop = (
     element: TElement;
   }
 ): number => {
-  const child = editor.api.toDOMNode(element)!;
-  const editable = editor.api.toDOMNode(editor)!;
+  const child = editor.api.toDOMNode(element);
+  const editable = editor.api.toDOMNode(editor);
   const firstSelectedChild = blocks[0];
 
-  const firstDomNode = editor.api.toDOMNode(firstSelectedChild)!;
+  const firstDomNode = firstSelectedChild
+    ? editor.api.toDOMNode(firstSelectedChild)
+    : null;
+
+  if (!child || !editable || !firstDomNode) return 0;
+
   // Get editor's top padding
   const editorPaddingTop = Number(
-    globalThis.getComputedStyle(editable).paddingTop.replace('px', '')
+    getComputedStyle(editable).paddingTop.replace('px', '')
   );
 
   // Calculate distance from first selected node to editor top
@@ -531,7 +539,7 @@ const calculatePreviewTop = (
     editorPaddingTop;
 
   // Get margin top of first selected node
-  const firstMarginTopString = globalThis.getComputedStyle(firstDomNode).marginTop;
+  const firstMarginTopString = getComputedStyle(firstDomNode).marginTop;
   const marginTop = Number(firstMarginTopString.replace('px', ''));
 
   // Calculate distance from current node to editor top
@@ -540,7 +548,7 @@ const calculatePreviewTop = (
     editable.getBoundingClientRect().top -
     editorPaddingTop;
 
-  const currentMarginTopString = globalThis.getComputedStyle(child).marginTop;
+  const currentMarginTopString = getComputedStyle(child).marginTop;
   const currentMarginTop = Number(currentMarginTopString.replace('px', ''));
 
   const previewElementsTopDistance =
@@ -553,9 +561,10 @@ const calculatePreviewTop = (
 };
 
 const calcDragButtonTop = (editor: PlateEditor, element: TElement): number => {
-  const child = editor.api.toDOMNode(element)!;
+  const child = editor.api.toDOMNode(element);
+  if (!child) return 0;
 
-  const currentMarginTopString = globalThis.getComputedStyle(child).marginTop;
+  const currentMarginTopString = getComputedStyle(child).marginTop;
   const currentMarginTop = Number(currentMarginTopString.replace('px', ''));
 
   return currentMarginTop;

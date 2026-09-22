@@ -68,7 +68,7 @@ const NewPermission = () => {
             // still patched. The permissions LIST is not: it is keyed by
             // page/sort/filters/search with a `{ data, meta }` value, so
             // prepending to `getQueryData(list)` never reached the table.
-            queryClient.invalidateQueries({
+            void queryClient.invalidateQueries({
               queryKey: PERMISSIONS_QUERY_KEYS.list,
             });
 
@@ -95,7 +95,7 @@ const NewPermission = () => {
         });
 
         toast.success(result.message || 'تم إنشاء الصلاحية بنجاح');
-        router.push('/dash/permissions');
+        void router.push('/dash/permissions');
       } catch (error) {
         toast.error(
           error instanceof CustomError

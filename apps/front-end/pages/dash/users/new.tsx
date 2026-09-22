@@ -69,12 +69,14 @@ const NewUser = () => {
             // assembled row: the list is keyed by page/sort/filters/search
             // (value `{ data, meta }`), so the prepend never landed, and the
             // fabricated row carried `role: null` for a user who has one.
-            queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEYS.list });
+            void queryClient.invalidateQueries({
+              queryKey: USERS_QUERY_KEYS.list,
+            });
           },
         });
 
         toast.success(result.message || 'تم إنشاء المستخدم بنجاح');
-        router.push('/dash/users');
+        void router.push('/dash/users');
       } catch (error) {
         toast.error(
           error instanceof CustomError

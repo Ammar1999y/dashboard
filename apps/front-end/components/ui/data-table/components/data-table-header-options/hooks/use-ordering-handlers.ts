@@ -5,7 +5,7 @@ import { type Column } from '@tanstack/react-table';
 import { useColumnOrder, useColumnPinning } from '../../../store';
 import { type ColumnPosition, type OrderContext } from '../types';
 
-export const useOrderingHandlers = (column: Column<any, any>) => {
+export const useOrderingHandlers = (column: Column<unknown, unknown>) => {
   // Helper to get the relevant order array based on pin state
   const getOrderContext = useCallback((): OrderContext => {
     const { columnPinning, setColumnPinning } = useColumnPinning.getState();
@@ -76,10 +76,9 @@ export const useOrderingHandlers = (column: Column<any, any>) => {
     const currentIndex = order.indexOf(column.id);
     if (currentIndex <= 0) return;
     const newOrder = [...order];
-    [newOrder[currentIndex - 1], newOrder[currentIndex]] = [
-      newOrder[currentIndex],
-      newOrder[currentIndex - 1],
-    ];
+    const prev = newOrder[currentIndex - 1];
+    newOrder[currentIndex - 1] = newOrder[currentIndex];
+    newOrder[currentIndex] = prev;
     setOrder(newOrder);
   }, [column.id, getOrderContext]);
 
@@ -97,10 +96,9 @@ export const useOrderingHandlers = (column: Column<any, any>) => {
     const currentIndex = order.indexOf(column.id);
     if (currentIndex >= order.length - 1) return;
     const newOrder = [...order];
-    [newOrder[currentIndex], newOrder[currentIndex + 1]] = [
-      newOrder[currentIndex + 1],
-      newOrder[currentIndex],
-    ];
+    const next = newOrder[currentIndex + 1];
+    newOrder[currentIndex + 1] = newOrder[currentIndex];
+    newOrder[currentIndex] = next;
     setOrder(newOrder);
   }, [column.id, getOrderContext]);
 

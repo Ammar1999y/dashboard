@@ -11,25 +11,26 @@ export function showFormErrors(errors: Record<string, unknown>) {
 }
 
 export function flattenErrors(
-  data: any,
+  data: unknown,
   path = '',
   result: Record<string, string> = {}
 ) {
   if (!data) return result;
   if (Array.isArray(data)) {
     data.forEach((item, index) => {
-      flattenErrors(item, path ? `${path}.${index}` : `${index}`, result);
+      flattenErrors(item, path ? `${path}.${index}` : String(index), result);
     });
     return result;
   }
-  if (typeof data === 'object') {
+  if (typeof data === 'object' && data !== null) {
+    const errorObj = data as Record<string, unknown>;
     // اذا ابغى ارسل المستخدم الي موقع المدخل الي غلط فيه
     // refاخذ اول
-    if (data.message) {
-      result[path] = data.message;
+    if (typeof errorObj.message === 'string') {
+      result[path] = errorObj.message;
       return result;
     }
-    Object.entries(data).forEach(([key, value]) =>
+    Object.entries(errorObj).forEach(([key, value]) =>
       flattenErrors(value, path ? `${path}.${key}` : key, result)
     );
     return result;

@@ -5,7 +5,7 @@ import { memo } from 'react';
 import { TableCell, TableRow } from './components/data-table';
 
 interface DataTableSkeletonProps {
-  table: Table<any>;
+  table: Table<unknown>;
   columnCount: number;
   rowCount?: number;
 }

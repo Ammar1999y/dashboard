@@ -75,12 +75,16 @@ export const useDateRangeState = ({
   );
 
   useEffect(() => {
-    const handleResize = () =>
-      setIsSmallScreen(
-        window.innerWidth < Number(breakpointsTokens.lg.slice(0, -2))
-      );
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        setIsSmallScreen(
+          entry.contentRect.width < Number(breakpointsTokens.lg.slice(0, -2))
+        );
+      }
+    });
+    observer.observe(document.body);
+    return () => observer.disconnect();
   }, []);
 
   const setPreset = useCallback(

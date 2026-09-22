@@ -74,7 +74,7 @@ const FontCombobox = memo(
             >
               <FontLabel selectedValue={value} />
               <ChevronDownIcon
-                className='absolute left-3 top-1/2 size-4 shrink-0 -translate-y-1/2 text-muted-foreground/80'
+                className='absolute top-1/2 size-4 shrink-0 -translate-y-1/2 text-muted-foreground/80 ltr:right-3 rtl:left-3'
                 aria-hidden='true'
               />
             </Button>

@@ -40,7 +40,6 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
     <PlateElement
       className={styles.codeBlock}
       {...props}
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-ltr-element': true,
@@ -52,7 +51,7 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
         </pre>
 
         <div
-          className='absolute right-1 top-1 z-10 flex select-none gap-0.5'
+          className='absolute top-1 z-10 flex select-none gap-0.5 ltr:left-1 rtl:right-1'
           contentEditable={false}
         >
           {isLangSupported(element.lang) && (
@@ -199,7 +198,6 @@ export function CodeLineElement(props: PlateElementProps) {
   return (
     <PlateElement
       {...props}
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-ltr-element': true,

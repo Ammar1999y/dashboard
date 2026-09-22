@@ -1,5 +1,8 @@
 import type { LoginFormData } from '@/utils/validation/auth';
-import type { TurnstileInstance } from '@marsidev/react-turnstile';
+import type {
+  TurnstileInstance,
+  TurnstileProps,
+} from '@marsidev/react-turnstile';
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 
@@ -23,7 +26,7 @@ interface TurnstileWidgetProps {
 }
 
 const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
-  const [options, setOptions] = useState<any>({
+  const [options, setOptions] = useState<TurnstileProps['options']>({
     theme: 'light',
     language: 'ar',
     size: 'flexible',
@@ -31,7 +34,7 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
   const { theme, resolvedTheme } = useTheme();
 
   useEffect(() => {
-    setOptions((prev: any) => ({
+    setOptions((prev) => ({
       ...prev,
       theme: (resolvedTheme || theme) === 'dark' ? 'dark' : 'light',
     }));
@@ -47,7 +50,7 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
       return;
     }
 
-    const script = document.getElementById(scriptOptions.id);
+    const script = document.querySelector(`#${scriptOptions.id}`);
     if (script) {
       script?.remove();
     }
@@ -111,7 +114,7 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
       siteKey={
         process.env.NODE_ENV === 'development'
           ? '1x00000000000000000000AA'
-          : process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!
+          : (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '')
       }
       scriptOptions={scriptOptions}
       options={options}

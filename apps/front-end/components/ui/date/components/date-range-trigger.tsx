@@ -48,7 +48,7 @@ export const DateRangeTrigger = memo<DateRangeTriggerProps>(
           aria-label='اختر التاريخ'
         >
           {showIcon && (
-            <CalendarIcon className='absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
+            <CalendarIcon className='absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground ltr:left-3 rtl:right-3' />
           )}
           <div
             className={cn(
@@ -57,9 +57,9 @@ export const DateRangeTrigger = memo<DateRangeTriggerProps>(
                 'rounded-md border border-input bg-background px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground'
             )}
           >
-            <span className='truncate text-right'>{getDisplayText()}</span>
+            <span className='truncate text-start'>{getDisplayText()}</span>
             {!triggerClassName && (
-              <ChevronDownIcon className='ml-2 h-4 w-4 opacity-50' />
+              <ChevronDownIcon className='ms-2 h-4 w-4 opacity-50' />
             )}
           </div>
         </button>

@@ -67,7 +67,7 @@ function parseSortItem(raw: unknown): ParsedSortItem | null {
   const obj = raw as Record<string, unknown>;
 
   const id = safeString(obj.id, MAX_ID_LENGTH);
-  if (!id || (typeof obj.desc !== 'boolean')) return null;
+  if (!id || typeof obj.desc !== 'boolean') return null;
 
   return { id, desc: obj.desc };
 }
@@ -286,7 +286,7 @@ export function parseFiltersState<TData>(
 export const MAX_PAGE = 10_000;
 export const MAX_PER_PAGE = 100;
 
-interface GetDataSchema<T = any> {
+interface GetDataSchema<T = Record<string, unknown>> {
   page: number;
   perPage: number;
   sort: ExtendedColumnSort<T>[];
@@ -300,7 +300,7 @@ function safeParam(value: string | string[] | undefined): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-export function parseSearchParams<T = any>(
+export function parseSearchParams<T = Record<string, unknown>>(
   params: Record<string, string | string[] | undefined>,
   defaultSort?: ExtendedColumnSort<T>,
   onFilterDropped?: () => void

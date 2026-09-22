@@ -89,7 +89,11 @@ function splitVariants(token) {
       start = i + 1;
     }
   }
-  return { variants, utility: token.slice(start).replace(/^!/, '') };
+  const rawUtility = token.slice(start);
+  const important = rawUtility.startsWith('!');
+  const utility = important ? rawUtility.slice(1) : rawUtility;
+  const prefix = token.slice(0, start) + (important ? '!' : '');
+  return { variants, prefix, utility };
 }
 
 function isClassString(node, sourceCode) {
@@ -120,16 +124,16 @@ function lookup(map, bare) {
 }
 
 /** `-right-2` + (right -> left) => `-left-2`, so the message is copy-pasteable. */
-function swapPrefix(raw, from, to) {
-  const negative = raw.startsWith('-');
-  const bare = negative ? raw.slice(1) : raw;
-  return (negative ? '-' : '') + to + bare.slice(from.length);
+function swapPrefix(prefix, utility, from, to) {
+  const negative = utility.startsWith('-');
+  const bare = negative ? utility.slice(1) : utility;
+  return prefix + (negative ? '-' : '') + to + bare.slice(from.length);
 }
 
 function checkClassString(context, node, value) {
   for (const raw of value.split(/\s+/)) {
     if (!raw) continue;
-    const { variants, utility } = splitVariants(raw);
+    const { variants, prefix, utility } = splitVariants(raw);
     const bare = utility.startsWith('-') ? utility.slice(1) : utility;
 
     const banned = lookup(BANNED_LOGICAL, bare);
@@ -140,8 +144,8 @@ function checkClassString(context, node, value) {
         messageId: 'bannedLogical',
         data: {
           utility: raw,
-          rtl: swapPrefix(raw, banned.prefix, rtlSide),
-          ltr: swapPrefix(raw, banned.prefix, ltrSide),
+          rtl: swapPrefix(prefix, utility, banned.prefix, rtlSide),
+          ltr: swapPrefix(prefix, utility, banned.prefix, ltrSide),
         },
       });
     } else if (!variants.some((v) => DELIBERATE_VARIANTS.has(v))) {
@@ -153,7 +157,12 @@ function checkClassString(context, node, value) {
           messageId: 'physical',
           data: {
             utility: raw,
-            logical: swapPrefix(raw, logical.prefix, logical.replacement),
+            logical: swapPrefix(
+              prefix,
+              utility,
+              logical.prefix,
+              logical.replacement
+            ),
           },
         });
       } else if (needsVariant) {
@@ -163,7 +172,8 @@ function checkClassString(context, node, value) {
           data: {
             utility: raw,
             mirrored: swapPrefix(
-              raw,
+              prefix,
+              utility,
               needsVariant.prefix,
               needsVariant.replacement
             ),

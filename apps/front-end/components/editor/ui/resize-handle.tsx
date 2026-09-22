@@ -20,8 +20,8 @@ export const mediaResizeHandleVariants = cva(
   {
     variants: {
       direction: {
-        left: 'left-2 -ms-3 ps-3',
-        right: 'right-2 -me-3 items-end pe-3',
+        left: 'rtl:left-2 ltr:right-2 -ms-3 ps-3',
+        right: 'rtl:right-2 ltr:left-2 -me-3 items-end pe-3',
       },
     },
   }

@@ -26,8 +26,9 @@ const measuring = { droppable: { strategy: MeasuringStrategy.Always } };
 
 const modifiers = [restrictToVerticalAxis];
 
-const animateLayoutChanges = (args: any) =>
-  defaultAnimateLayoutChanges({ ...args, wasDragging: true });
+const animateLayoutChanges = (
+  args: Parameters<typeof defaultAnimateLayoutChanges>[0]
+) => defaultAnimateLayoutChanges({ ...args, wasDragging: true });
 
 const DEFAULT_ITEM: Omit<NavLinkItem, 'id'> = {
   key: '',

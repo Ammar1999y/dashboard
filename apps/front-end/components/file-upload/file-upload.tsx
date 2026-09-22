@@ -3,7 +3,7 @@
 import type { FileWithPreview } from './file-types';
 import type { Modifiers } from '@dnd-kit/core';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
-import type { FileRejection } from 'react-dropzone';
+import type { FileError, FileRejection } from 'react-dropzone';
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -161,35 +161,40 @@ export const FileUpload = memo(
       });
     }, []);
 
+    const notifyRejectionError = useCallback(
+      (file: File, error: FileError) => {
+        switch (error.code) {
+          case ErrorCode.FileTooLarge: {
+            toast.error(
+              `الملف "${file.name}" كبير جداً (الحد الأقصى: ${maxSizeMB} MB)`
+            );
+            return;
+          }
+          case ErrorCode.FileInvalidType: {
+            toast.error(`الملف "${file.name}" نوعه غير مدعوم`);
+            return;
+          }
+          case ErrorCode.TooManyFiles: {
+            toast.error(`يمكنك رفع بحد أقصى ${maxFiles} ملفات فقط`);
+            return;
+          }
+          default: {
+            toast.error(`خطأ في الملف "${file.name}": ${error.message}`);
+          }
+        }
+      },
+      [maxFiles, maxSizeMB]
+    );
+
     const onDropRejected = useCallback(
       (fileRejections: FileRejection[]) => {
         for (const rejection of fileRejections) {
           const { file, errors } = rejection;
 
-          for (const error of errors) {
-            switch (error.code) {
-              case ErrorCode.FileTooLarge: {
-                toast.error(
-                  `الملف "${file.name}" كبير جداً (الحد الأقصى: ${maxSizeMB} MB)`
-                );
-                break;
-              }
-              case ErrorCode.FileInvalidType: {
-                toast.error(`الملف "${file.name}" نوعه غير مدعوم`);
-                break;
-              }
-              case ErrorCode.TooManyFiles: {
-                toast.error(`يمكنك رفع بحد أقصى ${maxFiles} ملفات فقط`);
-                break;
-              }
-              default: {
-                toast.error(`خطأ في الملف "${file.name}": ${error.message}`);
-              }
-            }
-          }
+          for (const error of errors) notifyRejectionError(file, error);
         }
       },
-      [maxFiles, maxSizeMB]
+      [notifyRejectionError]
     );
 
     const onDrop = useCallback(
@@ -320,7 +325,7 @@ export const FileUpload = memo(
               onClick={handleClearAll}
               className='h-8 px-2 text-destructive hover:bg-destructive/10 hover:text-destructive'
             >
-              <Trash2 className='ml-2 h-4 w-4' />
+              <Trash2 className='ms-2 h-4 w-4' />
               حذف الكل
             </Button>
           </div>

@@ -1,9 +1,8 @@
-import type { CarouselOptions } from '@/components/ui/carousel';
+import type { CarouselOptions, CarouselPlugin } from '@/components/ui/carousel';
 
 import Image from 'next/image';
 import { lazy, memo, Suspense, useEffect, useState } from 'react';
 
-import { type CreatePluginType } from 'embla-carousel';
 import { cn } from '@/lib/utils';
 
 const Carousel = lazy(() =>
@@ -37,10 +36,10 @@ type CarouselImage = { url?: string | null };
 
 const Images = memo(
   ({ images, title }: { images: CarouselImage[]; title: string }) => {
-    const [plugins, setPlugins] = useState<CreatePluginType<any, any>[]>([]);
+    const [plugins, setPlugins] = useState<CarouselPlugin>([]);
     useEffect(() => {
       if (!images || images.length === 0) return;
-      import('embla-carousel-autoplay').then((module) => {
+      void import('embla-carousel-autoplay').then((module) => {
         setPlugins([
           module.default({
             delay: 4000,
@@ -87,11 +86,12 @@ const ImageItem = memo(
     className,
     isFirst,
   }: {
-    image: any;
+    image: CarouselImage;
     title: string;
     className?: string;
     isFirst?: boolean;
   }) => {
+    if (!image.url) return null;
     return (
       <Image
         src={image.url}

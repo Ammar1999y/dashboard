@@ -11,11 +11,16 @@ const Toaster = memo(() => {
   );
 
   useEffect(() => {
-    const handleResize = () =>
-      setPosition(window.innerWidth > 768 ? 'bottom-right' : 'top-center');
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        setPosition(
+          entry.contentRect.width > 768 ? 'bottom-right' : 'top-center'
+        );
+      }
+    });
+    observer.observe(document.body);
+    return () => observer.disconnect();
   }, []);
 
   return (

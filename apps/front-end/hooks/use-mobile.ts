@@ -11,7 +11,7 @@ export function useIsMobile() {
     const mql =
       typeof window === 'undefined'
         ? null
-        : globalThis.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+        : matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
     const onChange = () => {
       setIsMobile(
         typeof window === 'undefined'

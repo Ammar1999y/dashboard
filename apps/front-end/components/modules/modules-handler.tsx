@@ -101,8 +101,8 @@ const ModulesHandler = memo(() => {
       }, 100);
     };
 
-    globalThis.addEventListener('popstate', handlePopState);
-    return () => globalThis.removeEventListener('popstate', handlePopState);
+    addEventListener('popstate', handlePopState);
+    return () => removeEventListener('popstate', handlePopState);
   }, []);
 
   // close modules when user clicks on link in the modules
@@ -132,8 +132,8 @@ const ModulesHandler = memo(() => {
     if (openModules.length > prevModulesRef.current.length) {
       history.pushState(null, '', nextUrl);
     } else if (
-      openModules.length < prevModulesRef.current.length &&
-      currentUrl !== nextUrl
+      currentUrl !== nextUrl &&
+      openModules.length < prevModulesRef.current.length
     ) {
       isHandlingPopStateRef.current = true;
       history.replaceState(null, '', nextUrl);

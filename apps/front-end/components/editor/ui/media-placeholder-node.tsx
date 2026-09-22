@@ -1,4 +1,3 @@
- 
 'use client';
 
 import type { MediaType } from '@/components/editor/media-config';
@@ -119,7 +118,7 @@ export const PlaceholderElement = withHOC(
           isUpload: true,
           name: element.mediaType === KEYS.file ? uploadedFile.name : '',
           placeholderId: element.id as string,
-          type: element.mediaType!,
+          type: element.mediaType ?? '',
           url: uploadedFile.url,
         };
 
@@ -129,7 +128,7 @@ export const PlaceholderElement = withHOC(
       });
 
       api.placeholder.removeUploadingFile(element.id as string);
-    }, [uploadedFile, element.id]);
+    }, [uploadedFile, element.id, api.placeholder, editor, element]);
 
     // React dev mode will call React.useEffect twice
     const isReplaced = React.useRef(false);
@@ -146,13 +145,12 @@ export const PlaceholderElement = withHOC(
       if (!currentFiles) return;
 
       replaceCurrentPlaceholder(currentFiles);
-    }, [isReplaced]);
+    }, [api.placeholder, element.id, replaceCurrentPlaceholder]);
 
     return (
       <PlateElement
         className='my-1'
         {...props}
-        // @ts-ignore
         attributes={{
           ...props.attributes,
           'data-ltr-element': true,
@@ -237,7 +235,7 @@ function ImageProgress({
         src={objectUrl}
       />
       {progress < 100 && (
-        <div className='absolute bottom-1 right-1 flex items-center rounded-full bg-black/50 px-1 py-0.5 space-x-2'>
+        <div className='absolute bottom-1 flex items-center rounded-full bg-black/50 px-1 py-0.5 space-x-2 ltr:left-1 rtl:right-1'>
           <Loader2Icon className='size-3.5 animate-spin text-muted-foreground' />
           <span className='text-xs font-medium text-white'>
             {Math.round(progress)}%
@@ -257,10 +255,10 @@ function formatBytes(
 ) {
   const { decimals = 0, sizeType = 'normal' } = opts;
 
+  if (bytes === 0) return '0 Byte';
+
   const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
   const accurateSizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB'];
-
-  if (bytes === 0) return '0 Byte';
 
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
 

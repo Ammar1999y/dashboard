@@ -1,7 +1,9 @@
 'use client';
 
-import type { TComment } from './comment';
-import type { TDiscussion } from '@/components/editor/plugins/discussion-kit';
+import type {
+  TComment,
+  TDiscussion,
+} from '@/components/editor/plugins/discussion-kit';
 import type { TResolvedSuggestion } from '@platejs/suggestion';
 import type { NodeEntry, Path, TElement, TSuggestionText } from 'platejs';
 
@@ -123,7 +125,7 @@ export function BlockSuggestionCard({
         <div className='relative mb-4 mt-1 ps-8'>
           <div className='flex flex-col gap-2'>
             {suggestion.type === 'remove' &&
-              suggestionText2Array(suggestion.text!).map((text, index) => (
+              suggestionText2Array(suggestion.text ?? '').map((text, index) => (
                 <div className='flex items-center gap-2' key={index}>
                   <span className='text-sm text-muted-foreground'>Delete:</span>
 
@@ -134,19 +136,21 @@ export function BlockSuggestionCard({
               ))}
 
             {suggestion.type === 'insert' &&
-              suggestionText2Array(suggestion.newText!).map((text, index) => (
-                <div className='flex items-center gap-2' key={index}>
-                  <span className='text-sm text-muted-foreground'>Add:</span>
+              suggestionText2Array(suggestion.newText ?? '').map(
+                (text, index) => (
+                  <div className='flex items-center gap-2' key={index}>
+                    <span className='text-sm text-muted-foreground'>Add:</span>
 
-                  <span className='text-sm' key={index}>
-                    {text || 'line breaks'}
-                  </span>
-                </div>
-              ))}
+                    <span className='text-sm' key={index}>
+                      {text || 'line breaks'}
+                    </span>
+                  </div>
+                )
+              )}
 
             {suggestion.type === 'replace' && (
               <div className='flex flex-col gap-2'>
-                {suggestionText2Array(suggestion.newText!).map(
+                {suggestionText2Array(suggestion.newText ?? '').map(
                   (text, index) => (
                     <React.Fragment key={index}>
                       <div
@@ -160,16 +164,18 @@ export function BlockSuggestionCard({
                   )
                 )}
 
-                {suggestionText2Array(suggestion.text!).map((text, index) => (
-                  <React.Fragment key={index}>
-                    <div className='flex items-start gap-2' key={index}>
-                      <span className='text-sm text-muted-foreground'>
-                        {index === 0 ? 'Replace:' : 'Delete:'}
-                      </span>
-                      <span className='text-sm'>{text || 'line breaks'}</span>
-                    </div>
-                  </React.Fragment>
-                ))}
+                {suggestionText2Array(suggestion.text ?? '').map(
+                  (text, index) => (
+                    <React.Fragment key={index}>
+                      <div className='flex items-start gap-2' key={index}>
+                        <span className='text-sm text-muted-foreground'>
+                          {index === 0 ? 'Replace:' : 'Delete:'}
+                        </span>
+                        <span className='text-sm'>{text || 'line breaks'}</span>
+                      </div>
+                    </React.Fragment>
+                  )
+                )}
               </div>
             )}
 
@@ -243,10 +249,10 @@ export const useResolveSuggestion = (
 
   suggestionNodes.forEach(([node]) => {
     const id = api.suggestion.nodeId(node);
-    const map = getOption('uniquePathMap');
 
     if (!id) return;
 
+    const map = getOption('uniquePathMap');
     const previousPath = map.get(id);
 
     // If there are no suggestion nodes in the corresponding path in the map, then update it.
@@ -268,9 +274,9 @@ export const useResolveSuggestion = (
   });
 
   const resolvedSuggestion: ResolvedSuggestion[] = React.useMemo(() => {
-    const map = getOption('uniquePathMap');
-
     if (suggestionNodes.length === 0) return [];
+
+    const map = getOption('uniquePathMap');
 
     const suggestionIds = new Set(
       suggestionNodes
@@ -278,7 +284,7 @@ export const useResolveSuggestion = (
           if (TextApi.isText(node)) {
             const dataList = api.suggestion.dataList(node);
             const includeUpdate = dataList.some(
-              (data) => data.type === 'update'
+              (data: { id?: string; type?: string }) => data.type === 'update'
             );
 
             if (!includeUpdate) {
@@ -286,8 +292,10 @@ export const useResolveSuggestion = (
             }
 
             return dataList
-              .filter((data) => data.type === 'update')
-              .map((d) => d.id);
+              .filter(
+                (data: { id?: string; type?: string }) => data.type === 'update'
+              )
+              .map((d: { id?: string; type?: string }) => d.id);
           }
           if (ElementApi.isElement(node)) {
             return api.suggestion.nodeId(node) ?? [];
@@ -305,7 +313,8 @@ export const useResolveSuggestion = (
 
       const path = map.get(id);
 
-      if (!path || !PathApi.isPath(path) || !PathApi.equals(path, blockPath)) return;
+      if (!path || !PathApi.isPath(path) || !PathApi.equals(path, blockPath))
+        return;
 
       const entries = [
         ...editor.api.nodes<TElement | TSuggestionText>({
@@ -324,60 +333,81 @@ export const useResolveSuggestion = (
 
       let newText = '';
       let text = '';
-      let properties: any = {};
-      let newProperties: any = {};
+      let properties: Record<string, unknown> = {};
+      let newProperties: Record<string, unknown> = {};
 
       // overlapping suggestion
       entries.forEach(([node]) => {
         if (TextApi.isText(node)) {
           const dataList = api.suggestion.dataList(node);
 
-          dataList.forEach((data) => {
-            if (data.id === id) {
-              switch (data.type) {
-                case 'insert': {
-                  newText += node.text;
+          dataList.forEach(
+            (data: {
+              id?: string;
+              type?: string;
+              properties?: Record<string, unknown>;
+              newProperties?: Record<string, unknown>;
+            }) => {
+              if (data.id === id) {
+                switch (data.type) {
+                  case 'insert': {
+                    newText += node.text;
 
-                  break;
+                    break;
+                  }
+                  case 'remove': {
+                    text += node.text;
+
+                    break;
+                  }
+                  case 'update': {
+                    properties = {
+                      ...properties,
+                      ...data.properties,
+                    };
+
+                    newProperties = {
+                      ...newProperties,
+                      ...data.newProperties,
+                    };
+
+                    newText += node.text;
+
+                    break;
+                  }
+                  // No default
                 }
-                case 'remove': {
-                  text += node.text;
-
-                  break;
-                }
-                case 'update': {
-                  properties = {
-                    ...properties,
-                    ...data.properties,
-                  };
-
-                  newProperties = {
-                    ...newProperties,
-                    ...data.newProperties,
-                  };
-
-                  newText += node.text;
-
-                  break;
-                }
-                // No default
               }
             }
-          });
+          );
         } else {
           const lineBreakData = api.suggestion.isBlockSuggestion(node)
-            ? node.suggestion
+            ? (
+                node as unknown as {
+                  suggestion?: {
+                    id?: string;
+                    type?: string;
+                    isLineBreak?: boolean;
+                  };
+                }
+              ).suggestion
             : undefined;
 
           if (lineBreakData?.id === keyId2SuggestionId(id)) {
             if (lineBreakData.type === 'insert') {
               newText += lineBreakData.isLineBreak
                 ? BLOCK_SUGGESTION
-                : BLOCK_SUGGESTION + TYPE_TEXT_MAP[node.type](node);
+                : BLOCK_SUGGESTION +
+                  (ElementApi.isElement(node)
+                    ? (TYPE_TEXT_MAP[node.type]?.(node) ?? '')
+                    : '');
             } else if (lineBreakData.type === 'remove') {
               text += lineBreakData.isLineBreak
                 ? BLOCK_SUGGESTION
-                : BLOCK_SUGGESTION + TYPE_TEXT_MAP[node.type](node);
+                : BLOCK_SUGGESTION +
+                  (ElementApi.isElement(node)
+                    ? (TYPE_TEXT_MAP[node.type]?.(node) ?? '')
+                    : '');
             }
           }
         }

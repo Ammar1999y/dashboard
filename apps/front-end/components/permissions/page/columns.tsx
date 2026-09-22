@@ -24,7 +24,7 @@ export const columns: ColumnDef<Permission>[] = [
       <DataTableColumnHeader column={column} title='اسم الصلاحية' />
     ),
     cell: ({ row }) => (
-      <p className='truncate text-right font-medium'>
+      <p className='truncate text-start font-medium'>
         {row.getValue('roleName')}
       </p>
     ),

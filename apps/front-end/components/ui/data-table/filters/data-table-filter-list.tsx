@@ -64,7 +64,8 @@ function generateId({ length = 12 }: { length?: number } = {}) {
   const bytes = crypto.getRandomValues(new Uint8Array(length));
   let id = '';
   for (let i = 0; i < length; i++) {
-    id += ALPHABET[bytes[i]! % ALPHABET.length];
+    const byte = bytes[i] ?? 0;
+    id += ALPHABET[byte % ALPHABET.length];
   }
   return id;
 }
@@ -129,7 +130,7 @@ export function DataTableFilterList<TData>({
   const onApply = React.useCallback(() => {
     const { setFilters, setJoinOperator } =
       useDataTableStore.getState().actions;
-    setFilters(draftFilters.length > 0 ? draftFilters : null);
+    setFilters((draftFilters.length > 0 ? draftFilters : null) as never);
     setJoinOperator(draftJoinOperator);
     setOpen(false);
   }, [draftFilters, draftJoinOperator]);
@@ -204,8 +205,8 @@ export function DataTableFilterList<TData>({
       }
     }
 
-    globalThis.addEventListener('keydown', onKeyDown);
-    return () => globalThis.removeEventListener('keydown', onKeyDown);
+    addEventListener('keydown', onKeyDown);
+    return () => removeEventListener('keydown', onKeyDown);
   }, []);
 
   const onTriggerKeyDown = React.useCallback(
@@ -382,8 +383,13 @@ function DataTableFilterItem<TData>({
 
   const onItemKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement || showFieldSelector || showOperatorSelector || showValueSelector) {
+      if (
+        showFieldSelector ||
+        showOperatorSelector ||
+        showValueSelector ||
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement
+      ) {
         return;
       }
 

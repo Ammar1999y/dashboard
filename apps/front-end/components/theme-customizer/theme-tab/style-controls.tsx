@@ -80,12 +80,12 @@ const StyleControls = memo(() => {
   );
 
   const radiusValue = useMemo(
-    () => Number.parseFloat(currentStyles.radius.replace('rem', '')),
+    () => Number(currentStyles.radius.replace('rem', '')),
     [currentStyles.radius]
   );
 
   const spacingValue = useMemo(
-    () => Number.parseFloat(currentStyles?.spacing?.replace('rem', '') || '0'),
+    () => Number(currentStyles?.spacing?.replace('rem', '') || '0'),
     [currentStyles.spacing]
   );
 

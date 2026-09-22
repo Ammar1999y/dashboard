@@ -1,4 +1,4 @@
-'use client';
+import type { PlateElementProps } from 'platejs/react';
 
 import { BlockSelectionPlugin } from '@platejs/selection/react';
 import { getPluginTypes, KEYS } from 'platejs';
@@ -19,7 +19,7 @@ export const BlockSelectionKit = [
         if (!props.attributes.className?.includes('slate-selectable'))
           return null;
 
-        return <BlockSelection {...(props as any)} />;
+        return <BlockSelection {...(props as PlateElementProps)} />;
       },
     },
   })),

@@ -1,10 +1,8 @@
 import PermissionsPage from '@/components/permissions/page';
 
-const Permissions = () => {
+export default function Permissions() {
   return <PermissionsPage />;
-};
-
-export default Permissions;
+}
 
 export async function getStaticProps() {
   return {

@@ -14,8 +14,11 @@ const ReactQueryProvider = ({ children }: { children: React.ReactNode }) => {
             refetchOnMount: true,
             refetchOnReconnect: true,
             retry: (failureCount, error) => {
-              const isDev = process.env.NODE_ENV === 'development';
-              if (error instanceof CustomError && failureCount < 5 && !isDev) {
+              if (
+                failureCount < 5 &&
+                process.env.NODE_ENV !== 'development' &&
+                error instanceof CustomError
+              ) {
                 const status = error.status;
                 return !!status && status >= 500;
               }

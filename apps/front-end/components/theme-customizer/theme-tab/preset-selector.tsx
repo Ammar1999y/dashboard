@@ -100,7 +100,7 @@ const PresetSelector = memo(() => {
               const themeColors =
                 presetName === 'default'
                   ? defaultLightThemeStyles
-                  : preset!.styles.light;
+                  : (preset?.styles.light ?? defaultLightThemeStyles);
 
               return (
                 <SelectItem

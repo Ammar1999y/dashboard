@@ -30,7 +30,7 @@ export default function DashboardLayout({
       return;
     }
 
-    replace('/dash/sign-in');
+    void replace('/dash/sign-in');
     localStorage.setItem('redirect-path', asPath);
   }, [session?.user?.id, replace, isPending, asPath]);
   if (isPending || !session?.user?.id) return null;

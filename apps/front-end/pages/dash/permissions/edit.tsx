@@ -126,7 +126,7 @@ const EditPermission = () => {
             // old `getQueryData(list)` patch never landed, and rebuilding the
             // row from form state guessed `updatedAt`/`usersCount`. `list` is a
             // prefix of `detail`, so this covers both.
-            queryClient.invalidateQueries({
+            void queryClient.invalidateQueries({
               queryKey: PERMISSIONS_QUERY_KEYS.list,
             });
 
@@ -139,7 +139,7 @@ const EditPermission = () => {
               initialData?.roleName !== validatedData.roleName;
 
             if (roleNameChanged) {
-              queryClient.invalidateQueries({
+              void queryClient.invalidateQueries({
                 queryKey: USERS_QUERY_KEYS.detailBase,
               });
             }
@@ -185,7 +185,7 @@ const EditPermission = () => {
         });
 
         toast.success(result.message || 'تم تحديث الصلاحية بنجاح');
-        router.push('/dash/permissions');
+        void router.push('/dash/permissions');
       } catch (error) {
         toast.error(
           error instanceof CustomError
@@ -196,7 +196,7 @@ const EditPermission = () => {
         setLoading(false);
       }
     },
-    [permissionData, queryClient, router]
+    [queryClient, router]
   );
 
   const onError = useCallback((errors: FieldErrors<UpdatePermissionInput>) => {

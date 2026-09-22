@@ -12,8 +12,8 @@ const PlateEditor = memo(
     content = [],
     onChange,
   }: {
-    content: any;
-    onChange: (value: any) => void;
+    content: unknown;
+    onChange: (value: unknown) => void;
   }) => {
     const initialValue = useMemo(
       () => (Array.isArray(content) ? content : []),

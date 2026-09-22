@@ -177,12 +177,14 @@ const EditUser = () => {
             // rebuilding the row from form state guessed at fields the server
             // owns (updatedAt, verified flags, the role after a custom edit).
             // `list` is a prefix of `detail`, so one call covers both.
-            queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEYS.list });
+            void queryClient.invalidateQueries({
+              queryKey: USERS_QUERY_KEYS.list,
+            });
           },
         });
 
         toast.success(result.message || 'تم تحديث المستخدم بنجاح');
-        router.push('/dash/users');
+        void router.push('/dash/users');
       } catch (error) {
         toast.error(
           error instanceof CustomError

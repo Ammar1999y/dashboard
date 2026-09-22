@@ -1,6 +1,9 @@
 'use client';
 
-import type { TDiscussion } from '@/components/editor/plugins/discussion-kit';
+import type {
+  TComment,
+  TDiscussion,
+} from '@/components/editor/plugins/discussion-kit';
 import type { Value } from 'platejs';
 import type { CreatePlateEditorOptions } from 'platejs/react';
 
@@ -45,15 +48,6 @@ import { BasicMarksKit } from '@/components/editor/plugins/basic-marks-kit';
 import { discussionPlugin } from '@/components/editor/plugins/discussion-kit';
 
 import { Editor, EditorContainer } from './editor';
-
-export type TComment = {
-  id: string;
-  contentRich: Value;
-  createdAt: Date;
-  discussionId: string;
-  isEdited: boolean;
-  userId: string;
-};
 
 export function Comment(props: {
   comment: TComment;
@@ -391,7 +385,7 @@ function CommentMoreDropdown(props: {
 
 const useCommentEditor = (
   options: Omit<CreatePlateEditorOptions, 'plugins'> = {},
-  deps: any[] = []
+  deps: React.DependencyList = []
 ) => {
   const commentEditor = usePlateEditor(
     {
@@ -495,9 +489,10 @@ export function CommentCreateForm({
       };
 
       // Filter out old discussion and add updated one
-      const updatedDiscussions = discussions
-        .filter((d) => d.id !== discussionId)
-        .concat(updatedDiscussion);
+      const updatedDiscussions = [
+        ...discussions.filter((d) => d.id !== discussionId),
+        updatedDiscussion,
+      ];
 
       editor.setOption(discussionPlugin, 'discussions', updatedDiscussions);
 
@@ -580,7 +575,7 @@ export function CommentCreateForm({
                 }
 
                 e.preventDefault();
-                onAddComment();
+                void onAddComment();
               }}
               placeholder={placeholderText}
               variant='comment'
@@ -591,7 +586,7 @@ export function CommentCreateForm({
               disabled={commentContent.trim().length === 0}
               onClick={(e) => {
                 e.stopPropagation();
-                onAddComment();
+                void onAddComment();
               }}
               size='icon'
               variant='ghost'
@@ -610,15 +605,17 @@ export function CommentCreateForm({
 export const formatCommentDate = (date: Date) => {
   const now = new Date();
   const diffMinutes = differenceInMinutes(now, date);
-  const diffHours = differenceInHours(now, date);
-  const diffDays = differenceInDays(now, date);
 
   if (diffMinutes < 60) {
     return `${diffMinutes}m`;
   }
+
+  const diffHours = differenceInHours(now, date);
   if (diffHours < 24) {
     return `${diffHours}h`;
   }
+
+  const diffDays = differenceInDays(now, date);
   if (diffDays < 2) {
     return `${diffDays}d`;
   }

@@ -16,7 +16,7 @@ const HideOptions = memo(({ column }: ColumnOptionsProps) => {
 
   return (
     <DropdownMenuItem onClick={handleHideColumn}>
-      <EyeOff className='ml-2 h-4 w-4' />
+      <EyeOff className='me-2 h-4 w-4' />
       <span>اخفاء العامود</span>
     </DropdownMenuItem>
   );

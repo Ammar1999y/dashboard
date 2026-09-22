@@ -48,7 +48,9 @@ const DeleteAction = memo(({ user }: { user: User }) => {
           // nothing and the deleted row stayed on screen. Invalidating the
           // prefix refetches whichever page is actually mounted — which also
           // pulls in the row that moved up from the next page.
-          queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEYS.list });
+          void queryClient.invalidateQueries({
+            queryKey: USERS_QUERY_KEYS.list,
+          });
         },
       });
 

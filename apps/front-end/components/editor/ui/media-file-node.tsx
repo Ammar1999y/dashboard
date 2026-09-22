@@ -20,7 +20,6 @@ export const FileElement = withHOC(
       <PlateElement
         className='my-px rounded-sm'
         {...props}
-        // @ts-ignore
         attributes={{
           ...props.attributes,
           'data-ltr-element': true,
@@ -42,7 +41,7 @@ export const FileElement = withHOC(
 
           <Caption align='left'>
             <CaptionTextarea
-              className='text-left'
+              className='text-end'
               placeholder='Write a caption...'
               readOnly={readOnly}
             />

@@ -10,7 +10,7 @@ const NavHorizontalLayout = memo(({ data }: NavProps) => {
     <nav
       data-slot='slash-layout-nav'
       className={
-        'sticky left-0 right-0 top-[--layout-header-height] z-app-bar w-full shrink-0 grow-0'
+        'sticky inset-x-0 top-[--layout-header-height] z-app-bar w-full shrink-0 grow-0'
       }
     >
       <ScrollArea className='whitespace-nowrap bg-background px-2'>

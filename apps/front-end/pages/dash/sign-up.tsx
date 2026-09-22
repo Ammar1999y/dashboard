@@ -40,9 +40,9 @@ export default function Page() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || 'حدث خطأ');
         toast.success('تم إنشاء الحساب بنجاح');
-        replace('/dash/sign-in');
-      } catch (error: any) {
-        toast.error(error?.message || 'حدث خطأ');
+        void replace('/dash/sign-in');
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'حدث خطأ');
       }
       setLoading(false);
     },

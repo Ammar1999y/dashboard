@@ -7,7 +7,7 @@ import useIsomorphicLayoutEffect from '@/hooks/use-layout-effect';
 
 function parsePx(value: string | null): number {
   if (!value) return 0;
-  const n = Number.parseFloat(value);
+  const n = Number(value);
   return Number.isNaN(n) ? 0 : n;
 }
 
@@ -25,7 +25,7 @@ function measureAndSetHeight(
   // Reset to auto to measure the intrinsic scroll height
   textarea.style.height = 'auto';
 
-  const style = globalThis.getComputedStyle(textarea);
+  const style = getComputedStyle(textarea);
   const borderHeight =
     parsePx(style.borderTopWidth) + parsePx(style.borderBottomWidth);
   const paddingHeight =

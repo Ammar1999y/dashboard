@@ -66,10 +66,12 @@ const NewCategory = () => {
             const existingList = queryClient.getQueryData<Category[]>(
               CATEGORIES_QUERY_KEYS.list
             );
-            queryClient.setQueryData(
-              CATEGORIES_QUERY_KEYS.detail(serverData.id!),
-              newCategory
-            );
+            if (serverData.id) {
+              queryClient.setQueryData(
+                CATEGORIES_QUERY_KEYS.detail(serverData.id),
+                newCategory
+              );
+            }
             if (existingList)
               queryClient.setQueryData(CATEGORIES_QUERY_KEYS.list, [
                 newCategory,
@@ -79,7 +81,7 @@ const NewCategory = () => {
         });
 
         toast.success(result.message || 'تم إنشاء التصنيف بنجاح');
-        router.push('/dash/projects/categories');
+        void router.push('/dash/projects/categories');
       } catch (error) {
         toast.error(
           error instanceof CustomError

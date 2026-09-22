@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 export default function Custom404() {
   const router = useRouter();
   useEffect(() => {
-    router.push('/');
+    void router.push('/');
   }, [router]);
   return (
     <div className='flex h-screen flex-col items-center justify-center text-black'>

@@ -124,14 +124,14 @@ export const TableElement = withHOC(
     const content = (
       <PlateElement
         {...props}
-        // @ts-ignore
         attributes={{
           ...props.attributes,
           'data-ltr-element': true,
         }}
         className={cn(
           'py-5',
-          hasControls && '*:data-[slot=block-selection]:left-2',
+          hasControls &&
+            'ltr:*:data-[slot=block-selection]:right-2 rtl:*:data-[slot=block-selection]:left-2',
           element.width !== 'full' && 'overflow-x-auto'
         )}
         style={{ paddingLeft: marginLeft }}
@@ -209,7 +209,8 @@ function TableFloatingToolbar({
                     { width: newWidth },
                     {
                       match: (n) =>
-                        'type' in n && (n as any).type === KEYS.table,
+                        'type' in n &&
+                        (n as { type?: unknown }).type === KEYS.table,
                     }
                   );
                 }}
@@ -574,7 +575,6 @@ export function TableRowElement({
     <PlateElement
       {...props}
       as='tr'
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-selected': selected ? 'true' : undefined,
@@ -595,14 +595,14 @@ export function TableRowElement({
   );
 }
 
-function RowDragHandle({ dragRef }: { dragRef: React.Ref<any> }) {
+function RowDragHandle({ dragRef }: { dragRef: React.Ref<HTMLButtonElement> }) {
   const editor = useEditorRef();
   const element = useElement();
 
   return (
     <Button
       className={cn(
-        'absolute left-0 top-1/2 z-[51] h-6 w-4 -translate-y-1/2 p-0 focus-visible:ring-0 focus-visible:ring-offset-0',
+        'absolute top-1/2 z-[51] h-6 w-4 -translate-y-1/2 p-0 focus-visible:ring-0 focus-visible:ring-offset-0 ltr:right-0 rtl:left-0',
         'cursor-grab active:cursor-grabbing',
         `${styles.rowDragHandle} opacity-0 transition-opacity duration-100 group-hover/row:opacity-100`
       )}
@@ -625,7 +625,7 @@ function RowDropLine() {
   return (
     <div
       className={cn(
-        'absolute inset-x-0 left-2 z-50 h-0.5 bg-primary/50',
+        'absolute inset-x-0 z-50 h-0.5 bg-primary/50 ltr:right-2 rtl:left-2',
         dropLine === 'top' ? '-top-px' : '-bottom-px'
       )}
     />
@@ -669,7 +669,6 @@ export function TableCellElement({
     <PlateElement
       {...props}
       as={isHeader ? 'th' : 'td'}
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         colSpan: api.table.getColSpan(element),
@@ -679,7 +678,7 @@ export function TableCellElement({
       className={cn(
         'h-full overflow-visible border-none bg-background p-0',
         element.background ? 'bg-[--cellBackground]' : 'bg-background',
-        isHeader && 'text-left *:m-0',
+        isHeader && 'text-end *:m-0',
         'before:size-full',
         selected && 'before:z-10 before:bg-primary/5',
         "before:absolute before:box-border before:select-none before:content-['']",
@@ -713,14 +712,14 @@ export function TableCellElement({
             <>
               <ResizeHandle
                 {...rightProps}
-                className='-right-1 -top-2 h-[calc(100%_+_8px)] w-2'
+                className='-top-2 h-[calc(100%_+_8px)] w-2 ltr:-left-1 rtl:-right-1'
                 data-col={colIndex}
               />
               <ResizeHandle {...bottomProps} className='-bottom-1 h-2' />
               {!hiddenLeft && (
                 <ResizeHandle
                   {...leftProps}
-                  className='-left-1 top-0 w-2'
+                  className='top-0 w-2 ltr:-right-1 rtl:-left-1'
                   data-resizer-left={colIndex === 0 ? 'true' : undefined}
                 />
               )}
@@ -728,15 +727,18 @@ export function TableCellElement({
               <div
                 className={cn(
                   'absolute top-0 z-30 hidden h-full w-1 bg-ring',
-                  'right-[-1.5px]',
-                  columnResizeVariants({ colIndex: colIndex as any })
+                  'ltr:left-[-1.5px] rtl:right-[-1.5px]',
+                  columnResizeVariants({
+                    colIndex: colIndex as
+                      0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10,
+                  })
                 )}
               />
               {colIndex === 0 && (
                 <div
                   className={cn(
                     'absolute top-0 z-30 h-full w-1 bg-ring',
-                    'left-[-1.5px]',
+                    'ltr:right-[-1.5px] rtl:left-[-1.5px]',
                     'hidden animate-in fade-in group-has-[[data-resizer-left]:hover]/table:block group-has-[[data-resizer-left][data-resizing="true"]]/table:block'
                   )}
                 />

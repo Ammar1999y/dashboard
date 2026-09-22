@@ -89,7 +89,7 @@ export function MediaToolbar({
     if (!open && isEditing) {
       FloatingMediaStore.set('isEditing', false);
     }
-  }, [open]);
+  }, [open, isEditing]);
 
   const element = useElement();
   const { props: buttonProps } = useRemoveNodeButton({ element });

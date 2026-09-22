@@ -204,7 +204,7 @@ const NavItem = memo(({ variant, ...item }: NavItemComponentProps) => {
         disabled && navItemClasses.disabled
       )}
     >
-      <span className='mr-1 inline-flex h-5 w-5 shrink-0 items-center justify-center'>
+      <span className='ms-1 inline-flex h-5 w-5 shrink-0 items-center justify-center'>
         {icon}
       </span>
 

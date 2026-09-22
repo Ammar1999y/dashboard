@@ -61,8 +61,8 @@ function extractDirectCoordinates(input: string): Coordinates | null {
 
     if (match) {
       return {
-        latitude: Number.parseFloat(match[1]),
-        longitude: Number.parseFloat(match[2]),
+        latitude: Number(match[1]),
+        longitude: Number(match[2]),
       };
     }
 
@@ -159,8 +159,8 @@ function extractFromStandardUrl(url: string): Coordinates | null {
 
       if (lngMatch) {
         return {
-          latitude: Number.parseFloat(latMatch[1]),
-          longitude: Number.parseFloat(lngMatch[1]),
+          latitude: Number(latMatch[1]),
+          longitude: Number(lngMatch[1]),
         };
       }
     }
@@ -172,8 +172,8 @@ function extractFromStandardUrl(url: string): Coordinates | null {
 
     if (match2) {
       return {
-        latitude: Number.parseFloat(match2[1]),
-        longitude: Number.parseFloat(match2[2]),
+        latitude: Number(match2[1]),
+        longitude: Number(match2[2]),
       };
     }
 
@@ -185,8 +185,8 @@ function extractFromStandardUrl(url: string): Coordinates | null {
 
     if (searchMatch) {
       return {
-        latitude: Number.parseFloat(searchMatch[1]),
-        longitude: Number.parseFloat(searchMatch[2]),
+        latitude: Number(searchMatch[1]),
+        longitude: Number(searchMatch[2]),
       };
     }
 
@@ -199,8 +199,8 @@ function extractFromStandardUrl(url: string): Coordinates | null {
 
     if (match1) {
       return {
-        latitude: Number.parseFloat(match1[1]),
-        longitude: Number.parseFloat(match1[2]),
+        latitude: Number(match1[1]),
+        longitude: Number(match1[2]),
       };
     }
 
@@ -223,7 +223,7 @@ export function validateCoordinates(coords: Coordinates): boolean {
     latitude <= 90 &&
     longitude >= -180 &&
     longitude <= 180 &&
-    !isNaN(latitude) &&
-    !isNaN(longitude)
+    !Number.isNaN(latitude) &&
+    !Number.isNaN(longitude)
   );
 }

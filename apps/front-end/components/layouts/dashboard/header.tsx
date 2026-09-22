@@ -18,7 +18,7 @@ export default memo(function Header({ leftSlot }: HeaderProps) {
     <header
       data-slot='slash-layout-header'
       className={cn(
-        'sticky left-0 right-0 top-0 z-app-bar bg-background/60 backdrop-blur-xl',
+        'sticky inset-x-0 top-0 z-app-bar bg-background/60 backdrop-blur-xl',
         'flex shrink-0 grow-0 flex-col items-start justify-between px-4 pb-4 pt-[calc((var(--spacing)*4)+env(safe-area-inset-top))] space-y-2 md:pe-8 md:ps-3',
         'h-[--layout-header-height]'
       )}

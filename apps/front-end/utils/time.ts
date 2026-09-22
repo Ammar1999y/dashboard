@@ -178,7 +178,7 @@ export function toCalendarDate(
   if (typeof raw === 'string' && CALENDAR_DATE_PATTERN.test(raw)) return raw;
 
   const numeric = Number(raw);
-  if (!Number.isFinite(numeric) || numeric === 0) return null;
+  if (numeric === 0 || !Number.isFinite(numeric)) return null;
   const instant = safeDate(numeric);
   return instant ? calendarDayInZone(instant, timeZone) : null;
 }

@@ -26,7 +26,7 @@ const removePx = (value: string | number): number => {
 
   const num = hasPx ? trimmed.slice(0, -2) : trimmed;
 
-  const result = Number.parseFloat(num);
+  const result = Number(num);
 
   if (Number.isNaN(result)) {
     throw new TypeError(`Invalid value: ${value}`);
@@ -117,7 +117,7 @@ export const useMediaQuery = (config: MediaQueryConfig | string) => {
   const mediaQueryString = useMemo(() => buildMediaQuery(config), [config]);
 
   useEffect(() => {
-    const mediaQuery = globalThis.matchMedia(mediaQueryString);
+    const mediaQuery = matchMedia(mediaQueryString);
     setMatches(mediaQuery.matches);
 
     const handler = (e: MediaQueryListEvent) => setMatches(e.matches);

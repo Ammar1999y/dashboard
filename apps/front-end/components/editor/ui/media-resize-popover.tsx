@@ -73,7 +73,7 @@ export function MediaResizePopover() {
     setPixelWidth(value);
     setPercentageWidth('');
 
-    if (value && !Number.isNaN(Number(value)) && aspectRatio) {
+    if (aspectRatio && value && !Number.isNaN(Number(value))) {
       const newHeight = Math.round(Number(value) / aspectRatio);
       setPixelHeight(newHeight.toString());
     }
@@ -83,7 +83,7 @@ export function MediaResizePopover() {
     setPixelHeight(value);
     setPercentageWidth('');
 
-    if (value && !Number.isNaN(Number(value)) && aspectRatio) {
+    if (aspectRatio && value && !Number.isNaN(Number(value))) {
       const newWidth = Math.round(Number(value) * aspectRatio);
       setPixelWidth(newWidth.toString());
     }

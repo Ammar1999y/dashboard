@@ -11,28 +11,31 @@ import {
 } from '../store';
 import { DataTableHeaderRow } from './data-table-header-row';
 
-interface DataTableHeaderGroupProps {
-  table: Table<any>;
+interface DataTableHeaderGroupProps<TData = unknown> {
+  table: Table<TData>;
   activeIndex: number;
 }
 
-const DataTableHeaderGroup = memo(
-  ({ table, activeIndex }: DataTableHeaderGroupProps) => {
-    useColumnVisibility(useShallow((s) => s.columnVisibility));
-    useColumnPinning(useShallow((s) => s.columnPinning));
-    useColumnOrder((s) => s.columnOrder);
-    return table
-      .getHeaderGroups()
-      .map((headerGroup) => (
-        <DataTableHeaderRow
-          key={headerGroup.id}
-          headerGroup={headerGroup}
-          activeIndex={activeIndex}
-        />
-      ));
-  }
-);
+const DataTableHeaderGroupInner = <TData,>({
+  table,
+  activeIndex,
+}: DataTableHeaderGroupProps<TData>) => {
+  useColumnVisibility(useShallow((s) => s.columnVisibility));
+  useColumnPinning(useShallow((s) => s.columnPinning));
+  useColumnOrder((s) => s.columnOrder);
+  return table
+    .getHeaderGroups()
+    .map((headerGroup) => (
+      <DataTableHeaderRow
+        key={headerGroup.id}
+        headerGroup={headerGroup}
+        activeIndex={activeIndex}
+      />
+    ));
+};
 
-DataTableHeaderGroup.displayName = 'DataTableHeaderGroup';
+const DataTableHeaderGroup = memo(DataTableHeaderGroupInner) as <TData>(
+  props: DataTableHeaderGroupProps<TData>
+) => React.ReactElement | null;
 
 export { DataTableHeaderGroup };

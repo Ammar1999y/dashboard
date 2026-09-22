@@ -24,7 +24,7 @@ export function HeadingElementStatic({
 }: SlateElementProps & VariantProps<typeof headingVariants>) {
   return (
     <SlateElement
-      as={variant!}
+      as={variant ?? 'h1'}
       className={headingVariants({ variant })}
       {...props}
     >

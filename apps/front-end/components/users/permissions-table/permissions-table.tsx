@@ -60,7 +60,7 @@ const PermissionsTable = memo(
                 >
                   <TableCell className='py-3 font-medium'>
                     <div className='flex items-center justify-between'>
-                      <div className='text-right'>
+                      <div className='text-start'>
                         <div className='font-semibold'>
                           {DASHBOARD_PAGES[page.name]}
                         </div>
@@ -68,7 +68,7 @@ const PermissionsTable = memo(
                       <button
                         onClick={() => toggleRowAll(index)}
                         type='button'
-                        className='mr-2 rounded-md text-xs text-muted-foreground transition-all duration-300 hover:text-foreground'
+                        className='ms-2 rounded-md text-xs text-muted-foreground transition-all duration-300 hover:text-foreground'
                       >
                         اختيار الكل
                       </button>

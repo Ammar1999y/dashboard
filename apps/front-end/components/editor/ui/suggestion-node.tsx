@@ -1,7 +1,10 @@
 'use client';
 
-import type { SuggestionConfig } from '@/components/editor/plugins/suggestion-kit';
-import type { TSuggestionData, TSuggestionText } from 'platejs';
+import type {
+  AnyPluginConfig,
+  TSuggestionData,
+  TSuggestionText,
+} from 'platejs';
 import type { PlateLeafProps, RenderNodeWrapper } from 'platejs/react';
 
 import * as React from 'react';
@@ -49,9 +52,15 @@ export function SuggestionLeaf(props: PlateLeafProps<TSuggestionText>) {
   const hoverSuggestionId = usePluginOption(suggestionPlugin, 'hoverId');
   const dataList = api.suggestion.dataList(leaf);
 
-  const hasRemove = dataList.some((data) => data.type === 'remove');
-  const hasActive = dataList.some((data) => data.id === activeSuggestionId);
-  const hasHover = dataList.some((data) => data.id === hoverSuggestionId);
+  const hasRemove = dataList.some(
+    (data: { id?: string; type?: string }) => data.type === 'remove'
+  );
+  const hasActive = dataList.some(
+    (data: { id?: string; type?: string }) => data.id === activeSuggestionId
+  );
+  const hasHover = dataList.some(
+    (data: { id?: string; type?: string }) => data.id === hoverSuggestionId
+  );
 
   const diffOperation = { type: hasRemove ? 'delete' : 'insert' } as const;
 
@@ -73,20 +82,22 @@ export function SuggestionLeaf(props: PlateLeafProps<TSuggestionText>) {
           insertActive: hasActive || hasHover,
           remove: hasRemove,
           removeActive: (hasActive || hasHover) && hasRemove,
-        })
+        }),
+        props.className
       )}
     >
       {props.children}
     </PlateLeaf>
   );
 }
-export const SuggestionLineBreak: RenderNodeWrapper<SuggestionConfig> = ({
+
+export const SuggestionLineBreak: RenderNodeWrapper<AnyPluginConfig> = ({
   api,
   element,
 }) => {
   if (!api.suggestion.isBlockSuggestion(element)) return;
 
-  const suggestionData = element.suggestion;
+  const suggestionData = element.suggestion as TSuggestionData;
 
   return function Component({ children }) {
     return (

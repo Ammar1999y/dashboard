@@ -71,7 +71,7 @@ export function TableCellElementStatic({
       className={cn(
         'h-full overflow-visible border-none bg-background p-0',
         element.background ? 'bg-[--cellBackground]' : 'bg-background',
-        isHeader && 'text-left font-normal *:m-0',
+        isHeader && 'text-end font-normal *:m-0',
         'before:size-full',
         "before:absolute before:box-border before:select-none before:content-['']",
         borders &&

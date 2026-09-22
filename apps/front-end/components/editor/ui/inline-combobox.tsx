@@ -54,7 +54,7 @@ const defaultFilter: FilterFn = (
   );
 
   return [...uniqueTerms].some((keyword) =>
-    filterWords(keyword!, search)
+    keyword ? filterWords(keyword, search) : false
   );
 };
 
@@ -211,8 +211,8 @@ const InlineComboboxInput = ({
     trigger,
   } = React.useContext(InlineComboboxContext);
 
-  const store = useComboboxContext()!;
-  const value = store.useState('value');
+  const store = useComboboxContext();
+  const value = store?.useState('value') ?? '';
 
   const ref = useComposedRef(propRef, contextRef);
 
@@ -238,7 +238,7 @@ const InlineComboboxInput = ({
         <Combobox
           autoSelect
           className={cn(
-            'absolute left-0 top-0 size-full bg-transparent outline-none',
+            'absolute top-0 size-full bg-transparent outline-none ltr:right-0 rtl:left-0',
             className
           )}
           ref={ref}
@@ -305,10 +305,10 @@ const InlineComboboxItem = ({
 
   const { filter, removeInput } = React.useContext(InlineComboboxContext);
 
-  const store = useComboboxContext()!;
+  const store = useComboboxContext();
 
   // Optimization: Do not subscribe to value if filter is false
-  const search = filter && store.useState('value');
+  const search = filter && store?.useState('value');
 
   const visible = React.useMemo(
     () =>
@@ -335,8 +335,8 @@ const InlineComboboxEmpty = ({
   className,
 }: React.HTMLAttributes<HTMLDivElement>) => {
   const { setHasEmpty } = React.useContext(InlineComboboxContext);
-  const store = useComboboxContext()!;
-  const items = store.useState('items');
+  const store = useComboboxContext();
+  const items = store?.useState('items');
 
   React.useEffect(() => {
     setHasEmpty(true);
@@ -346,7 +346,7 @@ const InlineComboboxEmpty = ({
     };
   }, [setHasEmpty]);
 
-  if (items.length > 0) return null;
+  if ((items?.length ?? 0) > 0) return null;
 
   return (
     <div

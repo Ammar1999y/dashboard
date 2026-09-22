@@ -1,10 +1,8 @@
 import { ProjectsPage } from '@/components/projects/page';
 
-const Projects = () => {
+export default function Projects() {
   return <ProjectsPage />;
-};
-
-export default Projects;
+}
 
 export async function getStaticProps() {
   return {

@@ -6,9 +6,9 @@ import { useShallow } from 'zustand/shallow';
 
 import { useColumnPinning, useColumnSizing } from '../store';
 
-interface PinningHandlerProps<TData = any> {
+interface PinningHandlerProps<TData = unknown> {
   cellRef: React.RefObject<HTMLDivElement | null>;
-  column: Column<TData>;
+  column: Column<TData, unknown>;
 }
 
 interface PinningState {

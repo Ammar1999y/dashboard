@@ -27,14 +27,16 @@ const OrderingOptions = memo(({ column }: ColumnOptionsProps) => {
     columnPosition,
   } = useOrderingHandlers(column);
 
-  const enableOrdering = (column.columnDef.meta as any)?.enableOrdering ?? true;
+  const enableOrdering =
+    (column.columnDef.meta as { enableOrdering?: boolean } | undefined)
+      ?.enableOrdering ?? true;
 
   if (!enableOrdering) return null;
 
   return (
     <DropdownMenuSub>
       <DropdownMenuSubTrigger>
-        <MoveHorizontal className='ml-2 h-4 w-4' />
+        <MoveHorizontal className='me-2 h-4 w-4' />
         <span>تحريك العامود</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
@@ -42,28 +44,28 @@ const OrderingOptions = memo(({ column }: ColumnOptionsProps) => {
           onClick={handleMoveRight}
           disabled={columnPosition.isFirst}
         >
-          <MoveRight className='ml-2 h-4 w-4' />
+          <MoveRight className='me-2 h-4 w-4' />
           <span>الى اليمين</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={handleMoveToFarRight}
           disabled={columnPosition.isFirst}
         >
-          <ChevronsRight className='ml-2 h-4 w-4' />
+          <ChevronsRight className='me-2 h-4 w-4' />
           <span>الى اقصى اليمين</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={handleMoveLeft}
           disabled={columnPosition.isLast}
         >
-          <MoveLeft className='ml-2 h-4 w-4' />
+          <MoveLeft className='me-2 h-4 w-4' />
           <span>الى اليسار</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={handleMoveToFarLeft}
           disabled={columnPosition.isLast}
         >
-          <ChevronsLeft className='ml-2 h-4 w-4' />
+          <ChevronsLeft className='me-2 h-4 w-4' />
           <span>الى اقصى اليسار</span>
         </DropdownMenuItem>
       </DropdownMenuSubContent>

@@ -67,15 +67,15 @@ export const ColorPickerContent = memo(
           rgba,
           hsla,
         };
-      } else {
-        const rgb = hexToRgb(value || defaultColor);
-        const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-        return {
-          hex: value || defaultColor,
-          rgb,
-          hsl,
-        };
       }
+
+      const rgb = hexToRgb(value || defaultColor);
+      const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+      return {
+        hex: value || defaultColor,
+        rgb,
+        hsl,
+      };
     });
 
     const [hexInputValue, setHexInputValue] = useState<string>(
@@ -168,7 +168,7 @@ export const ColorPickerContent = memo(
         const component = e.target.name;
         const inputValue = e.target.value;
 
-        const numValue = Number.parseFloat(inputValue) || 0;
+        const numValue = Number(inputValue) || 0;
         const clampedValue =
           component === 'a' && alpha && colorValues.rgba
             ? Math.max(0, Math.min(1, numValue))
@@ -206,7 +206,7 @@ export const ColorPickerContent = memo(
         const component = e.target.name;
         const inputValue = e.target.value;
 
-        const numValue = Number.parseFloat(inputValue) || 0;
+        const numValue = Number(inputValue) || 0;
         // Handle alpha mode
         let clampedValue: number;
 
@@ -253,7 +253,7 @@ export const ColorPickerContent = memo(
     useEffect(() => {
       updateColorValues(value || defaultColor);
       setHexInputValue((value || defaultColor).toUpperCase());
-    }, [value]);
+    }, [value, updateColorValues]);
 
     // Get current hex value for display
     const getCurrentHexValue = useMemo(() => {

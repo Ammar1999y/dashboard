@@ -117,7 +117,7 @@ export const FileCardContent = memo(
             </div>
 
             {/* Bottom Info */}
-            <div className='w-full truncate text-right text-xs text-white/90'>
+            <div className='w-full truncate text-start text-xs text-white/90'>
               <p className='truncate font-medium'>{fileName}</p>
               <p className='text-xs text-white/70'>{formatBytes(fileSize)}</p>
             </div>

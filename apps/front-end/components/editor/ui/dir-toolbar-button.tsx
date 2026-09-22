@@ -48,7 +48,7 @@ export function DirToolbarButton(props: DropdownMenuProps) {
   const value =
     (useSelectionFragmentProp({
       defaultValue: 'auto',
-      getProp: (node) => (node as any).dir,
+      getProp: (node) => (node as { dir?: DirValue }).dir,
     }) as DirValue) ?? 'auto';
 
   const [open, setOpen] = React.useState(false);

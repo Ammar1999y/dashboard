@@ -64,13 +64,19 @@ const Form = ({ onSuccess }: FormProps) => {
         if (!resData?.user?.id) throw new CustomError('حدث خطاء، اعد المحاوله');
         toast.success('تم تسجيل الدخول بنجاح');
         onSuccess();
-      } catch (error: any) {
+      } catch (error: unknown) {
         setValue('captcha', '');
         setResetTurnstile(true);
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : typeof (error as { message?: unknown })?.message === 'string'
+              ? (error as { message: string }).message
+              : '';
         toast.error(
           error instanceof CustomError
             ? error.message
-            : error?.message?.toLowerCase?.()?.includes('captcha')
+            : errorMessage.toLowerCase().includes('captcha')
               ? CAPTCHA_FAILED_MESSAGE
               : 'حدث خطاء، اعد المحاوله',
           {

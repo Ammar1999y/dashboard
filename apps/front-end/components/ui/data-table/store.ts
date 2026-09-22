@@ -40,9 +40,9 @@ interface DataTableColumnSizingStore {
 
 interface DataTableTableDataStore {
   reRender: number;
-  data: any[] | undefined;
+  data: unknown[] | undefined;
   setReRender: () => void;
-  setData: (data: any[]) => void;
+  setData: (data: unknown[]) => void;
 }
 
 interface DataTableUpdateRowsStore {
@@ -96,15 +96,13 @@ const useColumnFilters = create<DataTableColumnFiltersStore>((set) => ({
   updateColumnFilter: (id, value) =>
     set((state) => {
       const exists = state.columnFilters.some((filter) => filter.id === id);
-      return exists
-        ? {
-            columnFilters: state.columnFilters.map((filter) =>
+      return {
+        columnFilters: exists
+          ? state.columnFilters.map((filter) =>
               filter.id === id ? { ...filter, value } : filter
-            ),
-          }
-        : {
-            columnFilters: [...state.columnFilters, { id, value }],
-          };
+            )
+          : [...state.columnFilters, { id, value }],
+      };
     }),
 }));
 

@@ -116,7 +116,7 @@ export const defaultThemeState: ThemeEditorState = {
   },
   currentMode:
     typeof window !== 'undefined' &&
-    globalThis.matchMedia('(prefers-color-scheme: dark)').matches
+    matchMedia('(prefers-color-scheme: dark)').matches
       ? 'dark'
       : 'light',
   hslAdjustments: {

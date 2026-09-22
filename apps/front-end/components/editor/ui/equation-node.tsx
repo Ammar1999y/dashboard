@@ -53,7 +53,6 @@ export function EquationElement(props: PlateElementProps<TEquationElement>) {
     <PlateElement
       className='my-1'
       {...props}
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-ltr-element': true,
@@ -147,7 +146,7 @@ export function InlineEquationElement(
         <PopoverTrigger asChild>
           <div
             className={cn(
-              'after:absolute after:inset-0 after:-left-1 after:-top-0.5 after:z-[1] after:h-[calc(100%)+4px] after:w-[calc(100%+8px)] after:rounded-sm after:content-[""]',
+              'after:absolute after:inset-0 after:-top-0.5 after:z-[1] after:h-[calc(100%)+4px] after:w-[calc(100%+8px)] after:rounded-sm after:content-[""] ltr:after:-right-1 rtl:after:-left-1',
               'h-6',
               ((element.texExpression.length > 0 && open) || selected) &&
                 'after:bg-primary/15',

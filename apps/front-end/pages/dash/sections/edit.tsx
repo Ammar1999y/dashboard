@@ -131,7 +131,7 @@ const EditSection = () => {
         });
 
         toast.success(result.message || 'تم تحديث القسم بنجاح');
-        router.push('/dash/sections');
+        void router.push('/dash/sections');
       } catch (error) {
         toast.error(
           error instanceof CustomError

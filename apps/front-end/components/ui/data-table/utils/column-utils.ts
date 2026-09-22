@@ -1,4 +1,4 @@
-import type { Column, FilterFn, Table } from '@tanstack/react-table';
+import type { Column, Row, Table } from '@tanstack/react-table';
 
 type ColumnMeta = {
   title: string;
@@ -11,11 +11,11 @@ export interface SearchableColumn {
   id: string;
   label: string;
   filterVariant: 'text' | 'dateRange' | 'number' | 'numberRange';
-  column: Column<any, unknown> | null;
+  column: Column<unknown, unknown> | null;
 }
 
-interface SelectFilter {
-  column: Column<any, unknown>;
+interface SelectFilter<TData = unknown> {
+  column: Column<TData, unknown>;
   columnId: string;
   title: string;
 }
@@ -40,7 +40,7 @@ export const getSearchableColumns = <TData>(
 
 export const getSelectFilters = <TData>(
   table: Table<TData>
-): SelectFilter[] => {
+): SelectFilter<TData>[] => {
   return table
     .getAllColumns()
     .filter((column) => {
@@ -71,10 +71,10 @@ export const getAvailableSearchColumns = (
     : searchableColumns;
 };
 
-export const dateBetweenFilterFn: FilterFn<any> = (row, columnId, value) => {
+export const dateBetweenFilterFn = ((row, columnId, value) => {
   const date = row.getValue(columnId) as string;
   if (!date) return false;
-  const [start, end] = value ?? [];
+  const [start, end] = (value as [string, string]) ?? [];
   if (!start && !end) return true;
 
   const rowDate = new Date(date);
@@ -83,4 +83,4 @@ export const dateBetweenFilterFn: FilterFn<any> = (row, columnId, value) => {
   if (start && end)
     return rowDate >= new Date(start) && rowDate <= new Date(end);
   return true;
-};
+}) as <TData>(row: Row<TData>, columnId: string, value: unknown) => boolean;

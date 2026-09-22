@@ -38,7 +38,7 @@ const FullscreenButton = memo(() => {
   const [isFullscreen, setIsFullscreen] = useState(screenfull.isFullscreen);
 
   const toggleFullScreen = useCallback(() => {
-    if (screenfull.isEnabled) screenfull.toggle();
+    if (screenfull.isEnabled) void screenfull.toggle();
   }, []);
 
   useEffect(() => {
@@ -61,13 +61,13 @@ const FullscreenButton = memo(() => {
       screenfull.on('change', onFullscreenChange);
     }
 
-    globalThis.addEventListener('keydown', handleKeyDown);
+    addEventListener('keydown', handleKeyDown);
 
     return () => {
       if (screenfull.isEnabled) {
         screenfull.off('change', onFullscreenChange);
       }
-      globalThis.removeEventListener('keydown', handleKeyDown);
+      removeEventListener('keydown', handleKeyDown);
     };
   }, []);
 
@@ -82,12 +82,12 @@ const FullscreenButton = memo(() => {
       {isFullscreen ? (
         <>
           <ExitFullscreen size={18} className='size-5 opacity-60' />
-          <span className='ml-2'>الخروج من ملء الشاشة</span>
+          <span className='me-2'>الخروج من ملء الشاشة</span>
         </>
       ) : (
         <>
           <Fullscreen size={18} className='size-5 opacity-60' />
-          <span className='ml-2'>ملء الشاشة</span>
+          <span className='me-2'>ملء الشاشة</span>
         </>
       )}
     </Button>
@@ -109,8 +109,8 @@ const ThemeCustomizer = memo(() => {
     <DialogWrapper>
       <DialogContent side={'left'} className='w-[400px] gap-2 overflow-hidden'>
         {/* Decorative blur elements */}
-        <div className='w-7h-80 pointer-events-none absolute right-0 top-0 h-80 -translate-y-1/2 translate-x-1/2 rounded-full bg-gradient-to-br from-cyan-400/30 to-cyan-600/30 opacity-30 blur-3xl' />
-        <div className='w-7h-80 pointer-events-none absolute bottom-0 left-0 h-80 -translate-x-1/2 translate-y-1/2 rounded-full bg-gradient-to-tr from-red-400/30 to-pink-600/30 opacity-30 blur-3xl' />
+        <div className='w-7h-80 pointer-events-none absolute top-0 h-80 -translate-y-1/2 translate-x-1/2 rounded-full bg-gradient-to-br from-cyan-400/30 to-cyan-600/30 opacity-30 blur-3xl ltr:left-0 rtl:right-0' />
+        <div className='w-7h-80 pointer-events-none absolute bottom-0 h-80 -translate-x-1/2 translate-y-1/2 rounded-full bg-gradient-to-tr from-red-400/30 to-pink-600/30 opacity-30 blur-3xl ltr:right-0 rtl:left-0' />
 
         <DialogHeader className='p-4 pb-2 pt-[calc((var(--spacing)*4)+env(safe-area-inset-top))]'>
           <div className='flex items-center space-x-2'>

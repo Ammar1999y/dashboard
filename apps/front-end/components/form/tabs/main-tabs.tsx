@@ -30,7 +30,7 @@ const MainTabs = memo(({ tabs }: { tabs: TabConfig[] }) => {
       <div className='relative flex items-center space-x-e-2'>
         <div
           data-ignore
-          className='absolute -bottom-1.5 left-0 right-0 h-0.5 w-full bg-border'
+          className='absolute inset-x-0 -bottom-1.5 h-0.5 w-full bg-border'
         />
 
         {tabs.map((tab, i) => (
@@ -85,7 +85,7 @@ const TabButton = memo(({ tab, index }: { tab: TabConfig; index: number }) => {
       {isActive && (
         <motion.div
           layoutId='underline-main-tabs'
-          className='absolute -bottom-1.5 left-0 h-0.5 w-full bg-foreground'
+          className='absolute inset-x-0 -bottom-1.5 h-0.5 w-full bg-foreground'
           transition={underlineTransition}
         />
       )}

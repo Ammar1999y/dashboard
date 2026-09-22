@@ -11,7 +11,7 @@ export async function fastestFetchWithin(
     (url, i) => {
       const p = fetch(url, { ...fetchOptions, signal: ctrls[i].signal }).then(
         (res) => {
-          if (!res.ok) throw new Error();
+          if (!res.ok) throw new Error(`HTTP error ${res.status}`);
           return { i, res };
         }
       );

@@ -45,12 +45,14 @@ const HeaderOptions = memo(({ column, className }: HeaderOptionsProps) => {
   );
 });
 
-const Content = memo(({ column }: { column: Column<any, any> }) => {
+const Content = memo(({ column }: { column: Column<unknown, unknown> }) => {
   const canSort = column.getCanSort();
   const canPin = column.getCanPin();
   const canResize = column.getCanResize();
   const canHide = column.getCanHide();
-  const enableOrdering = (column.columnDef.meta as any)?.enableOrdering ?? true;
+  const enableOrdering =
+    (column.columnDef.meta as { enableOrdering?: boolean } | undefined)
+      ?.enableOrdering ?? true;
 
   return (
     <>

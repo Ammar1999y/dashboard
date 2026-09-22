@@ -18,23 +18,18 @@ export function ImageElementStatic(
   } = props.element;
 
   const flipTransform = `scaleX(${flipHorizontal ? -1 : 1}) scaleY(${flipVertical ? -1 : 1})`;
+  const alignmentClass =
+    align === 'center' ? 'mx-auto' : align === 'right' ? 'ms-auto' : 'me-auto';
 
   return (
     <SlateElement {...props} className='py-2.5'>
       <figure
-        className={cn(
-          'group m-0 block max-w-full',
-          align === 'center'
-            ? 'mx-auto'
-            : align === 'right'
-              ? 'ms-auto'
-              : 'me-auto'
-        )}
+        className={cn('group m-0 block max-w-full', alignmentClass)}
         style={{ width }}
       >
         <div className='relative min-w-24 max-w-full'>
           <img
-            alt={(props.attributes as any).alt}
+            alt={props.attributes?.alt as string | undefined}
             className={cn(
               'w-full max-w-full cursor-default object-cover px-0',
               'rounded-sm'

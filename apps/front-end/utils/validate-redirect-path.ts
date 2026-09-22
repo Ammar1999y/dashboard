@@ -41,7 +41,7 @@ export function validateRedirectPath(path: string, fallback = '/dash'): string {
   let decoded = trimmed;
   try {
     let prev = '';
-    for (let i = 0; i < 5 && decoded !== prev; i++) {
+    for (let i = 0; decoded !== prev && i < 5; i++) {
       prev = decoded;
       decoded = decodeURIComponent(decoded);
     }

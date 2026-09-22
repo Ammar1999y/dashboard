@@ -20,36 +20,35 @@ const PinningOptions = memo(({ column }: ColumnOptionsProps) => {
 
   if (!canPin) return null;
 
+  const isPinnedLeft = isPinned === 'left';
+  const isPinnedRight = isPinned === 'right';
+
   return (
     <DropdownMenuSub>
       <DropdownMenuSubTrigger>
-        <Pin className='ml-2 h-4 w-4' />
+        <Pin className='me-2 h-4 w-4' />
         <span>تثبيت العامود</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
         <DropdownMenuItem
           onClick={handlePinLeft}
-          className={
-            isPinned === 'left' ? 'bg-muted text-muted-foreground' : ''
-          }
+          className={isPinnedLeft ? 'bg-muted text-muted-foreground' : ''}
         >
-          <Pin className='ml-2 h-4 w-4 -rotate-90' />
+          <Pin className='me-2 h-4 w-4 -rotate-90' />
           <span>يمين</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={handlePinRight}
-          className={
-            isPinned === 'right' ? 'bg-muted text-muted-foreground' : ''
-          }
+          className={isPinnedRight ? 'bg-muted text-muted-foreground' : ''}
         >
-          <Pin className='ml-2 h-4 w-4 rotate-90' />
+          <Pin className='me-2 h-4 w-4 rotate-90' />
           <span>يسار</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={handleUnpin}
           className={isPinned ? '' : 'bg-muted text-muted-foreground'}
         >
-          <PinOff className='ml-2 h-4 w-4' />
+          <PinOff className='me-2 h-4 w-4' />
           <span>غير مثبت</span>
         </DropdownMenuItem>
       </DropdownMenuSubContent>

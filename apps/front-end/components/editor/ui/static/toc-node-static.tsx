@@ -19,7 +19,7 @@ export function TocElementStatic(props: SlateElementProps) {
           headingList.map((item) => (
             <Button
               className={
-                'block h-auto w-full cursor-pointer truncate rounded-none px-0.5 py-1.5 text-left font-medium text-muted-foreground underline decoration-[0.5px] underline-offset-4 hover:bg-accent hover:text-muted-foreground'
+                'block h-auto w-full cursor-pointer truncate rounded-none px-0.5 py-1.5 text-end font-medium text-muted-foreground underline decoration-[0.5px] underline-offset-4 hover:bg-accent hover:text-muted-foreground'
               }
               style={{
                 paddingInlineStart: `${(item.depth - 1) * 26 || 4}px`,
@@ -63,7 +63,7 @@ const getHeadingList = (editor?: SlateEditor) => {
 
   if (!values) return [];
 
-  [...values].forEach(([node, path]) => {
+  for (const [node, path] of values) {
     const { type } = node;
     const title = NodeApi.string(node);
     const depth = headingDepth[type];
@@ -72,7 +72,7 @@ const getHeadingList = (editor?: SlateEditor) => {
     if (title) {
       headingList.push({ id, depth, path, title, type });
     }
-  });
+  }
 
   return headingList;
 };

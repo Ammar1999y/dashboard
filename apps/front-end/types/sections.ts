@@ -14,7 +14,7 @@ interface SectionClient {
   title?: string;
   subtitle?: string;
   shortDescription?: string;
-  description?: any | null; // Rich text content
+  description?: unknown | null; // Rich text content
 
   isActive?: boolean;
   createdAt: string | null;

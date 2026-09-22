@@ -63,7 +63,7 @@ const DataTableSearch = memo(() => {
 
   return (
     <div className='relative'>
-      <Search className='pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
+      <Search className='pointer-events-none absolute top-1/2 size-4 -translate-y-1/2 text-muted-foreground ltr:left-2.5 rtl:right-2.5' />
       <Input
         value={localValue}
         onChange={handleChange}
@@ -72,7 +72,7 @@ const DataTableSearch = memo(() => {
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
         placeholder='...البحث السريع'
-        className='!h-9 border-0 bg-transparent pr-8 placeholder:!text-right'
+        className='!h-9 border-0 bg-transparent ps-8 placeholder:!text-right'
       />
     </div>
   );

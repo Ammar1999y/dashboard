@@ -109,12 +109,13 @@ export function useDataTable<TData>(props: UseDataTableProps<TData>) {
     setTimeout(() => {
       const sort = useDataTableStore.getState().sort;
       const initialSort = props.initialState?.sorting;
-      if (sort.length === 0 && initialSort && initialSort.length > 0) {
+      if (initialSort && initialSort.length > 0 && sort.length === 0) {
         useDataTableStore
           .getState()
-          .actions.setSorting(initialSort as ExtendedColumnSort<any>[]);
+          .actions.setSorting(initialSort as ExtendedColumnSort<unknown>[]);
       }
     }, 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const pagination: PaginationState = useMemo(
@@ -188,16 +189,16 @@ export function useDataTable<TData>(props: UseDataTableProps<TData>) {
       storeSizing[`headerId-${header.id}`] = headerSize;
       storeSizing[`columnId-${header.column.id}`] = columnSize;
       if (!tableContainerRef.current) {
-      	continue;
+        continue;
       }
 
       tableContainerRef.current.style.setProperty(
         `--header-${header.id}-size`,
-        `${headerSize}`
+        String(headerSize)
       );
       tableContainerRef.current.style.setProperty(
         `--col-${header.column.id}-size`,
-        `${columnSize}`
+        String(columnSize)
       );
     }
     useColumnSizing.getState().setColumnSizing(storeSizing);
@@ -214,10 +215,11 @@ export function useDataTable<TData>(props: UseDataTableProps<TData>) {
   // refresh components related to data
   useEffect(() => {
     useTableData.getState().setReRender();
-    if (data) useTableData.getState().setData(data as any[]);
+    if (data) useTableData.getState().setData(data as unknown[]);
   }, [data]);
 
   // refresh components related to rows
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const rows = useMemo(() => saveRowCheck(table), [table.getRowModel]);
 
   useEffect(() => {

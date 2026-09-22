@@ -1,6 +1,6 @@
 import type { SanitizeResult } from './config';
 
-import DOMPurify from 'isomorphic-dompurify';
+import { sanitize } from 'isomorphic-dompurify';
 
 import {
   DANGEROUS_ATTRIBUTES,
@@ -174,11 +174,11 @@ export function sanitizeSvg(
       const normalized = value.toLowerCase().trim();
       return !(
         !normalized ||
-        normalized.startsWith('url(') ||
         normalized === 'currentcolor' ||
         normalized === 'inherit' ||
         normalized === 'transparent' ||
-        normalized === 'none'
+        normalized === 'none' ||
+        normalized.startsWith('url(')
       );
     };
 
@@ -188,9 +188,9 @@ export function sanitizeSvg(
 
       const decodedCSS = safeDecodeURI(cssContent);
 
-      const hasDangerousCSS =
-        DANGEROUS_CSS_PATTERNS.some((pattern) => pattern.test(cssContent)) ||
-        DANGEROUS_CSS_PATTERNS.some((pattern) => pattern.test(decodedCSS));
+      const hasDangerousCSS = DANGEROUS_CSS_PATTERNS.some(
+        (pattern) => pattern.test(cssContent) || pattern.test(decodedCSS)
+      );
 
       if (hasDangerousCSS) {
         errors.push('تم إزالة style يحتوي على كود خطير');
@@ -237,7 +237,7 @@ export function sanitizeSvg(
     });
 
     const cleanedSvg = xmlSerializer.serializeToString(svgElement);
-    const sanitized = DOMPurify.sanitize(cleanedSvg, {
+    const sanitized = sanitize(cleanedSvg, {
       USE_PROFILES: { svg: true, svgFilters: true },
     });
 

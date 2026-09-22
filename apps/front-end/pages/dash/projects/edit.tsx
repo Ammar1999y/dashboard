@@ -128,7 +128,7 @@ const EditProject = () => {
         });
 
         toast.success(result.message || 'تم تحديث المشروع بنجاح');
-        router.push('/dash/projects');
+        void router.push('/dash/projects');
       } catch (error) {
         toast.error(
           error instanceof CustomError

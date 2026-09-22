@@ -1,12 +1,12 @@
 import { type Column } from '@tanstack/react-table';
 
 export interface HeaderOptionsProps {
-  column: Column<any, any>;
+  column: Column<unknown, unknown>;
   className?: string;
 }
 
 export interface ColumnOptionsProps {
-  column: Column<any, any>;
+  column: Column<unknown, unknown>;
 }
 
 export interface OrderContext {

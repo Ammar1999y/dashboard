@@ -197,7 +197,6 @@ export function SlashInputElement(
     <PlateElement
       {...props}
       as='span'
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-ltr-element': true,

@@ -40,7 +40,7 @@ function AccordionTrigger({
       >
         <div
           aria-hidden
-          className='absolute right-4 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-full bg-primary'
+          className='absolute top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-full bg-primary ltr:right-4 rtl:left-4'
         >
           <Plus className='size-4 text-card transition-transform duration-200' />
         </div>

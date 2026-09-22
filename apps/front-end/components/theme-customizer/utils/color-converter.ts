@@ -11,7 +11,7 @@ interface HslColor {
 
 const formatNumber = (num?: number) => {
   if (!num) return '0';
-  return num % 1 === 0 ? num : num.toFixed(4);
+  return Number.isSafeInteger(num) ? num : num.toFixed(4);
 };
 
 const formatHsl = (hsl: HslColor, includeAlpha: boolean = true) => {
@@ -33,11 +33,8 @@ const formatHsl = (hsl: HslColor, includeAlpha: boolean = true) => {
 const isCompleteColorFormat = (colorValue: string): boolean => {
   const trimmed = colorValue.trim();
 
-  // Check if it's a hex color
-  if (trimmed.startsWith('#')) return true;
-
-  // Check if it already contains a color function (hsl, rgb, oklch, hwb, lch, lab, etc.)
-  if (trimmed.includes('(')) return true;
+  // Check if it's a hex color or already contains a color function (hsl, rgb, etc.)
+  if (trimmed.startsWith('#') || trimmed.includes('(')) return true;
 
   // Check if it's a CSS color keyword
   const cssColorKeywords = [

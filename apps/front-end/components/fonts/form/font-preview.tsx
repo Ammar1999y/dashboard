@@ -43,7 +43,7 @@ const FontPreview = memo(
 
       // Create link element to load font
       const fontId = `google-font-${fontName.replace(/\s+/g, '-')}`;
-      let linkElement = document.getElementById(fontId) as HTMLLinkElement;
+      let linkElement = document.querySelector<HTMLLinkElement>(`#${fontId}`);
 
       if (!linkElement) {
         linkElement = document.createElement('link');

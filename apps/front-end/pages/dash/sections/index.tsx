@@ -1,10 +1,8 @@
 import { SectionsPage } from '@/components/sections/page';
 
-const Sections = () => {
+export default function Sections() {
   return <SectionsPage />;
-};
-
-export default Sections;
+}
 
 export async function getStaticProps() {
   return {

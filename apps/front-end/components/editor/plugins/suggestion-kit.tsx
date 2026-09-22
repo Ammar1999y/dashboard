@@ -47,15 +47,15 @@ export const suggestionPlugin = toTPlatePlugin<SuggestionConfig>(
         isSet = true;
       };
 
-      if (!isSlateString(leaf) && !isBlockLeaf) {
+      if (!isBlockLeaf && !isSlateString(leaf)) {
         unsetActiveSuggestion();
       }
 
       while (leaf.parentElement && !isSlateEditor(leaf.parentElement)) {
         const isBlockSuggestion = leaf.dataset.blockSuggestion === 'true';
 
-        if (leaf.classList.contains(`slate-${type}`) || isBlockSuggestion) {
-          const suggestionEntry = api.suggestion!.node({
+        if (isBlockSuggestion || leaf.classList.contains(`slate-${type}`)) {
+          const suggestionEntry = api.suggestion?.node({
             isText: !isBlockSuggestion,
           });
 
@@ -65,7 +65,7 @@ export const suggestionPlugin = toTPlatePlugin<SuggestionConfig>(
             break;
           }
 
-          const id = api.suggestion!.nodeId(suggestionEntry[0]);
+          const id = api.suggestion?.nodeId(suggestionEntry[0]);
           setOption('activeId', id ?? null);
 
           isSet = true;
@@ -80,7 +80,7 @@ export const suggestionPlugin = toTPlatePlugin<SuggestionConfig>(
     },
   },
   render: {
-    belowNodes: SuggestionLineBreak as any,
+    belowNodes: SuggestionLineBreak,
     node: SuggestionLeaf,
   },
 });

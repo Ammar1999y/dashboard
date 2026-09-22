@@ -1,6 +1,6 @@
 import { Head, Html, Main, NextScript } from 'next/document';
 
-const MyDocument = () => {
+export default function MyDocument() {
   return (
     <Html
       lang={'ar'}
@@ -28,6 +28,4 @@ const MyDocument = () => {
       </body>
     </Html>
   );
-};
-
-export default MyDocument;
+}

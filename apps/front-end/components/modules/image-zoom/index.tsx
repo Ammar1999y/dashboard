@@ -71,7 +71,7 @@ const ImageZoomDialog = () => {
             />
           )}
           <Button
-            className='absolute -right-2 top-3 translate-x-full rounded-full bg-accent text-accent-foreground backdrop-blur-lg'
+            className='absolute top-3 rounded-full bg-accent text-accent-foreground backdrop-blur-lg ltr:-left-2 ltr:-translate-x-full rtl:-right-2 rtl:translate-x-full'
             size='icon'
             variant={'none'}
             onClick={close}

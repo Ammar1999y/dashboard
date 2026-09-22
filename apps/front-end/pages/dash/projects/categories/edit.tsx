@@ -122,7 +122,7 @@ const EditCategory = () => {
         });
 
         toast.success(result.message || 'تم تحديث التصنيف بنجاح');
-        router.push('/dash/projects/categories');
+        void router.push('/dash/projects/categories');
       } catch (error) {
         toast.error(
           error instanceof CustomError

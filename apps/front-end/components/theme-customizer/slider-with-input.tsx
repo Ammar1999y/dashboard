@@ -38,7 +38,7 @@ export const SliderWithInput = memo(
       (e: React.ChangeEvent<HTMLInputElement>) => {
         const raw = e.target.value;
         setLocalValue(raw);
-        const num = Number.parseFloat(raw.replace(',', '.'));
+        const num = Number(raw.replace(',', '.'));
         if (!Number.isNaN(num)) {
           onChange(Math.max(min, Math.min(max, num)));
         }

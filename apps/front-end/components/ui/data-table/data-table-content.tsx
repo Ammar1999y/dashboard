@@ -22,7 +22,7 @@ import { cleaner } from './store';
 import { DataTableToolbar } from './toolbar';
 import { ToolbarSkeleton } from './toolbar-skeleton';
 
-interface DataTableContentProps<TData = any> {
+interface DataTableContentProps<TData = unknown> {
   table: Table<TData>;
   data: TData[] | undefined;
   isLoading: boolean;
@@ -60,80 +60,82 @@ const dropAnimation: DropAnimation = {
   }),
 };
 
-const DataTableContent = memo(
-  ({
-    table,
-    data,
-    isLoading,
-    error,
-    refetch,
-    tableContainerRef,
-    STORAGE_KEY,
-  }: DataTableContentProps) => {
-    const columnCount = table.getVisibleLeafColumns().length;
+const DataTableContentInner = <TData,>({
+  table,
+  data,
+  isLoading,
+  error,
+  refetch,
+  tableContainerRef,
+  STORAGE_KEY,
+}: DataTableContentProps<TData>) => {
+  const columnCount = table.getVisibleLeafColumns().length;
 
-    useEffect(() => {
-      return () => cleaner();
-    }, []);
+  useEffect(() => {
+    return () => cleaner();
+  }, []);
 
-    const {
-      activeIndex,
-      activeHeader,
-      sensors,
-      handleDragStart,
-      handleDragEnd,
-      handleDragCancel,
-    } = useColumnDnd(table);
+  const {
+    activeIndex,
+    activeHeader,
+    sensors,
+    handleDragStart,
+    handleDragEnd,
+    handleDragCancel,
+  } = useColumnDnd(table);
 
-    return (
-      <DndContext
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragCancel={handleDragCancel}
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        measuring={measuring}
+  return (
+    <DndContext
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      measuring={measuring}
+    >
+      <div
+        className={cn(
+          'relative transition-opacity duration-300 space-y-4',
+          isLoading && 'pointer-events-none select-none opacity-50'
+        )}
+        ref={tableContainerRef}
+        inert={isLoading}
       >
-        <div
-          className={cn(
-            'relative transition-opacity duration-300 space-y-4',
-            isLoading && 'pointer-events-none select-none opacity-50'
-          )}
-          ref={tableContainerRef}
-          inert={isLoading}
-        >
-          {isLoading ? (
-            <ToolbarSkeleton />
-          ) : (
-            <DataTableToolbar table={table} STORAGE_KEY={STORAGE_KEY} />
-          )}
-          <DataTableContainer
-            activeIndex={activeIndex}
-            table={table}
-            isLoading={isLoading}
-            error={error}
-            refetch={refetch}
-            columnCount={columnCount}
-          />
-          {isLoading ? (
-            <PaginationSkeleton />
-          ) : data?.length ? (
-            <DataTablePagination table={table} />
-          ) : null}
-        </div>
-        <DragOverlay dropAnimation={dropAnimation}>
-          {activeHeader == null ? null : (
-            <div className='flex min-h-10 max-w-32 translate-x-2.5 translate-y-2.5 animate-dnd-pop cursor-grabbing items-center rounded bg-card p-2 text-foreground shadow-lg'>
-              {(activeHeader.column.columnDef.meta as any)?.label ??
-                activeHeader.column.id}
-            </div>
-          )}
-        </DragOverlay>
-      </DndContext>
-    );
-  }
-);
+        {isLoading ? (
+          <ToolbarSkeleton />
+        ) : (
+          <DataTableToolbar table={table} STORAGE_KEY={STORAGE_KEY} />
+        )}
+        <DataTableContainer
+          activeIndex={activeIndex}
+          table={table}
+          isLoading={isLoading}
+          error={error}
+          refetch={refetch}
+          columnCount={columnCount}
+        />
+        {isLoading ? (
+          <PaginationSkeleton />
+        ) : data?.length ? (
+          <DataTablePagination table={table} />
+        ) : null}
+      </div>
+      <DragOverlay dropAnimation={dropAnimation}>
+        {activeHeader == null ? null : (
+          <div className='flex min-h-10 max-w-32 translate-x-2.5 translate-y-2.5 animate-dnd-pop cursor-grabbing items-center rounded bg-card p-2 text-foreground shadow-lg'>
+            {(
+              activeHeader.column.columnDef.meta as
+                { label?: string } | undefined
+            )?.label ?? activeHeader.column.id}
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
+  );
+};
 
-DataTableContent.displayName = 'DataTableContent';
+const DataTableContent = memo(DataTableContentInner) as <TData>(
+  props: DataTableContentProps<TData>
+) => React.ReactElement | null;
 
 export { DataTableContent };

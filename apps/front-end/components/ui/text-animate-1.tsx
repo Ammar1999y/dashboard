@@ -1,7 +1,7 @@
 import type { MotionProps, Transition, Variants } from 'framer-motion';
 import type { CSSProperties, ElementType } from 'react';
 
-import { memo } from 'react';
+import { createElement, memo } from 'react';
 
 import { AnimatePresence, motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -457,6 +457,20 @@ function mergeItemTransitions(
   } as Variants;
 }
 
+const motionComponentCache = new Map<
+  React.ElementType,
+  ReturnType<typeof motion.create>
+>();
+
+function getMotionComponent(Component: React.ElementType) {
+  let Cached = motionComponentCache.get(Component);
+  if (!Cached) {
+    Cached = motion.create(Component);
+    motionComponentCache.set(Component, Cached);
+  }
+  return Cached;
+}
+
 const TextAnimateBase = ({
   text,
   delay = 0,
@@ -482,7 +496,7 @@ const TextAnimateBase = ({
   style,
   ...props
 }: TextAnimateProps) => {
-  const MotionComponent = motion.create(Component);
+  const motionComp = getMotionComponent(Component);
 
   let segments: string[] = [];
   switch (by) {
@@ -540,21 +554,23 @@ const TextAnimateBase = ({
 
   return (
     <AnimatePresence mode='popLayout'>
-      {trigger && (
-        <MotionComponent
-          variants={finalVariants.container as Variants}
-          initial='hidden'
-          whileInView={startOnView ? 'show' : undefined}
-          animate={startOnView ? undefined : 'show'}
-          exit='exit'
-          className={`whitespace-pre-wrap ${className}`}
-          viewport={{ once, amount }}
-          onAnimationComplete={onAnimationComplete}
-          style={style}
-          {...props}
-        >
-          <span className='sr-only'>{text}</span>
-          {segments.map((segment, i) => {
+      {trigger &&
+        createElement(
+          motionComp as React.ElementType,
+          {
+            variants: finalVariants.container as Variants,
+            initial: 'hidden',
+            whileInView: startOnView ? 'show' : undefined,
+            animate: startOnView ? undefined : 'show',
+            exit: 'exit',
+            className: `whitespace-pre-wrap ${className}`,
+            viewport: { once, amount },
+            onAnimationComplete,
+            style,
+            ...props,
+          },
+          <span className='sr-only'>{text}</span>,
+          segments.map((segment, i) => {
             const inner = (
               <motion.span
                 key={`${by}-${segment}-${i}`}
@@ -582,9 +598,8 @@ const TextAnimateBase = ({
                 {inner}
               </span>
             );
-          })}
-        </MotionComponent>
-      )}
+          })
+        )}
     </AnimatePresence>
   );
 };

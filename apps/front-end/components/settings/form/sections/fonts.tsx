@@ -42,7 +42,7 @@ const FontsSection = memo(() => {
 
   const handleLetterSpacingChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const value = Number.parseFloat(e.target.value) || 0;
+      const value = Number(e.target.value) || 0;
       setValue('fonts.letterSpacing', value);
     },
     [setValue]
@@ -50,7 +50,7 @@ const FontsSection = memo(() => {
 
   const handleLineHeightChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const value = Number.parseFloat(e.target.value) || 1;
+      const value = Number(e.target.value) || 1;
       setValue('fonts.lineHeight', value);
     },
     [setValue]
@@ -58,7 +58,7 @@ const FontsSection = memo(() => {
 
   const handleFontSizeMultiplierChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const value = Number.parseFloat(e.target.value) || 1;
+      const value = Number(e.target.value) || 1;
       setValue('fonts.fontSizeMultiplier', value);
     },
     [setValue]

@@ -63,13 +63,12 @@ export default function DialogWrapper({
         )}
         side={side}
       >
-        {TitleComponent ? (
-          TitleComponent
-        ) : title ? (
-          <DialogTitle className='max-w-[90%] pb-1 ps-6 pt-6'>
-            {title}
-          </DialogTitle>
-        ) : null}
+        {TitleComponent ||
+          (title ? (
+            <DialogTitle className='max-w-[90%] pb-1 ps-6 pt-6'>
+              {title}
+            </DialogTitle>
+          ) : null)}
         <ScrollArea className={cn('h-full', bodyClassName)}>
           {children}
         </ScrollArea>

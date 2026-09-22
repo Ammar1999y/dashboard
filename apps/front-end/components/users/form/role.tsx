@@ -93,7 +93,7 @@ const RoleInput = memo(() => {
           >
             <RoleLabel selectedValue={selectedValue} />
             <ChevronDownIcon
-              className='absolute left-3 top-1/2 size-4 shrink-0 -translate-y-1/2 text-muted-foreground/80'
+              className='absolute top-1/2 size-4 shrink-0 -translate-y-1/2 text-muted-foreground/80 ltr:right-3 rtl:left-3'
               aria-hidden='true'
             />
           </Button>
@@ -160,7 +160,7 @@ const Content = memo(({ selectedValue, onSelect, isOpen }: ContentProps) => {
 
   const isRefetched = useRef(false);
   useEffect(() => {
-    (async () => {
+    void (async () => {
       if (
         !isOpen ||
         isLoading ||
@@ -174,7 +174,7 @@ const Content = memo(({ selectedValue, onSelect, isOpen }: ContentProps) => {
       isRefetched.current = true;
       await refetch();
     })();
-  }, [isOpen, refetch]);
+  }, [isOpen, refetch, isFetching, isLoading, isPending]);
 
   return (
     <Command data-lenis-prevent>

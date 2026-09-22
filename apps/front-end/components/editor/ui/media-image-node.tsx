@@ -32,11 +32,13 @@ export const ImageElement = withHOC(
     const flipVertical = props.element.flipVertical;
     const flipTransform = `scaleX(${flipHorizontal ? -1 : 1}) scaleY(${flipVertical ? -1 : 1})`;
 
+    const leftHandleClass = mediaResizeHandleVariants({ direction: 'left' });
+    const rightHandleClass = mediaResizeHandleVariants({ direction: 'right' });
+
     return (
       <MediaToolbar plugin={ImagePlugin}>
         <PlateElement
           {...props}
-          // @ts-ignore
           attributes={{
             ...props.attributes,
             'data-ltr-element': true,
@@ -52,7 +54,7 @@ export const ImageElement = withHOC(
               }}
             >
               <ResizeHandle
-                className={mediaResizeHandleVariants({ direction: 'left' })}
+                className={leftHandleClass}
                 options={{ direction: 'left' }}
               />
               <Image
@@ -69,9 +71,7 @@ export const ImageElement = withHOC(
                 }}
               />
               <ResizeHandle
-                className={mediaResizeHandleVariants({
-                  direction: 'right',
-                })}
+                className={rightHandleClass}
                 options={{ direction: 'right' }}
               />
             </Resizable>

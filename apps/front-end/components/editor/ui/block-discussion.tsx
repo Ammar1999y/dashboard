@@ -1,4 +1,3 @@
-/* eslint-disable react/display-name */
 'use client';
 
 import type { TDiscussion } from '@/components/editor/plugins/discussion-kit';
@@ -62,13 +61,14 @@ export const BlockDiscussion: RenderNodeWrapper<AnyPluginConfig> = (props) => {
   ].filter(([node]) => !node[getTransientSuggestionKey()]);
 
   if (
+    !draftCommentNode &&
     commentNodes.length === 0 &&
-    suggestionNodes.length === 0 &&
-    !draftCommentNode
+    suggestionNodes.length === 0
   ) {
     return;
   }
 
+  // eslint-disable-next-line react/display-name
   return (props) => (
     <BlockCommentContent
       blockPath={blockPath}
@@ -110,7 +110,7 @@ const BlockCommentContent = ({
   const isCommenting = activeCommentId === getDraftCommentKey();
   const activeDiscussion =
     activeCommentId &&
-    resolvedDiscussions.find((d) => d.id === activeCommentId);
+    resolvedDiscussions.find((d: TDiscussion) => d.id === activeCommentId);
 
   const noneActive = !activeSuggestion && !activeDiscussion;
 
@@ -120,7 +120,7 @@ const BlockCommentContent = ({
   ].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
   const selected =
-    resolvedDiscussions.some((d) => d.id === activeCommentId) ||
+    resolvedDiscussions.some((d: TDiscussion) => d.id === activeCommentId) ||
     resolvedSuggestions.some((s) => s.suggestionId === activeSuggestionId);
 
   const [_open, setOpen] = React.useState(selected);
@@ -152,25 +152,24 @@ const BlockCommentContent = ({
           ? draftCommentNode
           : commentNodes.find(
               ([node]) =>
-                editor.getApi(commentPlugin).comment.nodeId(node) ===
+                editor.getApi(CommentPlugin).comment.nodeId(node) ===
                 activeCommentId
             );
     }
 
     if (!activeNode) return null;
 
-    return editor.api.toDOMNode(activeNode[0])!;
+    return editor.api.toDOMNode(activeNode[0]) ?? null;
   }, [
-    open,
     activeSuggestion,
     activeCommentId,
-    editor.api,
+    editor,
     suggestionNodes,
     draftCommentNode,
     commentNodes,
   ]);
 
-  if (suggestionsCount + resolvedDiscussions.length === 0 && !draftCommentNode)
+  if (!draftCommentNode && suggestionsCount + resolvedDiscussions.length === 0)
     return <div className='w-full'>{children}</div>;
 
   return (
@@ -242,7 +241,7 @@ const BlockCommentContent = ({
         </PopoverContent>
 
         {totalCount > 0 && (
-          <div className='relative left-0 size-0 select-none'>
+          <div className='relative size-0 select-none ltr:right-0 rtl:left-0'>
             <PopoverTrigger asChild>
               <Button
                 className='ms-1 mt-1 flex h-6 gap-1 !px-1.5 py-0 text-muted-foreground/80 hover:text-muted-foreground/80 data-[active=true]:bg-muted'
@@ -314,10 +313,10 @@ const useResolvedDiscussion = (
 
   commentNodes.forEach(([node]) => {
     const id = api.comment.nodeId(node);
-    const map = getOption('uniquePathMap');
 
     if (!id) return;
 
+    const map = getOption('uniquePathMap');
     const previousPath = map.get(id);
 
     // If there are no comment nodes in the corresponding path in the map, then update it.
@@ -348,7 +347,8 @@ const useResolvedDiscussion = (
       const commentsPathMap = getOption('uniquePathMap');
       const firstBlockPath = commentsPathMap.get(item.id);
 
-      if (!firstBlockPath || !PathApi.equals(firstBlockPath, blockPath)) return false;
+      if (!firstBlockPath || !PathApi.equals(firstBlockPath, blockPath))
+        return false;
 
       return (
         api.comment.has({ id: item.id }) &&

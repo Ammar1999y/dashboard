@@ -8,16 +8,18 @@ import { validateRedirectPath } from '@/utils/validate-redirect-path';
 
 import Form from './form';
 
-const SignInPage = () => {
+export default function SignInPage() {
   const { replace } = useRouter();
   const { isPending, data } = useSession();
   const onSuccess = useCallback(() => {
-    replace(validateRedirectPath(localStorage.getItem('redirect-path') ?? ''));
+    void replace(
+      validateRedirectPath(localStorage.getItem('redirect-path') ?? '')
+    );
     localStorage.removeItem('redirect-path');
   }, [replace]);
   useEffect(() => {
     if (!isPending && validID(data?.user.id) && data?.session.id)
-      replace('/dash');
+      void replace('/dash');
   }, [isPending, data, replace]);
 
   if (isPending || data?.user) return null;
@@ -30,9 +32,7 @@ const SignInPage = () => {
       </div>
     </div>
   );
-};
-
-export default SignInPage;
+}
 
 const Logo = memo(
   ({

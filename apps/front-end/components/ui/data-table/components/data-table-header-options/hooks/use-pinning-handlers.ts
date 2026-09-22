@@ -5,7 +5,7 @@ import { useShallow } from 'zustand/shallow';
 
 import { useColumnOrder, useColumnPinning } from '../../../store';
 
-export const usePinningHandlers = (column: Column<any, any>) => {
+export const usePinningHandlers = (column: Column<unknown, unknown>) => {
   const isLeftPinning = useColumnPinning(
     useShallow((s) => s.columnPinning.left?.includes(column.id))
   );

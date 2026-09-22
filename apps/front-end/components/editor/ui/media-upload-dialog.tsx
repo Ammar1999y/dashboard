@@ -178,11 +178,11 @@ export function MediaUploadDialog({
               <div className='grid gap-2'>
                 <Label htmlFor='url' title={`رابط ${config.label}`} />
                 <div className='relative'>
-                  <LinkIcon className='absolute left-3 top-2.5 h-4 w-4 text-muted-foreground' />
+                  <LinkIcon className='absolute top-2.5 h-4 w-4 text-muted-foreground ltr:right-3 rtl:left-3' />
                   <Input
                     id='url'
                     placeholder={`https://example.com/${type}...`}
-                    className='pl-9'
+                    className='pe-9'
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                   />

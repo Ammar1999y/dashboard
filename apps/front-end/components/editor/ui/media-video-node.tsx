@@ -44,11 +44,13 @@ export const VideoElement = withHOC(
       element: props.element,
     });
 
+    const leftHandleClass = mediaResizeHandleVariants({ direction: 'left' });
+    const rightHandleClass = mediaResizeHandleVariants({ direction: 'right' });
+
     return (
       <PlateElement
         className='py-2.5'
         {...props}
-        // @ts-ignore
         attributes={{
           ...props.attributes,
           'data-ltr-element': true,
@@ -67,19 +69,19 @@ export const VideoElement = withHOC(
           >
             <div className='group/media'>
               <ResizeHandle
-                className={mediaResizeHandleVariants({ direction: 'left' })}
+                className={leftHandleClass}
                 options={{ direction: 'left' }}
               />
 
               <ResizeHandle
-                className={mediaResizeHandleVariants({ direction: 'right' })}
+                className={rightHandleClass}
                 options={{ direction: 'right' }}
               />
 
               {!isUpload && isYoutube && (
                 <div ref={handleRef}>
                   <LiteYouTubeEmbed
-                    id={embed!.id!}
+                    id={embed?.id ?? ''}
                     title='youtube'
                     wrapperClass={cn(
                       'aspect-video rounded-sm',
@@ -87,12 +89,12 @@ export const VideoElement = withHOC(
                       '[&.lyt-activated]:before:absolute [&.lyt-activated]:before:top-0 [&.lyt-activated]:before:h-14 [&.lyt-activated]:before:w-full [&.lyt-activated]:before:bg-top [&.lyt-activated]:before:bg-repeat-x [&.lyt-activated]:before:pb-12 [&.lyt-activated]:before:[transition:all_0.2s_cubic-bezier(0,_0,_0.2,_1)]',
                       '[&.lyt-activated]:before:bg-[url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAADGCAYAAAAT+OqFAAAAdklEQVQoz42QQQ7AIAgEF/T/D+kbq/RWAlnQyyazA4aoAB4FsBSA/bFjuF1EOL7VbrIrBuusmrt4ZZORfb6ehbWdnRHEIiITaEUKa5EJqUakRSaEYBJSCY2dEstQY7AuxahwXFrvZmWl2rh4JZ07z9dLtesfNj5q0FU3A5ObbwAAAABJRU5ErkJggg==)]',
                       'after:block after:pb-[var(--aspect-ratio)] after:content-[""]',
-                      '[&_>_iframe]:absolute [&_>_iframe]:top-0 [&_>_iframe]:left-0 [&_>_iframe]:size-full',
+                      '[&_>_iframe]:absolute [&_>_iframe]:top-0 rtl:[&_>_iframe]:left-0 ltr:[&_>_iframe]:right-0 [&_>_iframe]:size-full',
                       '[&_>_.lty-playbtn]:z-[1] [&_>_.lty-playbtn]:h-11 [&_>_.lty-playbtn]:w-16 [&_>_.lty-playbtn]:rounded-[14%] [&_>_.lty-playbtn]:bg-[#212121] [&_>_.lty-playbtn]:opacity-80 [&_>_.lty-playbtn]:[transition:all_0.2s_cubic-bezier(0,_0,_0.2,_1)]',
                       '[&:hover_>_.lty-playbtn]:bg-[red] [&:hover_>_.lty-playbtn]:opacity-100',
                       '[&_>_.lty-playbtn]:before:border-[transparent_transparent_transparent_#fff] [&_>_.lty-playbtn]:before:border-y-3 [&_>_.lty-playbtn]:before:border-s-5 [&_>_.lty-playbtn]:before:border-e-0 [&_>_.lty-playbtn]:before:content-[""]',
-                      '[&_>_.lty-playbtn]:absolute [&_>_.lty-playbtn]:top-1/2 [&_>_.lty-playbtn]:left-1/2 [&_>_.lty-playbtn]:[transform:translate3d(-50%,-50%,0)]',
-                      '[&_>_.lty-playbtn]:before:absolute [&_>_.lty-playbtn]:before:top-1/2 [&_>_.lty-playbtn]:before:left-1/2 [&_>_.lty-playbtn]:before:[transform:translate3d(-50%,-50%,0)]',
+                      '[&_>_.lty-playbtn]:absolute [&_>_.lty-playbtn]:top-1/2 rtl:[&_>_.lty-playbtn]:left-1/2 ltr:[&_>_.lty-playbtn]:right-1/2 [&_>_.lty-playbtn]:[transform:translate3d(-50%,-50%,0)]',
+                      '[&_>_.lty-playbtn]:before:absolute [&_>_.lty-playbtn]:before:top-1/2 rtl:[&_>_.lty-playbtn]:before:left-1/2 ltr:[&_>_.lty-playbtn]:before:right-1/2 [&_>_.lty-playbtn]:before:[transform:translate3d(-50%,-50%,0)]',
                       '[&.lyt-activated]:cursor-[unset]',
                       '[&.lyt-activated]:before:pointer-events-none [&.lyt-activated]:before:opacity-0',
                       '[&.lyt-activated_>_.lty-playbtn]:pointer-events-none [&.lyt-activated_>_.lty-playbtn]:!opacity-0'

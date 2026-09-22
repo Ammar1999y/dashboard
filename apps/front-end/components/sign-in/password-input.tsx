@@ -36,7 +36,7 @@ const PasswordInput = memo(() => {
         placeholder=''
       />
       <Button
-        className='absolute right-3 top-1/2 -translate-y-1/2 py-1 text-gray-500'
+        className='absolute top-1/2 -translate-y-1/2 py-1 text-gray-500 ltr:right-3 rtl:right-3'
         variant='none'
         aria-label={showPassword ? 'اخفاء كلمة المرور' : 'اظهار كلمة المرور'}
         size='icon'

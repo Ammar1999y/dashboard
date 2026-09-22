@@ -26,7 +26,9 @@ export const NavItemRenderer: React.FC<NavItemRendererProps> = ({
       type='button'
       tabIndex={disabled ? -1 : 0}
       className={cn(className, disabled && 'disabled')}
-      onClick={onClick as any}
+      onClick={
+        onClick as React.MouseEventHandler<HTMLButtonElement> | undefined
+      }
     >
       {children}
     </button>

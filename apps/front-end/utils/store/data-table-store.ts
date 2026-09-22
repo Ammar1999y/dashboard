@@ -27,8 +27,8 @@ export const URL_KEYS = {
 interface DataTableState {
   page: number;
   perPage: number;
-  sort: ExtendedColumnSort<any>[];
-  filters: ExtendedColumnFilter<any>[];
+  sort: ExtendedColumnSort<Record<string, unknown>>[];
+  filters: ExtendedColumnFilter<Record<string, unknown>>[];
   joinOperator: JoinOperator;
   search: string;
 }
@@ -53,12 +53,14 @@ interface DataTableActions {
   initTable: (tableKey: string) => void;
   setPage: (page: number) => void;
   setPerPage: (perPage: number) => void;
-  setSorting: (sort: ExtendedColumnSort<any>[]) => void;
+  setSorting: (sort: ExtendedColumnSort<Record<string, unknown>>[]) => void;
   setFilters: (
     filters:
-      | ExtendedColumnFilter<any>[]
+      | ExtendedColumnFilter<Record<string, unknown>>[]
       | null
-      | ((prev: ExtendedColumnFilter<any>[]) => ExtendedColumnFilter<any>[])
+      | ((
+          prev: ExtendedColumnFilter<Record<string, unknown>>[]
+        ) => ExtendedColumnFilter<Record<string, unknown>>[])
   ) => void;
   setJoinOperator: (joinOperator: JoinOperator) => void;
   setSearch: (search: string) => void;

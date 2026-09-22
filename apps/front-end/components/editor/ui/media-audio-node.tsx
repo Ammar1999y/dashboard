@@ -17,7 +17,6 @@ export const AudioElement = withHOC(
     return (
       <PlateElement
         {...props}
-        // @ts-ignore
         attributes={{
           ...props.attributes,
           'data-ltr-element': true,

@@ -1,4 +1,4 @@
-import type { ExtendedColumnSort } from '@/types/data-table';
+import type { ColumnSort } from '@tanstack/react-table';
 
 import { memo, useEffect, useMemo, useRef } from 'react';
 
@@ -6,16 +6,13 @@ import { useShallow } from 'zustand/shallow';
 
 import { URL_KEYS, useDataTableStore } from '@/utils/store/data-table-store';
 
-function isSortEqual(
-  a: ExtendedColumnSort<any>[],
-  b: ExtendedColumnSort<any>[]
-): boolean {
+function isSortEqual(a: ColumnSort[], b: ColumnSort[]): boolean {
   if (a.length !== b.length) return false;
-  return a.every((item, i) => item.id === b[i]!.id && item.desc === b[i]!.desc);
+  return a.every((item, i) => item.id === b[i]?.id && item.desc === b[i]?.desc);
 }
 
 interface UrlSyncProps {
-  defaultSort?: ExtendedColumnSort<any>[];
+  defaultSort?: ColumnSort[];
 }
 
 const DEBOUNCE_MS = 300;
@@ -53,7 +50,7 @@ const UrlSync = memo(({ defaultSort }: UrlSyncProps) => {
 
       const isDefaultSort =
         stableDefaultSort.length > 0 && isSortEqual(sort, stableDefaultSort);
-      if (sort.length > 0 && !isDefaultSort)
+      if (!isDefaultSort && sort.length > 0)
         params.set(URL_KEYS.sort, JSON.stringify(sort));
 
       if (filters.length > 0)

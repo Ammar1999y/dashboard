@@ -10,7 +10,7 @@ import { DataTableBodyRow } from './data-table-body-row';
 import { DataTableEmptyState } from './data-table-empty-state';
 import { DataTableErrorState } from './data-table-error-state';
 
-const getSaveRowLength = (table: Table<any>) => {
+const getSaveRowLength = (table: Table<unknown>) => {
   try {
     return table.getRowModel().rows.length;
   } catch {
@@ -18,44 +18,52 @@ const getSaveRowLength = (table: Table<any>) => {
   }
 };
 
-const TableBodyContent = memo(
-  ({
-    table,
-    isLoading,
-    error,
-    refetch,
-    columnCount,
-  }: {
-    table: Table<any>;
-    isLoading: boolean;
-    error: Error | null | undefined;
-    refetch: () => void;
-    columnCount: number;
-  }) => {
-    useUpdateRows(useShallow((s) => s.reRender));
-    const data = useTableData(useShallow((s) => s.data));
-    return data?.length && getSaveRowLength(table) ? (
-      <DateTableRows table={table} />
-    ) : isLoading ? (
-      <DataTableSkeleton table={table} columnCount={columnCount} rowCount={5} />
-    ) : error ? (
-      <DataTableErrorState error={error || null} refetch={refetch} />
-    ) : (
-      <DataTableEmptyState />
-    );
-  }
-);
+interface TableBodyContentProps<TData = unknown> {
+  table: Table<TData>;
+  isLoading: boolean;
+  error: Error | null | undefined;
+  refetch: () => void;
+  columnCount: number;
+}
 
-const DateTableRows = memo(({ table }: { table: Table<any> }) => {
+const TableBodyContentInner = <TData,>({
+  table,
+  isLoading,
+  error,
+  refetch,
+  columnCount,
+}: TableBodyContentProps<TData>) => {
+  useUpdateRows(useShallow((s) => s.reRender));
+  const data = useTableData(useShallow((s) => s.data));
+  return data?.length && getSaveRowLength(table as Table<unknown>) ? (
+    <DateTableRows table={table} />
+  ) : isLoading ? (
+    <DataTableSkeleton
+      table={table as Table<unknown>}
+      columnCount={columnCount}
+      rowCount={5}
+    />
+  ) : error ? (
+    <DataTableErrorState error={error || null} refetch={refetch} />
+  ) : (
+    <DataTableEmptyState />
+  );
+};
+
+const TableBodyContent = memo(TableBodyContentInner) as <TData>(
+  props: TableBodyContentProps<TData>
+) => React.ReactElement | null;
+
+const DateTableRowsInner = <TData,>({ table }: { table: Table<TData> }) => {
   useUpdateRows(useShallow((s) => s.reRender));
   useColumnPinning(useShallow((s) => s.columnPinning));
   return table
     .getRowModel()
-    .rows.map((row) => <DataTableBodyRow key={row.id} row={row} />);
-});
+    .rows.map((row) => <DataTableBodyRow key={row.id} row={row as never} />);
+};
 
-DateTableRows.displayName = 'DateTableRows';
-
-TableBodyContent.displayName = 'TableBodyContent';
+const DateTableRows = memo(DateTableRowsInner) as <TData>(props: {
+  table: Table<TData>;
+}) => React.ReactElement | null;
 
 export { TableBodyContent };

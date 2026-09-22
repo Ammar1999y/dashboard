@@ -23,7 +23,7 @@ const TRAILING_COLON_REGEX = /:$/;
 
 export function EmojiInputElement(props: PlateElementProps) {
   const { children, editor, element } = props;
-  const data = usePluginOption(EmojiPlugin, 'data')!;
+  const data = usePluginOption(EmojiPlugin, 'data');
   const [value, setValue] = React.useState('');
   const debouncedValue = useDebounce(value, 100);
   const isPending = value !== debouncedValue;
@@ -40,7 +40,6 @@ export function EmojiInputElement(props: PlateElementProps) {
     <PlateElement
       as='span'
       {...props}
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         'data-ltr-element': true,

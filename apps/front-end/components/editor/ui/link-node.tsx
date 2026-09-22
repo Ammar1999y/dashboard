@@ -18,7 +18,6 @@ export function LinkElement(props: PlateElementProps<TLinkElement>) {
     <PlateElement
       {...props}
       as='a'
-      // @ts-ignore
       attributes={{
         ...props.attributes,
         ...getLinkAttributes(props.editor, props.element),

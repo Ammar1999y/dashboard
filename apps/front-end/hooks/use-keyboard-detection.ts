@@ -20,11 +20,10 @@ export function useKeyboardDetection(): KeyboardDetection {
       const isTouchDevice =
         'ontouchstart' in globalThis ||
         navigator.maxTouchPoints > 0 ||
-        // @ts-ignore
-        navigator.msMaxTouchPoints > 0;
+        Boolean((navigator as { msMaxTouchPoints?: number }).msMaxTouchPoints);
 
       // Check media query for pointer type
-      const hasCoarsePointer = globalThis.matchMedia('(pointer: coarse)').matches;
+      const hasCoarsePointer = matchMedia('(pointer: coarse)').matches;
 
       // If touch device with coarse pointer, likely no physical keyboard
       setHasKeyboard(!(isTouchDevice && hasCoarsePointer));

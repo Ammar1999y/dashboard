@@ -33,7 +33,7 @@ const ModuleTrigger = ({
 
   useEffect(() => {
     if (isOpen) hasOpenedOnce.current = true;
-    else if (hasOpenedOnce.current && triggerButtonRef.current && !disableFocus)
+    else if (!disableFocus && hasOpenedOnce.current && triggerButtonRef.current)
       setTimeout(() => triggerButtonRef.current?.focus(), 300);
   }, [isOpen, disableFocus]);
 

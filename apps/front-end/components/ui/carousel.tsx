@@ -252,7 +252,7 @@ const CarouselPrevious = ({
       size={size}
       aria-label={'السابق'}
       className={cn(
-        'easeOutCircFunction absolute right-2 z-10 size-9 rounded-full bg-white/20 p-2 text-white backdrop-blur-sm duration-300 hover:scale-110 hover:bg-white/30 active:scale-95',
+        'easeOutCircFunction absolute z-10 size-9 rounded-full bg-white/20 p-2 text-white backdrop-blur-sm duration-300 hover:scale-110 hover:bg-white/30 active:scale-95 ltr:left-2 rtl:right-2',
         orientation === 'horizontal'
           ? 'top-1/2 -translate-y-1/2'
           : '-top-12 -translate-x-1/2 rotate-90',
@@ -286,7 +286,7 @@ const CarouselNext = ({
       size={size}
       aria-label={'التالي'}
       className={cn(
-        'easeOutCircFunction absolute left-2 z-10 size-9 rotate-180 rounded-full bg-white/20 p-2 text-white backdrop-blur-sm duration-300 hover:scale-110 hover:bg-white/30 active:scale-95',
+        'easeOutCircFunction absolute z-10 size-9 rotate-180 rounded-full bg-white/20 p-2 text-white backdrop-blur-sm duration-300 hover:scale-110 hover:bg-white/30 active:scale-95 ltr:right-2 rtl:left-2',
         orientation === 'horizontal'
           ? 'top-1/2 -translate-y-1/2'
           : '-bottom-12 -translate-x-1/2 rotate-90',

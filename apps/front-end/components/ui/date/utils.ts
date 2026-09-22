@@ -29,7 +29,7 @@ export const tableFormatDate = (date: string | null): string => {
 
 export const getDateAdjustedForTimezone = (dateInput: Date | string): Date => {
   if (typeof dateInput === 'string') {
-    const parts = dateInput.split('-').map((part) => Number.parseInt(part, 10));
+    const parts = dateInput.split('-').map((part) => Math.trunc(Number(part)));
     const date = new Date(parts[0], parts[1] - 1, parts[2]);
     return date;
   }

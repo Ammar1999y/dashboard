@@ -26,7 +26,7 @@ const ComboboxInputBase = React.forwardRef<
   <ComboboxPrimitive.Anchor asChild>
     <InputBase ref={ref} {...props}>
       {icon && (
-        <div className='absolute right-3 top-1/2 -translate-y-1/2 text-gray-500'>
+        <div className='absolute top-1/2 -translate-y-1/2 text-gray-500 ltr:left-3 rtl:right-3'>
           {icon}
         </div>
       )}
@@ -51,8 +51,8 @@ export const ComboboxInput = React.forwardRef<
   React.ElementRef<typeof ComboboxPrimitive.Input>,
   React.ComponentPropsWithoutRef<typeof ComboboxPrimitive.Input> & {
     icon?: React.ReactNode;
-    value: any;
-    onChange: (e: any) => void;
+    value?: string | number | readonly string[];
+    onChange?: React.ChangeEventHandler<HTMLInputElement>;
   }
 >(({ icon, ...props }, ref) => (
   <ComboboxInputBase icon={icon}>
@@ -94,7 +94,7 @@ const ComboboxTag = React.forwardRef<
     ref={ref}
     className={cn(
       badgeVariants({ variant: 'outline' }),
-      'group pr-1.5 space-x-1 data-[disabled]:opacity-50',
+      'group ps-1.5 space-x-1 data-[disabled]:opacity-50',
       className
     )}
     {...props}
@@ -202,7 +202,7 @@ export const ComboboxItem = React.forwardRef<
     {...props}
   >
     <ComboboxPrimitive.ItemText>{children}</ComboboxPrimitive.ItemText>
-    <ComboboxPrimitive.ItemIndicator className='absolute left-2 flex size-3.5 items-center justify-center'>
+    <ComboboxPrimitive.ItemIndicator className='absolute flex size-3.5 items-center justify-center ltr:left-2 rtl:right-2'>
       <Check className='size-4' />
     </ComboboxPrimitive.ItemIndicator>
   </ComboboxPrimitive.Item>

@@ -5,7 +5,6 @@ import '@/styles/app-style.css';
 import '@/styles/icons.css';
 import '@/styles/table.css';
 
-import type { NextComponentType, NextPageContext } from 'next';
 // Import local storage handlers to register them
 
 import type { AppProps } from 'next/app';
@@ -44,7 +43,7 @@ const myFont = Cairo({
   display: 'swap',
 });
 interface ComponentProps extends AppProps {
-  Component: NextComponentType<NextPageContext, any, any> & {
+  Component: AppProps['Component'] & {
     hideSidebar?: boolean;
   };
 }
@@ -74,16 +73,18 @@ const App = ({ Component, pageProps, router }: ComponentProps) => {
   }, [router]);
 
   useEffect(() => {
-    const handleResize = () =>
-      useModules.getState().setShowDrawer(window.innerWidth <= 768);
-    window.addEventListener('resize', handleResize);
-    handleResize();
+    const mql = matchMedia('(max-width: 768px)');
+    const onChange = (e: MediaQueryListEvent | MediaQueryList) =>
+      useModules.getState().setShowDrawer(e.matches);
+    onChange(mql);
+    mql.addEventListener('change', onChange);
     return () => {
-      window.removeEventListener('resize', handleResize);
+      mql.removeEventListener('change', onChange);
     };
   }, []);
-  const hideSidebar = Component.hideSidebar;
+
   if (serverError) return <ErrorPage />;
+  const hideSidebar = Component.hideSidebar;
   return (
     <ReactQueryProvider>
       <DirectionProvider dir={'rtl'}>

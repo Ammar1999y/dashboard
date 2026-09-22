@@ -4,7 +4,7 @@ import { type Column } from '@tanstack/react-table';
 
 import { useColumnVisibility } from '../../../store';
 
-export const useOtherHandlers = (column: Column<any, any>) => {
+export const useOtherHandlers = (column: Column<unknown, unknown>) => {
   const handleHideColumn = useCallback(() => {
     if (!column.getCanHide()) return;
     const { columnVisibility, setColumnVisibility } =

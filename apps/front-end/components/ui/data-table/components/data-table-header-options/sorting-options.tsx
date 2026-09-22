@@ -24,19 +24,19 @@ const SortingOptions = memo(({ column }: ColumnOptionsProps) => {
     <>
       {isSorted()?.desc !== false && (
         <DropdownMenuItem onClick={handleSortAscending}>
-          <ArrowUp className='ml-2 h-4 w-4' />
+          <ArrowUp className='me-2 h-4 w-4' />
           <span>ترتيب تصاعدي</span>
         </DropdownMenuItem>
       )}
       {isSorted()?.desc !== true && (
         <DropdownMenuItem onClick={handleSortDescending}>
-          <ArrowDown className='ml-2 h-4 w-4' />
+          <ArrowDown className='me-2 h-4 w-4' />
           <span>ترتيب تنازلي</span>
         </DropdownMenuItem>
       )}
       {isSorted() && (
         <DropdownMenuItem onClick={handleClearSort}>
-          <ClearSort className='ml-2 h-4 w-4' />
+          <ClearSort className='me-2 h-4 w-4' />
           <span>الغاء الترتيب</span>
         </DropdownMenuItem>
       )}

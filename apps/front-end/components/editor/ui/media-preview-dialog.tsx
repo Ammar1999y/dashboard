@@ -48,7 +48,7 @@ export function MediaPreviewDialog() {
   return (
     <div
       className={cn(
-        'fixed left-0 top-0 z-50 h-screen w-screen select-none',
+        'fixed top-0 z-50 h-screen w-screen select-none ltr:right-0 rtl:left-0',
         !isOpen && 'hidden'
       )}
       onContextMenu={(e) => e.stopPropagation()}
@@ -64,7 +64,7 @@ export function MediaPreviewDialog() {
             )}
           />
           <div
-            className='absolute bottom-0 left-1/2 z-40 flex w-fit -translate-x-1/2 justify-center gap-4 p-2 text-center text-white'
+            className='absolute bottom-0 z-40 flex w-fit -translate-x-1/2 justify-center gap-4 p-2 text-center text-white ltr:right-1/2 rtl:left-1/2'
             onClick={(e) => e.stopPropagation()}
           >
             <div className='flex gap-1'>

@@ -74,7 +74,7 @@ export const SingleDatePicker: FC<SingleDatePickerProps> = memo(
             aria-label='اختر التاريخ'
           >
             {showIcon && (
-              <CalendarIcon className='absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
+              <CalendarIcon className='absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground ltr:left-3 rtl:right-3' />
             )}
             <div
               className={cn(
@@ -83,9 +83,9 @@ export const SingleDatePicker: FC<SingleDatePickerProps> = memo(
                   'rounded-md border border-input bg-background px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground'
               )}
             >
-              <span className='truncate text-right'>{displayText}</span>
+              <span className='truncate text-start'>{displayText}</span>
               {!triggerClassName && (
-                <ChevronDownIcon className='ml-2 h-4 w-4 opacity-50' />
+                <ChevronDownIcon className='ms-2 h-4 w-4 opacity-50' />
               )}
             </div>
           </button>
@@ -108,7 +108,7 @@ export const SingleDatePicker: FC<SingleDatePickerProps> = memo(
               className='mx-auto p-0 pt-2'
             />
           </div>
-          <div className='flex justify-end pb-2 pr-4 pt-4 space-x-2'>
+          <div className='flex justify-end pb-2 ps-4 pt-4 space-x-2'>
             <Button onClick={handleCancel} variant='ghost'>
               الغاء
             </Button>

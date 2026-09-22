@@ -7,13 +7,13 @@ import { CustomError } from './error-class';
 type MutationMethod = 'POST' | 'PUT' | 'DELETE';
 
 // Type for local storage handlers
-type LocalStorageHandler<TData = any, TVariables = any> = {
+type LocalStorageHandler<TData = unknown, TVariables = unknown> = {
   create?: (data: TVariables) => Promise<{ data: TData; message: string }>;
   update?: (
     id: EntityID,
     data: TVariables
   ) => Promise<{ data: TData; message: string }>;
-  delete?: (id: EntityID) => Promise<{ data: any; message: string }>;
+  delete?: (id: EntityID) => Promise<{ data: unknown; message: string }>;
 };
 
 // Registry for local storage handlers by endpoint pattern
