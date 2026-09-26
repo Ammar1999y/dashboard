@@ -1,19 +1,10 @@
-import type {
-  CreateUserFormData,
-  UpdateUserFormData,
-} from '@/utils/validation/auth';
-
 import { memo } from 'react';
-
-import { useFormContext } from 'react-hook-form';
 
 import { PHONE_ENABLED, PHONE_REQUIRED } from '@/utils/config';
 
-import { Input } from '@/components/ui/input';
-import Label from '@/components/ui/label';
-import UserStatusSwitch from '@/components/ui/switch-larg';
-import { ErrorMessage } from '@/components/form/error-message';
-import PasswordInput from '@/components/users/form/password';
+import FormInput from '@/components/form/form-input';
+import FormPassword from '@/components/form/form-password';
+import FormSwitch from '@/components/form/form-switch';
 import PasswordStrength from '@/components/users/form/password-strength';
 import RoleInput from '@/components/users/form/role';
 
@@ -22,80 +13,35 @@ interface UserFormProps {
 }
 
 const UserForm = memo(({ isEdit = false }: UserFormProps) => {
-  const { register } = useFormContext<
-    CreateUserFormData | UpdateUserFormData
-  >();
   return (
     <div className='grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3'>
+      <FormInput name='name' label='الاسم' autoFocus required />
+      <FormInput name='email' label='البريد الإلكتروني' dir='ltr' required />
       <div>
-        <Label title={`الاسم`} require htmlFor={register('name').name} />
-        <Input
-          autoFocus
-          id={register('name').name}
-          type={'text'}
-          placeholder={''}
-          dir='auto'
-          autoComplete='off'
-          {...register('name')}
+        <FormPassword
+          name='password'
+          label={isEdit ? 'تغير كلمة السر' : 'كلمة المرور'}
+          autoComplete='new-password'
+          required
         />
-        <ErrorMessage path={register('name').name} />
-      </div>
-      <div>
-        <Label
-          title={`البريد الإلكتروني`}
-          require
-          htmlFor={register('email').name}
-        />
-        <Input
-          id={register('email').name}
-          type={'text'}
-          dir='ltr'
-          placeholder={''}
-          autoComplete='off'
-          {...register('email')}
-        />
-        <ErrorMessage path={register('email').name} />
-      </div>
-      <div>
-        <Label
-          title={isEdit ? 'تغير كلمة السر' : 'كلمة المرور'}
-          require
-          htmlFor={register('password').name}
-        />
-        <PasswordInput />
-        <ErrorMessage path={register('password').name} />
         <PasswordStrength />
       </div>
       {PHONE_ENABLED && (
-        <div>
-          <Label
-            title='رقم الهاتف'
-            require={PHONE_REQUIRED}
-            htmlFor={register('phoneNumber').name}
-          />
-          <Input
-            id={register('phoneNumber').name}
-            type='tel'
-            dir='ltr'
-            placeholder='05XXXXXXXX'
-            autoComplete='off'
-            {...register('phoneNumber')}
-          />
-          <ErrorMessage path={register('phoneNumber').name} />
-        </div>
-      )}
-      <div>
-        <RoleInput />
-        <ErrorMessage path={register('roleId').name} />
-      </div>
-      <div className='mt-3 flex items-center gap-x-4 gap-y-3 lg:mt-0 lg:flex-col lg:items-start'>
-        <Label
-          title='الحالة'
-          className='mb-0'
-          htmlFor={register('isActive').name}
+        <FormInput
+          name='phoneNumber'
+          label='رقم الهاتف'
+          type='tel'
+          dir='ltr'
+          placeholder='05XXXXXXXX'
+          required={PHONE_REQUIRED}
         />
-        <UserStatusSwitch name='isActive' ariaLabel='تبديل حالة المستخدم' />
-      </div>
+      )}
+      <RoleInput />
+      <FormSwitch
+        name='isActive'
+        label='الحالة'
+        className='mt-3 flex items-center gap-x-4 gap-y-3 lg:mt-0 lg:flex-col lg:items-start'
+      />
     </div>
   );
 });

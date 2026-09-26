@@ -1,4 +1,4 @@
-import type { LoginFormData } from '@/utils/validation/auth';
+import type { LoginInput } from '@/utils/validation/auth';
 import type {
   TurnstileInstance,
   TurnstileProps,
@@ -10,11 +10,11 @@ import { Turnstile as _Turnstile } from '@marsidev/react-turnstile';
 import { useTheme } from 'next-themes';
 import { useFormContext } from 'react-hook-form';
 import { toast } from 'sonner';
-import { useShallow } from 'zustand/react/shallow';
 
-import { useErrors } from '@/utils/store/errors';
+import { useFormErrors } from '@/components/form/store';
 
 const Turnstile = memo(_Turnstile);
+Turnstile.displayName = 'Turnstile';
 
 const scriptOptions = {
   id: `turnstile-script`,
@@ -40,11 +40,11 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
     }));
   }, [theme, resolvedTheme]);
 
-  const errorMessage = useErrors(useShallow((state) => state.errors));
+  const errorMessage = useFormErrors();
   const ref = useRef<TurnstileInstance>(null);
   const [remove, setRemove] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const { setValue } = useFormContext<LoginFormData>();
+  const { setValue } = useFormContext<LoginInput>();
   useEffect(() => {
     if (!(remove || errorMessage?.captcha)) {
       return;
@@ -112,7 +112,9 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
       key={!remove + ' ' + !remove}
       ref={ref}
       siteKey={
-        process.env.NODE_ENV === 'development'
+        // A mock build runs on localhost, where the real key is refused.
+        process.env.NODE_ENV === 'development' ||
+        process.env.NEXT_PUBLIC_API_MOCKING === 'enabled'
           ? '1x00000000000000000000AA'
           : (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '')
       }

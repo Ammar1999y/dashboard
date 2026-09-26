@@ -1,25 +1,23 @@
 import type { PagePermission } from '@/components/users/permissions-table/types';
 import type {
-  CreatePermissionFormData,
-  UpdatePermissionFormData,
+  CreatePermissionInput,
+  UpdatePermissionInput,
 } from '@/utils/validation/permissions';
 
 import { memo, useCallback } from 'react';
 
 import { useFormContext } from 'react-hook-form';
 
-import { AutosizeTextarea } from '@/components/ui/auto-resize-textarea';
-import { Input } from '@/components/ui/input';
-import UserStatusSwitch from '@/components/ui/switch-larg';
 import { ErrorMessage } from '@/components/form/error-message';
+import FormInput from '@/components/form/form-input';
+import FormSwitch from '@/components/form/form-switch';
+import FormTextarea from '@/components/form/form-textarea';
 import PermissionsTable from '@/components/users/permissions-table/permissions-table';
-
-import Label from '../ui/label';
 
 const PermissionsForm = memo(
   ({ setInitPermissions = true }: { setInitPermissions?: boolean }) => {
-    const { register, setValue } = useFormContext<
-      CreatePermissionFormData | UpdatePermissionFormData
+    const { setValue } = useFormContext<
+      CreatePermissionInput | UpdatePermissionInput
     >();
     const handlePermissionsChange = useCallback(
       (permissions: PagePermission[]) => {
@@ -31,43 +29,27 @@ const PermissionsForm = memo(
     return (
       <div className='formContentPadding space-y-6'>
         <div className='grid gap-x-4 gap-y-5 xs2:grid-cols-12 md:gap-6'>
-          <div className='order-1 xs2:col-span-8 sm:col-span-4'>
-            <Label
-              title={`الاسم`}
-              require
-              htmlFor={register('roleName').name}
-            />
-            <Input
-              id={register('roleName').name}
-              {...register('roleName')}
-              placeholder=''
-            />
-            <ErrorMessage path={register('roleName').name} />
-          </div>
+          <FormInput
+            name='roleName'
+            label='الاسم'
+            required
+            classNameField='order-1 xs2:col-span-8 sm:col-span-4'
+          />
 
-          <div className='order-3 xs2:col-span-12 sm:order-2 sm:col-span-5'>
-            <Label title={`الوصف`} htmlFor={register('description').name} />
-            <AutosizeTextarea
-              id={register('description').name}
-              placeholder=''
-              rows={1}
-              minRows={3}
-              className='px-3 pb-2 pt-3'
-              {...register('description')}
-            />
-            <ErrorMessage path={register('description').name} />
-          </div>
-          <div className='order-2 flex items-center gap-2 xs2:col-span-4 xs2:flex-col xs2:items-start sm:order-3 sm:col-span-3'>
-            <Label
-              title={`الحالة`}
-              htmlFor={register('isActive').name}
-              className='mb-0'
-            />
-            <UserStatusSwitch
-              name={register('isActive').name}
-              ariaLabel='تبديل حالة الدور'
-            />
-          </div>
+          <FormTextarea
+            name='description'
+            label='الوصف'
+            rows={1}
+            minRows={3}
+            maxRows={6}
+            classNameField='order-3 xs2:col-span-12 sm:order-2 sm:col-span-5'
+          />
+
+          <FormSwitch
+            name='isActive'
+            label='الحالة'
+            className='order-2 flex items-center gap-2 xs2:col-span-4 xs2:flex-col xs2:items-start sm:order-3 sm:col-span-3'
+          />
         </div>
 
         <div>
@@ -76,7 +58,7 @@ const PermissionsForm = memo(
             onPermissionsChange={handlePermissionsChange}
             setInitPermissions={setInitPermissions}
           />
-          <ErrorMessage path='permissions' />
+          <ErrorMessage name='permissions' />
         </div>
       </div>
     );

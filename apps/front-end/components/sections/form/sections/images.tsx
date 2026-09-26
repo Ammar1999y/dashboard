@@ -4,7 +4,7 @@ import { ACCEPT_IMAGES_WITH_SVG } from '@/lib/constants';
 
 import { MAX_IMAGE_SIZE } from '@/utils/images/config';
 
-import Label from '@/components/ui/label';
+import { Label } from '@/components/ui/label';
 import { FileUpload } from '@/components/file-upload';
 
 const ImagesSection = memo(() => {

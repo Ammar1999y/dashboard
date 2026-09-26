@@ -1,5 +1,3 @@
-'use client';
-
 import type { SortableContextProps } from '@dnd-kit/sortable';
 
 import * as React from 'react';

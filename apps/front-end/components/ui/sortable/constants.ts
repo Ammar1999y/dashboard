@@ -24,13 +24,12 @@ export const ITEM_HANDLE_NAME = 'SortableItemHandle';
 export const OVERLAY_NAME = 'SortableOverlay';
 
 export const SORTABLE_ERRORS = {
-  [CONTENT_NAME]: `\`${CONTENT_NAME}\` يجب أن يكون داخل \`${ROOT_NAME}\``,
-  [ITEM_NAME]: `\`${ITEM_NAME}\` يجب أن يكون داخل \`${CONTENT_NAME}\` أو \`${OVERLAY_NAME}\``,
-  [ITEM_HANDLE_NAME]: `\`${ITEM_HANDLE_NAME}\` يجب أن يكون داخل \`${ITEM_NAME}\``,
-  [OVERLAY_NAME]: `\`${OVERLAY_NAME}\` يجب أن يكون داخل \`${ROOT_NAME}\``,
-  emptyValue: `قيمة \`${ITEM_NAME}\` لا يمكن أن تكون نصاً فارغاً`,
-  getItemValueRequired:
-    'getItemValue مطلوب عند استخدام مصفوفة من الكائنات (objects)',
+  [CONTENT_NAME]: `\`${CONTENT_NAME}\` must be used within \`${ROOT_NAME}\``,
+  [ITEM_NAME]: `\`${ITEM_NAME}\` must be used within \`${CONTENT_NAME}\` or \`${OVERLAY_NAME}\``,
+  [ITEM_HANDLE_NAME]: `\`${ITEM_HANDLE_NAME}\` must be used within \`${ITEM_NAME}\``,
+  [OVERLAY_NAME]: `\`${OVERLAY_NAME}\` must be used within \`${ROOT_NAME}\``,
+  emptyValue: `\`${ITEM_NAME}\` value cannot be an empty string`,
+  getItemValueRequired: '`getItemValue` is required when items are objects',
 } as const;
 
 export const orientationConfig = {

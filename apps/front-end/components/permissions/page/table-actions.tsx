@@ -1,46 +1,40 @@
 import type { Permission } from '../types';
 
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 
-import { type CoreRow } from '@tanstack/react-table';
-import { EditIcon as _EditIcon } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 
-import { Link } from '@/components/ui/link';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { cacheRemoved } from '@/utils/query-cache';
 
-import { DeleteAction } from './delete-action';
+import { RowActions } from '@/components/shared/row-actions';
 
-const EditIcon = memo(_EditIcon);
+import { removeRoleOption } from '../cache';
+import { PERMISSIONS_QUERY_KEYS } from '../query-keys';
 
 const TableActions = memo(
-  ({ original: permission }: { original: CoreRow<Permission>['original'] }) => {
+  ({ original: permission }: { original: Permission }) => {
+    const queryClient = useQueryClient();
+    const onDeleted = useCallback(() => {
+      cacheRemoved<Permission>(
+        queryClient,
+        PERMISSIONS_QUERY_KEYS,
+        permission.id
+      );
+      removeRoleOption(queryClient, permission.id);
+    }, [queryClient, permission.id]);
+
     return (
-      <div className='flex items-center justify-end text-muted-foreground space-x-1'>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Link
-              href={`/dash/permissions/edit?id=${permission.id}`}
-              variant='ghost'
-              className='h-8 w-8 rounded-sm p-0 hover:bg-green-500/10 hover:text-green-600'
-              aria-label='تعديل الصلاحية'
-            >
-              <EditIcon className='h-4 w-4' />
-            </Link>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p className='text-sm'>تعديل الصلاحية</p>
-          </TooltipContent>
-        </Tooltip>
-        <DeleteAction permission={permission} />
-      </div>
+      <RowActions
+        editHref={`/dash/permissions/edit?id=${permission.id}`}
+        deleteHref={`/api/dash/permissions/${permission.id}`}
+        noun='الصلاحية'
+        name={permission.roleName}
+        onDeleted={onDeleted}
+      />
     );
   }
 );
 
-TableActions.displayName = 'TableActions';
+TableActions.displayName = 'PermissionTableActions';
 
 export { TableActions };

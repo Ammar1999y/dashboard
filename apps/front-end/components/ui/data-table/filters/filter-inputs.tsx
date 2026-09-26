@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 
 import { calendarDayInZone, safeDate } from '@/utils/time';
 
-import { DateRangePicker } from '@/components/ui/date/rang';
+import { DateRangePicker } from '@/components/ui/date/range';
 import { SingleDatePicker } from '@/components/ui/date/single';
 import { Input } from '@/components/ui/input';
 import {

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AutosizeTextarea } from '@/components/ui/auto-resize-textarea';
-import Label from '@/components/ui/label';
+import { Label } from '@/components/ui/label';
 
 interface FontPreviewProps {
   fontName: string | null | undefined;

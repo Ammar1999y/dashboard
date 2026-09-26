@@ -1,28 +1,18 @@
-import type {
-  CreateProjectInput,
-  UpdateProjectInput,
-} from '@/utils/validation/projects';
-
 import { memo } from 'react';
 
-import { useFormContext } from 'react-hook-form';
 import { ACCEPT_IMAGES_WITH_SVG } from '@/lib/constants';
 
 import { MAX_IMAGE_SIZE } from '@/utils/images/config';
 
-import { AutosizeTextarea } from '@/components/ui/auto-resize-textarea';
-import { Input } from '@/components/ui/input';
-import Label from '@/components/ui/label';
-import SectionStatusSwitch from '@/components/ui/switch-larg';
+import { Label } from '@/components/ui/label';
 import { FileUpload } from '@/components/file-upload';
-import { ErrorMessage } from '@/components/form/error-message';
+import FormInput from '@/components/form/form-input';
+import FormSwitch from '@/components/form/form-switch';
+import FormTextarea from '@/components/form/form-textarea';
 
 import CategoryCombobox from './category-combobox';
 
 const ProjectForm = memo(() => {
-  const { register } = useFormContext<
-    CreateProjectInput | UpdateProjectInput
-  >();
   // LANGUAGES-TODOS
   // const activeLang = useTabsStore(useShallow((s) => s.activeLang));
   // const nativeLang = activeLang?.english;
@@ -36,68 +26,36 @@ const ProjectForm = memo(() => {
       {/* <LangTabs /> */}
 
       <div className='grid grid-cols-3 items-center gap-6'>
-        <div className='col-span-2'>
-          <Label
-            title={`العنوان${nativeLang ? ` (${nativeLang}) ` : ''}`}
-            require
-            htmlFor={register('title').name}
-          />
-          <Input
-            {...register('title')}
-            id={register('title').name}
-            dir={inputDir}
-            type='text'
-            placeholder=''
-            autoComplete='off'
-          />
-          <ErrorMessage path={register('title').name} />
-        </div>
-        <div className='col-span-1 flex flex-col gap-4'>
-          <Label
-            title='الحاله'
-            className='mb-0'
-            htmlFor={register('isActive').name}
-          />
-          <SectionStatusSwitch name='isActive' ariaLabel='تبديل حالة المشروع' />
-          <ErrorMessage path={register('isActive').name} />
-        </div>
+        <FormInput
+          name='title'
+          label={`العنوان${nativeLang ? ` (${nativeLang}) ` : ''}`}
+          dir={inputDir}
+          required
+          classNameField='col-span-2'
+        />
+        <FormSwitch
+          name='isActive'
+          label='الحاله'
+          className='col-span-1 flex flex-col gap-4'
+        />
       </div>
 
-      <div>
-        <Label
-          title={`الوصف${nativeLang ? ` (${nativeLang}) ` : ''}`}
-          htmlFor={register('description').name}
-        />
-        <AutosizeTextarea
-          {...register('description')}
-          id={register('description').name}
-          placeholder=''
-          dir={inputDir}
-          className='px-3 pb-2 pt-3'
-          minRows={3}
-          maxRows={8}
-        />
-        <ErrorMessage path={register('description').name} />
-      </div>
+      <FormTextarea
+        name='description'
+        label={`الوصف${nativeLang ? ` (${nativeLang}) ` : ''}`}
+        dir={inputDir}
+      />
 
       <div className='grid grid-cols-1 gap-4 xs2:grid-cols-8'>
-        <div className='xs2:col-span-5'>
-          <Label title='الرابط' htmlFor={register('link').name} />
-          <Input
-            {...register('link')}
-            id={register('link').name}
-            dir='ltr'
-            type='text'
-            placeholder='https://example.com'
-            autoComplete='off'
-            className='placeholder:!text-left'
-          />
-          <ErrorMessage path={register('link').name} />
-        </div>
-        <div className='xs2:col-span-3'>
-          <CategoryCombobox />
-          <ErrorMessage path={register('categoryId').name} />
-        </div>
+        <FormInput
+          name='link'
+          label='الرابط'
+          dir='ltr'
+          placeholder='https://example.com'
+          className='placeholder:!text-left'
+          classNameField='xs2:col-span-5'
+        />
+        <CategoryCombobox className='xs2:col-span-3' />
       </div>
 
       {/* Images */}

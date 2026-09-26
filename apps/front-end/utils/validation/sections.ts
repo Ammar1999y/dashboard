@@ -1,9 +1,11 @@
-import type { Item } from '@/types/sections';
+import type { SectionClient } from '@/types/sections';
+import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
 
 import {
   idSchema,
+  orderedListSchema,
   orderSchema,
   richTextSchema,
   sanitizeStrict,
@@ -93,15 +95,10 @@ const itemSchema = z.object({
   order: orderSchema,
 });
 
-const itemsSchema = z
-  .preprocess(
-    (e: Item[] | null | undefined) => (e?.length ? e : null),
-    z
-      .array(itemSchema, 'قم بادخال العناصر بشكل صحيح')
-      .max(20, 'تجاوزت اكبر عدد للعناصر، وهو 20 عنصراً')
-      .nullish()
-  )
-  .nullish();
+const itemsSchema = orderedListSchema(
+  itemSchema,
+  'قم بإدخال العناصر بشكل صحيح'
+);
 
 // Create section schema
 export const createSectionSchema = z.object({
@@ -127,3 +124,33 @@ export type CreateSectionInput = z.input<typeof createSectionSchema>;
 export type UpdateSectionInput = z.input<typeof updateSectionSchema>;
 export type CreateSectionOutput = z.output<typeof createSectionSchema>;
 export type UpdateSectionOutput = z.output<typeof updateSectionSchema>;
+
+/** See the note on DEFAULT_CATEGORY in ./categories. */
+export const DEFAULT_SECTION: DefaultValues<CreateSectionInput> = {
+  title: '',
+  subtitle: '',
+  shortDescription: '',
+  description: undefined,
+  slug: '',
+  isActive: true,
+  items: [],
+};
+
+/** See the note on toCategoryForm in ./categories. */
+export const toSectionForm = (record: SectionClient): UpdateSectionInput => ({
+  id: record.id,
+  title: record.title ?? '',
+  subtitle: record.subtitle ?? '',
+  shortDescription: record.shortDescription ?? '',
+  description: record.description ?? undefined,
+  slug: record.slug ?? '',
+  isActive: record.isActive ?? true,
+  items: (record.items ?? []).map((item) => ({
+    id: item.id,
+    title: item.title ?? '',
+    subtitle: item.subtitle ?? '',
+    description: item.description ?? '',
+    isActive: item.isActive ?? true,
+    order: item.order ?? 0,
+  })),
+});

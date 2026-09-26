@@ -1,139 +1,74 @@
 import type { Permission } from '@/components/permissions/types';
-import type { RoleOption } from '@/components/users/form/role';
+import type { CreatedResponse } from '@/utils/mutation';
 import type {
   CreatePermissionInput,
   CreatePermissionOutput,
 } from '@/utils/validation/permissions';
-import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { FormProvider, useForm } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
-import { cn } from '@/lib/utils';
+import { ROLE_SCOPE } from '@/lib/permissions/constants';
 
-import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
-import { useErrors } from '@/utils/store/errors';
-import { createPermissionSchema } from '@/utils/validation/permissions';
-
+import { cacheCreated } from '@/utils/query-cache';
 import {
-  flattenErrors,
-  showFormErrors,
-} from '@/components/form/form-error-handeling';
+  createPermissionSchema,
+  DEFAULT_PERMISSION,
+} from '@/utils/validation/permissions';
+
+import { Form } from '@/components/form/form';
 import { Header } from '@/components/form/header';
+import { cacheRoleOption } from '@/components/permissions/cache';
 import PermissionsForm from '@/components/permissions/permissions-form';
 import { PERMISSIONS_QUERY_KEYS } from '@/components/permissions/query-keys';
-import { ROLES_QUERY_KEYS } from '@/components/users/query-keys';
 
 const NewPermission = () => {
-  const [loading, setLoading] = useState(false);
   const queryClient = useQueryClient();
   const router = useRouter();
 
-  const methods = useForm<CreatePermissionInput>({
+  const methods = useForm<
+    CreatePermissionInput,
+    unknown,
+    CreatePermissionOutput
+  >({
     resolver: zodResolver(createPermissionSchema),
-    disabled: loading,
-    defaultValues: {
-      roleName: '',
-      permissions: [],
-
-      isActive: true,
-    },
+    defaultValues: DEFAULT_PERMISSION,
   });
 
-  const { handleSubmit } = methods;
-
   const onSubmit = useCallback(
-    async (data: CreatePermissionInput) => {
-      setLoading(true);
-      useErrors.getState().setErrors({});
+    async (data: CreatePermissionOutput) => {
+      const result = await mutate<CreatedResponse, CreatePermissionOutput>({
+        href: '/api/dash/permissions',
+        method: 'POST',
+        data,
+        onSuccess: ({ id }) => {
+          cacheCreated<Permission>(queryClient, PERMISSIONS_QUERY_KEYS, {
+            ...data,
+            id,
+            scope: ROLE_SCOPE.STANDARD,
+            usersCount: 0,
+            createdAt: new Date().toISOString(),
+          });
+          cacheRoleOption(queryClient, { ...data, id });
+        },
+      });
 
-      try {
-        // After validation, data is guaranteed to match CreatePermissionOutput
-        const validatedData = data as CreatePermissionOutput;
-        const result = await mutate<
-          Pick<Permission, 'id' | 'createdAt'>,
-          CreatePermissionOutput
-        >({
-          href: '/api/dash/permissions',
-          method: 'POST',
-          data: validatedData,
-          onSuccess: (serverData) => {
-            // The roles cache below is a plain array under its own key and is
-            // still patched. The permissions LIST is not: it is keyed by
-            // page/sort/filters/search with a `{ data, meta }` value, so
-            // prepending to `getQueryData(list)` never reached the table.
-            void queryClient.invalidateQueries({
-              queryKey: PERMISSIONS_QUERY_KEYS.list,
-            });
-
-            // Update roles cache if role is active
-            if (validatedData.isActive) {
-              const existingRoles = queryClient.getQueryData<RoleOption[]>(
-                ROLES_QUERY_KEYS.list
-              );
-
-              if (existingRoles) {
-                const newRole: RoleOption = {
-                  id: serverData.id,
-                  roleName: validatedData.roleName,
-                };
-
-                queryClient.setQueryData(ROLES_QUERY_KEYS.list, [
-                  newRole,
-                  ...existingRoles.filter((r) => r.id !== CUSTOM_ROLE_VALUE),
-                  { id: CUSTOM_ROLE_VALUE, roleName: 'مخصص' },
-                ]);
-              }
-            }
-          },
-        });
-
-        toast.success(result.message || 'تم إنشاء الصلاحية بنجاح');
-        void router.push('/dash/permissions');
-      } catch (error) {
-        toast.error(
-          error instanceof CustomError
-            ? error.message
-            : 'حدث خطاء، اعد المحاوله'
-        );
-      } finally {
-        setLoading(false);
-      }
+      toast.success(result.message || 'تم إنشاء الصلاحية بنجاح');
+      void router.push('/dash/permissions');
     },
     [queryClient, router]
   );
 
-  const onError = useCallback((errors: FieldErrors<CreatePermissionInput>) => {
-    const erros = flattenErrors(errors);
-    showFormErrors(erros);
-    useErrors.getState().setErrors(erros);
-  }, []);
-
-  useEffect(() => {
-    return () => useErrors.getState().setErrors({});
-  }, []);
-
   return (
-    <FormProvider {...methods}>
-      <form
-        onSubmit={handleSubmit(onSubmit, onError)}
-        className={cn('transition-[max-width,opacity]', loading && 'disabled')}
-        inert={loading}
-      >
-        <Header
-          title='إنشاء صلاحية جديدة'
-          loading={loading}
-          cancelHref='/dash/permissions'
-        />
-        <PermissionsForm />
-      </form>
-    </FormProvider>
+    <Form methods={methods} onSubmit={onSubmit}>
+      <Header title='إنشاء صلاحية جديدة' cancelHref='/dash/permissions' />
+      <PermissionsForm />
+    </Form>
   );
 };
 

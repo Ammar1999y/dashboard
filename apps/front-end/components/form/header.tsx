@@ -1,20 +1,25 @@
 import { memo } from 'react';
 
-import { Save } from 'lucide-react';
+import { Save as _Save } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-import { Button } from '@/components/ui/button';
 import { Link } from '@/components/ui/link';
+
+import SubmitButton, { SubmitLabel } from './submit-button';
+
+const Save = memo(_Save);
+Save.displayName = 'Save';
 
 interface HeaderProps {
   title: string;
   cancelHref: string;
-  loading?: boolean;
   containerClassName?: string;
 }
 
+// No `loading` prop: the submit state is read inside SubmitButton, so typing in
+// a field — or submitting — never re-renders the header or the form body.
 const Header = memo(
-  ({ title, loading = false, cancelHref, containerClassName }: HeaderProps) => {
+  ({ title, cancelHref, containerClassName }: HeaderProps) => {
     return (
       <div
         className={cn(
@@ -27,20 +32,18 @@ const Header = memo(
           <Link href={cancelHref} variant='ghost'>
             إلغاء
           </Link>
-          <Button
-            type='submit'
-            disabled={loading}
-            className='min-w-24 py-1.5 font-medium shadow-lg shadow-primary/15'
-          >
+          <SubmitButton className='min-w-24 py-1.5 font-medium shadow-lg shadow-primary/15'>
             <Save className='h-4 w-4' />
-            <span>{loading ? 'جاري الحفظ...' : 'حفظ'}</span>
-          </Button>
+            <span>
+              <SubmitLabel pending='جاري الحفظ...'>حفظ</SubmitLabel>
+            </span>
+          </SubmitButton>
         </div>
       </div>
     );
   }
 );
 
-Header.displayName = 'CityFormHeader';
+Header.displayName = 'FormHeader';
 
 export { Header };

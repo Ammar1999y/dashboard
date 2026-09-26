@@ -1,5 +1,3 @@
-'use client';
-
 import type { SortableItemContextValue } from './sortable-context';
 
 import * as React from 'react';
@@ -7,10 +5,9 @@ import * as React from 'react';
 import { type UniqueIdentifier } from '@dnd-kit/core';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { useComposedRefs } from '@radix-ui/react-compose-refs';
 import { Slot } from '@radix-ui/react-slot';
 import { cn } from '@/lib/utils';
-
-import { useComposedRefs } from '@/components/ui/sortable/compose-refs';
 
 import {
   getConditionalProps,
@@ -25,10 +22,6 @@ import {
   useSortableContext,
   useSortableItemContext,
 } from './sortable-context';
-
-// ============================================
-// SortableItem
-// ============================================
 
 interface SortableItemProps extends React.ComponentProps<'div'> {
   value: UniqueIdentifier;
@@ -52,15 +45,9 @@ export function SortableItem(props: SortableItemProps) {
   const inSortableContent = React.useContext(SortableContentContext);
   const inSortableOverlay = React.useContext(SortableOverlayContext);
 
-  if (!inSortableContent && !inSortableOverlay) {
-    console.error(SORTABLE_ERRORS[ITEM_NAME]);
+  if (!inSortableContent && !inSortableOverlay)
     throw new Error(SORTABLE_ERRORS[ITEM_NAME]);
-  }
-
-  if (value === '') {
-    console.error(SORTABLE_ERRORS.emptyValue);
-    throw new Error(SORTABLE_ERRORS.emptyValue);
-  }
+  if (value === '') throw new Error(SORTABLE_ERRORS.emptyValue);
 
   const context = useSortableContext(ITEM_NAME);
   const id = React.useId();
@@ -122,11 +109,11 @@ export function SortableItem(props: SortableItemProps) {
         ref={composedRef}
         style={composedStyle}
         className={cn(
-          'focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1',
           {
             'touch-none select-none': asHandle,
             'cursor-default': context.flatCursor,
-            'data-dragging:cursor-grabbing': !context.flatCursor,
+            'data-[dragging]:cursor-grabbing': !context.flatCursor,
             'cursor-grab': !isDragging && asHandle && !context.flatCursor,
             'opacity-50': isDragging,
             'pointer-events-none opacity-50': disabled,
@@ -137,10 +124,6 @@ export function SortableItem(props: SortableItemProps) {
     </SortableItemContext.Provider>
   );
 }
-
-// ============================================
-// SortableItemHandle
-// ============================================
 
 interface SortableItemHandleProps extends React.ComponentProps<'button'> {
   asChild?: boolean;
@@ -185,7 +168,7 @@ export function SortableItemHandle(props: SortableItemHandleProps) {
         'select-none disabled:pointer-events-none disabled:opacity-50',
         context.flatCursor
           ? 'cursor-default'
-          : 'data-dragging:cursor-grabbing cursor-grab',
+          : 'cursor-grab data-[dragging]:cursor-grabbing',
         className
       )}
       disabled={isDisabled}

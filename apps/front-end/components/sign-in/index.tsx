@@ -6,7 +6,7 @@ import { useSession } from '@/lib/auth/use-session';
 
 import { validateRedirectPath } from '@/utils/validate-redirect-path';
 
-import Form from './form';
+import SignInForm from './form';
 
 export default function SignInPage() {
   const { replace } = useRouter();
@@ -28,7 +28,7 @@ export default function SignInPage() {
       <div className='z-20 w-full max-w-lg rounded-3xl bg-card px-6 pb-10 pt-6 text-card-foreground shadow-lg'>
         <Logo className='mx-auto mb-5 h-20 text-primary' />
         <h1 className='text-xl font-semibold'>تسجيل الدخول</h1>
-        <Form onSuccess={onSuccess} />
+        <SignInForm onSuccess={onSuccess} />
       </div>
     </div>
   );

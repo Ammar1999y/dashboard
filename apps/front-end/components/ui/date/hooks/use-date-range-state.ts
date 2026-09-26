@@ -1,20 +1,30 @@
-import { useCallback, useEffect, useState } from 'react';
+import type { DateRange, DateRangeUpdate } from '../types';
 
-import { breakpointsTokens } from '@/constants/breakpoints';
+import { useCallback, useMemo, useState } from 'react';
+
+import { down, useMediaQuery } from '@/hooks/use-media-query';
 
 import { PRESETS } from '../constants';
 import { getDateAdjustedForTimezone, getPresetRange } from '../utils';
 
-export interface DateRange {
-  from: Date | undefined;
-  to: Date | undefined;
-}
-
 interface UseDateRangeStateProps {
   initialDateFrom?: Date | string;
   initialDateTo?: Date | string;
-  onChange?: (range: { from: Date | undefined; to: Date | undefined }) => void;
+  onChange?: (range: DateRange) => void;
 }
+
+const SMALL_SCREEN = down('lg');
+
+const startOfDay = (date: Date | number) => new Date(date).setHours(0, 0, 0, 0);
+
+const isSameDayRange = (a: DateRange, b: DateRange) =>
+  !!a.from &&
+  !!b.from &&
+  startOfDay(a.from) === startOfDay(b.from) &&
+  startOfDay(a.to ?? 0) === startOfDay(b.to ?? 0);
+
+// Whichever bound exists: an upper-only range must still open on its month.
+const rangeAnchor = (range: DateRange) => range.from ?? range.to;
 
 export const useDateRangeState = ({
   initialDateFrom,
@@ -23,126 +33,57 @@ export const useDateRangeState = ({
 }: UseDateRangeStateProps) => {
   const [isOpen, setIsOpen] = useState(false);
 
-  // Committed range (applied to filter)
-  const [committedRange, setCommittedRange] = useState<DateRange>({
+  const [committedRange, setCommittedRange] = useState<DateRange>(() => ({
     from: initialDateFrom
       ? getDateAdjustedForTimezone(initialDateFrom)
       : undefined,
     to: initialDateTo ? getDateAdjustedForTimezone(initialDateTo) : undefined,
-  });
+  }));
 
-  // Temporary range (while popover is open)
+  // Edited while the popover is open; committed only on save.
   const [tempRange, setTempRange] = useState<DateRange>(committedRange);
 
-  // Controlled month for calendar navigation
-  // Falls back to `to` before today: an upper-only range would otherwise open
-  // the calendar on the current month with its own selection off-screen.
-  const [month, setMonth] = useState<Date>(
-    () =>
-      committedRange.from ??
-      committedRange.to ??
-      new Date(new Date().setMonth(new Date().getMonth() - 1))
-  );
+  const [month, setMonth] = useState<Date>(() => {
+    const anchor = rangeAnchor(committedRange);
+    if (anchor) return anchor;
+    const lastMonth = new Date();
+    lastMonth.setMonth(lastMonth.getMonth() - 1);
+    return lastMonth;
+  });
 
-  // Use tempRange while open, committedRange when closed
   const range = isOpen ? tempRange : committedRange;
 
-  const setRange = useCallback(
-    (newRange: DateRange | ((prev: DateRange) => DateRange)) => {
-      setTempRange((prevRange) => {
-        const updatedRange =
-          typeof newRange === 'function' ? newRange(prevRange) : newRange;
-        // Navigate to whichever bound the range actually has. `from` only meant
-        // an upper-only range never moved the calendar to its own selection.
-        const anchor = updatedRange.from ?? updatedRange.to;
-        if (anchor) {
-          setMonth(new Date(anchor));
-        }
-        return updatedRange;
-      });
-    },
-    []
-  );
-
-  const [selectedPreset, setSelectedPreset] = useState<string | undefined>(
-    undefined
-  );
-
-  const [isSmallScreen, setIsSmallScreen] = useState(
-    typeof window === 'undefined'
-      ? false
-      : window.innerWidth < Number(breakpointsTokens.lg.slice(0, -2))
-  );
-
-  useEffect(() => {
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) {
-        setIsSmallScreen(
-          entry.contentRect.width < Number(breakpointsTokens.lg.slice(0, -2))
-        );
-      }
+  const setRange = useCallback((update: DateRangeUpdate) => {
+    setTempRange((prevRange) => {
+      const nextRange =
+        typeof update === 'function' ? update(prevRange) : update;
+      const anchor = rangeAnchor(nextRange);
+      if (anchor) setMonth(new Date(anchor));
+      return nextRange;
     });
-    observer.observe(document.body);
-    return () => observer.disconnect();
   }, []);
 
+  const isSmallScreen = useMediaQuery(SMALL_SCREEN);
+
   const setPreset = useCallback(
-    (preset: string): void => {
-      const range = getPresetRange(preset);
-      setRange(range);
-    },
+    (preset: string) => setRange(getPresetRange(preset)),
     [setRange]
   );
 
-  const checkPreset = useCallback(() => {
-    if (!range.from) {
-      setSelectedPreset(undefined);
-      return;
-    }
-
-    for (const preset of PRESETS) {
-      const presetRange = getPresetRange(preset.name);
-
-      const normalizedRangeFrom = new Date(range.from);
-      normalizedRangeFrom.setHours(0, 0, 0, 0);
-      const normalizedPresetFrom = new Date(
-        presetRange.from.setHours(0, 0, 0, 0)
-      );
-
-      const normalizedRangeTo = new Date(range.to ?? 0);
-      normalizedRangeTo.setHours(0, 0, 0, 0);
-      const normalizedPresetTo = new Date(
-        presetRange.to?.setHours(0, 0, 0, 0) ?? 0
-      );
-
-      if (
-        normalizedRangeFrom.getTime() === normalizedPresetFrom.getTime() &&
-        normalizedRangeTo.getTime() === normalizedPresetTo.getTime()
-      ) {
-        setSelectedPreset(preset.name);
-        return;
-      }
-    }
-
-    setSelectedPreset(undefined);
-  }, [range]);
-
-  useEffect(() => {
-    checkPreset();
-  }, [checkPreset]);
+  const selectedPreset = useMemo(
+    () =>
+      PRESETS.find((preset) =>
+        isSameDayRange(range, getPresetRange(preset.name))
+      )?.name,
+    [range]
+  );
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
         setTempRange(committedRange);
-        // Same fallback as the initial state and `setRange`: without it,
-        // reopening after navigating elsewhere left an upper-only range showing
-        // the wrong month.
-        const anchor = committedRange.from ?? committedRange.to;
-        if (anchor) {
-          setMonth(new Date(anchor));
-        }
+        const anchor = rangeAnchor(committedRange);
+        if (anchor) setMonth(new Date(anchor));
       }
       setIsOpen(open);
     },
@@ -150,14 +91,12 @@ export const useDateRangeState = ({
   );
 
   const handleSave = useCallback(() => {
-    // Commit the temp range and notify parent
     setCommittedRange(tempRange);
     onChange?.(tempRange);
     setIsOpen(false);
   }, [tempRange, onChange]);
 
   const handleCancel = useCallback(() => {
-    // Revert to committed range
     setTempRange(committedRange);
     setIsOpen(false);
   }, [committedRange]);

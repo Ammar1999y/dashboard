@@ -50,6 +50,10 @@ const NEEDS_VARIANT = new Map([
   ['left', 'right'],
   ['rounded-r', 'rounded-l'],
   ['rounded-l', 'rounded-r'],
+  ['rounded-tr', 'rounded-tl'],
+  ['rounded-tl', 'rounded-tr'],
+  ['rounded-br', 'rounded-bl'],
+  ['rounded-bl', 'rounded-br'],
 ]);
 
 /**
@@ -61,6 +65,10 @@ const BANNED_LOGICAL = new Map([
   ['end', ['left', 'right']],
   ['rounded-s', ['rounded-r', 'rounded-l']],
   ['rounded-e', ['rounded-l', 'rounded-r']],
+  ['rounded-ss', ['rounded-tr', 'rounded-tl']],
+  ['rounded-se', ['rounded-tl', 'rounded-tr']],
+  ['rounded-es', ['rounded-br', 'rounded-bl']],
+  ['rounded-ee', ['rounded-bl', 'rounded-br']],
 ]);
 
 /**
@@ -70,8 +78,10 @@ const BANNED_LOGICAL = new Map([
  */
 const DELIBERATE_VARIANTS = new Set(['ltr', 'rtl', 'placeholder']);
 
-// eslint-disable-next-line security/detect-unsafe-regex -- bounded: one optional fractional group, no nesting
-const LITERAL_FONT_SIZE = /^text-\[\d+(\.\d+)?(px|rem|em)]$/;
+/** With or without a leading digit, and with or without a `/leading` modifier. */
+const LITERAL_FONT_SIZE =
+  // eslint-disable-next-line security/detect-unsafe-regex
+  /^text-\[(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em)](?:\/\S+)?$/;
 
 /**
  * Splits a class into its variants and the utility they qualify, ignoring the

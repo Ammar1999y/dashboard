@@ -1,17 +1,3 @@
-/**
- * Centralized query keys for permissions feature
- * Modify these keys in one place to update all usages
- */
+import { entityKeys } from '@/utils/query-cache';
 
-import type { EntityID } from '@/types';
-
-export const PERMISSIONS_QUERY_KEYS = {
-  /** Query key for permissions list */
-  list: ['permissions'],
-
-  /** Query key for permission detail with dynamic ID */
-  detail: (id: number | string | EntityID) => ['permissions', id],
-
-  /** Base query key for all permission details (for invalidation) */
-  detailBase: ['permissions'],
-};
+export const PERMISSIONS_QUERY_KEYS = entityKeys('permissions');

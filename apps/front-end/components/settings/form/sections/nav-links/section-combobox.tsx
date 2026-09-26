@@ -1,7 +1,15 @@
 import type { SectionClient } from '@/types/sections';
 import type { SettingsInput } from '@/utils/validation/settings';
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { Link } from 'lucide-react';
 import { useController } from 'react-hook-form';
@@ -14,90 +22,103 @@ import {
   ComboboxEmpty,
   ComboboxInput,
   ComboboxItem,
-} from '@/components/ui/autocomplate/combobox';
+} from '@/components/ui/autocomplete/combobox';
+import FormField from '@/components/form/form-field';
 import { SECTIONS_QUERY_KEYS } from '@/components/sections/query-keys';
 
 interface SectionLinkComboboxProps {
   index: number;
+  className?: string;
 }
 
-const SectionLinkCombobox = memo(({ index }: SectionLinkComboboxProps) => {
-  const { field } = useController<SettingsInput, `navLinks.${number}.link`>({
-    name: `navLinks.${index}.link`,
-  });
+const SectionLinkCombobox = memo(
+  ({ index, className }: SectionLinkComboboxProps) => {
+    const id = useId();
+    const { field } = useController<SettingsInput, `navLinks.${number}.link`>({
+      name: `navLinks.${index}.link`,
+    });
 
-  const [inputValue, setInputValue] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-  const isSelectingRef = useRef(false);
+    const [inputValue, setInputValue] = useState('');
+    const inputRef = useRef<HTMLInputElement>(null);
+    const isSelectingRef = useRef(false);
 
-  useEffect(() => {
-    setInputValue(field.value || '');
-  }, [field.value]);
+    useEffect(() => {
+      setInputValue(field.value || '');
+    }, [field.value]);
 
-  const ref = useCallback(
-    (el: HTMLInputElement) => {
-      field.ref(el);
-      if (inputRef.current !== el) {
-        inputRef.current = el;
+    const ref = useCallback(
+      (el: HTMLInputElement) => {
+        field.ref(el);
+        if (inputRef.current !== el) {
+          inputRef.current = el;
+        }
+      },
+      [field]
+    );
+
+    const handleInputChange = useCallback(
+      (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value;
+        setInputValue(value);
+
+        // If user is typing (not selecting from dropdown), update the field value
+        if (!isSelectingRef.current) {
+          field.onChange(value);
+        }
+        isSelectingRef.current = false;
+      },
+      [field]
+    );
+
+    const handleValueChange = useCallback(
+      (value: string) => {
+        // When selecting from dropdown, prepend # to the slug
+        isSelectingRef.current = true;
+        const newValue = value ? `#${value}` : '';
+        setInputValue(newValue);
+        field.onChange(newValue);
+      },
+      [field]
+    );
+
+    // Extract slug from current value (remove # if present)
+    const currentSlug = useMemo(() => {
+      if (field.value?.startsWith('#')) {
+        return field.value.slice(1);
       }
-    },
-    [field]
-  );
+      return '';
+    }, [field.value]);
 
-  const handleInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const value = e.target.value;
-      setInputValue(value);
-
-      // If user is typing (not selecting from dropdown), update the field value
-      if (!isSelectingRef.current) {
-        field.onChange(value);
-      }
-      isSelectingRef.current = false;
-    },
-    [field]
-  );
-
-  const handleValueChange = useCallback(
-    (value: string) => {
-      // When selecting from dropdown, prepend # to the slug
-      isSelectingRef.current = true;
-      const newValue = value ? `#${value}` : '';
-      setInputValue(newValue);
-      field.onChange(newValue);
-    },
-    [field]
-  );
-
-  // Extract slug from current value (remove # if present)
-  const currentSlug = useMemo(() => {
-    if (field.value?.startsWith('#')) {
-      return field.value.slice(1);
-    }
-    return '';
-  }, [field.value]);
-
-  return (
-    <Combobox
-      value={currentSlug}
-      defaultValue={currentSlug}
-      type='single'
-      onValueChange={handleValueChange}
-    >
-      <ComboboxInput
-        placeholder='قم بربط معا الاقسام، او روابط خارجيه'
+    return (
+      <FormField
         name={field.name}
-        value={inputValue}
-        icon={<Link className='size-4' />}
-        disabled={field.disabled}
-        onBlur={field.onBlur}
-        ref={ref}
-        onChange={handleInputChange}
-      />
-      <SectionComboboxContent searchValue={inputValue} />
-    </Combobox>
-  );
-});
+        label='الرابط'
+        htmlFor={id}
+        className={className}
+      >
+        <Combobox
+          value={currentSlug}
+          defaultValue={currentSlug}
+          type='single'
+          onValueChange={handleValueChange}
+        >
+          <ComboboxInput
+            id={id}
+            placeholder='قم بربط معا الاقسام، او روابط خارجيه'
+            name={field.name}
+            value={inputValue}
+            icon={<Link className='size-4' />}
+            disabled={field.disabled}
+            onBlur={field.onBlur}
+            ref={ref}
+            onChange={handleInputChange}
+          />
+          <SectionComboboxContent searchValue={inputValue} />
+        </Combobox>
+      </FormField>
+    );
+  }
+);
 
 SectionLinkCombobox.displayName = 'SectionLinkCombobox';
 

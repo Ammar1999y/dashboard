@@ -1,45 +1,33 @@
 import type { Section } from '../types';
 
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 
-import { type CoreRow } from '@tanstack/react-table';
-import { EditIcon as _EditIcon } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 
-import { Link } from '@/components/ui/link';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { cacheRemoved } from '@/utils/query-cache';
 
-import { DeleteAction } from './delete-action';
+import { RowActions } from '@/components/shared/row-actions';
 
-const EditIcon = memo(_EditIcon);
+import { SECTIONS_QUERY_KEYS } from '../query-keys';
 
-const TableActions = memo(
-  ({ original: section }: { original: CoreRow<Section>['original'] }) => {
-    return (
-      <div className='flex items-center justify-end text-muted-foreground space-x-1'>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Link
-              href={`/dash/sections/edit?sectionId=${section.id}`}
-              variant='defaultGhost'
-              aria-label='تعديل القسم'
-              size={'icon'}
-            >
-              <EditIcon className='h-4 w-4' />
-            </Link>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p className='text-sm'>تعديل القسم</p>
-          </TooltipContent>
-        </Tooltip>
-        <DeleteAction section={section} />
-      </div>
-    );
-  }
-);
+const TableActions = memo(({ original: section }: { original: Section }) => {
+  const queryClient = useQueryClient();
+  const onDeleted = useCallback(
+    () => cacheRemoved<Section>(queryClient, SECTIONS_QUERY_KEYS, section.id),
+    [queryClient, section.id]
+  );
+
+  return (
+    <RowActions
+      editHref={`/dash/sections/edit?sectionId=${section.id}`}
+      deleteHref={`/api/dash/sections/${section.id}`}
+      noun='القسم'
+      name={section.title ?? ''}
+      onDeleted={onDeleted}
+    />
+  );
+});
 
 TableActions.displayName = 'SectionTableActions';
+
 export { TableActions };

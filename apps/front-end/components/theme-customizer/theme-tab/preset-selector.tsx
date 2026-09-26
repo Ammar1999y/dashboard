@@ -4,7 +4,7 @@ import { Dices as _Dices } from 'lucide-react';
 import { useShallow } from 'zustand/shallow';
 
 import { Button } from '@/components/ui/button';
-import Label from '@/components/ui/label';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,

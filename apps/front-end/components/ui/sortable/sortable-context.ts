@@ -15,10 +15,6 @@ import {
   SORTABLE_ERRORS,
 } from './constants';
 
-// ============================================
-// Root Context
-// ============================================
-
 export const SortableRootContext =
   React.createContext<SortableRootContextValue<unknown> | null>(null);
 SortableRootContext.displayName = ROOT_NAME;
@@ -31,23 +27,12 @@ type SortableErrorKey =
 
 export function useSortableContext(name: SortableErrorKey) {
   const context = React.useContext(SortableRootContext);
-  if (!context) {
-    console.error(SORTABLE_ERRORS[name]);
-    throw new Error(SORTABLE_ERRORS[name]);
-  }
+  if (!context) throw new Error(SORTABLE_ERRORS[name]);
   return context;
 }
 
-// ============================================
-// Content Context
-// ============================================
-
 export const SortableContentContext = React.createContext<boolean>(false);
 SortableContentContext.displayName = CONTENT_NAME;
-
-// ============================================
-// Item Context
-// ============================================
 
 export interface SortableItemContextValue {
   id: string;
@@ -64,16 +49,9 @@ SortableItemContext.displayName = ITEM_NAME;
 
 export function useSortableItemContext(consumerName: SortableErrorKey) {
   const context = React.useContext(SortableItemContext);
-  if (!context) {
-    console.error(SORTABLE_ERRORS[consumerName]);
-    throw new Error(SORTABLE_ERRORS[consumerName]);
-  }
+  if (!context) throw new Error(SORTABLE_ERRORS[consumerName]);
   return context;
 }
-
-// ============================================
-// Overlay Context
-// ============================================
 
 export const SortableOverlayContext = React.createContext(false);
 SortableOverlayContext.displayName = OVERLAY_NAME;

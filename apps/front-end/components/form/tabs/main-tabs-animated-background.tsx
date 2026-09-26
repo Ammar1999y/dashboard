@@ -3,7 +3,6 @@ import type { Variants } from 'framer-motion';
 import { memo } from 'react';
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { useShallow } from 'zustand/shallow';
 
 import { useTabsStore } from './store';
 
@@ -27,13 +26,11 @@ const bgVariants: Variants = {
 };
 
 const MainTabsAnimatedBackground = memo(({ tab }: { tab: string }) => {
-  const hoveredMainTab = useTabsStore(
-    useShallow((state) => state.hoveredMainTab)
-  );
+  const isHovered = useTabsStore((state) => state.hoveredMainTab === tab);
 
   return (
     <AnimatePresence>
-      {hoveredMainTab === tab && (
+      {isHovered && (
         <motion.span
           className='absolute inset-0 block h-full w-full rounded-md bg-accent'
           layoutId='hover-background-main-tabs'

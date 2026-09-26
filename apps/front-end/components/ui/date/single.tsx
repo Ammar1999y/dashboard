@@ -1,18 +1,13 @@
-import type { FC } from 'react';
-
 import { memo, useCallback } from 'react';
 
-import { CalendarIcon, ChevronDownIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
+import { Popover, PopoverContent } from '@/components/ui/popover';
 
+import { DateActions } from './components/date-actions';
+import { DateTrigger } from './components/date-trigger';
+import { DATE_PLACEHOLDER, DEFAULT_DATE_LOCALE } from './constants';
 import { DateInput } from './date-input';
 import { useSingleDateState } from './hooks/use-single-date-state';
 import { formatDate } from './utils';
@@ -29,18 +24,18 @@ export interface SingleDatePickerProps {
   showIcon?: boolean;
 }
 
-export const SingleDatePicker: FC<SingleDatePickerProps> = memo(
+export const SingleDatePicker = memo(
   ({
     initialDate,
     align = 'center',
-    locale = 'ar-u-ca-gregory',
+    locale = DEFAULT_DATE_LOCALE,
     onChange,
     title,
     triggerClassName,
     contentClassName,
     placeholder,
     showIcon = false,
-  }) => {
+  }: SingleDatePickerProps) => {
     const {
       isOpen,
       date,
@@ -52,44 +47,24 @@ export const SingleDatePicker: FC<SingleDatePickerProps> = memo(
       handleCancel,
     } = useSingleDateState({ initialDate, onChange });
 
-    const displayText = date
+    const label = date
       ? formatDate(date, locale)
-      : placeholder || title || 'اختر التاريخ';
+      : placeholder || title || DATE_PLACEHOLDER;
 
     const handleSelect = useCallback(
       (value: Date | undefined) => {
-        if (value) {
-          setDate(value);
-        }
+        if (value) setDate(value);
       },
       [setDate]
     );
 
     return (
       <Popover open={isOpen} onOpenChange={handleOpenChange}>
-        <PopoverTrigger asChild>
-          <button
-            type='button'
-            className={cn('relative flex h-9 items-center', triggerClassName)}
-            aria-label='اختر التاريخ'
-          >
-            {showIcon && (
-              <CalendarIcon className='absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground ltr:left-3 rtl:right-3' />
-            )}
-            <div
-              className={cn(
-                'flex h-full w-full items-center justify-between',
-                !triggerClassName &&
-                  'rounded-md border border-input bg-background px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground'
-              )}
-            >
-              <span className='truncate text-start'>{displayText}</span>
-              {!triggerClassName && (
-                <ChevronDownIcon className='ms-2 h-4 w-4 opacity-50' />
-              )}
-            </div>
-          </button>
-        </PopoverTrigger>
+        <DateTrigger
+          label={label}
+          triggerClassName={triggerClassName}
+          showIcon={showIcon}
+        />
         <PopoverContent
           align={align}
           className={cn('w-auto px-3 py-5', contentClassName)}
@@ -108,12 +83,7 @@ export const SingleDatePicker: FC<SingleDatePickerProps> = memo(
               className='mx-auto p-0 pt-2'
             />
           </div>
-          <div className='flex justify-end pb-2 ps-4 pt-4 space-x-2'>
-            <Button onClick={handleCancel} variant='ghost'>
-              الغاء
-            </Button>
-            <Button onClick={handleSave}>حفظ</Button>
-          </div>
+          <DateActions onCancel={handleCancel} onSave={handleSave} />
         </PopoverContent>
       </Popover>
     );

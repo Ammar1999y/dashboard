@@ -12,3 +12,7 @@ export const PRESETS: Preset[] = [
   { name: 'thisMonth', label: 'هذا الشهر' },
   { name: 'lastMonth', label: 'الشهر الماضي' },
 ];
+
+export const DEFAULT_DATE_LOCALE = 'ar-u-ca-gregory';
+
+export const DATE_PLACEHOLDER = 'اختر التاريخ';

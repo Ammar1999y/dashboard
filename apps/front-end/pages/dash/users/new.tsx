@@ -1,123 +1,74 @@
 import type { User } from '@/components/users/types';
+import type { CreatedResponse } from '@/utils/mutation';
 import type {
   CreateUserInput,
   CreateUserOutput,
 } from '@/utils/validation/auth';
-import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { FormProvider, useForm } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 
-import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
-import { useErrors } from '@/utils/store/errors';
-import { createUserSchema } from '@/utils/validation/auth';
+import { cacheCreated } from '@/utils/query-cache';
+import { createUserSchema, DEFAULT_USER } from '@/utils/validation/auth';
 
-import {
-  flattenErrors,
-  showFormErrors,
-} from '@/components/form/form-error-handeling';
+import { Form } from '@/components/form/form';
 import { Header } from '@/components/form/header';
+import { resolveUserRole } from '@/components/permissions/cache';
 import UserForm from '@/components/users/form/index';
 import RolesTable from '@/components/users/form/roles-table';
 import { USERS_QUERY_KEYS } from '@/components/users/query-keys';
 
 const NewUser = () => {
-  const [loading, setLoading] = useState(false);
   const queryClient = useQueryClient();
   const router = useRouter();
 
-  const methods = useForm<CreateUserInput>({
+  const methods = useForm<CreateUserInput, unknown, CreateUserOutput>({
     resolver: zodResolver(createUserSchema),
-    disabled: loading,
-    defaultValues: {
-      name: '',
-      email: '',
-      password: '',
-      phoneNumber: '',
-      isActive: true,
-      roleId: undefined,
-      permissions: undefined,
-    },
+    defaultValues: DEFAULT_USER,
   });
 
-  const { handleSubmit } = methods;
-
   const onSubmit = useCallback(
-    async (data: CreateUserInput) => {
-      setLoading(true);
-      useErrors.getState().setErrors({});
+    async (data: CreateUserOutput) => {
+      const result = await mutate<CreatedResponse, CreateUserOutput>({
+        href: '/api/dash/users',
+        method: 'POST',
+        data,
+        onSuccess: ({ id }) =>
+          cacheCreated<User>(queryClient, USERS_QUERY_KEYS, {
+            id,
+            name: data.name,
+            email: data.email,
+            phoneNumber: data.phoneNumber,
+            isActive: data.isActive,
+            roleId: data.roleId,
+            permissions: data.permissions,
+            role: resolveUserRole(queryClient, data.roleId) ?? null,
+            emailVerified: false,
+            phoneNumberVerified: false,
+            createdAt: new Date().toISOString(),
+          }),
+      });
 
-      try {
-        // After validation, data is guaranteed to match CreateUserOutput
-        const validatedData = data as CreateUserOutput;
-        const result = await mutate<
-          Pick<User, 'id' | 'createdAt'>,
-          CreateUserOutput
-        >({
-          href: '/api/dash/users',
-          method: 'POST',
-          data: validatedData,
-          onSuccess: () => {
-            // Server-authoritative refetch instead of prepending a locally
-            // assembled row: the list is keyed by page/sort/filters/search
-            // (value `{ data, meta }`), so the prepend never landed, and the
-            // fabricated row carried `role: null` for a user who has one.
-            void queryClient.invalidateQueries({
-              queryKey: USERS_QUERY_KEYS.list,
-            });
-          },
-        });
-
-        toast.success(result.message || 'تم إنشاء المستخدم بنجاح');
-        void router.push('/dash/users');
-      } catch (error) {
-        toast.error(
-          error instanceof CustomError
-            ? error.message
-            : 'حدث خطاء، اعد المحاوله'
-        );
-      } finally {
-        setLoading(false);
-      }
+      toast.success(result.message || 'تم إنشاء المستخدم بنجاح');
+      void router.push('/dash/users');
     },
     [queryClient, router]
   );
 
-  const onError = useCallback((errors: FieldErrors<CreateUserInput>) => {
-    const erros = flattenErrors(errors);
-    showFormErrors(erros);
-    useErrors.getState().setErrors(erros);
-  }, []);
-
-  useEffect(() => {
-    return () => useErrors.getState().setErrors({});
-  }, []);
-
   return (
-    <FormProvider {...methods}>
-      <form
-        onSubmit={handleSubmit(onSubmit, onError)}
-        className={cn('transition-[max-width,opacity]', loading && 'disabled')}
-        inert={loading}
-      >
-        <Header
-          title='إنشاء مستخدم جديد'
-          loading={loading}
-          cancelHref='/dash/users'
-        />
-        <div className='formContentPadding'>
-          <UserForm />
-          <RolesTable />
-        </div>
-      </form>
-    </FormProvider>
+    <Form methods={methods} onSubmit={onSubmit}>
+      <Header title='إنشاء مستخدم جديد' cancelHref='/dash/users' />
+      <div className='formContentPadding'>
+        <UserForm />
+        <RolesTable />
+      </div>
+    </Form>
   );
 };
 

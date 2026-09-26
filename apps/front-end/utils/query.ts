@@ -17,42 +17,19 @@ import useIsomorphicLayoutEffect from '@/hooks/use-layout-effect';
 
 import { CustomError } from './error-class';
 
-// Type for local storage query handlers
-type LocalStorageQueryHandler<TData = unknown> = {
-  getAll?: () => Promise<TData>;
-  getById?: (id: EntityID) => Promise<TData>;
-};
-
-// Registry for local storage query handlers by endpoint pattern
-const localStorageQueryHandlers = new Map<RegExp, LocalStorageQueryHandler>();
-
-/**
- * Register a local storage query handler for a specific endpoint pattern
- */
-export const registerLocalStorageQueryHandler = (
-  pattern: RegExp,
-  handler: LocalStorageQueryHandler
-) => {
-  localStorageQueryHandlers.set(pattern, handler);
-};
-
 export const useQueryData = <TData = unknown>({
   queryKey,
   href,
   enabled = true,
-  requiredData = true,
 }: {
   queryKey: (string | number | EntityID)[];
   href: string;
+  /** The one gate: a detail query passes `!!id` so it waits for the route. */
   enabled?: boolean;
-  requiredData?: boolean | string | number | undefined | null;
 }) =>
   useQuery<TData>({
     queryKey,
     queryFn: async ({ signal }) => {
-      if (!requiredData)
-        throw new CustomError('البيانات غير صحيحة، اعد المحاوله', 400);
-
       try {
         const response = await apiFetch(href, { signal });
         const result = await response.json();

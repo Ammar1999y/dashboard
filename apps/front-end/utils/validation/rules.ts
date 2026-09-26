@@ -199,6 +199,28 @@ export const orderSchema = z.preprocess(
   z.int(itemOrderError).min(0, itemOrderError).max(999, itemOrderError)
 );
 
+const LIST_MAX = 20;
+
+/**
+ * An optional list of rows stored in display order: empty becomes `null`, and
+ * each row's `order` is rewritten from its position — the form reorders rows by
+ * moving them, never by editing `order`.
+ */
+export const orderedListSchema = <T extends z.ZodType<{ order: number }>>(
+  item: T,
+  invalidMessage: string
+) =>
+  z
+    .preprocess(
+      (rows: z.input<T>[] | null | undefined) => (rows?.length ? rows : null),
+      z
+        .array(item, invalidMessage)
+        .max(LIST_MAX, `تجاوزت أكبر عدد للعناصر، وهو ${LIST_MAX} عنصراً`)
+        .transform((rows) => rows.map((row, order) => ({ ...row, order })))
+        .nullish()
+    )
+    .nullish();
+
 export const SVGIconSchema = z
   .string()
   .min(1, 'الأيقونه مطلوبه')

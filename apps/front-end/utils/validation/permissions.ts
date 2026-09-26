@@ -2,6 +2,8 @@ import type {
   DashboardPage,
   PermissionAction,
 } from '@/lib/permissions/constants';
+import type { PermissionClient } from '@/types/permission';
+import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
 import {
@@ -204,7 +206,21 @@ export type CreatePermissionOutput = z.output<typeof createPermissionSchema>;
 export type UpdatePermissionOutput = z.output<typeof updatePermissionSchema>;
 export type PagePermission = z.input<typeof pagePermissionSchema>;
 
-/** @deprecated Use CreatePermissionInput instead */
-export type CreatePermissionFormData = CreatePermissionInput;
-/** @deprecated Use UpdatePermissionInput instead */
-export type UpdatePermissionFormData = UpdatePermissionInput;
+/** See the note on DEFAULT_CATEGORY in ./categories. */
+export const DEFAULT_PERMISSION: DefaultValues<CreatePermissionInput> = {
+  roleName: '',
+  description: '',
+  isActive: true,
+  permissions: [],
+};
+
+/** See the note on toCategoryForm in ./categories. */
+export const toPermissionForm = (
+  record: PermissionClient
+): UpdatePermissionInput => ({
+  id: record.id,
+  roleName: record.roleName ?? '',
+  description: record.description ?? '',
+  isActive: record.isActive ?? true,
+  permissions: record.permissions,
+});

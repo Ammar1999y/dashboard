@@ -11,6 +11,13 @@ module.exports = {
     '^(drizzle-orm/(.*)$)|^(drizzle-orm$)',
     '',
     '<THIRD_PARTY_MODULES>',
+    // Same position as `apps/back-end/prettier.config.js`: after third-party,
+    // before the `@/` groups. Without it, `@app/shared` imports sort into
+    // `<THIRD_PARTY_MODULES>` here and into their own block there, so the two
+    // apps would order the same import list differently. No `''` around it, so
+    // adding the group reformats none of the existing files — this side simply
+    // does not put a blank line before `^@/lib/`.
+    '^@app/(.*)$',
     '^@/lib/(.*)$',
     '',
     '^@/utils/(.*)$',

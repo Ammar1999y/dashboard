@@ -1,9 +1,9 @@
 {
-  "name": "app",
+  "name": "@app/front-end",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "preinstall": "bun scripts/require-bun.mjs",
+    "preinstall": "bun ../../scripts/require-bun.mjs",
     "prebuild": "bun --bun scripts/generate-manifest.ts && bun --bun scripts/build-icons.ts",
     "dev": "bun --bun  next dev",
     "build": "bun --bun next build",
@@ -19,9 +19,9 @@
   },
   "packageManager": "bun@1.4.2",
   "engines": {
-    "npm": "use bun (run: node scripts/require-bun.mjs)",
-    "yarn": "use bun (run: node scripts/require-bun.mjs)",
-    "pnpm": "use bun (run: node scripts/require-bun.mjs)"
+    "npm": "use bun (run: node ../../scripts/require-bun.mjs)",
+    "yarn": "use bun (run: node ../../scripts/require-bun.mjs)",
+    "pnpm": "use bun (run: node ../../scripts/require-bun.mjs)"
   },
   "browserslist": [
     "Chrome >= 80",
@@ -30,6 +30,7 @@
     "defaults and fully supports es6-module and not dead"
   ],
   "dependencies": {
+    "@app/shared": "workspace:*",
     "platejs": "^53",
     "@platejs/basic-nodes": "^53",
     "@platejs/basic-styles": "^53",
@@ -95,7 +96,7 @@
     "@tanstack/react-query": "^5",
     "@tanstack/react-table": "^8",
     "@udecode/cn": "^52.0",
-    "better-auth": "1.7.2",
+    "better-auth": "1.7.3",
     "browser-image-compression": "^2",
     "class-variance-authority": "^0.7",
     "clsx": "^2",
@@ -135,11 +136,10 @@
     "use-file-picker": "^2",
     "uuid": "^14",
     "vaul": "^1",
-    "zod": "^4",
+    "zod": "4.6.5",
     "zustand": "^5"
   },
   "devDependencies": {
-    "lefthook": "^2",
     "@eslint/eslintrc": "^3",
     "@ianvs/prettier-plugin-sort-imports": "^4",
     "@iconify-json/lucide": "^1",
@@ -158,7 +158,7 @@
     "eslint-plugin-no-unsanitized": "^4",
     "eslint-plugin-prettier": "^5",
     "eslint-plugin-security": "^4",
-    "eslint-plugin-unicorn": "75",
+    "eslint-plugin-unicorn": "^75",
     "knip": "^6",
     "postcss": "^8",
     "postcss-dir-tailwind-fix": "^1",
@@ -174,12 +174,5 @@
   "ignoreScripts": [
     "sharp",
     "unrs-resolver"
-  ],
-  "trustedDependencies": [
-    "sharp",
-    "unrs-resolver"
-  ],
-  "patchedDependencies": {
-    "@dnd-kit/core@6.3.1": "patches/@dnd-kit%2Fcore@6.3.1.patch"
-  }
+  ]
 }

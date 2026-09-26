@@ -1,138 +1,70 @@
 import type { Section } from '@/components/sections/types';
+import type { CreatedResponse } from '@/utils/mutation';
 import type {
   CreateSectionInput,
   CreateSectionOutput,
 } from '@/utils/validation/sections';
-import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { FormProvider, useForm } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 
-import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
-import { useErrors } from '@/utils/store/errors';
-import { createSectionSchema } from '@/utils/validation/sections';
-
+import { cacheCreated } from '@/utils/query-cache';
 import {
-  flattenErrors,
-  showFormErrors,
-} from '@/components/form/form-error-handeling';
+  createSectionSchema,
+  DEFAULT_SECTION,
+} from '@/utils/validation/sections';
+
+import { Form } from '@/components/form/form';
 import { Header } from '@/components/form/header';
-import { MainTabs } from '@/components/form/tabs/main-tabs';
-import { useTabsStore } from '@/components/form/tabs/store';
-import { FormContent, MAIN_TABS } from '@/components/sections/form/sections';
+import { FormTabs } from '@/components/form/tabs/form-tabs';
+import { SECTION_TABS } from '@/components/sections/form/sections';
 import { SECTIONS_QUERY_KEYS } from '@/components/sections/query-keys';
-import { SmoothHeightContainer } from '@/components/smooth-height-container';
 
 const NewSection = () => {
-  const [loading, setLoading] = useState(false);
   const queryClient = useQueryClient();
   const router = useRouter();
 
-  const methods = useForm<CreateSectionInput>({
+  const methods = useForm<CreateSectionInput, unknown, CreateSectionOutput>({
     resolver: zodResolver(createSectionSchema),
-    disabled: loading,
-    defaultValues: {
-      title: '',
-      subtitle: '',
-
-      isActive: true,
-    },
+    defaultValues: DEFAULT_SECTION,
   });
 
-  const { handleSubmit } = methods;
-
   const onSubmit = useCallback(
-    async (data: CreateSectionInput) => {
-      setLoading(true);
-      useErrors.getState().setErrors({});
-      // After validation, data is guaranteed to match CreateSectionOutput
-      const validatedData = data as CreateSectionOutput;
+    async (data: CreateSectionOutput) => {
+      const result = await mutate<CreatedResponse, CreateSectionOutput>({
+        href: '/api/dash/sections',
+        method: 'POST',
+        data,
+        onSuccess: ({ id }) =>
+          cacheCreated<Section>(queryClient, SECTIONS_QUERY_KEYS, {
+            ...data,
+            id,
+            createdAt: new Date().toISOString(),
+          }),
+      });
 
-      try {
-        const result = await mutate<
-          Pick<Section, 'id' | 'createdAt'>,
-          CreateSectionOutput
-        >({
-          href: '/api/dash/sections',
-          method: 'POST',
-          data: validatedData,
-          onSuccess: (serverData) => {
-            const newSection: Section = {
-              ...validatedData,
-              id: serverData.id,
-              createdAt: serverData.createdAt,
-            };
-            const existingSections = queryClient.getQueryData<Section[]>(
-              SECTIONS_QUERY_KEYS.list
-            );
-            queryClient.setQueryData(
-              SECTIONS_QUERY_KEYS.detail(serverData.id),
-              newSection
-            );
-            if (existingSections)
-              queryClient.setQueryData(SECTIONS_QUERY_KEYS.list, [
-                newSection,
-                ...existingSections,
-              ]);
-          },
-        });
-
-        toast.success(result.message || 'تم إنشاء القسم بنجاح');
-        void router.push('/dash/sections');
-      } catch (error) {
-        toast.error(
-          error instanceof CustomError
-            ? error.message
-            : 'حدث خطاء، اعد المحاوله'
-        );
-      } finally {
-        setLoading(false);
-      }
+      toast.success(result.message || 'تم إنشاء القسم بنجاح');
+      void router.push('/dash/sections');
     },
     [queryClient, router]
   );
 
-  const onError = useCallback((errors: FieldErrors<CreateSectionInput>) => {
-    const erros = flattenErrors(errors);
-    showFormErrors(erros);
-    useErrors.getState().setErrors(erros);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      useErrors.getState().setErrors({});
-      useTabsStore.getState().reset();
-    };
-  }, []);
-
   return (
-    <FormProvider {...methods}>
-      <form
-        onSubmit={handleSubmit(onSubmit, onError)}
-        className={cn('transition-[max-width,opacity]', loading && 'disabled')}
-        inert={loading}
-      >
-        <Header
-          title='إضافة قسم جديد'
-          loading={loading}
-          cancelHref='/dash/sections'
-          containerClassName='border-b-0 mb-5'
-        />
+    <Form methods={methods} onSubmit={onSubmit}>
+      <Header
+        title='إضافة قسم جديد'
+        cancelHref='/dash/sections'
+        containerClassName='border-b-0 mb-5'
+      />
 
-        <MainTabs tabs={MAIN_TABS} />
-
-        <SmoothHeightContainer className='px-1 pb-10 pt-4'>
-          <FormContent />
-        </SmoothHeightContainer>
-      </form>
-    </FormProvider>
+      <FormTabs tabs={SECTION_TABS} />
+    </Form>
   );
 };
 

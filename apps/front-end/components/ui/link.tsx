@@ -7,33 +7,15 @@ import { cn } from '@/lib/utils';
 
 import { buttonVariants } from './button';
 
-interface LinkProps
-  extends
-    React.ComponentPropsWithoutRef<'a'>,
-    VariantProps<typeof buttonVariants> {
-  replace?: boolean;
-  ref?: React.Ref<HTMLAnchorElement>;
-}
+type LinkProps = React.ComponentProps<typeof NextLink> &
+  VariantProps<typeof buttonVariants>;
 
-const Link = ({
-  className,
-  variant,
-  replace = false,
-  size,
-  href,
-  ref,
-  ...props
-}: LinkProps) => {
-  return (
-    <NextLink
-      className={cn(buttonVariants({ variant, size, className }))}
-      ref={ref}
-      href={href as string}
-      replace={replace}
-      {...props}
-    />
-  );
-};
+const Link = ({ className, variant, size, ...props }: LinkProps) => (
+  <NextLink
+    className={cn(buttonVariants({ variant, size, className }))}
+    {...props}
+  />
+);
 Link.displayName = 'Link';
 
 export { Link };

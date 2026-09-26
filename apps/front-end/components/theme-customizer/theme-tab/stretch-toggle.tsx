@@ -3,7 +3,7 @@ import { memo } from 'react';
 import { CircleQuestionMark as _CircleQuestionMark } from 'lucide-react';
 import { useShallow } from 'zustand/shallow';
 
-import Label from '@/components/ui/label';
+import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import {
   Tooltip,

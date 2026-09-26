@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 
 import { CheckIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -12,20 +12,27 @@ interface PresetButtonProps {
   onSelect: (preset: string) => void;
 }
 
-export const PresetButton = memo<PresetButtonProps>(
-  ({ preset, label, isSelected, onSelect }) => (
-    <Button
-      className={cn('py-1.5 font-normal', isSelected && 'pointer-events-none')}
-      variant='ghost'
-      disabled={isSelected}
-      onClick={() => onSelect(preset)}
-    >
-      <span>{label}</span>
-      <span className={cn('opacity-0', isSelected && 'opacity-70')}>
-        <CheckIcon width={18} height={18} />
-      </span>
-    </Button>
-  )
+export const PresetButton = memo(
+  ({ preset, label, isSelected, onSelect }: PresetButtonProps) => {
+    const handleClick = useCallback(() => onSelect(preset), [onSelect, preset]);
+
+    return (
+      <Button
+        className={cn(
+          'py-1.5 font-normal',
+          isSelected && 'pointer-events-none'
+        )}
+        variant='ghost'
+        disabled={isSelected}
+        onClick={handleClick}
+      >
+        <span>{label}</span>
+        <span className={cn('opacity-0', isSelected && 'opacity-70')}>
+          <CheckIcon size={18} />
+        </span>
+      </Button>
+    );
+  }
 );
 
 PresetButton.displayName = 'PresetButton';

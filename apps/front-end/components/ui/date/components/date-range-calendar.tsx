@@ -1,6 +1,7 @@
-import type { DateRange } from '../hooks/use-date-range-state';
+import type { DateRange, DateRangeUpdate } from '../types';
+import type { DateRange as DayPickerRange } from '@daypicker/react';
 
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 
 import { Calendar } from '@/components/ui/calendar';
 
@@ -9,30 +10,36 @@ interface DateRangeCalendarProps {
   isSmallScreen: boolean;
   month: Date;
   onMonthChange: (month: Date) => void;
-  onRangeChange: (range: DateRange | ((prev: DateRange) => DateRange)) => void;
+  onRangeChange: (update: DateRangeUpdate) => void;
 }
 
-export const DateRangeCalendar = memo<DateRangeCalendarProps>(
-  ({ range, isSmallScreen, month, onMonthChange, onRangeChange }) => (
-    <Calendar
-      mode='range'
-      onSelect={(value: { from?: Date; to?: Date } | undefined) => {
-        if (value?.from != null) {
-          onRangeChange({ from: value.from, to: value?.to });
-        }
-      }}
-      month={month}
-      onMonthChange={onMonthChange}
-      selected={range}
-      numberOfMonths={isSmallScreen ? 1 : 2}
-      className='mx-auto p-0 pt-2 lg:pe-2'
-      defaultMonth={
-        new Date(
-          new Date().setMonth(new Date().getMonth() - (isSmallScreen ? 0 : 1))
-        )
-      }
-    />
-  )
+export const DateRangeCalendar = memo(
+  ({
+    range,
+    isSmallScreen,
+    month,
+    onMonthChange,
+    onRangeChange,
+  }: DateRangeCalendarProps) => {
+    const handleSelect = useCallback(
+      (value: DayPickerRange | undefined) => {
+        if (value?.from) onRangeChange({ from: value.from, to: value.to });
+      },
+      [onRangeChange]
+    );
+
+    return (
+      <Calendar
+        mode='range'
+        onSelect={handleSelect}
+        month={month}
+        onMonthChange={onMonthChange}
+        selected={range}
+        numberOfMonths={isSmallScreen ? 1 : 2}
+        className='mx-auto p-0 pt-2 lg:pe-2'
+      />
+    );
+  }
 );
 
 DateRangeCalendar.displayName = 'DateRangeCalendar';

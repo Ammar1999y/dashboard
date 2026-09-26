@@ -1,129 +1,64 @@
 import type { Project } from '@/components/projects/types';
+import type { CreatedResponse } from '@/utils/mutation';
 import type {
   CreateProjectInput,
   CreateProjectOutput,
 } from '@/utils/validation/projects';
-import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { FormProvider, useForm } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 
-import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
-import { useErrors } from '@/utils/store/errors';
-import { createProjectSchema } from '@/utils/validation/projects';
-
+import { cacheCreated } from '@/utils/query-cache';
 import {
-  flattenErrors,
-  showFormErrors,
-} from '@/components/form/form-error-handeling';
+  createProjectSchema,
+  DEFAULT_PROJECT,
+} from '@/utils/validation/projects';
+
+import { Form } from '@/components/form/form';
 import { Header } from '@/components/form/header';
 import { ProjectForm } from '@/components/projects/form';
 import { PROJECTS_QUERY_KEYS } from '@/components/projects/query-keys';
 
 const NewProject = () => {
-  const [loading, setLoading] = useState(false);
   const queryClient = useQueryClient();
   const router = useRouter();
 
-  const methods = useForm<CreateProjectInput>({
+  const methods = useForm<CreateProjectInput, unknown, CreateProjectOutput>({
     resolver: zodResolver(createProjectSchema),
-    disabled: loading,
-    defaultValues: {
-      title: '',
-      description: '',
-      link: '',
-      categoryId: undefined,
-      isActive: true,
-    },
+    defaultValues: DEFAULT_PROJECT,
   });
 
-  const { handleSubmit } = methods;
-
   const onSubmit = useCallback(
-    async (data: CreateProjectInput) => {
-      setLoading(true);
-      useErrors.getState().setErrors({});
-      // After validation, data is guaranteed to match CreateProjectOutput
-      const validatedData = data as CreateProjectOutput;
+    async (data: CreateProjectOutput) => {
+      const result = await mutate<CreatedResponse, CreateProjectOutput>({
+        href: '/api/dash/projects',
+        method: 'POST',
+        data,
+        onSuccess: ({ id }) =>
+          cacheCreated<Project>(queryClient, PROJECTS_QUERY_KEYS, {
+            ...data,
+            id,
+            createdAt: new Date().toISOString(),
+          }),
+      });
 
-      try {
-        const result = await mutate<
-          Pick<Project, 'id' | 'createdAt'>,
-          CreateProjectOutput
-        >({
-          href: '/api/dash/projects',
-          method: 'POST',
-          data: validatedData,
-          onSuccess: (serverData) => {
-            const newProject: Project = {
-              ...validatedData,
-              id: serverData.id,
-              createdAt: serverData.createdAt,
-            };
-            const existingProjects = queryClient.getQueryData<Project[]>(
-              PROJECTS_QUERY_KEYS.list
-            );
-            queryClient.setQueryData(
-              PROJECTS_QUERY_KEYS.detail(serverData.id),
-              newProject
-            );
-            if (existingProjects)
-              queryClient.setQueryData(PROJECTS_QUERY_KEYS.list, [
-                newProject,
-                ...existingProjects,
-              ]);
-          },
-        });
-
-        toast.success(result.message || 'تم إنشاء المشروع بنجاح');
-        void router.push('/dash/projects');
-      } catch (error) {
-        toast.error(
-          error instanceof CustomError
-            ? error.message
-            : 'حدث خطاء، اعد المحاوله'
-        );
-      } finally {
-        setLoading(false);
-      }
+      toast.success(result.message || 'تم إنشاء المشروع بنجاح');
+      void router.push('/dash/projects');
     },
     [queryClient, router]
   );
 
-  const onError = useCallback((errors: FieldErrors<CreateProjectInput>) => {
-    const erros = flattenErrors(errors);
-    showFormErrors(erros);
-    useErrors.getState().setErrors(erros);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      useErrors.getState().setErrors({});
-    };
-  }, []);
-
   return (
-    <FormProvider {...methods}>
-      <form
-        onSubmit={handleSubmit(onSubmit, onError)}
-        className={cn('transition-[max-width,opacity]', loading && 'disabled')}
-        inert={loading}
-      >
-        <Header
-          title='إضافة مشروع جديد'
-          loading={loading}
-          cancelHref='/dash/projects'
-        />
-        <ProjectForm />
-      </form>
-    </FormProvider>
+    <Form methods={methods} onSubmit={onSubmit}>
+      <Header title='إضافة مشروع جديد' cancelHref='/dash/projects' />
+      <ProjectForm />
+    </Form>
   );
 };
 

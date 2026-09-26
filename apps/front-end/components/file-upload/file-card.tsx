@@ -1,6 +1,6 @@
 import type { FileWithPreview } from './file-types';
 
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 
 import { Download, GripVertical, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -42,6 +42,15 @@ export const FileCardContent = memo(
     const isImage = fileType.startsWith('image/');
     const previewUrl =
       file.preview || (file.file instanceof File ? undefined : file.file.url);
+
+    const handleRemove = useCallback(
+      () => onRemove(file.id),
+      [onRemove, file.id]
+    );
+    const handleDownload = useCallback(
+      () => onDownload?.(file),
+      [onDownload, file]
+    );
 
     return (
       <div
@@ -88,7 +97,7 @@ export const FileCardContent = memo(
               <Button
                 variant='ghost'
                 size='icon'
-                onClick={() => onRemove(file.id)}
+                onClick={handleRemove}
                 className={cn(
                   'h-8 w-8 rounded-full bg-red-500/80 text-white hover:bg-red-600',
                   !showDragHandle && 'ms-auto'
@@ -107,7 +116,7 @@ export const FileCardContent = memo(
                 <Button
                   variant='ghost'
                   size='icon'
-                  onClick={() => onDownload(file)}
+                  onClick={handleDownload}
                   className='h-8 w-8 rounded-full bg-white/20 text-white hover:bg-white/30'
                   title='تحميل'
                 >

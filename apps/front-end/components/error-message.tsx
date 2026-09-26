@@ -25,7 +25,7 @@ const ErrorMessage = memo(
         </p>
         <Button
           variant={'none'}
-          onClick={() => refetch()}
+          onClick={refetch}
           className='mx-auto mt-6 flex items-center justify-center border border-red-600 space-x-2 hover:bg-red-300/10'
         >
           <RefreshCw className='h-4 w-4' />

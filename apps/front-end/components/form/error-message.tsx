@@ -1,49 +1,46 @@
 import { memo } from 'react';
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { useShallow } from 'zustand/react/shallow';
+import { fieldMessage } from '@/lib/motion';
 
-import { useErrors } from '@/utils/store/errors';
+import { useFieldError } from './store';
 
-const inputMessageVariants = {
-  initial: { opacity: 0, height: 0 },
-  animate: { opacity: 1, height: 'auto' },
-  exit: { opacity: 0, height: 0 },
-  transition: { duration: 0.2 },
-};
+interface ErrorMessageProps {
+  name: string;
+  /** Help text shown while the field has no error; `\n` breaks the line. */
+  tip?: string;
+}
 
-export const ErrorMessage = memo(
-  ({ path, tip }: { path: string; tip?: string }) => {
-    const errorMessage = useErrors(useShallow((state) => state.errors[path]));
-    return (
-      <AnimatePresence mode='wait'>
-        {errorMessage && (
-          <motion.div
-            variants={inputMessageVariants}
-            initial='initial'
-            animate='animate'
-            exit='exit'
-            key={'error'}
-            className='select-none text-sm text-red-700'
-          >
-            <p className='pt-1.5'>{errorMessage}</p>
-          </motion.div>
-        )}
-        {!!tip && !errorMessage && (
-          <motion.div
-            variants={inputMessageVariants}
-            initial='initial'
-            animate='animate'
-            exit='exit'
-            key='tip'
-            className='select-none text-sm text-muted-foreground'
-          >
-            <p className='pt-1.5'>{tip}</p>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    );
-  }
-);
+export const ErrorMessage = memo(({ name, tip }: ErrorMessageProps) => {
+  const errorMessage = useFieldError(name);
+
+  return (
+    <AnimatePresence mode='wait'>
+      {errorMessage ? (
+        <motion.div
+          key='error'
+          variants={fieldMessage}
+          initial='hidden'
+          animate='show'
+          exit='exit'
+          className='select-none text-sm text-destructive'
+        >
+          <p className='pt-1.5'>{errorMessage}</p>
+        </motion.div>
+      ) : tip ? (
+        <motion.div
+          key='tip'
+          variants={fieldMessage}
+          initial='hidden'
+          animate='show'
+          exit='exit'
+          className='select-none text-sm text-muted-foreground'
+        >
+          <p className='whitespace-pre-line pt-1.5 leading-snug'>{tip}</p>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  );
+});
 
 ErrorMessage.displayName = 'ErrorMessage';

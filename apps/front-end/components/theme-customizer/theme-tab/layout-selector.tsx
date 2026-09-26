@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 
 import { useSettings, useSettingStore } from '@/utils/store/setting';
 
-import Label from '@/components/ui/label';
+import { Label } from '@/components/ui/label';
 import { ThemeLayout } from '@/components/theme-customizer/types/enum';
 
 import { useEditorStore } from '../store/editor-store';

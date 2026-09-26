@@ -1,5 +1,3 @@
-'use client';
-
 import type { DropAnimation, UniqueIdentifier } from '@dnd-kit/core';
 
 import * as React from 'react';
@@ -7,6 +5,8 @@ import * as React from 'react';
 import { defaultDropAnimationSideEffects, DragOverlay } from '@dnd-kit/core';
 import * as ReactDOM from 'react-dom';
 import { cn } from '@/lib/utils';
+
+import useIsomorphicLayoutEffect from '@/hooks/use-layout-effect';
 
 import { OVERLAY_NAME } from './constants';
 import { SortableOverlayContext, useSortableContext } from './sortable-context';
@@ -37,7 +37,7 @@ export function SortableOverlay(props: SortableOverlayProps) {
   const context = useSortableContext(OVERLAY_NAME);
 
   const [mounted, setMounted] = React.useState(false);
-  React.useLayoutEffect(() => setMounted(true), []);
+  useIsomorphicLayoutEffect(() => setMounted(true), []);
 
   const container =
     containerProp ?? (mounted ? globalThis.document?.body : null);

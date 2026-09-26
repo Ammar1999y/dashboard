@@ -1,11 +1,4 @@
-import type { MainTab, TabConfig } from '../../types';
-
-import { memo } from 'react';
-
-import { useShallow } from 'zustand/shallow';
-
-import { AnimatedContent } from '@/components/animated-content';
-import { useTabsStore } from '@/components/form/tabs/store';
+import type { FormTab } from '@/components/form/tabs/form-tabs';
 
 import { BasicInfoSection } from './basic';
 import { ContactInfoSection } from './contact-info';
@@ -14,48 +7,15 @@ import { ImagesSection } from './images';
 import { NavLinksSection } from './nav-links';
 import { SocialAccountsSection } from './social-accounts';
 
-export const FormContent = memo(() => {
-  const activeMainTab = useTabsStore(useShallow((s) => s.activeMainTab));
-
-  return (
-    <AnimatedContent keyValue={activeMainTab || ''}>
-      <TabContent activeTab={activeMainTab as MainTab} />
-    </AnimatedContent>
-  );
-});
-
-FormContent.displayName = 'FormContent';
-
-export const MAIN_TABS: TabConfig[] = [
-  { id: 'basic', label: 'المعلومات الأساسية' },
-  { id: 'images', label: 'الصور' },
-  { id: 'fonts', label: 'الخطوط' },
-  { id: 'socialAccounts', label: 'حسابات التواصل' },
-  { id: 'contactInfo', label: 'بيانات التواصل' },
-  { id: 'navLinks', label: 'الروابط' },
-];
-
-const TabContent = memo(({ activeTab }: { activeTab: MainTab }) => {
-  switch (activeTab) {
-    case 'images': {
-      return <ImagesSection />;
-    }
-    case 'fonts': {
-      return <FontsSection />;
-    }
-    case 'socialAccounts': {
-      return <SocialAccountsSection />;
-    }
-    case 'contactInfo': {
-      return <ContactInfoSection />;
-    }
-    case 'navLinks': {
-      return <NavLinksSection />;
-    }
-    default: {
-      return <BasicInfoSection />;
-    }
-  }
-});
-
-TabContent.displayName = 'TabContent';
+export const SETTINGS_TABS = [
+  { id: 'basic', label: 'المعلومات الأساسية', Panel: BasicInfoSection },
+  { id: 'images', label: 'الصور', Panel: ImagesSection },
+  { id: 'fonts', label: 'الخطوط', Panel: FontsSection },
+  {
+    id: 'socialAccounts',
+    label: 'حسابات التواصل',
+    Panel: SocialAccountsSection,
+  },
+  { id: 'contactInfo', label: 'بيانات التواصل', Panel: ContactInfoSection },
+  { id: 'navLinks', label: 'الروابط', Panel: NavLinksSection },
+] as const satisfies readonly [FormTab, ...FormTab[]];

@@ -1,5 +1,5 @@
 // https://github.com/vatsalpipalava/shadcn-input-color/blob/main/src/components/input-color.tsx
-import type { ChangeEvent } from 'react';
+import type { ChangeEvent, CSSProperties } from 'react';
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -20,7 +20,7 @@ import { getColorSchema } from '@/utils/validation/rules';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import Label from '@/components/ui/label';
+import { Label } from '@/components/ui/label';
 import {
   Popover,
   PopoverContent,
@@ -45,6 +45,14 @@ interface ColorPickerProps {
   alpha?: boolean;
 }
 
+type ColorFormat = 'HEX' | 'RGB' | 'HSL';
+type ChannelFormat = Exclude<ColorFormat, 'HEX'>;
+
+const COLOR_FORMATS: ColorFormat[] = ['HEX', 'RGB', 'HSL'];
+
+const isColorFormat = (value: string): value is ColorFormat =>
+  (COLOR_FORMATS as string[]).includes(value);
+
 interface ColorValues {
   hex: string;
   rgb: { r: number; g: number; b: number };
@@ -53,183 +61,193 @@ interface ColorValues {
   hsla?: { h: number; s: number; l: number; a: number };
 }
 
-const defaultColor = '';
+interface Channel {
+  name: string;
+  max: number;
+  step: number;
+  placeholder: string;
+}
 
-const InputColor = memo(
+const ALPHA_CHANNEL: Channel = {
+  name: 'a',
+  max: 1,
+  step: 0.01,
+  placeholder: '1.00',
+};
+
+const CHANNELS: Record<ChannelFormat, Channel[]> = {
+  RGB: [
+    { name: 'r', max: 255, step: 1, placeholder: '255' },
+    { name: 'g', max: 255, step: 1, placeholder: '255' },
+    { name: 'b', max: 255, step: 1, placeholder: '255' },
+  ],
+  HSL: [
+    { name: 'h', max: 360, step: 1, placeholder: '360' },
+    { name: 's', max: 100, step: 1, placeholder: '100' },
+    { name: 'l', max: 100, step: 1, placeholder: '100' },
+  ],
+};
+
+const EMPTY_COLOR = '';
+
+const RAINBOW = 'conic-gradient(red,orange,yellow,lime,cyan,blue,magenta,red)';
+
+const CHECKERBOARD_STYLE: CSSProperties = {
+  backgroundImage: `linear-gradient(45deg, #ccc 25%, transparent 25%),
+    linear-gradient(-45deg, #ccc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #ccc 75%),
+    linear-gradient(-45deg, transparent 75%, #ccc 75%)`,
+  backgroundSize: '8px 8px',
+  backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0px',
+};
+
+const toColorValues = (color: string, alpha: boolean): ColorValues => {
+  if (alpha) {
+    const rgba = hexToRgba(color);
+    return {
+      hex: color.slice(0, 7),
+      rgb: { r: rgba.r, g: rgba.g, b: rgba.b },
+      hsl: rgbToHsl(rgba.r, rgba.g, rgba.b),
+      rgba,
+      hsla: rgbaToHsla(rgba.r, rgba.g, rgba.b, rgba.a),
+    };
+  }
+
+  const rgb = hexToRgb(color);
+  return { hex: color.toUpperCase(), rgb, hsl: rgbToHsl(rgb.r, rgb.g, rgb.b) };
+};
+
+const clamp = (value: number, max: number) => Math.max(0, Math.min(max, value));
+
+const isValidColor = (color: string) =>
+  getColorSchema().safeParse(color).success;
+
+const channelSegmentClass = (index: number, count: number) => {
+  if (index === 0)
+    return 'ltr:rounded-l-sm ltr:rounded-r-none rtl:rounded-l-none rtl:rounded-r-sm';
+  if (index === count - 1)
+    return 'ltr:rounded-l-none ltr:rounded-r-sm rtl:rounded-l-sm rtl:rounded-r-none';
+  return 'rounded-none border-x-0';
+};
+
+const ColorPicker = memo(
   ({
     value,
     onChange,
     onBlur,
     label,
-    className = '',
+    className,
     alpha = true,
   }: ColorPickerProps) => {
-    const [colorFormat, setColorFormat] = useState('HEX');
-    const [colorValues, setColorValues] = useState<ColorValues>(() => {
-      if (alpha) {
-        const rgba = hexToRgba(value || defaultColor);
-        const hsla = rgbaToHsla(rgba.r, rgba.g, rgba.b, rgba.a);
-        return {
-          hex: value || defaultColor.slice(0, 7),
-          rgb: { r: rgba.r, g: rgba.g, b: rgba.b },
-          hsl: rgbToHsl(rgba.r, rgba.g, rgba.b),
-          rgba,
-          hsla,
-        };
-      }
-
-      const rgb = hexToRgb(value || defaultColor);
-      const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-      return {
-        hex: value || defaultColor,
-        rgb,
-        hsl,
-      };
-    });
-
+    const [colorFormat, setColorFormat] = useState<ColorFormat>('HEX');
+    const [colorValues, setColorValues] = useState<ColorValues>(() =>
+      toColorValues(value || EMPTY_COLOR, alpha)
+    );
     const [hexInputValue, setHexInputValue] = useState<string>(value || '');
 
-    // Max length for hex input memoized
-    const maxLength = useMemo(() => (alpha ? 9 : 7), [alpha]);
+    const maxLength = alpha ? 9 : 7;
 
-    // Update all color formats when color changes
     const updateColorValues = useCallback(
       (newColor: string) => {
-        if (alpha) {
-          const rgba = hexToRgba(newColor);
-          const hsla = rgbaToHsla(rgba.r, rgba.g, rgba.b, rgba.a);
-          setColorValues({
-            hex: newColor.length === 9 ? newColor.slice(0, 7) : newColor,
-            rgb: { r: rgba.r, g: rgba.g, b: rgba.b },
-            hsl: rgbToHsl(rgba.r, rgba.g, rgba.b),
-            rgba,
-            hsla,
-          });
-        } else {
-          const rgb = hexToRgb(newColor);
-          const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-          setColorValues({
-            hex: newColor.toUpperCase(),
-            rgb,
-            hsl,
-          });
-        }
+        setColorValues(toColorValues(newColor, alpha));
         setHexInputValue(newColor.toUpperCase());
       },
       [alpha]
     );
 
-    // Handle color picker change
     const handleColorChange = useCallback(
       (newColor: string) => {
         updateColorValues(newColor);
-        setHexInputValue(newColor.toUpperCase()); // ضمان تحديث النص
         onChange?.(newColor);
       },
       [updateColorValues, onChange]
     );
-    // Handle HEX input change
+
     const handleHexChange = useCallback(
       (e: ChangeEvent<HTMLInputElement>) => {
         let formattedValue = e.target.value.toUpperCase();
-        if (!formattedValue.startsWith('#')) {
-          formattedValue = '#' + formattedValue;
-        }
+        if (!formattedValue.startsWith('#'))
+          formattedValue = `#${formattedValue}`;
 
         if (
-          formattedValue.length <= maxLength &&
-          /^#[0-9A-Fa-f]*$/.test(formattedValue)
-        ) {
-          setHexInputValue(formattedValue);
+          formattedValue.length > maxLength ||
+          !/^#[0-9A-F]*$/.test(formattedValue)
+        )
+          return;
 
-          // Only update color if it's valid
-          try {
-            if (formattedValue.length === maxLength) {
-              getColorSchema().parse(formattedValue);
-              onChange?.(formattedValue);
-              updateColorValues(formattedValue);
-            }
-          } catch {
-            // Invalid color, will be reset on blur
-          }
+        setHexInputValue(formattedValue);
+        // A partial hex is kept as text only; blur resets it if never finished.
+        if (
+          formattedValue.length === maxLength &&
+          isValidColor(formattedValue)
+        ) {
+          onChange?.(formattedValue);
+          updateColorValues(formattedValue);
         }
       },
       [maxLength, onChange, updateColorValues]
     );
 
-    // Validate and reset to default if invalid
     const validateAndResetColor = useCallback(() => {
-      try {
-        getColorSchema().parse(hexInputValue);
-      } catch {
-        // Invalid color, reset to default red
-        onChange?.(defaultColor);
-        updateColorValues(defaultColor);
-        setHexInputValue(defaultColor);
-      }
+      if (isValidColor(hexInputValue)) return;
+      onChange?.(EMPTY_COLOR);
+      updateColorValues(EMPTY_COLOR);
     }, [hexInputValue, onChange, updateColorValues]);
 
-    // Handle RGB/RGBA input change
     const handleRgbChange = useCallback(
       (e: ChangeEvent<HTMLInputElement>) => {
-        const component = e.target.name;
-        const value = e.target.value;
+        const { name } = e.target;
+        const numValue = Number(e.target.value) || 0;
 
-        const numValue = Number(value) || 0;
-        const clampedValue =
-          component === 'a' && alpha && colorValues.rgba
-            ? Math.max(0, Math.min(1, numValue))
-            : Math.max(0, Math.min(255, Math.floor(numValue)));
         if (alpha && colorValues.rgba) {
-          const newRgba = { ...colorValues.rgba, [component]: clampedValue };
+          const newRgba = {
+            ...colorValues.rgba,
+            [name]:
+              name === 'a'
+                ? clamp(numValue, 1)
+                : clamp(Math.floor(numValue), 255),
+          };
           const hex = rgbaToHex(newRgba.r, newRgba.g, newRgba.b, newRgba.a);
-          const hsla = rgbaToHsla(newRgba.r, newRgba.g, newRgba.b, newRgba.a);
-
           setColorValues({
-            ...colorValues,
             hex: hex.slice(0, 7),
             rgb: { r: newRgba.r, g: newRgba.g, b: newRgba.b },
             hsl: rgbToHsl(newRgba.r, newRgba.g, newRgba.b),
             rgba: newRgba,
-            hsla,
+            hsla: rgbaToHsla(newRgba.r, newRgba.g, newRgba.b, newRgba.a),
           });
           onChange?.(hex);
           return;
         }
 
-        const newRgb = { ...colorValues.rgb, [component]: clampedValue };
+        const newRgb = {
+          ...colorValues.rgb,
+          [name]: clamp(Math.floor(numValue), 255),
+        };
         const hex = rgbToHex(newRgb.r, newRgb.g, newRgb.b);
-        const hsl = rgbToHsl(newRgb.r, newRgb.g, newRgb.b);
-
-        setColorValues({ ...colorValues, hex, rgb: newRgb, hsl });
+        setColorValues({
+          hex,
+          rgb: newRgb,
+          hsl: rgbToHsl(newRgb.r, newRgb.g, newRgb.b),
+        });
         onChange?.(hex);
       },
       [alpha, colorValues, onChange]
     );
 
-    // Handle HSL/HSLA input change
     const handleHslChange = useCallback(
       (e: ChangeEvent<HTMLInputElement>) => {
-        const component = e.target.name;
-        const value = e.target.value;
-
-        const numValue = Number(value) || 0;
-        // Handle alpha mode
-        let clampedValue: number;
-
-        if (component === 'a' && alpha && colorValues.hsla)
-          clampedValue = Math.max(0, Math.min(1, numValue));
-        else if (component === 'h')
-          clampedValue = Math.max(0, Math.min(360, numValue));
-        else clampedValue = Math.max(0, Math.min(100, numValue));
+        const { name } = e.target;
+        const numValue = Number(e.target.value) || 0;
+        const clamped = clamp(
+          numValue,
+          name === 'a' ? 1 : name === 'h' ? 360 : 100
+        );
 
         if (alpha && colorValues.hsla) {
-          const newHsla = { ...colorValues.hsla, [component]: clampedValue };
+          const newHsla = { ...colorValues.hsla, [name]: clamped };
           const rgba = hslaToRgba(newHsla.h, newHsla.s, newHsla.l, newHsla.a);
           const hex = rgbaToHex(rgba.r, rgba.g, rgba.b, rgba.a);
-
           setColorValues({
-            ...colorValues,
             hex: hex.slice(0, 7),
             rgb: { r: rgba.r, g: rgba.g, b: rgba.b },
             hsl: { h: newHsla.h, s: newHsla.s, l: newHsla.l },
@@ -240,23 +258,18 @@ const InputColor = memo(
           return;
         }
 
-        const newHsl = { ...colorValues.hsl, [component]: clampedValue };
+        const newHsl = { ...colorValues.hsl, [name]: clamped };
         const rgb = hslToRgb(newHsl.h, newHsl.s, newHsl.l);
         const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
-
-        setColorValues({ ...colorValues, hex, rgb, hsl: newHsl });
+        setColorValues({ hex, rgb, hsl: newHsl });
         onChange?.(hex);
       },
       [alpha, colorValues, onChange]
     );
 
-    // Handle popover close
     const handlePopoverChange = useCallback(
       (open: boolean) => {
-        if (open) {
-          return;
-        }
-
+        if (open) return;
         validateAndResetColor();
         setColorFormat('HEX');
         onBlur?.();
@@ -264,52 +277,54 @@ const InputColor = memo(
       [validateAndResetColor, onBlur]
     );
 
-    // Handle blur on main input
     const handleMainInputBlur = useCallback(() => {
       validateAndResetColor();
       onBlur?.();
     }, [validateAndResetColor, onBlur]);
 
     useEffect(() => {
-      // نقوم بالتحديث فقط إذا جاءت قيمة جديدة (ليست فارغة) ومختلفة عن الحالية
-      if (!value || value === hexInputValue || value === defaultColor) {
-        return;
-      }
-
+      if (!value || value === hexInputValue) return;
       updateColorValues(value);
-      setHexInputValue(value.toUpperCase());
     }, [value, hexInputValue, updateColorValues]);
-    // Get current hex value for display
-    const getCurrentHexValue = useMemo(() => {
-      if (!hexInputValue) return ''; // شرط جديد: إذا كان فارغاً أعد فارغاً
-      if (colorFormat === 'HEX') {
-        return hexInputValue;
-      }
+
+    const displayHex = useMemo(() => {
+      if (!hexInputValue) return '';
+      if (colorFormat === 'HEX') return hexInputValue;
       if (alpha && colorValues.rgba) {
-        return rgbaToHex(
-          colorValues.rgba.r,
-          colorValues.rgba.g,
-          colorValues.rgba.b,
-          colorValues.rgba.a
-        );
+        const { r, g, b, a } = colorValues.rgba;
+        return rgbaToHex(r, g, b, a);
       }
       return colorValues.hex;
     }, [colorFormat, hexInputValue, alpha, colorValues]);
 
+    const swatchStyle = useMemo<CSSProperties>(
+      () => ({ background: hexInputValue || RAINBOW }),
+      [hexInputValue]
+    );
+
+    const channelValues = useMemo<
+      Record<ChannelFormat, Record<string, number>>
+    >(
+      () => ({
+        RGB: alpha && colorValues.rgba ? colorValues.rgba : colorValues.rgb,
+        HSL: alpha && colorValues.hsla ? colorValues.hsla : colorValues.hsl,
+      }),
+      [alpha, colorValues]
+    );
+
+    const showsAlpha = alpha && !!colorValues.rgba;
+
     return (
-      <div className={cn(className)}>
+      <div className={className}>
         <Label title={label} />
         <div className='relative h-input'>
           <Input
             dir='ltr'
-            // يظهر "اختر لون" فقط إذا كان النص فارغاً
-            placeholder={hexInputValue ? label : 'اختر لون'}
-            // الربط مع الدالة المحسوبة وليس الـ prop
-            value={getCurrentHexValue}
+            placeholder='اختر لون'
+            value={displayHex}
             onChange={handleHexChange}
             onBlur={handleMainInputBlur}
-            // إضافة كلاس لجعل النص يمين في حالة البليس هولدر
-            className={`!h-input pe-14 uppercase placeholder:text-right`}
+            className='!h-input pe-14 uppercase placeholder:text-right'
           />
           <Popover onOpenChange={handlePopoverChange}>
             <PopoverTrigger asChild>
@@ -318,31 +333,15 @@ const InputColor = memo(
                   'absolute top-1/2 h-full w-12 -translate-y-1/2 overflow-hidden border border-border opacity-90 shadow-none saturate-[.7] ltr:right-0 ltr:rounded-r-none rtl:left-0 rtl:rounded-l-none',
                   !hexInputValue && 'border-0'
                 )}
-                size={'icon'}
-                style={{
-                  // الخلفية: إما اللون المختار أو التدرج اللوني
-                  background:
-                    hexInputValue ||
-                    'conic-gradient(red,orange,yellow,lime,cyan,blue,magenta,red)',
-                  // الحيلة هنا: تكبير الخلفية لـ 150% أو 200% وقص الأطراف (الزر لديه overflow-hidden)
-                  // هذا يجعل التدرج يبدو "ناعماً" وكأنه جزء من عجلة ألوان كبيرة
-                }}
+                size='icon'
+                style={swatchStyle}
               >
-                {/* شرط ظهور الشفافية: يجب أن يكون هناك لون مختار */}
                 {hexInputValue &&
-                  alpha &&
                   colorValues.rgba &&
                   colorValues.rgba.a < 1 && (
                     <div
                       className='absolute inset-0 opacity-20'
-                      style={{
-                        backgroundImage: `linear-gradient(45deg, #ccc 25%, transparent 25%), 
-                                      linear-gradient(-45deg, #ccc 25%, transparent 25%), 
-                                      linear-gradient(45deg, transparent 75%, #ccc 75%), 
-                                      linear-gradient(-45deg, transparent 75%, #ccc 75%)`,
-                        backgroundSize: '8px 8px',
-                        backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0px',
-                      }}
+                      style={CHECKERBOARD_STYLE}
                     />
                   )}
               </Button>
@@ -361,161 +360,31 @@ const InputColor = memo(
                   />
                 )}
                 <div className='flex space-x-2'>
-                  <ColorSelector
+                  <ColorFormatSelect
                     colorFormat={colorFormat}
-                    setColorFormat={setColorFormat}
+                    onColorFormatChange={setColorFormat}
                   />
                   <div className='flex flex-1 items-center [&>input]:h-7 [&>input]:flex-1 [&>input]:!cursor-text [&>input]:px-1 [&>input]:py-1 [&>input]:text-center [&>input]:text-sm'>
                     {colorFormat === 'HEX' ? (
                       <Input
                         className='rounded-sm'
                         dir='ltr'
-                        value={getCurrentHexValue}
+                        value={displayHex}
                         onChange={handleHexChange}
-                        placeholder={defaultColor}
                         maxLength={maxLength}
                       />
-                    ) : colorFormat === 'RGB' ? (
-                      <>
-                        <Input
-                          type='number'
-                          dir='ltr'
-                          className='num bidi-isolate ltr:rounded-l-sm ltr:rounded-r-none rtl:rounded-l-none rtl:rounded-r-sm'
-                          value={
-                            alpha && colorValues.rgba
-                              ? colorValues.rgba.r
-                              : colorValues.rgb.r
-                          }
-                          name='r'
-                          onChange={handleRgbChange}
-                          placeholder='255'
-                          min={0}
-                          max={255}
-                          step={1}
-                        />
-                        <Input
-                          type='number'
-                          dir='ltr'
-                          className='num bidi-isolate rounded-none border-x-0'
-                          value={
-                            alpha && colorValues.rgba
-                              ? colorValues.rgba.g
-                              : colorValues.rgb.g
-                          }
-                          name='g'
-                          onChange={handleRgbChange}
-                          placeholder='255'
-                          min={0}
-                          max={255}
-                          step={1}
-                        />
-                        <Input
-                          type='number'
-                          dir='ltr'
-                          className={cn(
-                            'num bidi-isolate border-x-0',
-                            alpha && colorValues.rgba
-                              ? 'rounded-none'
-                              : 'ltr:rounded-l-none ltr:rounded-r-sm rtl:rounded-l-sm rtl:rounded-r-none'
-                          )}
-                          value={
-                            alpha && colorValues.rgba
-                              ? colorValues.rgba.b
-                              : colorValues.rgb.b
-                          }
-                          name='b'
-                          onChange={handleRgbChange}
-                          placeholder='255'
-                          min={0}
-                          max={255}
-                          step={1}
-                        />
-                        {alpha && colorValues.rgba && (
-                          <Input
-                            type='number'
-                            dir='ltr'
-                            className='num bidi-isolate ltr:rounded-l-none ltr:rounded-r-sm rtl:rounded-l-sm rtl:rounded-r-none'
-                            value={colorValues.rgba.a.toFixed(2)}
-                            name='a'
-                            onChange={handleRgbChange}
-                            placeholder='1.00'
-                            min={0}
-                            max={1}
-                            step={0.01}
-                          />
-                        )}
-                      </>
-                    ) : colorFormat === 'HSL' ? (
-                      <>
-                        <Input
-                          type='number'
-                          dir='ltr'
-                          className='num bidi-isolate ltr:rounded-l-sm ltr:rounded-r-none rtl:rounded-l-none rtl:rounded-r-sm'
-                          value={
-                            alpha && colorValues.hsla
-                              ? colorValues.hsla.h
-                              : colorValues.hsl.h
-                          }
-                          name='h'
-                          onChange={handleHslChange}
-                          placeholder='360'
-                          min={0}
-                          max={360}
-                          step={1}
-                        />
-                        <Input
-                          type='number'
-                          dir='ltr'
-                          className='num bidi-isolate rounded-none border-x-0'
-                          value={
-                            alpha && colorValues.hsla
-                              ? colorValues.hsla.s
-                              : colorValues.hsl.s
-                          }
-                          name='s'
-                          onChange={handleHslChange}
-                          placeholder='100'
-                          min={0}
-                          max={100}
-                          step={1}
-                        />
-                        <Input
-                          type='number'
-                          dir='ltr'
-                          className={cn(
-                            'num bidi-isolate border-x-0',
-                            alpha && colorValues.hsla
-                              ? 'rounded-none'
-                              : 'ltr:rounded-l-none ltr:rounded-r-sm rtl:rounded-l-sm rtl:rounded-r-none'
-                          )}
-                          value={
-                            alpha && colorValues.hsla
-                              ? colorValues.hsla.l
-                              : colorValues.hsl.l
-                          }
-                          name='l'
-                          onChange={handleHslChange}
-                          placeholder='100'
-                          min={0}
-                          max={100}
-                          step={1}
-                        />
-                        {alpha && colorValues.hsla && (
-                          <Input
-                            type='number'
-                            dir='ltr'
-                            className='num bidi-isolate ltr:rounded-l-none ltr:rounded-r-sm rtl:rounded-l-sm rtl:rounded-r-none'
-                            name='a'
-                            value={colorValues.hsla.a.toFixed(2)}
-                            onChange={handleHslChange}
-                            placeholder='1.00'
-                            min={0}
-                            max={1}
-                            step={0.01}
-                          />
-                        )}
-                      </>
-                    ) : null}
+                    ) : (
+                      <ChannelInputs
+                        channels={CHANNELS[colorFormat]}
+                        values={channelValues[colorFormat]}
+                        showsAlpha={showsAlpha}
+                        onChange={
+                          colorFormat === 'RGB'
+                            ? handleRgbChange
+                            : handleHslChange
+                        }
+                      />
+                    )}
                   </div>
                 </div>
               </div>
@@ -527,45 +396,78 @@ const InputColor = memo(
   }
 );
 
-InputColor.displayName = 'InputColor';
+ColorPicker.displayName = 'ColorPicker';
 
-const ColorSelector = memo(
-  ({
-    colorFormat,
-    setColorFormat,
-  }: {
-    colorFormat: string;
-    setColorFormat: (value: string) => void;
-  }) => {
+interface ChannelInputsProps {
+  channels: Channel[];
+  values: Record<string, number>;
+  showsAlpha: boolean;
+  onChange: (e: ChangeEvent<HTMLInputElement>) => void;
+}
+
+const ChannelInputs = memo(
+  ({ channels, values, showsAlpha, onChange }: ChannelInputsProps) => {
+    const visible = showsAlpha ? [...channels, ALPHA_CHANNEL] : channels;
+
+    return visible.map((channel, index) => {
+      const channelValue = values[channel.name] ?? 0;
+      return (
+        <Input
+          key={channel.name}
+          type='number'
+          dir='ltr'
+          className={cn(
+            'num bidi-isolate',
+            channelSegmentClass(index, visible.length)
+          )}
+          name={channel.name}
+          value={
+            channel === ALPHA_CHANNEL ? channelValue.toFixed(2) : channelValue
+          }
+          onChange={onChange}
+          placeholder={channel.placeholder}
+          min={0}
+          max={channel.max}
+          step={channel.step}
+        />
+      );
+    });
+  }
+);
+
+ChannelInputs.displayName = 'ChannelInputs';
+
+interface ColorFormatSelectProps {
+  colorFormat: ColorFormat;
+  onColorFormatChange: (format: ColorFormat) => void;
+}
+
+const ColorFormatSelect = memo(
+  ({ colorFormat, onColorFormatChange }: ColorFormatSelectProps) => {
+    const handleValueChange = useCallback(
+      (format: string) => {
+        if (isColorFormat(format)) onColorFormatChange(format);
+      },
+      [onColorFormatChange]
+    );
+
     return (
-      <Select value={colorFormat} onValueChange={setColorFormat}>
-        <ColorSelectorContent />
+      <Select value={colorFormat} onValueChange={handleValueChange}>
+        <SelectTrigger className='!h-7 w-20 rounded-sm py-1 pe-1 ps-2 text-sm'>
+          <SelectValue placeholder='Color' />
+        </SelectTrigger>
+        <SelectContent className='min-w-24'>
+          {COLOR_FORMATS.map((format) => (
+            <SelectItem key={format} value={format} className='h-7 text-sm'>
+              {format}
+            </SelectItem>
+          ))}
+        </SelectContent>
       </Select>
     );
   }
 );
 
-ColorSelector.displayName = 'ColorSelector';
+ColorFormatSelect.displayName = 'ColorFormatSelect';
 
-const ColorSelectorContent = memo(() => (
-  <>
-    <SelectTrigger className='!h-7 w-20 rounded-sm py-1 pe-1 ps-2 text-sm dark:bg-input/30'>
-      <SelectValue placeholder='Color' />
-    </SelectTrigger>
-    <SelectContent className='min-w-24'>
-      <SelectItem value='HEX' className='h-7 text-sm'>
-        HEX
-      </SelectItem>
-      <SelectItem value='RGB' className='h-7 text-sm'>
-        RGB
-      </SelectItem>
-      <SelectItem value='HSL' className='h-7 text-sm'>
-        HSL
-      </SelectItem>
-    </SelectContent>
-  </>
-));
-
-ColorSelectorContent.displayName = 'ColorSelectorContent';
-
-export default InputColor;
+export { ColorPicker };

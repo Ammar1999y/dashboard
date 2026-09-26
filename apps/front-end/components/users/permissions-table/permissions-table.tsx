@@ -1,7 +1,10 @@
 import type { PermissionsTableProps } from './types';
-import type { PermissionAction } from '@/lib/permissions/constants';
+import type {
+  DashboardPage,
+  PermissionAction,
+} from '@/lib/permissions/constants';
 
-import { memo, useMemo } from 'react';
+import { memo, useCallback } from 'react';
 
 import {
   DASHBOARD_PAGES,
@@ -18,16 +21,16 @@ import PermissionsTableCell from './permissions-table-cell';
 import PermissionsTableHeader from './permissions-table-header';
 import { usePermissionsTable } from './use-permissions-table';
 
+const PERMISSION_ACTIONS_LIST = Object.keys(
+  PERMISSION_ACTIONS
+) as PermissionAction[];
+
 const PermissionsTable = memo(
   ({
     onPermissionsChange,
     className,
     setInitPermissions,
   }: PermissionsTableProps) => {
-    const permissionActions = useMemo(
-      () => Object.keys(PERMISSION_ACTIONS) as PermissionAction[],
-      []
-    );
     const {
       toggleAllView,
       toggleAllEdit,
@@ -35,6 +38,7 @@ const PermissionsTable = memo(
       toggleAllCreate,
       toggleRowAll,
     } = usePermissionsTable(setInitPermissions);
+
     return (
       <>
         <PermissionsChangeHandler onPermissionsChange={onPermissionsChange} />
@@ -50,44 +54,14 @@ const PermissionsTable = memo(
           />
           <tbody aria-hidden='true' className='h-2' />
           <TableBody>
-            {DEFAULT_PAGE_PERMISSIONS.map((page, index) => {
-              const availablePermissions = getAvailablePermissions(page.name);
-
-              return (
-                <TableRow
-                  key={index}
-                  className='border-none transition-colors duration-300 even:bg-accent/50 hover:bg-accent'
-                >
-                  <TableCell className='py-3 font-medium'>
-                    <div className='flex items-center justify-between'>
-                      <div className='text-start'>
-                        <div className='font-semibold'>
-                          {DASHBOARD_PAGES[page.name]}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => toggleRowAll(index)}
-                        type='button'
-                        className='ms-2 rounded-md text-xs text-muted-foreground transition-all duration-300 hover:text-foreground'
-                      >
-                        اختيار الكل
-                      </button>
-                    </div>
-                  </TableCell>
-                  {permissionActions.map((action, colIndex) => (
-                    <TableCell key={colIndex}>
-                      {availablePermissions.includes(action) && (
-                        <PermissionsTableCell
-                          key={colIndex}
-                          rowIndex={index}
-                          colIndex={colIndex}
-                        />
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              );
-            })}
+            {DEFAULT_PAGE_PERMISSIONS.map((page, index) => (
+              <PermissionRow
+                key={page.name}
+                name={page.name}
+                index={index}
+                onToggleRow={toggleRowAll}
+              />
+            ))}
           </TableBody>
         </Table>
       </>
@@ -97,3 +71,49 @@ const PermissionsTable = memo(
 
 PermissionsTable.displayName = 'PermissionsTable';
 export default PermissionsTable;
+
+interface PermissionRowProps {
+  name: DashboardPage;
+  index: number;
+  onToggleRow: (index: number) => void;
+}
+
+/** Its own component so the row's index binds here, not in a closure per render. */
+const PermissionRow = memo(
+  ({ name, index, onToggleRow }: PermissionRowProps) => {
+    const availablePermissions = getAvailablePermissions(name);
+
+    const handleToggleRow = useCallback(
+      () => onToggleRow(index),
+      [onToggleRow, index]
+    );
+
+    return (
+      <TableRow className='border-none transition-colors duration-300 even:bg-accent/50 hover:bg-accent'>
+        <TableCell className='py-3 font-medium'>
+          <div className='flex items-center justify-between'>
+            <div className='text-start'>
+              <div className='font-semibold'>{DASHBOARD_PAGES[name]}</div>
+            </div>
+            <button
+              onClick={handleToggleRow}
+              type='button'
+              className='ms-2 rounded-md text-xs text-muted-foreground transition-all duration-300 hover:text-foreground'
+            >
+              اختيار الكل
+            </button>
+          </div>
+        </TableCell>
+        {PERMISSION_ACTIONS_LIST.map((action, colIndex) => (
+          <TableCell key={action}>
+            {availablePermissions.includes(action) && (
+              <PermissionsTableCell rowIndex={index} colIndex={colIndex} />
+            )}
+          </TableCell>
+        ))}
+      </TableRow>
+    );
+  }
+);
+
+PermissionRow.displayName = 'PermissionRow';

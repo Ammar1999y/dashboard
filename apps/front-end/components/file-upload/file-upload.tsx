@@ -32,7 +32,9 @@ import { FileCardContent } from './file-card';
 import { formatBytes } from './file-utils';
 
 const CloudUpload = memo(_CloudUpload);
+CloudUpload.displayName = 'CloudUpload';
 const Trash2 = memo(_Trash2);
+Trash2.displayName = 'Trash2';
 
 const measuring = { droppable: { strategy: MeasuringStrategy.Always } };
 

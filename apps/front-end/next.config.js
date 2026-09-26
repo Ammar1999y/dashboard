@@ -1,3 +1,4 @@
+const path = require('node:path');
 const { API_URL, PUBLIC_URL } = require('./lib/env');
 
 // TODO: clear the unuse
@@ -159,7 +160,10 @@ const nextConfig = {
   reactCompiler: true,
   poweredByHeader: false,
   devIndicators: false,
-  transpilePackages: ['@platejs/math', 'react-tweet'],
+  // `@app/shared` ships TypeScript source from the workspace, not a build.
+  transpilePackages: ['@platejs/math', 'react-tweet', '@app/shared'],
+  // The workspace root, so file tracing follows imports into `packages/`.
+  outputFileTracingRoot: path.join(__dirname, '../../'),
   images: {
     unoptimized: true,
     remotePatterns: [

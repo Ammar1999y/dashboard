@@ -1,8 +1,5 @@
-import type {
-  ContactInfoItem,
-  NavLinkItem,
-  SocialAccountItem,
-} from '@/types/settings';
+import type { SettingsClient } from '@/types/settings';
+import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
 
@@ -11,6 +8,7 @@ import {
   getColorSchema,
   getIDSchema,
   idSchema,
+  orderedListSchema,
   orderSchema,
   sanitizeStrict,
   sanitizeStrictSingleLine,
@@ -80,8 +78,17 @@ const googleFontSchema = z
   .preprocess(trimed, z.string().max(100, 'اسم الخط طويل جداً').nullish())
   .nullish();
 
+/**
+ * The number inputs are registered uncontrolled, so a cleared field arrives as
+ * `''` — which `Number('')` reads as 0, not "absent". Every font setting has a
+ * neutral value, so an empty field means that value rather than an error.
+ */
+const numberOr =
+  (fallback: number) => (v: string | undefined | number | null) =>
+    v === '' || v == null ? fallback : (returnNumberOrNull(v) ?? fallback);
+
 const letterSpacingSchema = z.preprocess(
-  (v: string | undefined | number | null) => returnNumberOrNull(v) ?? 0,
+  numberOr(0),
   z
     .number()
     .min(
@@ -95,7 +102,7 @@ const letterSpacingSchema = z.preprocess(
 );
 
 const lineHeightSchema = z.preprocess(
-  (v: string | undefined | number | null) => returnNumberOrNull(v) ?? 1,
+  numberOr(1),
   z
     .number()
     .min(MIN_LINE_HEIGHT, `تباعد الأسطر يجب أن يكون أكبر من ${MIN_LINE_HEIGHT}`)
@@ -103,7 +110,7 @@ const lineHeightSchema = z.preprocess(
 );
 
 const fontSizeMultiplierSchema = z.preprocess(
-  (v: string | undefined | number | null) => returnNumberOrNull(v) ?? 1,
+  numberOr(1),
   z
     .number()
     .min(
@@ -130,7 +137,6 @@ const settingsFontsSchema = z
 // Item constants
 const ITEM_TITLE_MAX = 100;
 const ITEM_LINK_MAX = 500;
-const MAX_ITEMS = 20;
 
 // Item title schema
 const itemTitleSchema = z.preprocess(
@@ -188,37 +194,22 @@ const navLinkItemSchema = z.object({
 });
 
 // Social accounts array schema
-const socialAccountsSchema = z
-  .preprocess(
-    (e: SocialAccountItem[] | null | undefined) => (e?.length ? e : null),
-    z
-      .array(socialAccountItemSchema, 'قم بإدخال حسابات التواصل بشكل صحيح')
-      .max(MAX_ITEMS, `تجاوزت أكبر عدد للعناصر، وهو ${MAX_ITEMS} عنصراً`)
-      .nullish()
-  )
-  .nullish();
+const socialAccountsSchema = orderedListSchema(
+  socialAccountItemSchema,
+  'قم بإدخال حسابات التواصل بشكل صحيح'
+);
 
 // Contact info array schema
-const contactInfoSchema = z
-  .preprocess(
-    (e: ContactInfoItem[] | null | undefined) => (e?.length ? e : null),
-    z
-      .array(contactInfoItemSchema, 'قم بإدخال بيانات التواصل بشكل صحيح')
-      .max(MAX_ITEMS, `تجاوزت أكبر عدد للعناصر، وهو ${MAX_ITEMS} عنصراً`)
-      .nullish()
-  )
-  .nullish();
+const contactInfoSchema = orderedListSchema(
+  contactInfoItemSchema,
+  'قم بإدخال بيانات التواصل بشكل صحيح'
+);
 
 // Nav links array schema
-const navLinksSchema = z
-  .preprocess(
-    (e: NavLinkItem[] | null | undefined) => (e?.length ? e : null),
-    z
-      .array(navLinkItemSchema, 'قم بإدخال الروابط بشكل صحيح')
-      .max(MAX_ITEMS, `تجاوزت أكبر عدد للعناصر، وهو ${MAX_ITEMS} عنصراً`)
-      .nullish()
-  )
-  .nullish();
+const navLinksSchema = orderedListSchema(
+  navLinkItemSchema,
+  'قم بإدخال الروابط بشكل صحيح'
+);
 
 // Settings schema (for upsert - uses POST)
 export const settingsSchema = z.object({
@@ -243,3 +234,32 @@ export const settingsSchema = z.object({
 // Type inference
 export type SettingsInput = z.input<typeof settingsSchema>;
 export type SettingsOutput = z.output<typeof settingsSchema>;
+
+const DEFAULT_FONTS = {
+  googleFont: null,
+  letterSpacing: 0,
+  lineHeight: 1,
+  fontSizeMultiplier: 1,
+};
+
+/**
+ * The settings form, seeded from the stored record or from nothing — the page
+ * is an upsert, so there may not be a record yet. Explicit per field because
+ * the API marks most of them optional while the form needs every input to have
+ * a value from its first render; spreading the record instead would leave an
+ * input `undefined` and make React switch it to controlled on first edit.
+ */
+export const toSettingsForm = (
+  record: SettingsClient | null
+): DefaultValues<SettingsInput> => ({
+  id: record?.id,
+  siteTitle: record?.siteTitle || '',
+  siteDescription: record?.siteDescription || '',
+  footerDescription: record?.footerDescription || '',
+  copyrightText: record?.copyrightText || '',
+  primaryColor: record?.primaryColor || '',
+  fonts: record?.fonts || DEFAULT_FONTS,
+  socialAccounts: record?.socialAccounts || [],
+  contactInfo: record?.contactInfo || [],
+  navLinks: record?.navLinks || [],
+});

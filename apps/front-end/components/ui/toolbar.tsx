@@ -1,5 +1,3 @@
-'use client';
-
 import type { VariantProps } from 'class-variance-authority';
 
 import * as React from 'react';
@@ -45,33 +43,8 @@ function ToolbarToggleGroup({
   );
 }
 
-export function ToolbarLink({
-  className,
-  ...props
-}: React.ComponentProps<typeof ToolbarPrimitive.Link>) {
-  return (
-    <ToolbarPrimitive.Link
-      className={cn('font-medium underline underline-offset-4', className)}
-      {...props}
-    />
-  );
-}
-
-export function ToolbarSeparator({
-  className,
-  ...props
-}: React.ComponentProps<typeof ToolbarPrimitive.Separator>) {
-  return (
-    <ToolbarPrimitive.Separator
-      className={cn('mx-2 my-1 w-px shrink-0 bg-border', className)}
-      {...props}
-    />
-  );
-}
-
-// From toggleVariants
 const toolbarButtonVariants = cva(
-  "inline-flex cursor-pointer hover:text-foreground items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium text-sm outline-none transition-[color,box-shadow] hover:bg-muted focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-checked:bg-accent aria-checked:text-accent-foreground  [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex cursor-pointer hover:text-foreground items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium text-sm outline-none transition-[color,box-shadow] hover:bg-muted focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-checked:bg-accent aria-checked:text-accent-foreground [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     defaultVariants: {
       size: 'default',
@@ -93,9 +66,7 @@ const toolbarButtonVariants = cva(
 );
 
 const dropdownArrowVariants = cva(
-  cn(
-    'inline-flex items-center justify-center font-medium text-foreground text-sm transition-colors disabled:pointer-events-none disabled:opacity-50 ltr:rounded-r-md rtl:rounded-l-md'
-  ),
+  'inline-flex items-center justify-center font-medium text-foreground text-sm transition-colors disabled:pointer-events-none disabled:opacity-50 ltr:rounded-r-md rtl:rounded-l-md',
   {
     defaultVariants: {
       size: 'sm',
@@ -226,6 +197,8 @@ export function ToolbarSplitButtonPrimary({
   );
 }
 
+const stopPropagation = (e: React.MouseEvent) => e.stopPropagation();
+
 export function ToolbarSplitButtonSecondary({
   className,
   size,
@@ -243,7 +216,7 @@ export function ToolbarSplitButtonSecondary({
         'group-data-[pressed=true]:bg-accent group-data-[pressed=true]:text-accent-foreground',
         className
       )}
-      onClick={(e) => e.stopPropagation()}
+      onClick={stopPropagation}
       role='button'
       {...props}
     >
@@ -274,8 +247,7 @@ export function ToolbarGroup({
   return (
     <div
       className={cn(
-        'group/toolbar-group',
-        'relative hidden has-[button]:flex',
+        'group/toolbar-group relative hidden has-[button]:flex',
         className
       )}
     >
@@ -341,18 +313,12 @@ export function ToolbarMenuGroup({
 }: React.ComponentProps<typeof DropdownMenuRadioGroup> & { label?: string }) {
   return (
     <>
-      <DropdownMenuSeparator
-        className={cn(
-          'hidden',
-          'mb-0 shrink-0 peer-has-[[role=menuitem]]/menu-group:block peer-has-[[role=menuitemradio]]/menu-group:block peer-has-[[role=option]]/menu-group:block'
-        )}
-      />
+      <DropdownMenuSeparator className='mb-0 hidden shrink-0 peer-has-[[role=menuitem]]/menu-group:block peer-has-[[role=menuitemradio]]/menu-group:block peer-has-[[role=option]]/menu-group:block' />
 
       <DropdownMenuRadioGroup
         {...props}
         className={cn(
-          'hidden',
-          'peer/menu-group group/menu-group my-1.5 has-[[role=menuitem]]:block has-[[role=menuitemradio]]:block has-[[role=option]]:block',
+          'peer/menu-group group/menu-group my-1.5 hidden has-[[role=menuitem]]:block has-[[role=menuitemradio]]:block has-[[role=option]]:block',
           className
         )}
       >

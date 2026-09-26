@@ -4,13 +4,7 @@ import { cn } from '@/lib/utils';
 
 interface DateInputProps {
   value?: Date;
-  /**
-   * `undefined` means the bound was CLEARED. Emitting it is not optional: the
-   * empty state is user-reachable, so a signature of `(date: Date) => void`
-   * meant clearing every field updated only this input's own display while the
-   * owner kept the old value — the UI said the bound was removed and Save
-   * committed it anyway.
-   */
+  /** `undefined` means the user cleared every field. */
   onChange: (date: Date | undefined) => void;
   className?: string;
 }
@@ -21,12 +15,7 @@ const daysInMonth = (y: number, m1to12: number) =>
 
 type DParts = { day: string; month: string; year: string };
 
-/**
- * Rendered when the bound genuinely has no value. An open-ended range ("up to
- * Aug 5") is a normal state — starting from an empty filter and editing only
- * the upper input produces it — and defaulting the empty side to today showed
- * the user a lower bound that was not part of their filter at all.
- */
+// No value is a real state (an open-ended range), never defaulted to today.
 const EMPTY_PARTS: DParts = { day: '', month: '', year: '' };
 
 const toPartsFromDate = (d: Date): DParts => ({
@@ -38,29 +27,15 @@ const toPartsFromDate = (d: Date): DParts => ({
 const toDateFromParts = (p: DParts) =>
   new Date(Number(p.year), Number(p.month) - 1, Number(p.day));
 
-/**
- * Identity of an emitted value, for suppressing duplicate notifications.
- *
- * Numeric, not the raw strings: `'5'` and `'05'` are the same day, and keying
- * on the literals made a single-digit entry emit once before blur padded it and
- * again after. `CLEARED_KEY` is the same idea for the empty state.
- */
+// De-duplicates emissions. Numeric so `'5'` and `'05'` are the same day.
 const partsKey = (p: DParts) =>
   `${Number(p.year)}-${Number(p.month)}-${Number(p.day)}`;
 const CLEARED_KEY = 'cleared';
 
 /**
- * A parseable value is not necessarily a COMMITTED one.
- *
- * Typing `1` into a filled day field produces the valid date "the 1st", so it
- * was emitted immediately; the controlled parent echoed it back, the sync effect
- * padded the field to `01`, and `maxLength={2}` then refused the `5` the user
- * was about to type — `15` was unreachable. Editing day or month on a complete
- * date was impossible for every value except those starting with `0`.
- *
- * A single digit is therefore held as provisional text: blur pads it and commits
- * it (`handleBlur`), and two digits commit straight away. Arrow adjustment is
- * unaffected — it always produces padded parts.
+ * A single digit is valid but not committed: emitting `1` would echo back
+ * padded to `01` and `maxLength` would refuse the `5` of `15`. Blur pads and
+ * commits it; two digits commit at once.
  */
 const isCommittableParts = (d: DParts) =>
   d.day.length === 2 && d.month.length === 2 && d.year.length === 4;
@@ -83,8 +58,7 @@ const isValidParts = (d: DParts) => {
 };
 
 const adjust = (parts: DParts, field: keyof DParts, step: 1 | -1): DParts => {
-  // Stepping an empty input starts from today, not the year 2000: with a real
-  // empty state the previous fallback would have jumped to 2000-01-01.
+  // Missing parts start from today, so the arrows can also begin an entry.
   const today = new Date();
   const y = Number(parts.year) || today.getFullYear();
   const m = (Number(parts.month) || today.getMonth() + 1) - 1;
@@ -117,12 +91,9 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
     value ? toPartsFromDate(new Date(value)) : EMPTY_PARTS
   );
   const lastValidRef = useRef<DParts>(date);
-  // Seeded from the initial value for the same reason the effect resyncs it:
-  // the owner already holds this date, so re-entering it is not a change.
-  // Completing a field auto-focuses the next one, and that focus fires blur
-  // synchronously with a stale render closure — so the same finished date was
-  // emitted twice for one keystroke. Consumers here are idempotent, but an
-  // exported component should not double-fire its own contract.
+  // The owner already holds its value, so re-entering it is not a change.
+  // Completing a field focuses the next, whose blur fires with a stale
+  // closure; this is what keeps that from emitting the same date twice.
   const lastEmittedRef = useRef<string>(value ? partsKey(date) : CLEARED_KEY);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -133,26 +104,14 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
   useEffect(() => {
     const next = value ? toPartsFromDate(new Date(value)) : EMPTY_PARTS;
     lastValidRef.current = next;
-    // The de-dupe key MUST resync with the incoming value. Leaving it behind
-    // meant that after the owner changed the value another way — Cancel, or a
-    // calendar click — retyping the date this input had previously emitted was
-    // suppressed as a duplicate, so the field displayed one date while the
-    // owner still held another and Save committed the wrong one.
+    // Must follow the incoming value, or retyping a date this input emitted
+    // before the owner changed it elsewhere is dropped as a duplicate.
     lastEmittedRef.current = value ? partsKey(next) : CLEARED_KEY;
     setDate(next);
   }, [value]);
 
-  /**
-   * The single place a value change is reported. Both terminal states are
-   * handled here — a complete date, and a fully empty one.
-   *
-   * "Cleared" used to be reachable only from the blur handler, which made the
-   * owner's knowledge depend on focus moving. Anything that reads the committed
-   * value without an intervening blur then saw the old date while the field
-   * showed nothing. Depending on incidental event ordering is the same mistake
-   * that produced several earlier defects here, so emptiness is now reported
-   * when it happens, exactly like completeness is.
-   */
+  // The single place a change is reported, for both terminal states — a
+  // complete date and a fully empty one — as they happen, not on blur.
   const setAndMaybeEmit = (next: DParts) => {
     if (
       next.day === date.day &&
@@ -164,8 +123,7 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
 
     if (!next.day && !next.month && !next.year) {
       lastValidRef.current = EMPTY_PARTS;
-      // Guarded because tabbing across an already-empty input blurs each field
-      // in turn, and the owner should be told once.
+      // Tabbing across an empty input blurs each field; report it once.
       if (lastEmittedRef.current === CLEARED_KEY) return;
       lastEmittedRef.current = CLEARED_KEY;
       onChange(undefined);
@@ -174,8 +132,6 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
 
     if (isValidParts(next)) {
       lastValidRef.current = next;
-      // Valid but still being typed (`1` for `15`): keep it local. Emitting it
-      // would round-trip through the parent and pad the field mid-keystroke.
       if (!isCommittableParts(next)) return;
       const key = partsKey(next);
       if (lastEmittedRef.current === key) return;
@@ -199,12 +155,8 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
 
   const handleBlur =
     (field: keyof DParts) => (e: React.FocusEvent<HTMLInputElement>) => {
-      // Normalizes ONLY the field being left, and takes the others from state
-      // as-is. The previous version padded every empty sibling to '00', which
-      // made a partially typed date fail validation and get reset — and since
-      // completing the day auto-focuses the month, that blur fired on every
-      // single entry attempt. With a genuinely empty initial state that made
-      // an empty input impossible to fill in by hand.
+      // Pads only the field being left: padding empty siblings would fail a
+      // partial date's validation and reset it on every day → month move.
       const raw = e.target.value;
       const padded = raw ? pad2(Number(raw) || 0) : '';
       const next: DParts = {
@@ -213,13 +165,9 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
         year: field === 'year' ? raw : date.year,
       };
 
-      // Fully empty is a legitimate "no bound", not a mistake to undo.
-      // `setAndMaybeEmit` owns that transition; if the state is already empty
-      // its equality check makes this a no-op.
       if (!next.day && !next.month && !next.year) return setAndMaybeEmit(next);
 
-      // Reject only a COMPLETE but impossible date (31/02, month 13). An
-      // in-progress one is preserved so the user can carry on typing.
+      // Only a complete but impossible date (31/02) is rejected.
       const complete = !!next.day && !!next.month && next.year.length === 4;
       if (complete && !isValidParts(next)) {
         setDate(lastValidRef.current);
@@ -249,10 +197,6 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
       }
 
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        // No readiness gate: `adjust` fills missing parts from today, so the
-        // arrows also work as a way to START entering a date. The gate existed
-        // because the old fallback produced the year 2000 — with an empty
-        // initial state it made the arrows dead on an unset bound.
         e.preventDefault();
         const next = adjust(date, field, e.key === 'ArrowUp' ? 1 : -1);
         setAndMaybeEmit(next);
@@ -281,22 +225,13 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
       }
     };
 
-  /**
-   * Focus leaving the whole control discards an unfinished date.
-   *
-   * A partial value is fine *while editing*, but it must not survive the user
-   * moving on: Save commits the owner's value, and the owner never saw the
-   * partial edit — so the field would display one date while a different one
-   * was committed. Reverting on FIELD blur is what broke entry earlier (moving
-   * day -> month is a blur), so this is scoped to leaving the container: an
-   * internal focus move is not leaving.
-   */
+  // Leaving the whole control — not moving between its fields — discards an
+  // unfinished date, which the owner never saw and Save would not commit.
   const handleContainerBlur = (e: React.FocusEvent<HTMLDivElement>) => {
     if (e.relatedTarget && containerRef.current?.contains(e.relatedTarget))
       return;
 
     const hasAnyInput = !!(date.day || date.month || date.year);
-    // All-empty is the cleared state, already reported to the owner.
     if (hasAnyInput && !isValidParts(date)) setDate(lastValidRef.current);
   };
 

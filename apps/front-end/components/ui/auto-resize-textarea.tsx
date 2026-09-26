@@ -1,28 +1,31 @@
-import * as React from 'react';
-import { useEffect, useMemo, useRef } from 'react';
+import type { ChangeEvent, Ref, TextareaHTMLAttributes } from 'react';
+
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { cn } from '@/lib/utils';
 
 import useIsomorphicLayoutEffect from '@/hooks/use-layout-effect';
 
+import { fieldSurface } from './field-surface';
+
+// Computed lengths carry their unit (`"1px"`), which `Number` alone rejects.
 function parsePx(value: string | null): number {
   if (!value) return 0;
-  const n = Number(value);
+  const n = Number(value.replace('px', '').trim());
   return Number.isNaN(n) ? 0 : n;
+}
+
+interface HeightConstraints {
+  minRows?: number;
+  maxRows?: number;
+  minHeight?: number;
+  maxHeight?: number;
 }
 
 function measureAndSetHeight(
   textarea: HTMLTextAreaElement,
-  options: {
-    minRows?: number;
-    maxRows?: number;
-    minHeight?: number;
-    maxHeight?: number;
-  }
+  { minRows, maxRows, minHeight, maxHeight }: HeightConstraints
 ) {
-  const { minRows, maxRows, minHeight, maxHeight } = options;
-
-  // Reset to auto to measure the intrinsic scroll height
   textarea.style.height = 'auto';
 
   const style = getComputedStyle(textarea);
@@ -31,10 +34,9 @@ function measureAndSetHeight(
   const paddingHeight =
     parsePx(style.paddingTop) + parsePx(style.paddingBottom);
 
-  // Some browsers may return 'normal' for line-height; fall back to ~1.2 * font-size
-  const lineHeightRaw = parsePx(style.lineHeight);
+  // `line-height: normal` computes to the keyword, not a length.
   const fontSize = parsePx(style.fontSize) || 16;
-  const lineHeight = lineHeightRaw || fontSize * 1.2;
+  const lineHeight = parsePx(style.lineHeight) || fontSize * 1.2;
 
   const minHeightPx =
     typeof minHeight === 'number'
@@ -50,29 +52,18 @@ function measureAndSetHeight(
         ? maxRows * lineHeight + borderHeight + paddingHeight
         : Infinity;
 
-  // scrollHeight includes padding but not borders
-  const scrollHeight = textarea.scrollHeight;
-  const next = Math.max(
-    minHeightPx,
-    Math.min(scrollHeight + borderHeight, maxHeightPx)
-  );
-  textarea.style.height = `${next}px`;
-
-  // Toggle vertical scrollbar only when exceeding the cap
-  textarea.style.overflowY =
-    scrollHeight + borderHeight > maxHeightPx ? 'auto' : 'hidden';
+  // `scrollHeight` includes padding but not borders.
+  const contentHeight = textarea.scrollHeight + borderHeight;
+  textarea.style.height = `${Math.max(minHeightPx, Math.min(contentHeight, maxHeightPx))}px`;
+  textarea.style.overflowY = contentHeight > maxHeightPx ? 'auto' : 'hidden';
 }
 
-export type AutosizeTextareaProProps =
-  React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
-    minRows?: number;
-    maxRows?: number;
-    minHeight?: number;
-    maxHeight?: number;
-    ref?: React.Ref<HTMLTextAreaElement>;
+type AutosizeTextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement> &
+  HeightConstraints & {
+    ref?: Ref<HTMLTextAreaElement>;
   };
 
-export const AutosizeTextarea = React.memo(
+export const AutosizeTextarea = memo(
   ({
     className,
     minRows = 4,
@@ -80,13 +71,12 @@ export const AutosizeTextarea = React.memo(
     minHeight = 70,
     maxHeight,
     onChange,
-    onBlur = () => {},
     value,
     defaultValue,
     rows,
     ref,
     ...props
-  }: AutosizeTextareaProProps) => {
+  }: AutosizeTextareaProps) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const lastObservedWidth = useRef<number | null>(null);
 
@@ -95,13 +85,12 @@ export const AutosizeTextarea = React.memo(
       [minRows, maxRows, minHeight, maxHeight]
     );
 
-    const adjust = React.useCallback(() => {
+    const adjust = useCallback(() => {
       const el = textareaRef.current;
-      if (!el) return;
-      measureAndSetHeight(el, constraints);
+      if (el) measureAndSetHeight(el, constraints);
     }, [constraints]);
 
-    const mergedRef = React.useCallback(
+    const mergedRef = useCallback(
       (node: HTMLTextAreaElement | null) => {
         textareaRef.current = node;
         if (typeof ref === 'function') ref(node);
@@ -110,30 +99,20 @@ export const AutosizeTextarea = React.memo(
       [ref]
     );
 
-    // Initial adjustment (SSR-safe)
+    // Before paint, so a value change never shows a frame at the old height.
     useIsomorphicLayoutEffect(() => {
       adjust();
-    }, []);
+    }, [value, defaultValue, adjust]);
 
-    // Re-adjust whenever the controlled value changes
-    useEffect(() => {
-      adjust();
-    }, [value, adjust]);
-
-    // Also handle uncontrolled defaultValue changes in dev or hot reload
-    useEffect(() => {
-      adjust();
-    }, [defaultValue, adjust]);
-
-    // Re-measure on width changes to accommodate reflow/wrap
+    // Width changes re-wrap the text, so the height has to follow.
     useEffect(() => {
       const el = textareaRef.current;
       if (!el) return;
 
       if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver((entries) => {
-          const entry = entries[0];
-          const width = entry.contentRect.width;
+          const width = entries[0]?.contentRect.width;
+          if (width === undefined) return;
           if (
             lastObservedWidth.current === null ||
             Math.abs(width - lastObservedWidth.current) > 0.5
@@ -146,10 +125,17 @@ export const AutosizeTextarea = React.memo(
         return () => ro.disconnect();
       }
 
-      const handle = () => adjust();
-      window.addEventListener('resize', handle);
-      return () => window.removeEventListener('resize', handle);
+      window.addEventListener('resize', adjust);
+      return () => window.removeEventListener('resize', adjust);
     }, [adjust]);
+
+    const handleChange = useCallback(
+      (e: ChangeEvent<HTMLTextAreaElement>) => {
+        onChange?.(e);
+        adjust();
+      },
+      [onChange, adjust]
+    );
 
     return (
       <textarea
@@ -157,17 +143,14 @@ export const AutosizeTextarea = React.memo(
         ref={mergedRef}
         rows={rows ?? minRows}
         className={cn(
-          'block w-full min-w-0 resize-none rounded-md border bg-input text-sm caret-primary transition duration-300 placeholder:text-muted-foreground hover:shadow-md dark:bg-input/30',
+          fieldSurface,
+          'block w-full min-w-0 resize-none px-3 py-2 caret-primary placeholder:text-muted-foreground',
           className,
           props.disabled && 'disabled'
         )}
         value={value}
         defaultValue={defaultValue}
-        onChange={(e) => {
-          onChange?.(e);
-          adjust();
-        }}
-        onBlur={onBlur}
+        onChange={handleChange}
         {...props}
       />
     );

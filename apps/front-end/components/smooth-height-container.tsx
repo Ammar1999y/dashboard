@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion';
 import useMeasure from 'react-use-measure';
 import { create } from 'zustand';
-import { useShallow } from 'zustand/shallow';
 import { cn } from '@/lib/utils';
 
 interface SmoothHeightContainerProps {
@@ -10,7 +9,7 @@ interface SmoothHeightContainerProps {
   className?: string;
 }
 
-export const useStore = create<{
+export const useSmoothHeightStore = create<{
   disabled: boolean;
   setDisabled: (disabled: boolean) => void;
 }>((set) => ({
@@ -24,7 +23,7 @@ const SmoothHeightContainer = ({
   className,
 }: SmoothHeightContainerProps) => {
   const [ref, bounds] = useMeasure();
-  const disabled = useStore(useShallow((s) => s.disabled));
+  const disabled = useSmoothHeightStore((s) => s.disabled);
   return (
     <motion.div
       className={cn('relative overflow-hidden', motionClassName)}

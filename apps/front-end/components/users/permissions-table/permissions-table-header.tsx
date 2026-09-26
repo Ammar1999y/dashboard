@@ -18,6 +18,7 @@ const PermissionsTableHeader = memo(
   }: PermissionsTableHeaderProps) => {
     return (
       <TableHeader>
+        {/* eslint-disable-next-line tailwind/class-conventions */}
         <TableRow className='bg-accent/50 [&_th:first-child]:rounded-tr-lg [&_th:last-child]:rounded-tl-lg'>
           <TableHead className='py-5 font-normal'>اسم الصفحة</TableHead>
           <TableHead className='text-center font-semibold'>

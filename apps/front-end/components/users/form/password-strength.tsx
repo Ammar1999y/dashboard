@@ -3,13 +3,13 @@ import { memo, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check as _Check, X as _X } from 'lucide-react';
 import { useWatch } from 'react-hook-form';
-import { useShallow } from 'zustand/react/shallow';
-
-import { inputMessageVariants } from '../anim';
-import useAuthStore from '../store';
+import { fieldMessage } from '@/lib/motion';
+import { cn } from '@/lib/utils';
 
 const Check = memo(_Check);
+Check.displayName = 'Check';
 const X = memo(_X);
+X.displayName = 'X';
 
 // Constants
 const PASSWORD_REQUIREMENTS = [
@@ -47,10 +47,7 @@ type Requirement = {
 };
 
 const PasswordStrength = memo(() => {
-  const password = useWatch({ name: `password` });
-  const isActive = useAuthStore(
-    useShallow((state) => state.activeInput === 'password')
-  );
+  const password = useWatch<{ password?: string }>({ name: 'password' });
 
   const calculateStrength = useMemo((): {
     score: StrengthScore;
@@ -67,13 +64,18 @@ const PasswordStrength = memo(() => {
     };
   }, [password]);
 
+  const meterStyle = useMemo(
+    () => ({ width: `${(calculateStrength.score / 5) * 100}%` }),
+    [calculateStrength.score]
+  );
+
   return (
     <AnimatePresence>
-      {isActive && (
+      {!!password && (
         <motion.div
-          variants={inputMessageVariants}
-          initial='initial'
-          animate='animate'
+          variants={fieldMessage}
+          initial='hidden'
+          animate='show'
           exit='exit'
           className='w-full select-none'
         >
@@ -86,10 +88,11 @@ const PasswordStrength = memo(() => {
             aria-valuemax={4}
           >
             <div
-              className={`h-full ${
+              className={cn(
+                'h-full transition-all duration-500',
                 STRENGTH_CONFIG.colors[calculateStrength.score]
-              } transition-all duration-500`}
-              style={{ width: `${(calculateStrength.score / 5) * 100}%` }}
+              )}
+              style={meterStyle}
             />
           </div>
 

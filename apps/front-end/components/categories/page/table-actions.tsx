@@ -1,45 +1,34 @@
 import type { Category } from '../types';
 
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 
-import { type CoreRow } from '@tanstack/react-table';
-import { EditIcon as _EditIcon } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 
-import { Link } from '@/components/ui/link';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { cacheRemoved } from '@/utils/query-cache';
 
-import { DeleteAction } from './delete-action';
+import { RowActions } from '@/components/shared/row-actions';
 
-const EditIcon = memo(_EditIcon);
+import { CATEGORIES_QUERY_KEYS } from '../query-keys';
 
-const TableActions = memo(
-  ({ original: category }: { original: CoreRow<Category>['original'] }) => {
-    return (
-      <div className='flex items-center justify-end text-muted-foreground space-x-1'>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Link
-              href={`/dash/projects/categories/edit?categoryId=${category.id}`}
-              variant='defaultGhost'
-              size={'icon'}
-              aria-label='تعديل التصنيف'
-            >
-              <EditIcon className='h-4 w-4' />
-            </Link>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p className='text-sm'>تعديل التصنيف</p>
-          </TooltipContent>
-        </Tooltip>
-        <DeleteAction category={category} />
-      </div>
-    );
-  }
-);
+const TableActions = memo(({ original: category }: { original: Category }) => {
+  const queryClient = useQueryClient();
+  const onDeleted = useCallback(
+    () =>
+      cacheRemoved<Category>(queryClient, CATEGORIES_QUERY_KEYS, category.id),
+    [queryClient, category.id]
+  );
+
+  return (
+    <RowActions
+      editHref={`/dash/projects/categories/edit?categoryId=${category.id}`}
+      deleteHref={`/api/dash/projects/categories/${category.id}`}
+      noun='التصنيف'
+      name={category.title}
+      onDeleted={onDeleted}
+    />
+  );
+});
 
 TableActions.displayName = 'CategoryTableActions';
+
 export { TableActions };

@@ -1,52 +1,37 @@
+import type { DevSignUpInput, DevSignUpOutput } from '@/utils/validation/auth';
+
 import { useRouter } from 'next/router';
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { apiFetch } from '@/lib/api';
 
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import Label from '@/components/ui/label';
+import { mutate } from '@/utils/mutation';
+import { devSignUpSchema } from '@/utils/validation/auth';
 
-interface FormState {
-  name: string;
-  email: string;
-  password: string;
-}
+import { Form } from '@/components/form/form';
+import FormInput from '@/components/form/form-input';
+import FormPassword from '@/components/form/form-password';
+import SubmitButton, { SubmitLabel } from '@/components/form/submit-button';
+
+const DEFAULT_VALUES: DevSignUpInput = { name: '', email: '', password: '' };
 
 export default function Page() {
   const { replace } = useRouter();
-  const [loading, setLoading] = useState(false);
-  const [form, setForm] = useState<FormState>({
-    name: '',
-    email: '',
-    password: '',
+
+  const methods = useForm<DevSignUpInput, unknown, DevSignUpOutput>({
+    resolver: zodResolver(devSignUpSchema),
+    defaultValues: DEFAULT_VALUES,
   });
 
-  const onChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-  }, []);
-
   const onSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      setLoading(true);
-      try {
-        const res = await apiFetch('/api/dev/sign-up', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(form),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.message || 'حدث خطأ');
-        toast.success('تم إنشاء الحساب بنجاح');
-        void replace('/dash/sign-in');
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'حدث خطأ');
-      }
-      setLoading(false);
+    async (data: DevSignUpOutput) => {
+      await mutate({ href: '/api/dev/sign-up', method: 'POST', data });
+      toast.success('تم إنشاء الحساب بنجاح');
+      void replace('/dash/sign-in');
     },
-    [form, replace]
+    [replace]
   );
 
   return (
@@ -56,47 +41,26 @@ export default function Page() {
         <p className='mt-1 text-sm text-muted-foreground'>
           سيتم إنشاء حساب بصلاحيات نظام كاملة
         </p>
-        <form onSubmit={onSubmit} className='mt-6 space-y-6' inert={loading}>
-          <div>
-            <Label title='الاسم' require htmlFor='name' />
-            <Input
-              id='name'
-              name='name'
-              type='text'
-              autoFocus
-              value={form.name}
-              onChange={onChange}
-              required
-            />
-          </div>
-          <div>
-            <Label title='البريد الإلكتروني' require htmlFor='email' />
-            <Input
-              id='email'
-              name='email'
-              type='email'
-              dir='ltr'
-              value={form.email}
-              onChange={onChange}
-              required
-            />
-          </div>
-          <div>
-            <Label title='كلمة المرور' require htmlFor='password' />
-            <Input
-              id='password'
-              name='password'
-              type='password'
-              dir='ltr'
-              value={form.password}
-              onChange={onChange}
-              required
-            />
-          </div>
-          <Button type='submit' className='w-full' disabled={loading}>
-            {loading ? 'جاري الإنشاء...' : 'إنشاء حساب'}
-          </Button>
-        </form>
+        <Form methods={methods} onSubmit={onSubmit} className='mt-6 space-y-6'>
+          <FormInput name='name' label='الاسم' autoFocus required />
+          <FormInput
+            name='email'
+            label='البريد الإلكتروني'
+            type='email'
+            dir='ltr'
+            autoComplete='email'
+            required
+          />
+          <FormPassword
+            name='password'
+            label='كلمة المرور'
+            autoComplete='new-password'
+            required
+          />
+          <SubmitButton className='w-full'>
+            <SubmitLabel pending='جاري الإنشاء...'>إنشاء حساب</SubmitLabel>
+          </SubmitButton>
+        </Form>
       </div>
     </div>
   );

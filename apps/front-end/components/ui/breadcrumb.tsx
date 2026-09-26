@@ -37,6 +37,7 @@ function BreadcrumbLink({
 }: React.ComponentProps<typeof Link>) {
   return (
     <Link
+      data-slot='breadcrumb-link'
       className={cn('rounded-sm transition hover:text-foreground', className)}
       {...props}
     />

@@ -4,8 +4,7 @@ import '@/components/theme-customizer/circular-transition.css';
 import '@/styles/app-style.css';
 import '@/styles/icons.css';
 import '@/styles/table.css';
-
-// Import local storage handlers to register them
+import '@/utils/validation/locale';
 
 import type { AppProps } from 'next/app';
 
@@ -13,6 +12,7 @@ import dynamic from 'next/dynamic';
 import { Cairo } from 'next/font/google';
 import { useEffect, useMemo } from 'react';
 
+import { withApiMocking } from '@/mocks/with-api-mocking';
 import { DirectionProvider } from '@radix-ui/react-direction';
 
 import { useModules } from '@/utils/store/modules';
@@ -116,7 +116,7 @@ const App = ({ Component, pageProps, router }: ComponentProps) => {
   );
 };
 
-export default App;
+export default withApiMocking(App);
 
 const Layout = ({
   children,

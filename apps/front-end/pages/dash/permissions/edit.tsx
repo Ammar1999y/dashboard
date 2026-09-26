@@ -1,239 +1,140 @@
 import type { Permission } from '@/components/permissions/types';
-import type { RoleOption } from '@/components/users/form/role';
+import type { UpdatedResponse } from '@/utils/mutation';
 import type {
   UpdatePermissionInput,
   UpdatePermissionOutput,
 } from '@/utils/validation/permissions';
-import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { validID } from '@/utils';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { FormProvider, useForm, useWatch } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
-import { cn } from '@/lib/utils';
 
-import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
 import { useQueryData } from '@/utils/query';
-import { useErrors } from '@/utils/store/errors';
-import { updatePermissionSchema } from '@/utils/validation/permissions';
+import { cacheUpdated } from '@/utils/query-cache';
+import {
+  toPermissionForm,
+  updatePermissionSchema,
+} from '@/utils/validation/permissions';
 
 import ErrorMessage from '@/components/error-message';
-import {
-  flattenErrors,
-  showFormErrors,
-} from '@/components/form/form-error-handeling';
+import { Form } from '@/components/form/form';
 import { Header } from '@/components/form/header';
 import LoadingPage from '@/components/loading-page';
+import {
+  cacheRoleOption,
+  cacheRoleRenamed,
+} from '@/components/permissions/cache';
 import PermissionsForm from '@/components/permissions/permissions-form';
 import { PERMISSIONS_QUERY_KEYS } from '@/components/permissions/query-keys';
 import { usePermissionsTableStore } from '@/components/users/permissions-table/store';
-import {
-  ROLES_QUERY_KEYS,
-  USERS_QUERY_KEYS,
-} from '@/components/users/query-keys';
 
 const EditPermission = () => {
-  const [loading, setLoading] = useState(false);
-  const initialDataRef = useRef<Permission | null>(null);
-  const queryClient = useQueryClient();
   const router = useRouter();
   const { id: _id } = router.query;
 
   const id = useMemo(() => validID(_id), [_id]);
 
-  const queryParams = useMemo(
-    () => ({
-      queryKey: PERMISSIONS_QUERY_KEYS.detail(id),
-      href: `/api/dash/permissions/${id}`,
-      enabled: !!id,
-      requiredData: id,
-    }),
-    [id]
-  );
+  const { data, isLoading, error, refetch } = useQueryData<Permission>({
+    queryKey: PERMISSIONS_QUERY_KEYS.detail(id),
+    href: `/api/dash/permissions/${id}`,
+    enabled: !!id,
+  });
 
-  const {
-    data: permissionData,
-    isLoading,
-    error,
-    refetch,
-  } = useQueryData<Permission>(queryParams);
+  // `id` is empty for the first render after a client-side navigation, before
+  // the router has parsed the route — that is still loading, not a bad id.
+  if (!id || isLoading) return <LoadingPage />;
+  if (!data?.id)
+    return <ErrorMessage error={error ?? null} refetch={refetch} />;
 
-  const methods = useForm<UpdatePermissionInput>({
+  return <PermissionEditForm key={data.id} record={data} />;
+};
+
+/** Mounted with the record in hand — see the note in pages/dash/sections/edit.tsx. */
+const PermissionEditForm = memo(({ record }: { record: Permission }) => {
+  const queryClient = useQueryClient();
+  const router = useRouter();
+
+  // The baseline the submit diffs against. A ref, not state: nothing renders
+  // from it, and a refetch must not move the "what did they change" reading.
+  const initialDataRef = useRef<Permission>(record);
+
+  const methods = useForm<
+    UpdatePermissionInput,
+    unknown,
+    UpdatePermissionOutput
+  >({
     resolver: zodResolver(updatePermissionSchema),
-    disabled: loading,
+    defaultValues: toPermissionForm(record),
   });
 
-  const { handleSubmit, reset, control } = methods;
-  const watchedId = useWatch({
-    control,
-    name: 'id',
-  });
-  const isFormHydrated = useMemo(() => !!validID(watchedId), [watchedId]);
-
-  // Reset form when permission data is loaded
+  // The permission matrix lives in its own store rather than in the form, so it
+  // is seeded here instead of through `defaultValues`. An effect is fine where
+  // `defaultValues` would not be: the table subscribes to the store and picks
+  // the values up on the next render.
   useEffect(() => {
-    if (!permissionData) {
-      return;
-    }
-
-    reset(permissionData);
-    initialDataRef.current = permissionData;
-
-    usePermissionsTableStore
-      .getState()
-      .initializeStates(permissionData.permissions);
-  }, [permissionData, reset]);
+    usePermissionsTableStore.getState().initializeStates(record.permissions);
+  }, [record]);
 
   const onSubmit = useCallback(
-    async (data: UpdatePermissionInput) => {
-      setLoading(true);
-      useErrors.getState().setErrors({});
+    async (data: UpdatePermissionOutput) => {
+      const initialPermissions = initialDataRef.current.permissions;
+      const permissionsChanged =
+        JSON.stringify(initialPermissions) !== JSON.stringify(data.permissions);
 
-      try {
-        // After validation, data is guaranteed to match UpdatePermissionOutput
-        const validatedData = data as UpdatePermissionOutput;
+      const payload: Partial<UpdatePermissionOutput> = {
+        id: data.id,
+        roleName: data.roleName,
+        description: data.description,
+        isActive: data.isActive,
+      };
 
-        const initialPermissions = initialDataRef.current?.permissions;
-        const permissionsChanged =
-          JSON.stringify(initialPermissions) !==
-          JSON.stringify(validatedData.permissions);
+      if (permissionsChanged) payload.permissions = data.permissions;
 
-        const payload: Partial<UpdatePermissionOutput> = {
-          id: validatedData.id,
-          roleName: validatedData.roleName,
-          description: validatedData.description,
-          isActive: validatedData.isActive,
-        };
-
-        if (permissionsChanged) payload.permissions = validatedData.permissions;
-
-        const result = await mutate<
-          Pick<Permission, 'updatedAt'>,
-          Partial<UpdatePermissionOutput>
-        >({
-          href: `/api/dash/permissions/${validatedData.id}`,
-          method: 'PUT',
-          data: payload,
-          onSuccess: () => {
-            // Invalidate rather than patch: the list is keyed by
-            // page/sort/filters/search with a `{ data, meta }` value, so the
-            // old `getQueryData(list)` patch never landed, and rebuilding the
-            // row from form state guessed `updatedAt`/`usersCount`. `list` is a
-            // prefix of `detail`, so this covers both.
-            void queryClient.invalidateQueries({
-              queryKey: PERMISSIONS_QUERY_KEYS.list,
-            });
-
-            // Handle roles cache updates
-            const existingRoles = queryClient.getQueryData<RoleOption[]>(
-              ROLES_QUERY_KEYS.list
-            );
-            const initialData = initialDataRef.current;
-            const roleNameChanged =
-              initialData?.roleName !== validatedData.roleName;
-
-            if (roleNameChanged) {
-              void queryClient.invalidateQueries({
-                queryKey: USERS_QUERY_KEYS.detailBase,
-              });
+      const result = await mutate<
+        UpdatedResponse,
+        Partial<UpdatePermissionOutput>
+      >({
+        href: `/api/dash/permissions/${data.id}`,
+        method: 'PUT',
+        data: payload,
+        onSuccess: ({ updatedAt }) => {
+          cacheUpdated<Permission>(
+            queryClient,
+            PERMISSIONS_QUERY_KEYS,
+            data.id,
+            {
+              ...payload,
+              updatedAt,
             }
+          );
+          cacheRoleOption(queryClient, data);
+          if (initialDataRef.current.roleName !== data.roleName) {
+            cacheRoleRenamed(queryClient, data.id, data.roleName);
+          }
+        },
+      });
 
-            if (existingRoles && initialData) {
-              const isActiveChanged =
-                initialData.isActive !== validatedData.isActive;
-
-              let updatedRoles = [...existingRoles];
-              const roleId = validID(validatedData.id);
-
-              if (isActiveChanged) {
-                if (validatedData.isActive) {
-                  const newRole: RoleOption = {
-                    id: roleId,
-                    roleName: validatedData.roleName,
-                  };
-                  updatedRoles = [
-                    newRole,
-                    ...updatedRoles.filter((r) => r.id !== CUSTOM_ROLE_VALUE),
-                    {
-                      id: CUSTOM_ROLE_VALUE,
-                      roleName: 'مخصص',
-                    } as unknown as RoleOption,
-                  ];
-                } else {
-                  updatedRoles = updatedRoles.filter((r) => r.id !== roleId);
-                }
-              } else if (roleNameChanged && validatedData.isActive) {
-                updatedRoles = updatedRoles.map((r) =>
-                  r.id === roleId
-                    ? {
-                        ...r,
-                        roleName: validatedData.roleName,
-                      }
-                    : r
-                );
-              }
-
-              queryClient.setQueryData(ROLES_QUERY_KEYS.list, updatedRoles);
-            }
-          },
-        });
-
-        toast.success(result.message || 'تم تحديث الصلاحية بنجاح');
-        void router.push('/dash/permissions');
-      } catch (error) {
-        toast.error(
-          error instanceof CustomError
-            ? error.message
-            : 'حدث خطاء، اعد المحاوله'
-        );
-      } finally {
-        setLoading(false);
-      }
+      toast.success(result.message || 'تم تحديث الصلاحية بنجاح');
+      void router.push('/dash/permissions');
     },
     [queryClient, router]
   );
 
-  const onError = useCallback((errors: FieldErrors<UpdatePermissionInput>) => {
-    const erros = flattenErrors(errors);
-    showFormErrors(erros);
-    useErrors.getState().setErrors(erros);
-  }, []);
-
-  useEffect(() => {
-    return () => useErrors.getState().setErrors({});
-  }, []);
-
-  return isLoading || !isFormHydrated ? (
-    <LoadingPage />
-  ) : permissionData?.id ? (
-    <FormProvider {...methods}>
-      <form
-        className={cn('transition-[max-width,opacity]', loading && 'disabled')}
-        inert={loading}
-        // `onSubmit` reads `initialDataRef.current`, but react-hook-form's
-        // `handleSubmit` only wraps it into a submit handler and never invokes
-        // it during render, so the ref is read on submit only.
-        // eslint-disable-next-line react-hooks/refs
-        onSubmit={handleSubmit(onSubmit, onError)}
-      >
-        <Header
-          title='تعديل الصلاحية'
-          loading={loading}
-          cancelHref='/dash/permissions'
-        />
-        <PermissionsForm setInitPermissions={false} />
-      </form>
-    </FormProvider>
-  ) : (
-    <ErrorMessage error={error || null} refetch={refetch} />
+  return (
+    <Form methods={methods} onSubmit={onSubmit}>
+      <Header title='تعديل الصلاحية' cancelHref='/dash/permissions' />
+      <PermissionsForm setInitPermissions={false} />
+    </Form>
   );
-};
+});
+
+PermissionEditForm.displayName = 'PermissionEditForm';
 
 export default EditPermission;
 

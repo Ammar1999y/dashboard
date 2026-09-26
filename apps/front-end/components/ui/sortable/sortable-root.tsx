@@ -1,5 +1,3 @@
-'use client';
-
 import type { Orientation, SortableRootContextValue } from './constants';
 import type {
   Announcements,
@@ -26,10 +24,6 @@ import { arrayMove, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { orientationConfig, SORTABLE_ERRORS } from './constants';
 import { SortableRootContext } from './sortable-context';
 
-// ============================================
-// Types
-// ============================================
-
 interface GetItemValue<T> {
   /**
    * Callback that returns a unique identifier for each sortable item. Required for array of objects.
@@ -50,17 +44,9 @@ type SortableRootProps<T> = DndContextProps &
     flatCursor?: boolean;
   };
 
-// ============================================
-// Sensor config (stable reference)
-// ============================================
-
 const keyboardSensorOptions = {
   coordinateGetter: sortableKeyboardCoordinates,
 };
-
-// ============================================
-// Announcements helper (DRY)
-// ============================================
 
 function getMoveAnnouncement(
   activeId: UniqueIdentifier,
@@ -72,10 +58,6 @@ function getMoveAnnouncement(
   const direction = overIndex > activeIndex ? 'أسفل' : 'أعلى';
   return `العنصر "${activeId}" ${verb} ${direction} إلى الموضع ${overIndex + 1} من ${total}.`;
 }
-
-// ============================================
-// Component
-// ============================================
 
 function SortableRoot<T>(props: SortableRootProps<T>) {
   const {
@@ -111,10 +93,8 @@ function SortableRoot<T>(props: SortableRootProps<T>) {
 
   const getItemValue = React.useCallback(
     (item: T): UniqueIdentifier => {
-      if (typeof item === 'object' && !getItemValueProp) {
-        console.error(SORTABLE_ERRORS.getItemValueRequired);
+      if (typeof item === 'object' && !getItemValueProp)
         throw new Error(SORTABLE_ERRORS.getItemValueRequired);
-      }
       return getItemValueProp
         ? getItemValueProp(item)
         : (item as UniqueIdentifier);

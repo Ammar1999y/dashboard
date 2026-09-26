@@ -1,6 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "Bash(cd /d/apps/frontend-inspiration && ls; echo ---; grep -rl \"react-hook-form\" --include=*.ts --include=*.tsx . --exclude-dir=node_modules --exclude-dir=.next | head -80)",
+      "Read(//d/apps/frontend-inspiration/**)"
     ]
   }
 }

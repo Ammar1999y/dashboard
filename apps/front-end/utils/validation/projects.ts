@@ -1,3 +1,6 @@
+import type { ProjectClient } from '@/types/projects';
+import type { DefaultValues } from 'react-hook-form';
+
 import * as z from 'zod';
 
 import {
@@ -66,3 +69,22 @@ export type CreateProjectInput = z.input<typeof createProjectSchema>;
 export type UpdateProjectInput = z.input<typeof updateProjectSchema>;
 export type CreateProjectOutput = z.output<typeof createProjectSchema>;
 export type UpdateProjectOutput = z.output<typeof updateProjectSchema>;
+
+/** See the note on DEFAULT_CATEGORY in ./categories. */
+export const DEFAULT_PROJECT: DefaultValues<CreateProjectInput> = {
+  title: '',
+  description: '',
+  link: '',
+  categoryId: null,
+  isActive: true,
+};
+
+/** See the note on toCategoryForm in ./categories. */
+export const toProjectForm = (record: ProjectClient): UpdateProjectInput => ({
+  id: record.id,
+  title: record.title ?? '',
+  description: record.description ?? '',
+  link: record.link ?? '',
+  categoryId: record.categoryId ?? null,
+  isActive: record.isActive ?? true,
+});

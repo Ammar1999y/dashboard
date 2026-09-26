@@ -1,6 +1,7 @@
 import type { User } from '../types';
 
 import { type ColumnDef } from '@tanstack/react-table';
+import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
 
 import { Badge } from '@/components/ui/badge';
 import { DataTableColumnHeader } from '@/components/ui/data-table';
@@ -67,7 +68,9 @@ export const columns: ColumnDef<User>[] = [
     ),
     cell: ({ row }) => (
       <p className='truncate text-sm text-muted-foreground'>
-        {row.getValue('role')}
+        {row.original.roleId === CUSTOM_ROLE_VALUE
+          ? 'مخصص'
+          : row.original.role?.roleName}
       </p>
     ),
     size: 200,

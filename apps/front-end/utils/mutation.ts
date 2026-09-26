@@ -1,33 +1,21 @@
 import type { EntityID } from '@/types';
 
+import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
 
 import { CustomError } from './error-class';
 
 type MutationMethod = 'POST' | 'PUT' | 'DELETE';
 
-// Type for local storage handlers
-type LocalStorageHandler<TData = unknown, TVariables = unknown> = {
-  create?: (data: TVariables) => Promise<{ data: TData; message: string }>;
-  update?: (
-    id: EntityID,
-    data: TVariables
-  ) => Promise<{ data: TData; message: string }>;
-  delete?: (id: EntityID) => Promise<{ data: unknown; message: string }>;
-};
+/** A create answers with what the server generated; the rest was sent. */
+export interface CreatedResponse {
+  id: EntityID;
+}
 
-// Registry for local storage handlers by endpoint pattern
-const localStorageHandlers = new Map<RegExp, LocalStorageHandler>();
-
-/**
- * Register a local storage handler for a specific endpoint pattern
- */
-export const registerLocalStorageHandler = (
-  pattern: RegExp,
-  handler: LocalStorageHandler
-) => {
-  localStorageHandlers.set(pattern, handler);
-};
+/** An update answers with the new timestamp only. */
+export interface UpdatedResponse {
+  updatedAt: string;
+}
 
 interface MutationOptions<TData = unknown, TVariables = unknown> {
   href: string;
@@ -168,3 +156,19 @@ export const mutate = async <TData = unknown, TVariables = unknown>({
     message: result.message,
   };
 };
+
+export const GENERIC_ERROR_MESSAGE = 'حدث خطأ، أعد المحاولة';
+
+/**
+ * The message for a failed write. Only a `CustomError` carries text meant for a
+ * user — everything else is a `TypeError` from the network layer or a bug, and
+ * showing its message would put "Failed to fetch" or a stack-trace string in a
+ * toast.
+ */
+export function toastError(
+  error: unknown,
+  fallback: string = GENERIC_ERROR_MESSAGE,
+  options?: Parameters<typeof toast.error>[1]
+) {
+  toast.error(error instanceof CustomError ? error.message : fallback, options);
+}

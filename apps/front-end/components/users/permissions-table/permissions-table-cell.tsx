@@ -1,9 +1,11 @@
+import type { KeyboardEvent } from 'react';
+
 import { memo, useCallback } from 'react';
 
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/shallow';
 
-import { Checkbox } from '@/components/ui/checkbox-animate';
+import { AnimatedCheckbox } from '@/components/ui/animated-checkbox';
 
 import { getGateIndex, usePermissionsTableStore } from './store';
 
@@ -40,18 +42,23 @@ const PermissionsTableCell = memo(
       toast.info(GATE_TOAST_MSG);
     }, []);
 
+    const handleDisabledKeyDown = useCallback(
+      (e: KeyboardEvent<HTMLDivElement>) => {
+        if (e.key === 'Enter' || e.key === ' ') handleDisabledClick();
+      },
+      [handleDisabledClick]
+    );
+
     if (gatedOff) {
       return (
         <div
           role='button'
           tabIndex={0}
           onClick={handleDisabledClick}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') handleDisabledClick();
-          }}
+          onKeyDown={handleDisabledKeyDown}
           className='flex justify-center'
         >
-          <Checkbox
+          <AnimatedCheckbox
             checked={false}
             disabled
             className='pointer-events-none mx-auto'
@@ -61,7 +68,7 @@ const PermissionsTableCell = memo(
     }
 
     return (
-      <Checkbox
+      <AnimatedCheckbox
         checked={checked}
         onCheckedChange={handleChange}
         className='mx-auto'

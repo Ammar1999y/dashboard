@@ -1,10 +1,7 @@
 import * as React from 'react';
 
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-import { Button } from './button';
 
 const Dialog = DialogPrimitive.Root;
 
@@ -20,8 +17,7 @@ const DialogOverlay = React.memo(
       <DialogPrimitive.Overlay
         data-lenis-prevent
         aria-hidden
-        // 🔴 added pointer-events-none select-none to prevent close it by clicking outside
-        /* backdrop-blur-md backdrop-saturate-150 */
+        data-slot='dialog-overlay'
         className={cn(
           'fixed inset-0 z-50 h-screen w-screen select-none bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
           className
@@ -32,18 +28,16 @@ const DialogOverlay = React.memo(
   }
 );
 
-DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
+DialogOverlay.displayName = 'DialogOverlay';
 
 function DialogContent({
   className,
   overlayClassName,
   children,
   side = 'center',
-  showCloseButton = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   side?: 'top' | 'right' | 'bottom' | 'left' | 'center';
-  showCloseButton?: boolean;
   overlayClassName?: string;
 }) {
   const isRight = side === 'right';
@@ -57,12 +51,7 @@ function DialogContent({
       <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-lenis-prevent
-        data-disable-drawer
-        // 🔴 if want to prevent close it by clicking outside
-        // onInteractOutside={(e) => {
-        //   e.preventDefault();
-        // }}
-        data-slot='sheet-content'
+        data-slot='dialog-content'
         className={cn(
           'fixed z-50 grid max-w-[calc(100vw-env(safe-area-inset-left)-env(safe-area-inset-right))] grid-rows-[auto_1fr_auto] gap-4 bg-background shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out',
           isRight &&
@@ -80,16 +69,6 @@ function DialogContent({
         {...props}
       >
         {children}
-        {showCloseButton && (
-          <DialogPrimitive.Close asChild>
-            <Button
-              variant='ghost'
-              className='absolute top-4 h-fit px-2 py-2 text-gray-500 hover:text-gray-700 ltr:right-4 rtl:left-4'
-            >
-              <X size={20} className='size-5' />
-            </Button>
-          </DialogPrimitive.Close>
-        )}
       </DialogPrimitive.Content>
     </DialogPortal>
   );
@@ -101,6 +80,7 @@ function DialogTitle({
 }: React.ComponentProps<typeof DialogPrimitive.Title>) {
   return (
     <DialogPrimitive.Title
+      data-slot='dialog-title'
       className={cn('font-semibold text-foreground', className)}
       {...props}
     />
@@ -113,6 +93,7 @@ function DialogDescription({
 }: React.ComponentProps<typeof DialogPrimitive.Description>) {
   return (
     <DialogPrimitive.Description
+      data-slot='dialog-description'
       className={cn('text-sm text-muted-foreground', className)}
       {...props}
     />
@@ -122,7 +103,7 @@ function DialogDescription({
 function DialogHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      data-slot='sheet-header'
+      data-slot='dialog-header'
       className={cn('flex flex-col p-4 space-y-1.5', className)}
       {...props}
     />
@@ -132,7 +113,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<'div'>) {
 function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      data-slot='sheet-footer'
+      data-slot='dialog-footer'
       className={cn('mt-auto flex flex-col p-4 space-y-2', className)}
       {...props}
     />

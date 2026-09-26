@@ -1,0 +1,71 @@
+import type { RoleOption } from '@/components/users/form/role';
+import type { User } from '@/components/users/types';
+import type { EntityID } from '@/types';
+import type { QueryClient } from '@tanstack/react-query';
+
+import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
+
+import { cacheUpdatedEach } from '@/utils/query-cache';
+
+import {
+  ROLES_QUERY_KEYS,
+  USERS_QUERY_KEYS,
+} from '@/components/users/query-keys';
+
+/**
+ * Keeps the role picker's list in step with a saved permission: an active one
+ * is listed (renamed in place, or appended as the newest), an inactive one is
+ * not.
+ */
+export function cacheRoleOption(
+  queryClient: QueryClient,
+  role: RoleOption & { isActive: boolean }
+) {
+  const option: RoleOption = { id: role.id, roleName: role.roleName };
+
+  queryClient.setQueryData<RoleOption[]>(ROLES_QUERY_KEYS.list, (roles) => {
+    if (!roles) return roles;
+    if (!role.isActive) return roles.filter((r) => r.id !== role.id);
+    if (roles.some((r) => r.id === role.id)) {
+      return roles.map((r) => (r.id === role.id ? option : r));
+    }
+    return [...roles, option];
+  });
+}
+
+export function removeRoleOption(queryClient: QueryClient, id: EntityID) {
+  queryClient.setQueryData<RoleOption[]>(ROLES_QUERY_KEYS.list, (roles) =>
+    roles?.filter((r) => r.id !== id)
+  );
+}
+
+/**
+ * The `{ id, roleName }` a user row embeds for `roleId`, or `undefined` when
+ * the client cannot know it — a new custom role (its id is the server's), or a
+ * role the picker's list does not hold, since that list is scoped to the
+ * viewer. `undefined` leaves a cached row's role as it is.
+ */
+export function resolveUserRole(
+  queryClient: QueryClient,
+  roleId: User['roleId'],
+  current?: User
+): User['role'] | undefined {
+  if (!roleId) return null;
+  if (current && roleId === current.roleId) return current.role;
+  if (roleId === CUSTOM_ROLE_VALUE) return undefined;
+  const roles = queryClient.getQueryData<RoleOption[]>(ROLES_QUERY_KEYS.list);
+  return roles?.find((r) => r.id === roleId);
+}
+
+/** Users embed their role's name, so a rename is written into their rows. */
+export function cacheRoleRenamed(
+  queryClient: QueryClient,
+  id: EntityID,
+  roleName: string
+) {
+  cacheUpdatedEach<User>(queryClient, USERS_QUERY_KEYS, (user) =>
+    user.role?.id === id && user.role.roleName !== roleName
+      ? { ...user, role: { ...user.role, roleName } }
+      : user
+  );
+}

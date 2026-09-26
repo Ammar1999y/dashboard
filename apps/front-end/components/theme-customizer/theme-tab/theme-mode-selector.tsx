@@ -2,7 +2,7 @@ import { memo, useCallback } from 'react';
 
 import { cn } from '@/lib/utils';
 
-import Label from '@/components/ui/label';
+import { Label } from '@/components/ui/label';
 import Moon from '@/components/icons/moon';
 import Sun from '@/components/icons/sun';
 import { useTheme } from '@/components/theme-customizer/theme-provider';

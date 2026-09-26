@@ -4,27 +4,17 @@ import { memo, useCallback } from 'react';
 
 import { useFormContext } from 'react-hook-form';
 
-import { AutosizeTextarea } from '@/components/ui/auto-resize-textarea';
-import InputColor from '@/components/ui/color-picker';
-import { Input } from '@/components/ui/input';
-import Label from '@/components/ui/label';
-import { ErrorMessage } from '@/components/form/error-message';
+import { ColorPicker } from '@/components/ui/color-picker';
+import FormField from '@/components/form/form-field';
+import FormInput from '@/components/form/form-input';
+import FormTextarea from '@/components/form/form-textarea';
 
 const BasicInfoSection = memo(() => {
-  const { register, setValue, getValues } = useFormContext<SettingsInput>();
-
   // LANGUAGES-TODOS
   // const activeLang = useTabsStore(useShallow((s) => s.activeLang));
   // const nativeLang = activeLang?.english;
   // const inputDir = activeLang?.dir || 'auto';
   const inputDir = 'rtl';
-
-  const handleColorChange = useCallback(
-    (value: string) => {
-      setValue('primaryColor', value);
-    },
-    [setValue]
-  );
 
   return (
     <div className='space-y-6'>
@@ -32,80 +22,41 @@ const BasicInfoSection = memo(() => {
       {/* <LangTabs /> */}
 
       <div className='grid grid-cols-1 gap-6 sm:grid-cols-2'>
-        {/* Site Title */}
-        <div>
-          <Label title='عنوان الموقع' htmlFor={register('siteTitle').name} />
-          <Input
-            {...register('siteTitle')}
-            id={register('siteTitle').name}
-            dir={inputDir}
-            type='text'
-            placeholder='اسم الموقع'
-            autoComplete='off'
-          />
-          <ErrorMessage path={register('siteTitle').name} />
-        </div>
-
-        {/* Primary Color */}
-        <div>
-          <InputColor
-            label='اللون الرئيسي'
-            onChange={handleColorChange}
-            value={getValues('primaryColor')}
-            alpha={false}
-          />
-          <ErrorMessage path={register('primaryColor').name} />
-        </div>
-      </div>
-
-      {/* Site Description */}
-      <div>
-        <Label title='وصف الموقع' htmlFor={register('siteDescription').name} />
-        <AutosizeTextarea
-          {...register('siteDescription')}
-          id={register('siteDescription').name}
-          placeholder='وصف مختصر للموقع'
+        <FormInput
+          name='siteTitle'
+          label='عنوان الموقع'
           dir={inputDir}
-          className='px-3 pb-2 pt-3'
-          minRows={2}
-          minHeight={50}
-          maxRows={4}
+          placeholder='اسم الموقع'
         />
-        <ErrorMessage path={register('siteDescription').name} />
+        <PrimaryColorField />
       </div>
 
-      {/* Footer Description */}
-      <div>
-        <Label
-          title='وصف الفوتر'
-          htmlFor={register('footerDescription').name}
-        />
-        <AutosizeTextarea
-          {...register('footerDescription')}
-          id={register('footerDescription').name}
-          placeholder='نص يظهر في أسفل الموقع'
-          dir={inputDir}
-          className='px-3 pb-2 pt-3'
-          minRows={2}
-          minHeight={50}
-          maxRows={4}
-        />
-        <ErrorMessage path={register('footerDescription').name} />
-      </div>
+      <FormTextarea
+        name='siteDescription'
+        label='وصف الموقع'
+        dir={inputDir}
+        placeholder='وصف مختصر للموقع'
+        minRows={2}
+        minHeight={50}
+        maxRows={4}
+      />
 
-      {/* Copyright Text */}
-      <div>
-        <Label title='نص الحقوق' htmlFor={register('copyrightText').name} />
-        <Input
-          {...register('copyrightText')}
-          id={register('copyrightText').name}
-          dir={inputDir}
-          type='text'
-          placeholder='جميع الحقوق محفوظة © 2024'
-          autoComplete='off'
-        />
-        <ErrorMessage path={register('copyrightText').name} />
-      </div>
+      <FormTextarea
+        name='footerDescription'
+        label='وصف الفوتر'
+        dir={inputDir}
+        placeholder='نص يظهر في أسفل الموقع'
+        minRows={2}
+        minHeight={50}
+        maxRows={4}
+      />
+
+      <FormInput
+        name='copyrightText'
+        label='نص الحقوق'
+        dir={inputDir}
+        placeholder='جميع الحقوق محفوظة © 2024'
+      />
     </div>
   );
 });
@@ -113,3 +64,32 @@ const BasicInfoSection = memo(() => {
 BasicInfoSection.displayName = 'BasicInfoSection';
 
 export { BasicInfoSection };
+
+/**
+ * `ColorPicker` is uncontrolled past its first render, so the value is read with
+ * `getValues` rather than watched — a subscription here would re-render the
+ * picker on every channel drag it emits.
+ */
+const PrimaryColorField = memo(() => {
+  const { setValue, getValues } = useFormContext<SettingsInput>();
+
+  const handleChange = useCallback(
+    (value: string) => {
+      setValue('primaryColor', value);
+    },
+    [setValue]
+  );
+
+  return (
+    <FormField name='primaryColor'>
+      <ColorPicker
+        label='اللون الرئيسي'
+        onChange={handleChange}
+        value={getValues('primaryColor')}
+        alpha={false}
+      />
+    </FormField>
+  );
+});
+
+PrimaryColorField.displayName = 'PrimaryColorField';

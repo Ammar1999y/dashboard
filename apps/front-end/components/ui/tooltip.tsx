@@ -1,7 +1,13 @@
 import type { Dispatch, PropsWithChildren, SetStateAction } from 'react';
 
 import * as React from 'react';
-import { createContext, useCallback, useContext, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+} from 'react';
 
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { cn } from '@/lib/utils';
@@ -17,26 +23,23 @@ const TouchContext = createContext<{
 });
 const useOpen = () => useContext(TouchContext);
 
+// Touch has no hover, so a tap opens the tooltip and it stays until the finger
+// leaves both trigger and content; the delay bridges the gap between them.
 const TouchProvider = (props: PropsWithChildren) => {
   const [isOpen, setOpen] = useState<boolean>(false);
   const [canClose, setCanClose] = useState<boolean>(true);
   React.useEffect(() => {
     if (!isOpen && !canClose) setOpen(true);
-    const hadnleClose = setTimeout(() => {
+    const closeTimer = setTimeout(() => {
       if (isOpen && canClose) setOpen(false);
     }, 300);
-    return () => clearTimeout(hadnleClose);
+    return () => clearTimeout(closeTimer);
   }, [canClose, isOpen]);
-  return (
-    <TouchContext.Provider
-      value={{
-        isOpen,
-        canClose,
-        setCanClose,
-      }}
-      {...props}
-    />
+  const value = useMemo(
+    () => ({ isOpen, canClose, setCanClose }),
+    [isOpen, canClose]
   );
+  return <TouchContext.Provider value={value} {...props} />;
 };
 
 function TooltipProvider({

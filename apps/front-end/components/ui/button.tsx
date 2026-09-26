@@ -7,7 +7,7 @@ import { cva } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-all duration-300',
+  'inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[color,background-color,border-color,box-shadow,opacity] duration-300',
   {
     variants: {
       variant: {
@@ -24,7 +24,7 @@ const buttonVariants = cva(
           'border border-primary text-primary hover:bg-primary/20 active:bg-primary/35',
         secondary:
           'bg-secondary text-secondary-foreground shadow-xs hover:bg-secondary/80',
-        ghost: 'hover:bg-accent hover:text-accent-foreground ',
+        ghost: 'hover:bg-accent hover:text-accent-foreground',
         ghostPrimary: 'hover:bg-primary/20 text-primary',
         link: 'text-primary underline-offset-4 hover:underline',
         none: '',
@@ -60,17 +60,29 @@ const Button = ({
   ref,
   ...props
 }: ButtonProps) => {
-  const Comp = asChild ? Slot : 'button';
+  const composedClassName = cn(
+    disabled && 'disabled',
+    buttonVariants({ variant, size, className })
+  );
+
+  // The child owns its element: `type` and `disabled` are invalid on an `<a>`.
+  if (asChild) {
+    return (
+      <Slot
+        className={composedClassName}
+        ref={ref}
+        tabIndex={disabled ? -1 : undefined}
+        aria-disabled={disabled || undefined}
+        {...props}
+      />
+    );
+  }
 
   return (
-    <Comp
-      className={cn(
-        disabled && 'disabled',
-        buttonVariants({ variant, size, className })
-      )}
+    <button
+      className={composedClassName}
       ref={ref}
       type='button'
-      tabIndex={disabled ? -1 : 0}
       disabled={disabled}
       {...props}
     />

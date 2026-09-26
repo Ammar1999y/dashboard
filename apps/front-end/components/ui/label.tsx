@@ -5,25 +5,26 @@ import { memo } from 'react';
 import { cn } from '@/lib/utils';
 
 interface LabelProps extends LabelHTMLAttributes<HTMLLabelElement> {
-  require?: boolean;
+  required?: boolean;
   title: string;
 }
 
 const Label = memo(
-  ({ className, require = false, title, ...props }: LabelProps) => {
+  ({ className, required = false, title, ...props }: LabelProps) => {
     return (
       <label
         className={cn(
-          'mb-2 block text-sm font-semibold text-foreground' /* leading-none */,
+          'mb-2 block text-sm font-semibold text-foreground',
           className
         )}
         {...props}
       >
-        {title} {require && <span className='text-destructive'>*</span>}
+        {title} {required && <span className='text-destructive'>*</span>}
       </label>
     );
   }
 );
 
 Label.displayName = 'Label';
-export default Label;
+
+export { Label };

@@ -3,7 +3,6 @@ import type { Transition } from 'framer-motion';
 import { memo, useCallback } from 'react';
 
 import { motion } from 'framer-motion';
-import { useShallow } from 'zustand/shallow';
 import { cn } from '@/lib/utils';
 
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
@@ -24,7 +23,7 @@ const underlineTransition: Transition = {
   mass: 1,
 };
 
-const MainTabs = memo(({ tabs }: { tabs: TabConfig[] }) => {
+const MainTabs = memo(({ tabs }: { tabs: readonly TabConfig[] }) => {
   return (
     <ScrollArea viewportClassName='pb-3 pt-1 px-1'>
       <div className='relative flex items-center space-x-e-2'>
@@ -47,9 +46,7 @@ export { MainTabs };
 
 const TabButton = memo(({ tab, index }: { tab: TabConfig; index: number }) => {
   const isActive = useTabsStore(
-    useShallow(
-      (s) => s.activeMainTab === tab.id || (index === 0 && !s.activeMainTab)
-    )
+    (s) => s.activeMainTab === tab.id || (index === 0 && !s.activeMainTab)
   );
 
   const handleClick = useCallback(() => {
@@ -76,12 +73,8 @@ const TabButton = memo(({ tab, index }: { tab: TabConfig; index: number }) => {
       )}
       type='button'
     >
-      {/* Hover background */}
       {!isActive && <MainTabsAnimatedBackground tab={tab.id} />}
 
-      {/* Text */}
-
-      {/* Active underline */}
       {isActive && (
         <motion.div
           layoutId='underline-main-tabs'

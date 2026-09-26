@@ -1,189 +1,103 @@
 import type { Section } from '@/components/sections/types';
+import type { UpdatedResponse } from '@/utils/mutation';
 import type {
   UpdateSectionInput,
   UpdateSectionOutput,
 } from '@/utils/validation/sections';
-import type { FieldErrors } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 
 import { validID } from '@/utils';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { FormProvider, useForm, useWatch } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 
-import { CustomError } from '@/utils/error-class';
 import { mutate } from '@/utils/mutation';
 import { useQueryData } from '@/utils/query';
-import { useErrors } from '@/utils/store/errors';
-import { updateSectionSchema } from '@/utils/validation/sections';
+import { cacheUpdated } from '@/utils/query-cache';
+import {
+  toSectionForm,
+  updateSectionSchema,
+} from '@/utils/validation/sections';
 
 import ErrorMessage from '@/components/error-message';
-import {
-  flattenErrors,
-  showFormErrors,
-} from '@/components/form/form-error-handeling';
+import { Form } from '@/components/form/form';
 import { Header } from '@/components/form/header';
-import { MainTabs } from '@/components/form/tabs/main-tabs';
-import { useTabsStore } from '@/components/form/tabs/store';
+import { FormTabs } from '@/components/form/tabs/form-tabs';
 import LoadingPage from '@/components/loading-page';
-import { FormContent, MAIN_TABS } from '@/components/sections/form/sections';
+import { SECTION_TABS } from '@/components/sections/form/sections';
 import { SECTIONS_QUERY_KEYS } from '@/components/sections/query-keys';
-import { SmoothHeightContainer } from '@/components/smooth-height-container';
 
 const EditSection = () => {
-  const [loading, setLoading] = useState(false);
-  const queryClient = useQueryClient();
   const router = useRouter();
   const { sectionId: _id } = router.query;
 
   const id = useMemo(() => validID(_id), [_id]);
 
-  const queryParams = useMemo(
-    () => ({
-      queryKey: SECTIONS_QUERY_KEYS.detail(id),
-      href: `/api/dash/sections/${id}`,
-      enabled: !!id,
-      requiredData: id,
-    }),
-    [id]
-  );
+  const { data, isLoading, error, refetch } = useQueryData<Section>({
+    queryKey: SECTIONS_QUERY_KEYS.detail(id),
+    href: `/api/dash/sections/${id}`,
+    enabled: !!id,
+  });
 
-  const {
-    data: sectionData,
-    isLoading,
-    error,
-    refetch,
-  } = useQueryData<Section>(queryParams);
+  // `id` is empty for the first render after a client-side navigation, before
+  // the router has parsed the route — that is still loading, not a bad id.
+  if (!id || isLoading) return <LoadingPage />;
+  if (!data?.id)
+    return <ErrorMessage error={error ?? null} refetch={refetch} />;
 
-  const methods = useForm<UpdateSectionInput>({
+  return <SectionEditForm key={data.id} record={data} />;
+};
+
+/**
+ * Mounted only once the record is in hand, so `defaultValues` seeds the form
+ * synchronously. Seeding it afterwards — through `values` or a `reset` effect —
+ * lands one commit too late for the parts that read the form once on mount,
+ * such as the rich-text editor in the basic tab.
+ */
+const SectionEditForm = memo(({ record }: { record: Section }) => {
+  const queryClient = useQueryClient();
+  const router = useRouter();
+
+  const methods = useForm<UpdateSectionInput, unknown, UpdateSectionOutput>({
     resolver: zodResolver(updateSectionSchema),
-    disabled: loading,
-    defaultValues: {
-      id: undefined,
-      title: '',
-      subtitle: '',
-      shortDescription: '',
-
-      isActive: true,
-    },
+    defaultValues: toSectionForm(record),
   });
-
-  const { handleSubmit, reset, control } = methods;
-
-  const watchedId = useWatch({
-    control,
-    name: 'id',
-  });
-  const isFormHydrated = useMemo(() => !!validID(watchedId), [watchedId]);
-
-  // Reset form when section data is loaded
-  useEffect(() => {
-    if (sectionData) {
-      reset(sectionData);
-    }
-  }, [sectionData, reset]);
 
   const onSubmit = useCallback(
-    async (data: UpdateSectionInput) => {
-      setLoading(true);
-      useErrors.getState().setErrors({});
+    async (data: UpdateSectionOutput) => {
+      const result = await mutate<UpdatedResponse, UpdateSectionOutput>({
+        href: `/api/dash/sections/${data.id}`,
+        method: 'PUT',
+        data,
+        onSuccess: ({ updatedAt }) =>
+          cacheUpdated<Section>(queryClient, SECTIONS_QUERY_KEYS, data.id, {
+            ...data,
+            updatedAt,
+          }),
+      });
 
-      // After validation, data is guaranteed to match UpdateSectionOutput
-      const validatedData = data as UpdateSectionOutput;
-      try {
-        const result = await mutate<
-          Pick<Section, 'updatedAt'>,
-          UpdateSectionOutput
-        >({
-          href: `/api/dash/sections/${validatedData.id}`,
-          method: 'PUT',
-          data: validatedData,
-          onSuccess: (serverData) => {
-            const updatedSection: Section = {
-              ...validatedData,
-              updatedAt: serverData.updatedAt || new Date().toISOString(),
-              createdAt: sectionData?.createdAt || new Date().toISOString(),
-              slug: sectionData?.slug, // Preserve slug as it's not editable
-            };
-
-            // Update detail cache
-            queryClient.setQueryData(
-              SECTIONS_QUERY_KEYS.detail(validatedData.id),
-              updatedSection
-            );
-
-            // Update list cache
-            const existingList = queryClient.getQueryData<Section[]>(
-              SECTIONS_QUERY_KEYS.list
-            );
-            if (existingList)
-              queryClient.setQueryData(
-                SECTIONS_QUERY_KEYS.list,
-                existingList.map((item) =>
-                  item.id === validatedData.id ? updatedSection : item
-                )
-              );
-          },
-        });
-
-        toast.success(result.message || 'تم تحديث القسم بنجاح');
-        void router.push('/dash/sections');
-      } catch (error) {
-        toast.error(
-          error instanceof CustomError
-            ? error.message
-            : 'حدث خطاء، اعد المحاوله'
-        );
-      } finally {
-        setLoading(false);
-      }
+      toast.success(result.message || 'تم تحديث القسم بنجاح');
+      void router.push('/dash/sections');
     },
-    [sectionData, queryClient, router]
+    [queryClient, router]
   );
 
-  const onError = useCallback((errors: FieldErrors<UpdateSectionInput>) => {
-    const erros = flattenErrors(errors);
-    showFormErrors(erros);
-    useErrors.getState().setErrors(erros);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      useErrors.getState().setErrors({});
-      useTabsStore.getState().reset();
-    };
-  }, []);
-
-  return isLoading || !isFormHydrated ? (
-    <LoadingPage />
-  ) : sectionData?.id ? (
-    <FormProvider {...methods}>
-      <form
-        className={cn('transition-[max-width,opacity]', loading && 'disabled')}
-        inert={loading}
-        onSubmit={handleSubmit(onSubmit, onError)}
-      >
-        <Header
-          title='تعديل بيانات القسم'
-          loading={loading}
-          cancelHref='/dash/sections'
-          containerClassName='border-b-0 mb-5'
-        />
-        <MainTabs tabs={MAIN_TABS} />
-
-        <SmoothHeightContainer className='px-1 pb-10 pt-4'>
-          <FormContent />
-        </SmoothHeightContainer>
-      </form>
-    </FormProvider>
-  ) : (
-    <ErrorMessage error={error || null} refetch={refetch} />
+  return (
+    <Form methods={methods} onSubmit={onSubmit}>
+      <Header
+        title='تعديل بيانات القسم'
+        cancelHref='/dash/sections'
+        containerClassName='border-b-0 mb-5'
+      />
+      <FormTabs tabs={SECTION_TABS} />
+    </Form>
   );
-};
+});
+
+SectionEditForm.displayName = 'SectionEditForm';
 
 export default EditSection;
 

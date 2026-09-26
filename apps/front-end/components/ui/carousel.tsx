@@ -6,8 +6,7 @@ import useEmblaCarousel from 'embla-carousel-react';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
-
-import Arrow from '../icons/arrow';
+import Arrow from '@/components/icons/arrow';
 
 type CarouselApi = UseEmblaCarouselType[1];
 type UseCarouselParameters = Parameters<typeof useEmblaCarousel>;
@@ -56,9 +55,9 @@ const Carousel = ({
   CarouselProps & { itemsLength: number; ref?: React.Ref<HTMLDivElement> }) => {
   const [carouselRef, api] = useEmblaCarousel(
     {
+      direction: 'rtl',
       ...opts,
       axis: orientation === 'horizontal' ? 'x' : 'y',
-      direction: 'rtl',
     },
     plugins
   );
@@ -66,9 +65,7 @@ const Carousel = ({
   const [canScrollNext, setCanScrollNext] = React.useState(false);
 
   const onSelect = React.useCallback((api: CarouselApi) => {
-    if (!api) {
-      return;
-    }
+    if (!api) return;
 
     setCanScrollPrev(api.canScrollPrev());
     setCanScrollNext(api.canScrollNext());
@@ -102,71 +99,76 @@ const Carousel = ({
   );
 
   React.useEffect(() => {
-    if (!api || !setApi) {
-      return;
-    }
-
-    setApi(api);
+    if (api && setApi) setApi(api);
   }, [api, setApi]);
 
   React.useEffect(() => {
-    if (!api) {
-      return;
-    }
+    if (!api) return;
 
     onSelect(api);
     api.on('reInit', onSelect);
     api.on('select', onSelect);
 
     return () => {
-      api?.off('select', onSelect);
+      api.off('reInit', onSelect);
+      api.off('select', onSelect);
     };
   }, [api, onSelect]);
 
-  const onPointerDown = React.useCallback(() => {
-    if (api && api.plugins()?.autoplay) {
-      api.plugins().autoplay?.stop();
-    }
-  }, [api]);
-
-  const onPointerUp = React.useCallback(() => {
-    if (api && api.plugins()?.autoplay) {
-      setTimeout(() => {
-        api.plugins().autoplay?.play();
-      }, 1000);
-    }
-  }, [api]);
-
+  // Autoplay pauses while the pointer is down and resumes a second after it
+  // leaves; the pending resume must not outlive the carousel.
   React.useEffect(() => {
     if (!api || itemsLength <= 1) return;
 
-    const emblaNode = api.rootNode();
+    let resumeTimer: ReturnType<typeof setTimeout> | undefined;
+    const onPointerDown = () => {
+      clearTimeout(resumeTimer);
+      api.plugins().autoplay?.stop();
+    };
+    const onPointerUp = () => {
+      if (!api.plugins().autoplay) return;
+      clearTimeout(resumeTimer);
+      resumeTimer = setTimeout(() => api.plugins().autoplay?.play(), 1000);
+    };
 
+    const emblaNode = api.rootNode();
     emblaNode.addEventListener('pointerdown', onPointerDown);
     emblaNode.addEventListener('pointerup', onPointerUp);
     emblaNode.addEventListener('pointerleave', onPointerUp);
 
     return () => {
+      clearTimeout(resumeTimer);
       emblaNode.removeEventListener('pointerdown', onPointerDown);
       emblaNode.removeEventListener('pointerup', onPointerUp);
       emblaNode.removeEventListener('pointerleave', onPointerUp);
     };
-  }, [api, onPointerDown, onPointerUp, itemsLength]);
+  }, [api, itemsLength]);
+
+  const contextValue = React.useMemo<CarouselContextProps>(
+    () => ({
+      carouselRef,
+      api,
+      opts,
+      orientation,
+      scrollPrev,
+      scrollNext,
+      canScrollPrev,
+      canScrollNext,
+    }),
+    [
+      carouselRef,
+      api,
+      opts,
+      orientation,
+      scrollPrev,
+      scrollNext,
+      canScrollPrev,
+      canScrollNext,
+    ]
+  );
 
   return (
-    <CarouselContext.Provider
-      value={{
-        carouselRef,
-        api: api,
-        opts,
-        orientation:
-          orientation || (opts?.axis === 'y' ? 'vertical' : 'horizontal'),
-        scrollPrev,
-        scrollNext,
-        canScrollPrev,
-        canScrollNext,
-      }}
-    >
+    <CarouselContext.Provider value={contextValue}>
       <div
         ref={ref}
         onKeyDownCapture={handleKeyDown}
@@ -239,10 +241,7 @@ const CarouselPrevious = ({
   size = 'icon',
   ref,
   ...props
-}: React.ComponentProps<typeof Button> & {
-  ariaLabel?: string;
-  ref?: React.Ref<HTMLButtonElement>;
-}) => {
+}: React.ComponentProps<typeof Button>) => {
   const { orientation, scrollPrev, canScrollPrev } = useCarousel();
 
   return (
@@ -250,9 +249,9 @@ const CarouselPrevious = ({
       ref={ref}
       variant={variant}
       size={size}
-      aria-label={'السابق'}
+      aria-label='السابق'
       className={cn(
-        'easeOutCircFunction absolute z-10 size-9 rounded-full bg-white/20 p-2 text-white backdrop-blur-sm duration-300 hover:scale-110 hover:bg-white/30 active:scale-95 ltr:left-2 rtl:right-2',
+        'absolute z-10 size-9 rounded-full bg-white/20 p-2 text-white backdrop-blur-sm duration-300 hover:scale-110 hover:bg-white/30 active:scale-95 ltr:left-2 rtl:right-2',
         orientation === 'horizontal'
           ? 'top-1/2 -translate-y-1/2'
           : '-top-12 -translate-x-1/2 rotate-90',
@@ -274,9 +273,7 @@ const CarouselNext = ({
   size = 'icon',
   ref,
   ...props
-}: React.ComponentProps<typeof Button> & {
-  ref?: React.Ref<HTMLButtonElement>;
-}) => {
+}: React.ComponentProps<typeof Button>) => {
   const { orientation, scrollNext, canScrollNext } = useCarousel();
 
   return (
@@ -284,9 +281,9 @@ const CarouselNext = ({
       ref={ref}
       variant={variant}
       size={size}
-      aria-label={'التالي'}
+      aria-label='التالي'
       className={cn(
-        'easeOutCircFunction absolute z-10 size-9 rotate-180 rounded-full bg-white/20 p-2 text-white backdrop-blur-sm duration-300 hover:scale-110 hover:bg-white/30 active:scale-95 ltr:right-2 rtl:left-2',
+        'absolute z-10 size-9 rotate-180 rounded-full bg-white/20 p-2 text-white backdrop-blur-sm duration-300 hover:scale-110 hover:bg-white/30 active:scale-95 ltr:right-2 rtl:left-2',
         orientation === 'horizontal'
           ? 'top-1/2 -translate-y-1/2'
           : '-bottom-12 -translate-x-1/2 rotate-90',

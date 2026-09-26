@@ -1,4 +1,6 @@
 import type { EntityID } from '@/types';
+import type { UserClient } from '@/types/user';
+import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
 import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
@@ -26,7 +28,24 @@ export const loginSchema = z.object({
     .max(1000, 'الرجاء التحقق من أنك لست روبوت'),
 });
 
-export type LoginFormData = z.input<typeof loginSchema>;
+export type LoginInput = z.input<typeof loginSchema>;
+export type LoginOutput = z.output<typeof loginSchema>;
+
+/** `POST /api/dev/sign-up`, a route the production route table withholds. */
+export const devSignUpSchema = z.object({
+  name: z.preprocess(
+    sanitizeStrictSingleLine,
+    z
+      .string()
+      .min(2, 'الاسم مطلوب')
+      .max(NAME_MAX, `الاسم يجب أن لا يتجاوز ${NAME_MAX} حرفاً`)
+  ),
+  email: emailSchema,
+  password: passwordSchema,
+});
+
+export type DevSignUpInput = z.input<typeof devSignUpSchema>;
+export type DevSignUpOutput = z.output<typeof devSignUpSchema>;
 
 const userRoleSchema = z.object({
   email: emailSchema,
@@ -236,9 +255,35 @@ export type UpdateUserInput = z.input<typeof updateUserSchema>;
 export type CreateUserOutput = z.output<typeof createUserSchema>;
 export type UpdateUserOutput = z.output<typeof updateUserSchema>;
 
-/** @deprecated Use CreateUserInput instead */
-export type CreateUserFormData = CreateUserInput;
-/** @deprecated Use CreateUserOutput instead */
-export type CreateUserFormDataOutput = CreateUserOutput;
-/** @deprecated Use UpdateUserInput instead */
-export type UpdateUserFormData = UpdateUserInput;
+/** See the note on DEFAULT_CATEGORY in ./categories. */
+export const DEFAULT_USER: DefaultValues<CreateUserInput> = {
+  name: '',
+  email: '',
+  password: '',
+  phoneNumber: '',
+  isActive: true,
+  roleId: undefined,
+  permissions: undefined,
+};
+
+/**
+ * See the note on toCategoryForm in ./categories. The password is never seeded
+ * from a record — the API does not return one, and an empty field is what the
+ * update schema reads as "leave it alone".
+ */
+export const toUserForm = (record: UserClient): UpdateUserInput => ({
+  id: record.id,
+  name: record.name ?? '',
+  email: record.email ?? '',
+  password: '',
+  phoneNumber: record.phoneNumber ?? '',
+  isActive: record.isActive ?? true,
+  // A user whose role was deleted comes back with `roleId: null`; the empty
+  // string keeps the select on its placeholder and lets the schema ask for a
+  // real one at submit, which `null` (a valid-looking value) would not.
+  roleId: record.roleId ?? '',
+  // The API sends every user's effective permissions, but the form carries a
+  // matrix only for a custom role — the schema rejects one on any other.
+  permissions:
+    record.roleId === CUSTOM_ROLE_VALUE ? record.permissions : undefined,
+});
