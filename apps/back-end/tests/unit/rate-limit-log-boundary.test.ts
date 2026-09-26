@@ -32,10 +32,12 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 
 import { ROUTES } from '@/routes';
-import { serializeForLog } from '@/utils';
+
 import { preAuthScope } from '@/lib/http/pre-auth';
 import { getRateLimitStore } from '@/lib/rate-limit/store';
 import { describeStoreFailure } from '@/lib/rate-limit/store-failure';
+
+import { serializeForLog } from '@/utils/log';
 
 import {
   REAL_SQLITE_ERROR_NAME,
@@ -78,7 +80,7 @@ const realKeys: string[] = [];
 
 beforeAll(async () => {
   resetSqliteStores();
-  const api = await import('@/lib/rate-limit/api');
+  const api = await import('@/lib/rate-limit');
 
   for (const surface of [
     'verify_contact',

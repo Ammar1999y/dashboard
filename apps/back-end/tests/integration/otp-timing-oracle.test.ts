@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
 
 import { resetTables } from '../helpers/database';
 import { delayMail, settleDelivery } from '../helpers/mailbox';

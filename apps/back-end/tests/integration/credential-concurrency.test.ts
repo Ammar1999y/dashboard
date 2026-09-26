@@ -13,15 +13,17 @@ import { eq } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { users, verificationCodes, verificationSessions } from '@/db/schema';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+
 import {
   LoginRejected,
   MAX_FAILED_ATTEMPTS,
   verifyLoginAttempt,
 } from '@/lib/auth/login-guard';
-
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { processOtpSend, processOtpVerify } from '@/utils/otp';
+import { processOtpSend } from '@/lib/otp/send';
+import { processOtpVerify } from '@/lib/otp/verify';
 
 import { resetTables } from '../helpers/database';
 import { sentMail, settleDelivery } from '../helpers/mailbox';

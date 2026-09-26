@@ -1,18 +1,14 @@
-import type { FilterOperator } from '@/types/data-table';
+import type { FilterOperator } from '@app/shared/types/data-table';
 
-import { dataTableConfig } from './config';
+import { dataTableConfig } from '@app/shared/data-table/config';
+import { VALUELESS_OPERATORS } from '@app/shared/data-table/parsers';
 
 /**
- * Server-owned description of what may be filtered, and how.
- *
- * The client sends `{ id, variant, operator, value }` and each part used to be
- * validated independently — so a text operator could reach a boolean or
- * timestamp column and produce an invalid PostgreSQL cast (a deterministic
- * 500 any authorized caller could trigger), and short `ILIKE` patterns could
- * force repeated sequential scans that quick search already refuses.
- *
- * These descriptors bind column -> DB type -> allowed operators -> value rules
- * in one place, on the server, where the client can't influence them.
+ * Server-owned description of what may be filtered, and how: column -> DB type
+ * -> allowed operators -> value rules, bound in one place the client cannot
+ * influence. Validating the parts of `{ id, variant, operator, value }`
+ * independently lets a text operator reach a boolean or timestamp column — a
+ * PostgreSQL cast error surfacing as a 500 any authorized caller can trigger.
  *
  * `variant` is deliberately NOT bound here: it describes how the CLIENT renders
  * a control, is validated for membership in `parsers.ts` and then never read,
@@ -43,16 +39,13 @@ interface FilterColumnSpecBase {
 }
 
 /**
- * A union, not one optional field, because `values` is not optional where it
+ * A union, not one optional field, because `values` is required where it
  * matters and the type has to say so.
  *
- * `select` / `multiSelect` name a VALUE SET; in this codebase that set is
- * always a PostgreSQL enum or a closed lookup. Without `values` the validator
- * has nothing to check membership against, so it admitted any string and the
- * column was treated as string-like — which made `isEmpty` emit
- * `enum_column = ''`, a `22P02` cast error surfacing as a 500 that any
- * authorized caller could trigger. Every registered spec already supplies the
- * set; this is what stops the next one from forgetting.
+ * `select` / `multiSelect` name a VALUE SET — in this codebase always a
+ * PostgreSQL enum or a closed lookup. Without `values` the validator has
+ * nothing to check membership against, and `isEmpty` would emit
+ * `enum_column = ''`, a `22P02` cast error surfacing as a 500.
  */
 export type FilterColumnSpec =
   | (FilterColumnSpecBase & {
@@ -105,9 +98,6 @@ const ARRAY_VALUE_OPERATORS = new Set<FilterOperator>([
   'isBetween',
 ]);
 
-/** Operators that take no value at all. */
-const NO_VALUE_OPERATORS = new Set<FilterOperator>(['isEmpty', 'isNotEmpty']);
-
 /** Substring searches that need the trigram floor. */
 const SEARCH_OPERATORS = new Set<FilterOperator>([
   'iLike',
@@ -124,7 +114,7 @@ export function isArrayValueOperator(operator: FilterOperator): boolean {
 }
 
 export function isNoValueOperator(operator: FilterOperator): boolean {
-  return NO_VALUE_OPERATORS.has(operator);
+  return VALUELESS_OPERATORS.has(operator);
 }
 
 export function isSearchOperator(operator: FilterOperator): boolean {
@@ -159,15 +149,10 @@ export function operatorsForSpec(
 }
 
 /**
- * The filter contract of one descriptor map, as published prose.
- *
- * Derived, never transcribed. The route table used to carry a hand-written list
- * of allowed ids per route, maintained separately from the map the handler
- * actually passes to `parseDataTableParams` — two sources of truth for one
- * allowlist, with nothing to notice when a column was added to one and not the
- * other. Operators and closed-set members were not published at all, so a
- * generated client could offer `iLike` on a timestamp and read the 422 as a
- * server fault.
+ * The filter contract of one descriptor map, as published prose. Derived from
+ * the same map the handler passes to `parseDataTableParams`, so the documented
+ * allowlist, operators and closed-set members cannot drift from the enforced
+ * ones.
  */
 export function describeFilterColumns(
   specs: FilterColumnSpecs,
@@ -175,14 +160,18 @@ export function describeFilterColumns(
 ): string {
   return Object.entries(specs)
     .map(([id, spec]) => {
-      const parts: string[] = [spec.type];
-      if (spec.values) parts.push(`one of ${spec.values.join('|')}`);
       const floor = spec.minSearchLength ?? defaultMinSearchLength;
-      if (operatorsForSpec(spec).some(isSearchOperator))
-        parts.push(
-          `substring searches need ${floor}+ characters including letters or digits the trigram index can key on`
-        );
-      parts.push(`operators: ${operatorsForSpec(spec).join(', ')}`);
+      const operators = operatorsForSpec(spec);
+      const parts = [
+        spec.type,
+        ...(spec.values ? [`one of ${spec.values.join('|')}`] : []),
+        ...(operators.some(isSearchOperator)
+          ? [
+              `substring searches need ${floor}+ characters including letters or digits the trigram index can key on`,
+            ]
+          : []),
+        `operators: ${operators.join(', ')}`,
+      ];
       return `\`${id}\` (${parts.join('; ')})`;
     })
     .join('. ');

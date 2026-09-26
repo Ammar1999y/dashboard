@@ -4,9 +4,9 @@ import {
   isTwoFactorMethodEnabled,
   TWO_FACTOR_ENABLED,
   TWO_FACTOR_OTP_AVAILABLE,
-} from '@/utils/validation/two-factor';
+} from '@app/shared/validation/two-factor';
 
-import { GOOGLE_ENABLED } from './oauth-config';
+import { GOOGLE_ENABLED } from './oauth/config';
 
 /**
  * The two-factor surface, gated per METHOD by the environment: a method that is
@@ -18,7 +18,8 @@ import { GOOGLE_ENABLED } from './oauth-config';
  * advertise an endpoint that answers `OTP_NOT_CONFIGURED`.
  *
  * ⚠️ A path here carrying a `password` field must also be in
- * `PASSWORD_PROOF_PATHS` (`lib/auth.ts`), or it rejects every password.
+ * `PASSWORD_PROOF_PATHS` (`lib/auth/path-policy.ts`), or it rejects every
+ * password.
  */
 function twoFactorEndpoints(): RoutePrefixPath[] {
   if (!TWO_FACTOR_ENABLED) return [];
@@ -26,7 +27,7 @@ function twoFactorEndpoints(): RoutePrefixPath[] {
   // ⚠️ `/two-factor/enable` is ABSENT and stays absent. It can only produce TOTP
   // in this configuration, and it writes the flag and the credential outside the
   // transaction that has to carry the intent row with them. Enrolment is
-  // `lib/auth/two-factor-enrolment.ts`.
+  // `lib/auth/two-factor/enrolment.ts`.
   const paths: RoutePrefixPath[] = [
     {
       path: '/two-factor/disable',
@@ -37,6 +38,7 @@ function twoFactorEndpoints(): RoutePrefixPath[] {
     },
   ];
 
+  // eslint-disable-next-line unicorn/no-immediate-mutation -- the list is built method by method below, each block behind its own gate and comment; one literal would bury them
   if (isTwoFactorMethodEnabled('totp'))
     paths.push(
       {
@@ -237,22 +239,20 @@ function twoFactorEndpoints(): RoutePrefixPath[] {
 /**
  * The complete Better Auth surface this deployment exposes, per ENDPOINT.
  *
- * A leaf module (type-only import above), read by `lib/auth.ts` (which enforces
- * it in a `before` hook), `routes.ts` (which needs it to answer 404-versus-405
- * accurately), `app.ts` (which registers it and reads `preAuthLimit`) and
- * `lib/http/openapi.ts` (which publishes it). One table, every reader, so
- * enforcement, admission and advertisement cannot drift.
+ * Kept free of Better Auth imports so every reader can load it: the `before`
+ * hook (`lib/auth/path-policy.ts`) enforces it, `routes.ts` answers
+ * 404-versus-405 from it, `app.ts` registers it and reads `preAuthLimit`, and
+ * `lib/http/openapi/` publishes it. One table, so enforcement, admission and
+ * advertisement cannot drift.
  *
- * Methods are per path, and the values are read from the dependency's own
- * endpoint definitions (`method:` in `better-auth/dist/api/routes/*.mjs`) and
- * from `lib/auth/passwordless.ts` for the local plugin endpoint. Declared once
- * for the whole prefix, the 405 boundary advertises `Allow: GET` on POST-only
- * paths and the document lists operations no client can make.
+ * Methods are per path, read from the dependency's own endpoint definitions
+ * (`method:` in `better-auth/dist/api/routes/*.mjs`) and from the local plugin
+ * endpoints. Declared once for the whole prefix, the 405 boundary would
+ * advertise `Allow: GET` on POST-only paths.
  *
- * ⚠️ WARNING that travels with this list: `lib/auth.ts` replaces Better Auth's
- * built-in `password.verify` with a check that the `before` hook already ran the
- * real `verifyLoginAttempt`. A password-bearing path added here must also be in
- * that hook's `PASSWORD_PROOF_PATHS`, or it rejects every password.
+ * ⚠️ `password.verify` is replaced by a check that the `before` hook already ran
+ * the real `verifyLoginAttempt`: a password-bearing path added here must also
+ * be in `PASSWORD_PROOF_PATHS`, or it rejects every password.
  */
 export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] = [
   {
@@ -312,14 +312,10 @@ export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] = [
         },
       ] satisfies RoutePrefixPath[])
     : []),
-  // GET only, and this is the case that proves the values have to be MEASURED
-  // rather than read off the dependency's declaration. `getSession` declares
-  // `method: ["GET", "POST"]`, but its own handler throws
-  // `METHOD_NOT_ALLOWED` for a POST unless `session.deferSessionRefresh` is
-  // enabled (`better-auth/dist/api/routes/session.mjs`), and `lib/auth.ts` does
-  // not enable it — measured, `POST /api/auth/get-session` answers 405. Turning
-  // that option on is what would make POST belong here.
-  // Session reads need a separate budget from credential attempts for shared NATs.
+  // GET only, although `getSession` declares `["GET", "POST"]`: its handler
+  // refuses POST unless `session.deferSessionRefresh` is enabled, and
+  // `lib/auth/index.ts` does not enable it. Enabling it is what would make POST
+  // belong here. The budget is separate from credential attempts for shared NATs.
   {
     path: '/get-session',
     methods: ['GET'],
@@ -341,7 +337,7 @@ export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] = [
     captcha: true,
     session: 'none',
   },
-  // Passwordless plugin endpoint — does its own captcha/rate-limit/OTP verify.
+  // Verifies its own captcha, rate limit and OTP.
   {
     path: '/passwordless/verify',
     methods: ['POST'],
@@ -416,12 +412,9 @@ const SERVED_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
 /**
  * Does this deployment serve `path` under `method`? Drives the 405 boundary.
  *
- * `HEAD` is answered from the `GET` entry, because a resource that serves GET
- * serves HEAD — RFC 9110 §9.3.2 makes both mandatory for a general-purpose
- * server, `CORS_POLICY` advertises HEAD, and `createRouteLookup` already derives
- * it for every table route. Without this, `HEAD /api/auth/get-session` answered
- * `405` while advertising `Allow: GET` on the very path it was refusing — a
- * response that contradicts itself.
+ * `HEAD` is answered from the `GET` entry (RFC 9110 §9.3.2), as
+ * `createRouteLookup` derives it for every table route: otherwise a GET path
+ * would refuse HEAD while advertising `Allow: GET`.
  */
 export function betterAuthServes(path: string, method: string): boolean {
   const served = SERVED_METHODS.get(path);

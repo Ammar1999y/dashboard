@@ -38,15 +38,16 @@ import { sql } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import { SQLITE_MAINTENANCE_TOKEN } from '@/lib/env.server';
-import { generateUuidV7 } from '@/lib/id';
 
 import {
   HTTP_STATUS,
   MSG_CREATED,
   MSG_NOT_FOUND,
   REAUTH_REQUIRED_CODE,
-} from '@/utils/api-messages';
+} from '@app/shared/api-messages';
+
+import { SQLITE_MAINTENANCE_TOKEN } from '@/lib/env.server';
+import { generateUuidV7 } from '@/lib/id';
 
 import { resetTables } from '../helpers/database';
 import {
@@ -161,8 +162,8 @@ async function listPage(
 }
 
 /**
- * A complete admin-update payload. `adminUpdateUserSchema` is `.strict()` and
- * requires name, email, roleId and isActive, so a partial body is a 422 that
+ * A complete admin-update payload. `adminUpdateUserBodySchema` is `.strict()`
+ * and requires name, email, roleId and isActive, so a partial body is a 422 that
  * would look exactly like the authorization refusal under test.
  */
 function putUser(
@@ -768,7 +769,7 @@ describe('the maintenance token — the accept path, and the compare that guards
    * Driven through `GET /api/health/storage`, which is now the ONLY surface the
    * token guards — and it guards the whole route, not just `?deep=1`. The two
    * `/api/internal/*` sweep routes it used to gate are gone — the sweeps run
-   * in-process (`lib/schedule.ts`), which is what removed them from the
+   * in-process (`lib/maintenance/schedule.ts`), which is what removed them from the
    * unauthenticated route table entirely.
    *
    * The compare itself is unchanged and shared, so this still covers it: the

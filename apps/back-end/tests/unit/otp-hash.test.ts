@@ -1,5 +1,5 @@
 /**
- * The OTP MAC primitive (`lib/auth/otp-hash.ts`) and the keyring it reads
+ * The OTP MAC primitive (`lib/otp/hash.ts`) and the keyring it reads
  * (`lib/auth/keyring.ts`).
  *
  * Covers the three things that would fail silently: a malformed stored value
@@ -24,7 +24,7 @@ const KEY_B = Buffer.alloc(32, 22).toString('base64url');
 
 const PEPPER = Buffer.alloc(32, 7).toString('base64url');
 
-/** `lib/auth/password.ts` is imported by the module under test, so its keyring must parse. */
+/** `lib/auth/password/hash.ts` is imported by the module under test, so its keyring must parse. */
 const BASE_ENV = {
   PASSWORD_PEPPER_ACTIVE_ID: 'p1',
   PASSWORD_PEPPER_KEYRING: `{"p1":{"generation":1,"secret":"${PEPPER}"}}`,

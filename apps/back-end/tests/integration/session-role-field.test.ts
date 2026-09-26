@@ -1,7 +1,7 @@
 /**
  * `session.user.roleId` — the field, and every site that reads it.
  *
- * It was always `undefined`. `lib/auth.ts` declared it with
+ * It was always `undefined`. `lib/auth/index.ts` declared it with
  * `fieldName: 'role_id'`, which tells Better Auth which key to read off the row
  * the adapter returned — and the adapter is `drizzleAdapter`, which returns
  * Drizzle's TypeScript keys (`roleId`), not column names. Better Auth read
@@ -23,9 +23,10 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import type { SignedInSession } from '../helpers/session';
 
 import { app } from '@/app';
-import { auth } from '@/lib/auth';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { auth } from '@/lib/auth';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';
@@ -150,7 +151,7 @@ describe('every site that reads it', () => {
 
 describe('DELETE /api/dash/users/:id/sessions authorises before it answers', () => {
   /**
-   * The subresource contract, from `app/api/dash/users/[id]/target-user.ts`: "a
+   * The subresource contract, from `lib/users/target-user.ts`: "a
    * subresource must never be reachable when its parent is not."
    *
    * The empty-set short-circuit used to precede the transaction entirely, so a

@@ -1,0 +1,11 @@
+# Repository-wide secret-scanning config; the default rules stay in force.
+[extend]
+useDefault = true
+
+# `generic-api-key` matches editor keyboard shortcuts such as
+# `keys: 'mod+shift+enter'` in the front-end's Plate plugins, in the working
+# tree and in history. A shortcut is not a credential.
+[allowlist]
+description = "Editor keyboard-shortcut strings"
+regexTarget = "line"
+regexes = ['''keys: 'mod\+[a-z+]+''']

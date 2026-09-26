@@ -1,34 +1,19 @@
 /**
- * The DECISIONS behind `server.ts`'s boot gates, as pure functions.
+ * The DECISIONS behind `server.ts`'s boot gates, as pure functions, so they
+ * can be asserted without starting a server (`tests/unit/startup-gates-logic.test.ts`).
+ * `server.ts` keeps only the wiring: read the value, ask for a verdict, fail.
  *
- * Split out for one reason: those gates run at module scope, before `./app` is
- * dynamically imported, so importing `server.ts` to test them starts a server
- * and binds a port. The only observable behaviour left was a spawned process's
- * exit code, and two of the four gates could not be varied from a child at all —
- * `assertBunVersion` reads the running Bun and the repository's own
- * `package.json`, `assertSqliteVersion` reads the version compiled into the
- * binary. Both were therefore untested, which is the state a fail-closed guard
- * silently regresses from.
- *
- * Every function here is total: same input, same verdict, no environment, no
- * process, no I/O. `server.ts` keeps the wiring — read the value, call the
- * verdict, `fail(reason)` — and `tests/unit/startup-gates-logic.test.ts` asserts
- * the verdicts. What remains unasserted is that one-line wiring, and the
- * spawned cases in `tests/process/startup-gates.test.ts` cover it for the two
- * gates whose inputs a child CAN vary.
- *
- * No application import, and nothing here may gain one: it is loaded by the
- * entry point above the `NODE_ENV` check.
+ * ⚠️ No application import, ever: `server.ts` loads this above its
+ * `NODE_ENV` check.
  */
 
-/** A gate's answer. `warning` is for something notable that is not a refusal. */
-export type Verdict =
-  { ok: true; warning?: string } | { ok: false; reason: string };
+/** `warning` is for something notable that is not a refusal. */
+type Verdict = { ok: true; warning?: string } | { ok: false; reason: string };
 
 /** Leading `major.minor.patch`, ignoring any `-canary.…` tail. */
 const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)/;
 
-/** The one spelling `packageManager` may take — the single source for the pin. */
+/** The one spelling `packageManager` may take. */
 const PACKAGE_MANAGER_PATTERN = /^bun@(\d+\.\d+\.\d+)$/;
 
 export const DEFAULT_PORT = 3000;
@@ -53,13 +38,10 @@ export function atLeastVersion(
 }
 
 /**
- * A port, or the reason to refuse one.
- *
- * `Number(process.env.PORT)` accepted `''` as 0, `'3000abc'` as NaN and
- * `'3000.5'` as a float. Bun then binds an ephemeral or clamped port while the
- * startup log reports the requested value — so the log lies to the operator
- * about where the server is. An EMPTY value is the absent case, not a rejection:
- * an orchestrator that declares `PORT` without a value means "you choose".
+ * A port, or the reason to refuse one. Strictly decimal: anything `Number()`
+ * would coerce makes Bun bind an ephemeral or clamped port while the log
+ * reports the requested one. EMPTY is the absent case, not a rejection: an
+ * orchestrator that declares `PORT` without a value means "you choose".
  */
 export function portVerdict(
   raw: string | undefined,
@@ -82,26 +64,18 @@ export function portVerdict(
 }
 
 /**
- * Refuses a Bun OLDER than the tested pin, and warns about anything newer.
+ * Refuses a Bun OLDER than the tested pin and warns about a newer one.
  *
- * A FLOOR, not an equality check, and the difference is deliberate. BOTH
- * database drivers are compiled into the binary, so their transaction semantics
- * travel with the Bun version rather than with a lockfile entry. `bun:sqlite` is
- * the older reason. `bun:sql` is the sharper one: through 1.3.x a simple-protocol
- * query running concurrently with a not-yet-prepared parameterized query on the
- * same connection could deliver one query's rows to the other, and the `BEGIN`,
- * `COMMIT` and `ROLLBACK` that `db.transaction()` issues ARE simple-protocol
- * queries (Bun #32772, fixed in 1.4.0). Below the pin, every transaction in the
- * application is exposed to that — so below the pin is fatal.
+ * Fatal below: both database drivers are compiled into the binary, so their
+ * transaction semantics travel with the Bun version, and older `bun:sql` could
+ * cross rows between the simple-protocol `BEGIN`/`COMMIT` of
+ * `db.transaction()` and a concurrent parameterized query (oven-sh/bun#32772).
+ * Only a warning above: newer is untested, not known-broken, and refusing it
+ * would turn a routine image bump into an outage. `scripts/require-bun.mjs`
+ * applies the same floor at install.
  *
- * Above the pin is a WARNING, not a failure: newer is untested, not
- * known-broken, and refusing it turns a routine image bump into an outage.
- * `scripts/require-bun.mjs` treats the pin as a floor too, so the install check
- * and the boot check state one policy.
- *
- * A malformed pin is fatal rather than "no pin": `bun@1.4` or `bun@^1.4.0` is
- * not a looser requirement, it is a server that cannot say what it was tested
- * against.
+ * A malformed pin is fatal, not "no pin": `bun@^1.4.0` is a server that
+ * cannot say what it was tested against.
  */
 export function bunVersionVerdict(
   running: string,
@@ -149,17 +123,14 @@ export function bunVersionVerdict(
 }
 
 /**
- * The conservative floor for the WAL-reset race — see the SQLite notice linked
- * from `reports/coolify-deployment.md` §6. `bun:sqlite` links SQLite into the
- * Bun binary, so this is a property of the deployed runtime rather than of a
- * pinned npm package, and nothing but an assertion can catch drift.
+ * The floor for the WAL-reset race (see `reports/coolify-deployment.md` §6).
+ * SQLite ships inside the Bun binary, so only an assertion can catch drift.
  */
 export function sqliteVersionVerdict(
   version: string,
   floor: readonly number[]
 ): Verdict {
-  // A version string this cannot parse is refused rather than waved through:
-  // `''` is what `sqlite_version()` returns when the probe itself went wrong.
+  // Unparseable is refused: `''` is what the probe yields when it went wrong.
   const parts = parseVersionParts(version);
   if (!parts)
     return {

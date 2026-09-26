@@ -1,9 +1,16 @@
-import type { Handler } from '@/lib/http/contract';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import {
+  deleteFilesSchema,
+  moveFilesSchema,
+} from '@app/shared/validation/media';
 
-import { isForeignKeyViolation, validID } from '@/utils';
-import { getAuditMeta } from '@/lib/audit';
+import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
+import { readJsonBody, requireId } from '@/lib/http/input';
+import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { moveFiles, toMediaFile, toMediaFiles } from '@/lib/media/files';
+import { requestActor } from '@/lib/media/actor';
+import { moveFiles, toMediaFile } from '@/lib/media/files';
 import { getFolder } from '@/lib/media/folders';
 import { deleteFiles } from '@/lib/media/lifecycle';
 import { mediaMsg } from '@/lib/media/messages';
@@ -21,169 +28,118 @@ import { viewablePages } from '@/lib/media/usages';
 import { isVisibilityEnabled } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { CustomError } from '@/utils/error-class';
-import { deleteFilesSchema, moveFilesSchema } from '@/utils/validation/media';
-import { idRequired, zodIssueMessage } from '@/utils/validation/rules';
-
 /**
- * Library uploads land PRIVATE, and only there: nothing a user does at upload
- * time makes a file public (`reports/file-manager-plan.md`, section 1), and a
- * deployment with no private bucket has nowhere private to put them, so it
- * answers 422 rather than publishing what `media.create` alone was never
- * allowed to publish.
+ * Library uploads land PRIVATE and only there: nothing done at upload time
+ * makes a file public, and a deployment with no private bucket answers 422
+ * rather than publishing what `media.create` alone may not publish.
  */
 const LIBRARY_UPLOAD_VISIBILITY = 'private';
 
-export const POST: Handler = async (ctx) => {
-  try {
-    const { session, userId } = await requirePermission(ctx, {
-      resource: 'media',
-      action: 'create',
-    });
+export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
+  const caller = await requirePermission(ctx, {
+    resource: 'media',
+    action: 'create',
+  });
 
-    // Query, not form field: it has to be checked before the body is parsed,
-    // for the reason `resource` is a query parameter on `/api/upload/file`.
-    const folderId = validID(ctx.query.get('folder'));
-    if (!folderId) throw new CustomError(idRequired, HTTP_STATUS.UNPROCESSABLE);
-    if (!(await getFolder(folderId)))
-      throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
+  // Query, not form field, for the reason `resource` is one on
+  // `/api/upload/file`: it is checked before the body is parsed.
+  const folderId = requireId(ctx.query.get('folder'));
+  if (!(await getFolder(folderId)))
+    throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
 
-    if (!isVisibilityEnabled(LIBRARY_UPLOAD_VISIBILITY))
-      throw new CustomError(
-        mediaMsg.visibilityDisabled,
-        HTTP_STATUS.UNPROCESSABLE
-      );
+  if (!isVisibilityEnabled(LIBRARY_UPLOAD_VISIBILITY))
+    throw new CustomError(
+      mediaMsg.visibilityDisabled,
+      HTTP_STATUS.UNPROCESSABLE
+    );
 
-    await enforceRateLimit({
-      scope: UPLOAD_ADMISSION_SCOPE,
-      identifier: userIdentifier(userId),
-      limit: UPLOAD_ADMISSION_LIMIT,
-      failClosed: true,
-    });
+  await enforceRateLimit({
+    scope: UPLOAD_ADMISSION_SCOPE,
+    identifier: userIdentifier(caller.userId),
+    limit: UPLOAD_ADMISSION_LIMIT,
+    failClosed: true,
+  });
 
-    // Charged from `Content-Length` while the body is still a stream: the
-    // kind budgets below can only be charged once it has been buffered.
-    await chargeUploadBodyBudget(userId, ctx.headers);
+  // Charged from `Content-Length` while the body is still a stream: the kind
+  // budgets below can only be charged once it has been buffered.
+  await chargeUploadBodyBudget(caller.userId, ctx.headers);
 
-    const entry = takeSingleFile(await ctx.readFormData(), 'file');
-    const admitted = await admitUpload(entry, DEFAULT_UPLOAD_PURPOSE);
-    await chargeUploadBudget(userId, admitted);
+  const entry = takeSingleFile(await ctx.readFormData(), 'file');
+  const admitted = await admitUpload(entry, DEFAULT_UPLOAD_PURPOSE);
+  await chargeUploadBudget(caller.userId, admitted);
 
-    const row = await storeUpload({
-      admitted,
-      target: {
-        visibility: LIBRARY_UPLOAD_VISIBILITY,
-        kinds: DEFAULT_UPLOAD_PURPOSE.kinds,
-        folderId,
-        activate: true,
-      },
-      actor: { userId, email: session.user.email, meta: getAuditMeta(ctx) },
-    });
+  const row = await storeUpload({
+    admitted,
+    target: {
+      visibility: LIBRARY_UPLOAD_VISIBILITY,
+      kinds: DEFAULT_UPLOAD_PURPOSE.kinds,
+      folderId,
+      activate: true,
+    },
+    actor: requestActor(ctx, caller),
+  });
 
-    return apiSuccess({
-      message: mediaMsg.uploaded,
-      data: await toMediaFile(row),
-      status: HTTP_STATUS.CREATED,
-    });
-  } catch (error) {
-    return handleApiError(error, mediaMsg.uploadFailed);
-  }
-};
+  return apiSuccess({
+    message: mediaMsg.uploaded,
+    data: await toMediaFile(row),
+    status: HTTP_STATUS.CREATED,
+  });
+});
 
-export const PUT: Handler = async (ctx) => {
-  try {
-    const { session, userId, scope } = await requirePermission(ctx, {
+export const PUT = withApiErrors(
+  mediaMsg.updateError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
       resource: 'media',
       action: 'edit',
     });
 
     await enforceRateLimit({
       scope: 'media.files.put',
-      identifier: userIdentifier(userId),
+      identifier: userIdentifier(caller.userId),
       limit: 30,
       failClosed: true,
     });
 
-    const parsed = moveFilesSchema.safeParse(
-      requireJsonBody(await ctx.readJson())
-    );
-    if (!parsed.success)
-      throw new CustomError(
-        zodIssueMessage(parsed.error),
-        HTTP_STATUS.UNPROCESSABLE
-      );
+    const input = await readJsonBody(ctx, moveFilesSchema);
 
-    const moved = await moveFiles({
-      ids: parsed.data.ids,
-      folderId: parsed.data.folderId,
-      actor: {
-        userId,
-        email: session.user.email,
-        scope: scope ?? 'all',
-        meta: getAuditMeta(ctx),
-      },
+    const updatedAt = await moveFiles({
+      ids: input.ids,
+      folderId: input.folderId,
+      actor: requestActor(ctx, caller, caller.scope ?? 'all'),
     });
 
     return apiSuccess({
       message: mediaMsg.updated,
-      data: await toMediaFiles(moved),
+      data: { unfiledAt: null, updatedAt },
     });
-  } catch (error) {
-    // The destination folder was deleted between the check and the write.
-    return handleApiError(
-      isForeignKeyViolation(error)
-        ? new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND)
-        : error,
-      mediaMsg.updateError
-    );
-  }
-};
+  },
+  handleFolderForeignKeyViolation
+);
 
-export const DELETE: Handler = async (ctx) => {
-  try {
-    const { session, userId, scope, permissions } = await requirePermission(
-      ctx,
-      { resource: 'media', action: 'delete' }
-    );
+export const DELETE = withApiErrors(mediaMsg.deleteError, async (ctx) => {
+  const caller = await requirePermission(ctx, {
+    resource: 'media',
+    action: 'delete',
+  });
 
-    await enforceRateLimit({
-      scope: 'media.files.delete',
-      identifier: userIdentifier(userId),
-      limit: 30,
-      failClosed: true,
-    });
+  await enforceRateLimit({
+    scope: 'media.files.delete',
+    identifier: userIdentifier(caller.userId),
+    limit: 30,
+    failClosed: true,
+  });
 
-    const parsed = deleteFilesSchema.safeParse(
-      requireJsonBody(await ctx.readJson())
-    );
-    if (!parsed.success)
-      throw new CustomError(
-        zodIssueMessage(parsed.error),
-        HTTP_STATUS.UNPROCESSABLE
-      );
+  const input = await readJsonBody(ctx, deleteFilesSchema);
 
-    const { deleted, pending } = await deleteFiles({
-      ids: parsed.data.ids,
-      actor: {
-        userId,
-        email: session.user.email,
-        scope: scope ?? 'all',
-        meta: getAuditMeta(ctx),
-      },
-      viewable: viewablePages(permissions),
-    });
+  const { deleted, pending } = await deleteFiles({
+    ids: input.ids,
+    actor: requestActor(ctx, caller, caller.scope ?? 'all'),
+    viewable: viewablePages(caller.permissions),
+  });
 
-    return apiSuccess({
-      message: mediaMsg.deleted,
-      data: { deleted, pending },
-    });
-  } catch (error) {
-    return handleApiError(error, mediaMsg.deleteError);
-  }
-};
+  return apiSuccess({
+    message: mediaMsg.deleted,
+    data: { deleted, pending },
+  });
+});

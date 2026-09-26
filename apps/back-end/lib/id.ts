@@ -1,12 +1,8 @@
 /**
- * Central UUIDv7 seam kept dependency-free for schema imports. Generators may
- * advance embedded timestamps to preserve sort order, so callers must not treat
- * them as wall-clock creation times.
+ * A lexicographically sortable UUIDv7. Dependency-free so `db/schema.ts` can
+ * import it. The generator may advance the embedded timestamp to keep sort
+ * order, so it is not a wall-clock creation time.
  */
-
-/** A lexicographically sortable UUIDv7 string. */
-export type UuidV7 = string;
-
-export function generateUuidV7(): UuidV7 {
+export function generateUuidV7(): string {
   return Bun.randomUUIDv7();
 }

@@ -118,7 +118,7 @@ process.env.R2_PUBLIC_URL ??= 'https://cdn.example.invalid';
  * `?deep=1`. Only the 401 shape would be assertable, which cannot distinguish
  * "guarded" from "guarded and broken".
  * (The two `/api/internal/*` sweep routes it also used to gate are gone — the
- * sweeps run in-process, see `lib/schedule.ts`.)
+ * sweeps run in-process, see `lib/maintenance/schedule.ts`.)
  *
  * `??=` so a run that sets a real one keeps it.
  */

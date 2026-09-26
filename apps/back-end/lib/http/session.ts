@@ -2,32 +2,25 @@ import type { HandlerInput } from './contract';
 import type {
   DashboardPage,
   PermissionAction,
-} from '@/lib/permissions/constants';
-
-import { validID } from '@/utils';
-import { auth } from '@/lib/auth';
-import { hasAdminReauth } from '@/lib/auth/admin-reauth';
-import { assertLiveSession } from '@/lib/auth/live-session';
-import {
-  checkMultiplePermissions,
-  checkUserPermission,
-} from '@/lib/permissions/checker';
-import { DASHBOARD_PAGE_NAMES } from '@/lib/permissions/constants';
+} from '@app/shared/permissions/constants';
 
 import {
   HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-  MSG_LOGIN_REQUIRED,
   MSG_REAUTH_REQUIRED,
   REAUTH_REQUIRED_CODE,
-} from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
+} from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 
-/**
- * Authorisation helper that reads headers from the framework-agnostic
- * `HandlerInput`. Delegates to `checkUserPermission` — same return shape,
- * just a thinner call site for handlers.
- */
+import { hasAdminReauth } from '@/lib/auth/reauth/window';
+import { assertLiveSession } from '@/lib/auth/session/live';
+import {
+  authenticatedSession,
+  checkMultiplePermissions,
+  checkUserPermission,
+  insufficientPermissions,
+} from '@/lib/permissions/checker';
+
 export async function requirePermission(
   ctx: HandlerInput,
   opts: {
@@ -37,14 +30,10 @@ export async function requirePermission(
     throwError?: boolean;
     /**
      * ⚠️ The `D12` class: an action that lowers ANOTHER account's security
-     * posture. A permission grant says the actor may do it; this says the
-     * person at the keyboard is still that actor. Set it on the whole class or
-     * on none of it — the failure it exists to stop was the most dangerous
-     * action in the family (`resetTwoFactor`) sitting behind nothing while
-     * `users/me/change-password` re-authenticated for far less.
-     *
-     * A short WINDOW, minted by `POST /api/dash/auth/reauth`, so a batch does
-     * not prompt per row.
+     * posture. The grant says the actor may do it; this says the person at the
+     * keyboard is still that actor. Set it on the whole class or on none of it.
+     * The window is minted by `POST /api/dash/auth/reauth`, so a batch does not
+     * prompt per row.
      */
     reauth?: boolean;
   }
@@ -57,10 +46,10 @@ export async function requirePermission(
     throwError: opts.throwError,
   });
 
-  // AFTER the permission check, so a caller with no grant learns nothing about
-  // whether a proof would have helped — which `throwError: false` would defeat,
-  // because then a refused caller reaches this line. A route that branches on
-  // `scope` must ask for the window itself, once it knows the branch needs one.
+  // After the permission check, so a caller with no grant learns nothing about
+  // whether a proof would have helped. `throwError: false` lets a refused
+  // caller reach this line, so a route that branches on `scope` asks for the
+  // window itself once it knows the branch needs one.
   if (opts.reauth && result.allowed && result.userId && result.sessionId) {
     const proven = await hasAdminReauth(result.sessionId, result.userId);
     if (!proven)
@@ -75,22 +64,14 @@ export async function requirePermission(
 }
 
 /**
- * Loads the active Better Auth session from ctx.headers.
- * Throws 401 when no authenticated user is present.
- * Use this when you need the session but don't need a permission check.
- *
- * The session ROW is verified, not just the cookie: the cookie cache stays valid
- * for minutes after the row is deleted, so a session revoked by credential
- * rotation could otherwise finish a mutation it had started. See
- * `assertLiveSession`. The preferences `GET` pays that query too rather than
- * growing a second, cache-only helper.
+ * The caller's session, 401 without one. The session ROW is verified, not just
+ * the cookie: the cookie cache outlives a deleted row by minutes, so a session
+ * revoked by credential rotation could otherwise finish a mutation it started.
+ * The preferences `GET` pays that query too rather than growing a cache-only
+ * variant.
  */
 export async function requireSession(ctx: HandlerInput) {
-  const session = await auth.api.getSession({ headers: ctx.headers });
-  const userId = validID(session?.user?.id);
-  if (!session || !userId)
-    throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
-
+  const { session, userId } = await authenticatedSession(ctx.headers);
   const sessionId = await assertLiveSession(session.session.id, userId);
 
   return {
@@ -111,28 +92,21 @@ export async function requireDashboardAccess(ctx: HandlerInput): Promise<void> {
   });
 
   if (!Object.values(permissions).some(Boolean))
-    throw new CustomError(MSG_INSUFFICIENT_PERMISSIONS, HTTP_STATUS.FORBIDDEN);
+    throw insufficientPermissions();
 }
 
 /**
- * Authorisation for a route that a grant on ANY ONE of several actions unlocks.
+ * Authorisation that a grant on ANY ONE of several actions unlocks — the image
+ * upload, which is authorised against the resource the file is for, where a
+ * `create`-only and an `edit`-only holder must both pass.
  *
- * The image upload is the case that needs it. An image is uploaded *for* a
- * resource, so the question is "may this caller create or edit that resource",
- * not a permission belonging to the upload endpoint itself — the endpoint holds
- * no data of its own. `requirePermission` cannot express that: it takes a single
- * action and throws on the first miss, so a `create`-only holder and an
- * `edit`-only holder could not both pass one call.
+ * One `checkMultiplePermissions` call rather than a `checkUserPermission` loop:
+ * it resolves every check from one permissions read and forces the live-session
+ * assertion as soon as any action is a write, where a loop would repeat the
+ * session lookup and throw on the first miss.
  *
- * Delegates to `checkMultiplePermissions` rather than calling
- * `checkUserPermission` once per action: it resolves every check from ONE
- * permissions read, and it forces the database path — including the live-session
- * assertion — as soon as any requested action is a write. Looping the
- * single-action helper would repeat the session lookup per action and,
- * `throwError: false` being per-call, would leak a 403 for the first miss.
- *
- * Returns the subset actually granted, so a caller that needs to distinguish
- * them (create vs edit) can, without asking again.
+ * Returns the granted subset, so a caller can tell create from edit without
+ * asking again.
  */
 export async function requireAnyPermission(
   ctx: HandlerInput,
@@ -156,8 +130,7 @@ export async function requireAnyPermission(
     (action) => permissions[`${opts.resource}.${action}`] === true
   );
 
-  if (granted.length === 0)
-    throw new CustomError(MSG_INSUFFICIENT_PERMISSIONS, HTTP_STATUS.FORBIDDEN);
+  if (granted.length === 0) throw insufficientPermissions();
 
   return { session, userId, sessionId, granted };
 }

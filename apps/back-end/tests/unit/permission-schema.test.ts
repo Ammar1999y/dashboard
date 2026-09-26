@@ -8,10 +8,10 @@ import { expect, test } from 'bun:test';
  * which of them it is breaking.
  */
 import {
-  adminUpdatePermissionSchema,
+  adminUpdatePermissionBodySchema,
   createPermissionSchema,
   pagePermissionSchema,
-} from '@/utils/validation/permissions';
+} from '@app/shared/validation/permissions';
 
 /**
  * One `bun test` case per assertion, keeping every original `check(...)` call
@@ -170,8 +170,7 @@ check(
 );
 check(
   'strict PUT accepts the real client payload',
-  adminUpdatePermissionSchema.safeParse({
-    id: '019702b8-6c2e-7000-8000-000000000000',
+  adminUpdatePermissionBodySchema.safeParse({
     roleName: 'محرر',
     description: 'وصف',
     isActive: true,
@@ -180,10 +179,20 @@ check(
 );
 check(
   'strict PUT rejects a response-only field',
-  !adminUpdatePermissionSchema.safeParse({
-    id: '019702b8-6c2e-7000-8000-000000000000',
+  !adminUpdatePermissionBodySchema.safeParse({
     roleName: 'محرر',
     isActive: true,
     usersCount: 3,
+  }).success
+);
+// The target comes from the path. `id` in the body used to be accepted by the
+// with-`id` variant the handler parsed and then silently overridden, while the
+// published schema promised a 422 for it.
+check(
+  'strict PUT rejects an id in the body',
+  !adminUpdatePermissionBodySchema.safeParse({
+    id: '019702b8-6c2e-7000-8000-000000000000',
+    roleName: 'محرر',
+    isActive: true,
   }).success
 );

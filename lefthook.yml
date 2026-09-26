@@ -1,0 +1,211 @@
+# Hooks for the whole repository. A job with `root:` runs inside that workspace
+# and its `{staged_files}` are that workspace's staged files, so every command
+# below is the one the workspace's own package.json scripts use.
+#
+# `--no-warn-ignored` on the per-file eslint jobs: a staged path that matches an
+# eslint ignore pattern is reported as a warning when passed by name, and
+# `--max-warnings 0` would turn that warning into a blocked commit.
+
+# The pre-commit hook script is patched by `scripts/install-git-hooks.mjs`
+# (see its header); an automatic reinstall would drop the patch. After adding or
+# removing a hook here, run `bun run prepare`.
+no_auto_install: true
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: front-end typecheck
+      root: 'apps/front-end/'
+      glob: '*.{ts,tsx,mts,cts}'
+      run: bun --bun tsc --noEmit
+    - name: front-end lint
+      root: 'apps/front-end/'
+      glob: '*.{ts,tsx,mts,cts,js,mjs,cjs}'
+      run: bun --bun eslint --max-warnings 0 --no-warn-ignored {staged_files}
+    - name: front-end format
+      root: 'apps/front-end/'
+      glob: '*.{ts,tsx,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml,css}'
+      run: bun --bun prettier --check {staged_files}
+    - name: back-end typecheck
+      root: 'apps/back-end/'
+      glob: '*.{ts,tsx,mts,cts}'
+      run: bunx tsc --noEmit
+    - name: back-end lint
+      root: 'apps/back-end/'
+      glob: '*.{ts,tsx,mts,cts,js,mjs,cjs}'
+      run: bunx eslint --max-warnings 0 --no-warn-ignored {staged_files}
+    - name: back-end format
+      root: 'apps/back-end/'
+      glob: '*.{ts,tsx,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml,css}'
+      run: bunx prettier --check {staged_files}
+    - name: shared typecheck
+      root: 'packages/shared/'
+      glob: '*.ts'
+      run: bunx tsc --noEmit
+    - name: shared lint
+      root: 'packages/shared/'
+      glob: '*.{ts,js,mjs}'
+      run: bunx eslint --max-warnings 0 --no-warn-ignored {staged_files}
+    - name: shared format
+      root: 'packages/shared/'
+      glob: '*.{ts,js,mjs,json,jsonc,md}'
+      run: bunx prettier --check {staged_files}
+    # Root-level files: the guard script, the hooks, the workflows and the
+    # manifests. No `root:`, so nothing that lives above the workspaces escapes.
+    - name: root lint
+      glob: '{scripts/**/*.mjs,*.mjs}'
+      exclude: '{apps/**,packages/**}'
+      run: bunx eslint --max-warnings 0 --no-warn-ignored {staged_files}
+    - name: root format
+      glob: '{scripts/**/*.mjs,*.js,*.mjs,*.json,*.yml,README.md,.github/**/*.yml,patches/**/*.md}'
+      exclude: '{apps/**,packages/**}'
+      run: bunx prettier --check {staged_files}
+    # No `exclude`, unlike the two jobs above: the workspace manifests are the
+    # point. The script reads every manifest whatever was staged; the glob only
+    # decides whether a commit is one it needs to look at.
+    - name: dependency parity
+      glob: '{package.json,apps/*/package.json,packages/*/package.json}'
+      run: bun scripts/check-dependency-parity.mjs
+    - name: secrets
+      run: mise exec -- gitleaks git --staged --redact --verbose --no-banner
+
+# Two stages, not one parallel group. `tests/unit/lint-security-gate.test.ts`
+# writes a deliberately rule-violating probe into the back-end tree while it
+# runs, and every gate in the group reads the whole tree, so running them
+# concurrently fails naming a file that no longer exists by the time the
+# developer looks — the classic reason a gate gets disabled.
+pre-push: &full_verify
+  jobs:
+    - name: gates
+      group:
+        parallel: true
+        jobs:
+          - name: front-end typecheck
+            root: 'apps/front-end/'
+            run: bun --bun tsc --noEmit
+          - name: front-end lint
+            root: 'apps/front-end/'
+            run: bun --bun eslint . --max-warnings 0
+          - name: front-end format
+            root: 'apps/front-end/'
+            run: bun --bun prettier --check .
+          - name: back-end typecheck
+            root: 'apps/back-end/'
+            run: bunx tsc --noEmit
+          - name: back-end lint
+            root: 'apps/back-end/'
+            run: bunx eslint . --max-warnings 0
+          - name: back-end format
+            root: 'apps/back-end/'
+            run: bunx prettier --check .
+          - name: shared typecheck
+            root: 'packages/shared/'
+            run: bunx tsc --noEmit
+          - name: shared lint
+            root: 'packages/shared/'
+            run: bunx eslint . --max-warnings 0
+          - name: shared format
+            root: 'packages/shared/'
+            run: bunx prettier --check .
+          - name: root lint
+            run: bun run lint:root
+          - name: root format
+            run: bun run format:check:root
+          - name: audit
+            root: 'apps/back-end/'
+            run: bun run audit
+            fail_text:
+              'a vulnerable dependency, or the advisories registry is down (the
+              script retries a 5xx three times before giving up)'
+          # The half of the Bun-only guard that a skipped `preinstall` cannot
+          # hide: `--ignore-scripts` silences the hook silently, so a foreign
+          # lockfile can reach the tree with no install-time complaint at all.
+          - name: runtime
+            run: bun scripts/require-bun.mjs
+            fail_text:
+              'wrong package manager, an outdated Bun, a foreign lockfile, or a
+              workspace whose packageManager pin disagrees with the root'
+          - name: routes
+            root: 'apps/back-end/'
+            run: bun run find:unused-files
+            fail_text:
+              'unreachable file, a handler no routes.ts entry routes (see the
+              comment in scripts/find-unused-files.ts), or a knip finding'
+          - name: schema-drift
+            root: 'apps/back-end/'
+            run: bun run check:schema-drift
+            fail_text:
+              'db/schema.ts has changes db/drizzle/ does not carry (run `bun run
+              db:generate` inside apps/back-end)'
+          # `bun dedupe --check` reports only duplicates it could COLLAPSE, so it
+          # passes a lockfile holding several incompatible majors of one package.
+          # `dependency-parity` covers the half of that which enters through the
+          # manifests: two direct declarations of one package with two
+          # specifiers. A transitive duplicate is still only visible in the
+          # lockfile.
+          - name: collapsible-duplicates
+            run: bun dedupe --check
+            fail_text:
+              'a dependency resolves to several versions that could be collapsed
+              into one (run `bun dedupe`)'
+          - name: dependency-parity
+            run: bun scripts/check-dependency-parity.mjs
+            fail_text:
+              'a package declared with different specifiers in two manifests
+              (align them, then `bun install` at the root)'
+          - name: secrets
+            run: mise exec -- gitleaks git . --redact --verbose --no-banner
+            fail_text: 'leaked secret, or tools not installed (mise install)'
+          - name: back-end sast
+            root: 'apps/back-end/'
+            run: mise exec -- semgrep scan --config=p/typescript
+              --config=p/secrets --error --metrics=off
+            fail_text: 'semgrep findings, or tools not installed (mise install)'
+          - name: shared sast
+            root: 'packages/shared/'
+            run: mise exec -- semgrep scan --config=p/typescript
+              --config=p/secrets --error --metrics=off
+            fail_text: 'semgrep findings, or tools not installed (mise install)'
+          - name: root sast
+            root: 'scripts/'
+            run: mise exec -- semgrep scan --config=p/typescript
+              --config=p/secrets --error --metrics=off
+            fail_text: 'semgrep findings, or tools not installed (mise install)'
+          - name: workflows
+            run: mise exec -- actionlint
+            fail_text: 'workflow errors, or tools not installed (mise install)'
+    # AFTER the group above, because this tier writes into the back-end tree.
+    # The cheap tier only: the database tiers are `bun run test:all` by hand, or
+    # the `tests` CI job.
+    - name: test
+      root: 'apps/back-end/'
+      run: bun run test
+
+verify: *full_verify
+
+fix:
+  # Sequential: the pairs rewrite the same files.
+  piped: true
+  jobs:
+    - name: front-end format
+      root: 'apps/front-end/'
+      run: bun --bun prettier --write .
+    - name: front-end lint
+      root: 'apps/front-end/'
+      run: bun --bun eslint . --fix
+    - name: back-end format
+      root: 'apps/back-end/'
+      run: bunx prettier --write .
+    - name: back-end lint
+      root: 'apps/back-end/'
+      run: bunx eslint . --fix
+    - name: shared format
+      root: 'packages/shared/'
+      run: bunx prettier --write .
+    - name: shared lint
+      root: 'packages/shared/'
+      run: bunx eslint . --fix
+    - name: root format
+      run: bun run format:root
+    - name: root lint
+      run: bunx eslint scripts *.mjs --fix

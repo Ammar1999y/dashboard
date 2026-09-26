@@ -1,36 +1,28 @@
-/**
- * Fail when `db/schema.ts` says something `db/drizzle/` does not: `bun run
- * check:schema-drift`.
- *
- * Migration generation is a manual step (`bun run db:generate`), and nothing
- * checked that it had been taken. The schema embeds runtime constants in CHECK
- * constraints, column widths, foreign-key behaviour and enum labels, so a
- * constant raised in TypeScript without a generated migration typechecks and
- * lints, and reaches a deployed database still enforcing the old rule, where a
- * request the code considers valid becomes a 500. The test template is migrated
- * from `db/drizzle/` too, so it disagrees the same way — which makes the tests a
- * detector only where one happens to exercise that constraint, and silent
- * everywhere else.
- *
- * The check is drizzle-kit's own diff, run against a COPY of the metadata so a
- * gate can never write into the repository: copy `db/drizzle/` to a scratch
- * directory, generate into it, and compare. Any new SQL file, or any change to
- * `meta/`, is drift.
- *
- * Runs in `lefthook.yml`'s pre-push gates and in CI's `verify` job. It needs no
- * database — `generate` reads the schema module and the snapshots, and never
- * connects.
- */
 /* eslint-disable unicorn/no-process-exit -- CLI entry point: the exit code IS
    this tool's result contract, which is the case the rule excepts */
+/**
+ * `bun run check:schema-drift`: fails when `db/schema.ts` says something
+ * `db/drizzle/` does not.
+ *
+ * The schema embeds runtime constants in CHECK constraints, widths, foreign-key
+ * behaviour and enum labels, so a constant changed without `db:generate`
+ * typechecks, lints, and then reaches a database still enforcing the old rule.
+ * The test template migrates from `db/drizzle/` too, so the tests catch it only
+ * where one happens to exercise that constraint.
+ *
+ * drizzle-kit's own diff, run against a COPY of the metadata so the gate never
+ * writes into the repository: any new SQL file or `meta/` change is drift. Needs
+ * no database; `generate` never connects.
+ */
 import { cp, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+
+import { compareCodeUnits } from '@/utils/text';
 
 import drizzleConfig from '../drizzle.config';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.join(HERE, '..');
+const WORKSPACE_ROOT = path.resolve(import.meta.dirname, '..');
+
 /**
  * The folder to copy, from the config rather than spelled here: `out` is the one
  * generate-affecting key this script supplies itself, so a hand-written copy of
@@ -38,9 +30,12 @@ const REPO_ROOT = path.join(HERE, '..');
  * old folder's journal while `db:generate` wrote to the new one. `'drizzle'` is
  * drizzle-kit's own default when the key is absent.
  */
-const DRIZZLE_DIR = path.resolve(REPO_ROOT, drizzleConfig.out ?? 'drizzle');
+const DRIZZLE_DIR = path.resolve(
+  WORKSPACE_ROOT,
+  drizzleConfig.out ?? 'drizzle'
+);
 
-/** Every file under `dir`, relative and sorted, with its bytes. */
+/** Every file under `dir`, keyed by its relative path, with its contents. */
 async function snapshotOf(dir: string): Promise<Map<string, string>> {
   const files = new Map<string, string>();
   /* eslint-disable-next-line security/detect-non-literal-fs-filename -- a
@@ -115,26 +110,19 @@ if (unforwarded.length > 0) {
 }
 
 /**
- * Under `node_modules/`, not the OS temp directory, for two reasons that both
- * bite: drizzle-kit resolves `--out` against `cwd`, and on Windows a temp
- * directory on another drive has no relative path to the repository — the
- * absolute one arrives doubled and generate writes nowhere, which reads as
- * "no drift". `node_modules/` is also the one writable place inside the
- * repository that neither git nor the unreachable-file scanner walks.
- *
- * Created rather than assumed: `bun install` does not make `node_modules/.cache`
- * — on this repository only a drizzle-kit run does, through jiti — so on a fresh
- * clone and in CI `mkdtemp` answered ENOENT before the `try` below could clean
- * anything up.
+ * Under `node_modules/`, not the OS temp directory: drizzle-kit resolves `--out`
+ * against `cwd`, and on Windows a temp directory on another drive has no
+ * relative path, so generate writes nowhere and reads as "no drift". It is also
+ * the one writable place neither git nor the unreachable-file scanner walks.
+ * Created, because `bun install` does not make `node_modules/.cache`.
  */
-const cacheDir = path.join(REPO_ROOT, 'node_modules', '.cache');
+const cacheDir = path.join(WORKSPACE_ROOT, 'node_modules', '.cache');
 await mkdir(cacheDir, { recursive: true });
 const scratch = await mkdtemp(path.join(cacheDir, 'schema-drift-'));
 
 /**
  * The verdict is RETURNED, never exited from: `process.exit` inside the `try`
- * skips the `finally`, and every refusal below is the case where the scratch
- * directory most needs removing — it accumulated one per failed run.
+ * would skip the `finally` that removes the scratch directory.
  */
 async function decide(): Promise<number> {
   await cp(DRIZZLE_DIR, scratch, { recursive: true });
@@ -151,9 +139,9 @@ async function decide(): Promise<number> {
         config[key] === undefined ? [] : [flag, String(config[key])]
       ),
       '--out',
-      path.relative(REPO_ROOT, scratch).replaceAll('\\', '/'),
+      path.relative(WORKSPACE_ROOT, scratch).replaceAll('\\', '/'),
     ],
-    { cwd: REPO_ROOT, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' }
+    { cwd: WORKSPACE_ROOT, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' }
   );
 
   if (generated.exitCode !== 0) {
@@ -173,9 +161,7 @@ async function decide(): Promise<number> {
     .keys()
     .filter((name) => !after.has(name))
     .toArray();
-  const drift = [...changed, ...removed].toSorted((a, b) =>
-    a === b ? 0 : a < b ? -1 : 1
-  );
+  const drift = [...changed, ...removed].toSorted(compareCodeUnits);
 
   if (drift.length > 0) {
     console.error(

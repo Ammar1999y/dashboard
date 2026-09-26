@@ -1,0 +1,31 @@
+{
+  // The strict set every workspace extends. `packages/shared` is type-checked
+  // inside each consumer's program, so it is written to this base and adds
+  // nothing; `apps/front-end` relaxes `noUncheckedIndexedAccess` and targets
+  // ES2017 for the browser bundle, and those overrides are the whole difference
+  // between "passes in shared" and "passes in every consumer".
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "Preserve",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "checkJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+    "noImplicitAny": true,
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "noImplicitOverride": true
+  }
+}

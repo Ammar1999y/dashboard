@@ -1,9 +1,10 @@
-import type { BucketType } from '@/lib/r2/client';
+import type { BucketType } from '@app/shared/validation/enums';
 
 import { and, eq, gt, inArray, isNull } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { files } from '@/db/schema';
+
 import {
   ENABLED_VISIBILITIES,
   headObjectInR2,
@@ -40,13 +41,67 @@ interface BucketReport {
   truncated: boolean;
 }
 
-export interface ReconcileReport {
+interface ReconcileReport {
   buckets: BucketReport[];
   durationMs: number;
 }
 
 function sampled(keys: readonly string[]) {
   return { count: keys.length, sample: keys.slice(0, SAMPLE_SIZE) };
+}
+
+/**
+ * Every listed key under the prefix, up to `MAX_LISTED_KEYS`, each page checked
+ * against `files` as it arrives: no row at all is an orphan, a settled row
+ * naming the other bucket makes this a stale copy.
+ */
+async function listBucket(bucket: BucketType): Promise<{
+  listed: Set<string>;
+  orphans: string[];
+  stale: string[];
+  truncated: boolean;
+}> {
+  const listed = new Set<string>();
+  const orphans: string[] = [];
+  const stale: string[] = [];
+  let truncated = false;
+  let token: string | undefined;
+
+  do {
+    const page = await listObjectsInR2({
+      bucketType: bucket,
+      prefix: OBJECT_KEY_PREFIX,
+      continuationToken: token,
+    });
+    const keys = page.objects.map((object) => object.key);
+    for (const key of keys) listed.add(key);
+
+    if (keys.length > 0) {
+      const rows = await db
+        .select({
+          r2Key: files.r2Key,
+          bucketType: files.bucketType,
+          transition: files.transition,
+        })
+        .from(files)
+        .where(inArray(files.r2Key, keys));
+      const byKey = new Map(rows.map((row) => [row.r2Key, row]));
+      for (const key of keys) {
+        const row = byKey.get(key);
+        if (!row) orphans.push(key);
+        else if (row.transition === null && row.bucketType !== bucket)
+          stale.push(key);
+      }
+    }
+
+    token = page.nextContinuationToken ?? undefined;
+    if (token && listed.size >= MAX_LISTED_KEYS) {
+      truncated = true;
+      token = undefined;
+    }
+  } while (token);
+
+  return { listed, orphans, stale, truncated };
 }
 
 /**
@@ -117,45 +172,7 @@ export async function reconcileObjectStore(
   const reports: BucketReport[] = [];
 
   for (const bucket of ENABLED_VISIBILITIES) {
-    const listed = new Set<string>();
-    const orphans: string[] = [];
-    const stale: string[] = [];
-    let truncated = false;
-    let token: string | undefined;
-
-    do {
-      const page = await listObjectsInR2({
-        bucketType: bucket,
-        prefix: OBJECT_KEY_PREFIX,
-        continuationToken: token,
-      });
-      const keys = page.objects.map((object) => object.key);
-      for (const key of keys) listed.add(key);
-
-      if (keys.length > 0) {
-        const rows = await db
-          .select({
-            r2Key: files.r2Key,
-            bucketType: files.bucketType,
-            transition: files.transition,
-          })
-          .from(files)
-          .where(inArray(files.r2Key, keys));
-        const byKey = new Map(rows.map((row) => [row.r2Key, row]));
-        for (const key of keys) {
-          const row = byKey.get(key);
-          if (!row) orphans.push(key);
-          else if (row.transition === null && row.bucketType !== bucket)
-            stale.push(key);
-        }
-      }
-
-      token = page.nextContinuationToken ?? undefined;
-      if (token && listed.size >= MAX_LISTED_KEYS) {
-        truncated = true;
-        token = undefined;
-      }
-    } while (token);
+    const { listed, orphans, stale, truncated } = await listBucket(bucket);
 
     const { suspects, unchecked } = await suspectKeys(
       bucket,

@@ -20,12 +20,13 @@
 import { describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
 import {
   MAX_JSON_BODY_BYTES,
   MAX_REQUEST_BODY_BYTES,
 } from '@/lib/http/request';
-
-import { HTTP_STATUS } from '@/utils/api-messages';
 
 import { egressCalls } from '../helpers/egress';
 import { baseHeaders } from '../helpers/session';

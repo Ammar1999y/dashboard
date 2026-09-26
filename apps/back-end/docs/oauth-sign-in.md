@@ -133,7 +133,7 @@ as documented for those operations.
 
 ## Implementation and verification
 
-`lib/auth/oauth.ts` is a narrow Better Auth plugin: it uses the installed library's
+`lib/auth/oauth/plugin.ts` is a narrow Better Auth plugin: it uses the installed library's
 Google authorization URL, code exchange, state and ID-token verifier. Its
 transaction bridges the existing Drizzle adapter and session hook so linking,
 email verification and session admission agree before commit. General account

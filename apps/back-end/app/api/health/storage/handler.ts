@@ -1,48 +1,32 @@
 /**
- * Storage readiness, for the Coolify health check.
+ * Storage readiness, for the Coolify health check. The stores open lazily on
+ * the first limited request, so without this a missing volume, native driver
+ * or schema passes the health check and serves a silently degraded limiter.
  *
- * Without this, a container whose volume failed to mount, whose native driver is
- * missing, or whose schema is wrong passes its health check and serves a silently
- * degraded limiter — the stores open lazily on the first limited request, so
- * nothing forces the failure to surface at startup.
+ * - **Cheap (default), safe to poll.** Opens the store and reads back its
+ *   PRAGMAs, and runs a bounded `SELECT 1` against PostgreSQL.
+ * - **Deep (`?deep=1`).** Adds `quick_check` and a real write probe, which take
+ *   a write lock and must not contend with the limiter on every poll.
  *
- * Two costs, deliberately separated:
+ * ⚠️ The WHOLE route requires `x-maintenance-token`. A per-IP limiter would
+ * refuse the container's own probe, which carries no trusted proxy header, and
+ * a shared budget would hand any anonymous caller a restart switch. The probe
+ * carries the token (see reports/coolify-deployment.md §7), so the route needs
+ * no limiter; `SQLITE_MAINTENANCE_TOKEN` unset answers every request 401.
  *
- * - **Cheap (default).** Opens the store (cached after the first call) and reads
- *   back its PRAGMAs, and runs a bounded `SELECT 1` against PostgreSQL. Enough
- *   to catch a missing binary, an unopenable file, a wrong `journal_mode`, a
- *   schema version this build cannot use, or an unreachable primary database.
- *   Safe to poll.
- * - **Deep (`?deep=1`, token required).** Adds `quick_check` and a real write
- *   probe. Both take real work and a write lock, so they must not run on every
- *   poll — that would put the health check itself in contention with the limiter.
+ * `apiRaw`, because the deployed check reads `status` at the top level.
  *
- * The WHOLE route requires `x-maintenance-token`, not only `?deep=1`. A health
- * endpoint is otherwise the least-authenticated surface in a deployment, and the
- * only bound available to an anonymous one here is deployment-wide: `ipIdentifier`
- * answers 503 without a trusted proxy header and the container's own probe carries
- * none, so a per-IP limiter would refuse exactly the caller this route exists for
- * while a shared budget hands any anonymous caller a restart switch — spend it at
- * 4 req/s and the orchestrator's own `curl -f` starts reading 429 as unhealthy.
- * The token removes both: the probe carries it (a Coolify CMD health check runs
- * inside the container with its environment — see reports/coolify-deployment.md
- * §7), so the route needs no limiter and writes nothing to the limiter store.
- *
- * `SQLITE_MAINTENANCE_TOKEN` is therefore required in production; an unset one
- * makes every request here 401, which is a boot failure rather than a surprise.
- *
- * The body is `apiRaw`, not the standard envelope: the deployed health check
- * reads `status` at the top level, so wrapping it would break a deployment
- * rather than a client we control.
- *
- * What this CANNOT prove: that the volume is actually persistent. SQLite will
- * create the same path inside the container layer just as happily. Only surviving
- * a real redeploy proves that — see reports/coolify-deployment.md.
+ * It CANNOT prove the volume is persistent: SQLite creates the same path in the
+ * container layer just as happily. Only surviving a redeploy proves that.
  */
 import type { Handler } from '@/lib/http/contract';
 
 import { pingDatabase } from '@/db';
-import { errorClassOf } from '@/utils';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { apiRaw } from '@/lib/http/response';
+import { maintenanceTokenMatches } from '@/lib/maintenance/token';
 import {
   getRateLimitStore,
   RATE_LIMIT_SCHEMA_VERSION,
@@ -53,10 +37,8 @@ import {
   quickCheck,
   SYNCHRONOUS_VALUE,
 } from '@/lib/sqlite/database';
-import { maintenanceTokenMatches } from '@/lib/sqlite/maintenance-token';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { apiRaw } from '@/utils/api-response';
+import { errorClassOf } from '@/utils/log';
 
 const PROBE_KEY = 'health:write-probe';
 

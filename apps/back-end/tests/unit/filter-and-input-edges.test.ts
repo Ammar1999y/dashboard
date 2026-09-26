@@ -2,32 +2,38 @@ import { describe, expect, test } from 'bun:test';
 
 import { PgDialect } from 'drizzle-orm/pg-core';
 
-import { parseDataTableParams } from '@/db/queries/data-table';
 import { users } from '@/db/schema';
-import { normalizeArabicDigits, OUT_OF_RANGE, positiveInt } from '@/utils';
 import * as z from 'zod';
-import { filterColumns } from '@/lib/data-table/filter-columns';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { REQUEST_BODIES } from '@app/shared/contract';
 import {
   isTrigramIndexable,
   parseSearchParams,
-} from '@/lib/data-table/parsers';
-import { REQUEST_BODIES } from '@/lib/http/openapi';
-
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { toCalendarDate } from '@/utils/time';
-import { adminUpdateUserSchema } from '@/utils/validation/auth';
-import { createPermissionSchema } from '@/utils/validation/permissions';
+} from '@app/shared/data-table/parsers';
+import { toCalendarDate } from '@app/shared/time';
+import {
+  normalizeArabicDigits,
+  OUT_OF_RANGE,
+  positiveInt,
+} from '@app/shared/utils';
+import { adminUpdateUserBodySchema } from '@app/shared/validation/auth';
+import { createPermissionSchema } from '@app/shared/validation/permissions';
 import {
   idSchema,
   slugSchema,
   zodIssueMessage,
-} from '@/utils/validation/rules';
+} from '@app/shared/validation/rules';
+
+import { filterColumns } from '@/lib/data-table/filter-columns';
+import { parseDataTableParams } from '@/lib/data-table/params';
 
 const ID = '01a02581-a7ee-723b-8000-000000000000';
 
+// No `id`: the admin update parses the BODY schema and takes the target from
+// the path, so an `id` here is an unknown key and a 422.
 function adminPayload(overrides: Record<string, unknown> = {}) {
   return {
-    id: ID,
     roleId: ID,
     name: 'Valid Name',
     email: 'user@gmail.com',
@@ -234,7 +240,7 @@ describe('negated set membership includes rows with no value', () => {
   // and from `meta.total`, with a 200.
   const dialect = new PgDialect();
   // `ne` is only offered for `select`, the array operators only for
-  // `multiSelect` (`lib/data-table/config.ts`), so the two halves of the
+  // `multiSelect` (`@app/shared/data-table/config`), so the two halves of the
   // comparison use the descriptor each operator is actually reachable from —
   // both against the same nullable column.
   const printed = (operator: 'inArray' | 'notInArray' | 'ne') => {
@@ -403,7 +409,7 @@ describe('L5 - a union failure speaks the API language', () => {
   test.each([['not-a-uuid'], [''], [0], [null], [{}]])(
     'roleId %p is refused in Arabic, not with the framework default',
     (input) => {
-      const parsed = adminUpdateUserSchema.safeParse(
+      const parsed = adminUpdateUserBodySchema.safeParse(
         adminPayload({ roleId: input })
       );
       expect(parsed.success).toBe(false);
@@ -426,7 +432,7 @@ describe('L5 - a union failure speaks the API language', () => {
 
 describe('L6 - reflected key names are bounded', () => {
   test('a huge key name does not produce a huge message', () => {
-    const parsed = adminUpdateUserSchema.safeParse(
+    const parsed = adminUpdateUserBodySchema.safeParse(
       adminPayload({ ['k'.repeat(200_000)]: 1 })
     );
     expect(parsed.success).toBe(false);
@@ -439,7 +445,7 @@ describe('L6 - reflected key names are bounded', () => {
     const extras = Object.fromEntries(
       ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((key) => [key, 1])
     );
-    const parsed = adminUpdateUserSchema.safeParse(adminPayload(extras));
+    const parsed = adminUpdateUserBodySchema.safeParse(adminPayload(extras));
     expect(parsed.success).toBe(false);
     if (parsed.success) return;
     const message = zodIssueMessage(parsed.error);
@@ -447,6 +453,18 @@ describe('L6 - reflected key names are bounded', () => {
     // Still actionable: it names some of them, which is why the message exists.
     expect(message).toContain('a');
   });
+});
+
+describe('L6b - the target comes from the path, never from the body', () => {
+  test.each([['id'], ['userId']])(
+    '%s in the body is an unknown key, not a target selector',
+    (key) => {
+      const parsed = adminUpdateUserBodySchema.safeParse(
+        adminPayload({ [key]: ID })
+      );
+      expect(parsed.success).toBe(false);
+    }
+  );
 });
 
 describe('L7 - both Arabic-Indic digit ranges normalise', () => {
@@ -466,7 +484,7 @@ describe('M11 - a wrong TYPE stays a type error', () => {
   test.each([[12_345_678], [true], [['Passw0rd!']], [{ p: 1 }]])(
     'password %p is rejected rather than read as "no change"',
     (input) => {
-      const parsed = adminUpdateUserSchema.safeParse(
+      const parsed = adminUpdateUserBodySchema.safeParse(
         adminPayload({ password: input })
       );
       expect(parsed.success).toBe(false);
@@ -478,7 +496,7 @@ describe('M11 - a wrong TYPE stays a type error', () => {
     ['null', null],
     ['empty string', ''],
   ])('%s still means "leave the password alone"', (_label, input) => {
-    const parsed = adminUpdateUserSchema.safeParse(
+    const parsed = adminUpdateUserBodySchema.safeParse(
       adminPayload(input === undefined ? {} : { password: input })
     );
     expect(parsed.success).toBe(true);

@@ -3,9 +3,8 @@
  *
  * `lib/env.server.ts` compares them at boot — one bucket under both names would
  * make a publish copy an object onto itself and then delete the only copy — and
- * `lib/r2/client.ts` sends them to the SDK. Two reads of the same variable are
- * how ` dash-public` passed the comparison and reached the wire untrimmed, so
- * the compared value and the used value come from here or from nowhere.
+ * `lib/r2/client.ts` sends them to the SDK. Both must read them from here, or
+ * the compared value and the sent value can differ.
  *
  * Whitespace-only is unset: an empty name would name no bucket anyway, and the
  * env rules treat an absent bucket as a disabled visibility.

@@ -1,35 +1,26 @@
-import type { Tx } from '@/db';
-import type { EntityID } from '@/types';
+import type { Actor } from './actor';
+import type { Executor, Tx } from '@/db';
+import type { EntityID } from '@app/shared/types';
 
 import { asc, eq, isNull, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
+import { getConstraintName, isUniqueViolation } from '@/db/errors';
 import { files, folders } from '@/db/schema';
-import { getConstraintName, isUniqueViolation } from '@/utils';
-import { auditLog } from '@/lib/audit';
-import { escapeLike } from '@/lib/data-table/filter-columns';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
 import {
   FOLDER_MAX_CHILDREN,
   FOLDER_MAX_DEPTH,
-} from '@/utils/validation/constants';
+} from '@app/shared/validation/constants';
 
+import { escapeLike } from '@/lib/data-table/filter-columns';
+
+import { auditAs } from './actor';
 import { mediaMsg } from './messages';
 
-export interface Actor {
-  userId: EntityID;
-  email: string;
-  /** `own` narrows every write to folders the actor created. */
-  scope: 'all' | 'own';
-  meta: { ip: string | null; userAgent: string | null; apiPath: string };
-}
-
-/** What an audit row needs about the caller; the scope is the route's business. */
-export type AuditActor = Pick<Actor, 'userId' | 'email' | 'meta'>;
-
-export interface FolderSummary {
+interface FolderSummary {
   id: string;
   name: string;
   parentId: string | null;
@@ -56,12 +47,12 @@ export interface FolderDeleteOutcome {
   pending: EntityID[];
 }
 
-export interface Breadcrumb {
+interface Breadcrumb {
   id: string;
   name: string;
 }
 
-export interface FolderHit extends FolderSummary {
+interface FolderHit extends FolderSummary {
   /** Root → the folder itself. */
   breadcrumbs: Breadcrumb[];
 }
@@ -73,6 +64,39 @@ export interface FolderHit extends FolderSummary {
  * looking for is worse than one that says there are more.
  */
 const FOLDER_SEARCH_LIMIT = 20;
+
+const FOLDER_COLUMNS = {
+  id: folders.id,
+  name: folders.name,
+  parentId: folders.parentId,
+  createdBy: folders.createdBy,
+  createdAt: folders.createdAt,
+  updatedAt: folders.updatedAt,
+} as const;
+
+/**
+ * A row of a raw statement. The driver types it `Record<string, any>` whatever
+ * `execute<T>` is given, so the SQL text is the only statement of its shape.
+ */
+type RawRow = Awaited<ReturnType<Executor['execute']>>[number];
+
+/** A row selecting `id`, `name`, `parent_id`, `created_by` (ids as text), `created_at`, `updated_at`. */
+function toFolderSummary(row: RawRow): FolderSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    parentId: row.parent_id,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** Direct children of `parentId`; `null` is the root. */
+const childrenOf = (parentId: EntityID | null) =>
+  parentId === null ? isNull(folders.parentId) : eq(folders.parentId, parentId);
+
+export const rowCount = () => sql<number>`count(*)::int`;
 
 const FOLDER_UNIQUE_CONSTRAINTS = new Set([
   'ux_folders_parent_name',
@@ -90,16 +114,14 @@ function folderNameConflict(error: unknown): CustomError | null {
 /**
  * One tree, one lock. Row locks on the moved folder and its destination are not
  * enough: two disjoint moves (`A` under `B1`, `B` under `A1`) each validate
- * against the tree the other is about to change and both commit a cycle
- * (reproduced against PostgreSQL). Every structural change takes this
- * transaction-scoped advisory lock FIRST, before any row lock, so two of them
- * serialize instead of deadlocking on each other's rows. Folder mutations are
- * rare administrative actions; one lock is the right size.
- */
-/**
- * Exported for `deleteFolderTree` (`./lifecycle.ts`), which deletes the files
- * of a subtree and then its folders. The dependency points that way on purpose:
- * this module must not import the file lifecycle, or the two would form a cycle.
+ * against the tree the other is about to change and both commit a cycle. Every
+ * structural change takes this transaction-scoped advisory lock FIRST, before
+ * any row lock, so two of them serialize instead of deadlocking on each other's
+ * rows. Folder mutations are rare administrative actions; one lock is the right
+ * size.
+ *
+ * Exported for `deleteFolderTree` (`./lifecycle.ts`); this module must not
+ * import the file lifecycle, or the two would form a cycle.
  */
 export async function lockTree(tx: Tx): Promise<void> {
   await tx.execute(
@@ -113,7 +135,7 @@ export async function lockTree(tx: Tx): Promise<void> {
  */
 export async function breadcrumbs(
   folderId: EntityID,
-  executor: typeof db | Tx = db
+  executor: Executor = db
 ): Promise<Breadcrumb[]> {
   const rows = await executor.execute<{ id: string; name: string }>(sql`
     with recursive up as (
@@ -148,7 +170,6 @@ async function depthOf(
   return depth == null ? null : Number(depth);
 }
 
-/** Every folder under `folderId`, itself included, with the subtree's height. */
 /**
  * The folder and everything under it, DEEPEST FIRST — the order a delete has to
  * use, and the shape a cycle check and a recursive delete both need. Bounded by
@@ -159,15 +180,7 @@ export async function subtreeFolders(
   executor: Tx,
   folderId: EntityID
 ): Promise<Array<FolderSummary & { level: number }>> {
-  const rows = await executor.execute<{
-    id: string;
-    name: string;
-    parent_id: string | null;
-    created_by: string | null;
-    created_at: Date;
-    updated_at: Date;
-    level: number | string;
-  }>(sql`
+  const rows = await executor.execute(sql`
     with recursive down as (
       select id, 1 as level from folders where id = ${folderId}::uuid
       union all
@@ -186,16 +199,12 @@ export async function subtreeFolders(
     order by down.level desc, f.id
   `);
   return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    parentId: row.parent_id,
-    createdBy: row.created_by,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    ...toFolderSummary(row),
     level: Number(row.level),
   }));
 }
 
+/** Every folder under `folderId`, itself included, with the subtree's height. */
 async function subtreeOf(
   executor: Tx,
   folderId: EntityID
@@ -213,13 +222,9 @@ async function assertRoomUnder(
   parentId: EntityID | null
 ): Promise<void> {
   const [count] = await tx
-    .select({ children: sql<number>`count(*)::int` })
+    .select({ children: rowCount() })
     .from(folders)
-    .where(
-      parentId === null
-        ? isNull(folders.parentId)
-        : eq(folders.parentId, parentId)
-    );
+    .where(childrenOf(parentId));
   if ((count?.children ?? 0) >= FOLDER_MAX_CHILDREN)
     throw new CustomError(
       mediaMsg.folderTooManyChildren,
@@ -255,14 +260,7 @@ export async function lockFolderFor(
   actor: Actor
 ): Promise<FolderSummary> {
   const [folder] = await tx
-    .select({
-      id: folders.id,
-      name: folders.name,
-      parentId: folders.parentId,
-      createdBy: folders.createdBy,
-      createdAt: folders.createdAt,
-      updatedAt: folders.updatedAt,
-    })
+    .select(FOLDER_COLUMNS)
     .from(folders)
     .where(eq(folders.id, folderId))
     .for('update');
@@ -275,17 +273,10 @@ export async function lockFolderFor(
 
 export async function getFolder(
   folderId: EntityID,
-  executor: typeof db | Tx = db
+  executor: Executor = db
 ): Promise<FolderSummary | null> {
   const [folder] = await executor
-    .select({
-      id: folders.id,
-      name: folders.name,
-      parentId: folders.parentId,
-      createdBy: folders.createdBy,
-      createdAt: folders.createdAt,
-      updatedAt: folders.updatedAt,
-    })
+    .select(FOLDER_COLUMNS)
     .from(folders)
     .where(eq(folders.id, folderId));
   return folder ?? null;
@@ -296,20 +287,9 @@ export async function listSubfolders(
   parentId: EntityID | null
 ): Promise<FolderSummary[]> {
   return db
-    .select({
-      id: folders.id,
-      name: folders.name,
-      parentId: folders.parentId,
-      createdBy: folders.createdBy,
-      createdAt: folders.createdAt,
-      updatedAt: folders.updatedAt,
-    })
+    .select(FOLDER_COLUMNS)
     .from(folders)
-    .where(
-      parentId === null
-        ? isNull(folders.parentId)
-        : eq(folders.parentId, parentId)
-    )
+    .where(childrenOf(parentId))
     .orderBy(asc(sql`lower(${folders.name})`), asc(folders.id))
     .limit(FOLDER_MAX_CHILDREN);
 }
@@ -324,15 +304,7 @@ export async function searchFolders(
   term: string
 ): Promise<{ folders: FolderHit[]; truncated: boolean }> {
   const pattern = `%${escapeLike(term)}%`;
-  const rows = await db.execute<{
-    id: string;
-    name: string;
-    parent_id: string | null;
-    created_by: string | null;
-    created_at: Date;
-    updated_at: Date;
-    breadcrumbs: Breadcrumb[];
-  }>(sql`
+  const rows = await db.execute(sql`
     with recursive hits as (
       select id, name, parent_id, created_by, created_at, updated_at
       from folders
@@ -363,12 +335,7 @@ export async function searchFolders(
   `);
   return {
     folders: rows.slice(0, FOLDER_SEARCH_LIMIT).map((row) => ({
-      id: row.id,
-      name: row.name,
-      parentId: row.parent_id,
-      createdBy: row.created_by,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      ...toFolderSummary(row),
       breadcrumbs: row.breadcrumbs,
     })),
     truncated: rows.length > FOLDER_SEARCH_LIMIT,
@@ -397,25 +364,15 @@ export async function createFolder(params: {
       const [created] = await tx
         .insert(folders)
         .values({ parentId, name, createdBy: actor.userId })
-        .returning({
-          id: folders.id,
-          name: folders.name,
-          parentId: folders.parentId,
-          createdBy: folders.createdBy,
-          createdAt: folders.createdAt,
-          updatedAt: folders.updatedAt,
-        });
+        .returning(FOLDER_COLUMNS);
       if (!created)
         throw new CustomError(mediaMsg.updateError, HTTP_STATUS.INTERNAL_ERROR);
 
-      await auditLog(tx, {
-        userId: actor.userId,
-        userEmail: actor.email,
+      await auditAs(tx, actor, {
         action: 'INSERT',
         tableName: 'folders',
         recordId: created.id,
         newData: { name, parentId },
-        meta: actor.meta,
       });
       return created;
     });
@@ -461,27 +418,17 @@ export async function updateFolder(params: {
           ...(moving && { parentId }),
         })
         .where(eq(folders.id, folderId))
-        .returning({
-          id: folders.id,
-          name: folders.name,
-          parentId: folders.parentId,
-          createdBy: folders.createdBy,
-          createdAt: folders.createdAt,
-          updatedAt: folders.updatedAt,
-        });
+        .returning(FOLDER_COLUMNS);
       if (!updated)
         throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
 
-      await auditLog(tx, {
-        userId: actor.userId,
-        userEmail: actor.email,
+      await auditAs(tx, actor, {
         action: 'UPDATE',
         tableName: 'folders',
         recordId: folderId,
         oldData: { name: current.name, parentId: current.parentId },
         newData: { name: updated.name, parentId: updated.parentId },
         skipIfUnchanged: true,
-        meta: actor.meta,
       });
       return updated;
     });
@@ -490,11 +437,7 @@ export async function updateFolder(params: {
   }
 }
 
-/**
- * Empty folders only. A recursive delete would have to remove objects for every
- * file underneath, which is a job, not a request; refusing keeps every request
- * bounded and keeps "delete" from ever meaning "delete a thousand things".
- */
+/** Empty folders only; `deleteFolderTree` (`./lifecycle.ts`) is the recursive delete. */
 export async function deleteFolder(params: {
   folderId: EntityID;
   actor: Actor;
@@ -505,13 +448,13 @@ export async function deleteFolder(params: {
     const current = await lockFolderFor(tx, folderId, actor);
 
     const [children] = await tx
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: rowCount() })
       .from(folders)
-      .where(eq(folders.parentId, folderId));
+      .where(childrenOf(folderId));
     // Any row, whatever its status: a pending upload or a half-deleted file in
     // here is still an object the folder is responsible for.
     const [contents] = await tx
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: rowCount() })
       .from(files)
       .where(eq(files.folderId, folderId));
     if ((children?.count ?? 0) > 0 || (contents?.count ?? 0) > 0)
@@ -519,14 +462,11 @@ export async function deleteFolder(params: {
 
     await tx.delete(folders).where(eq(folders.id, folderId));
 
-    await auditLog(tx, {
-      userId: actor.userId,
-      userEmail: actor.email,
+    await auditAs(tx, actor, {
       action: 'DELETE',
       tableName: 'folders',
       recordId: folderId,
       oldData: { name: current.name, parentId: current.parentId },
-      meta: actor.meta,
     });
   });
   return { folders: 1, deleted: [], pending: [] };

@@ -39,7 +39,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { SeededUser, SignedInSession } from '../helpers/session';
-import type { SessionMetadata } from '@/lib/permissions/constants';
+import type { SessionMetadata } from '@app/shared/permissions/constants';
 import type { SQL, SQLChunk } from 'drizzle-orm';
 
 import {
@@ -53,6 +53,11 @@ import {
 import { PgTable } from 'drizzle-orm/pg-core';
 
 import { db, withTransaction } from '@/db';
+import {
+  getConstraintName,
+  isForeignKeyViolation,
+  isUniqueViolation,
+} from '@/db/errors';
 import * as schema from '@/db/schema';
 import {
   auditLogs,
@@ -62,30 +67,27 @@ import {
   userPreferences,
   users,
 } from '@/db/schema';
-import {
-  getConstraintName,
-  isForeignKeyViolation,
-  isUniqueViolation,
-  sanitizeForLog,
-} from '@/utils';
-import { auditLog } from '@/lib/audit';
-import { generateUuidV7 } from '@/lib/id';
+
+import { MSG_EMAIL_EXISTS } from '@app/shared/api-messages';
 import {
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,
-} from '@/lib/permissions/constants';
+} from '@app/shared/permissions/constants';
+import { OTP_CHANNELS, OTP_PURPOSES } from '@app/shared/validation/enums';
+import { DEFAULT_PREFERENCES } from '@app/shared/validation/preferences';
+
+import { auditLog } from '@/lib/audit';
+import {
+  handleUserForeignKeyViolation,
+  handleUserUniqueViolation,
+} from '@/lib/http/constraint-errors';
+import { generateUuidV7 } from '@/lib/id';
 import {
   refreshRoleSessions,
   refreshUserSessions,
 } from '@/lib/permissions/utils';
 
-import { MSG_EMAIL_EXISTS } from '@/utils/api-messages';
-import {
-  handleUserForeignKeyViolation,
-  handleUserUniqueViolation,
-} from '@/utils/api-response';
-import { OTP_CHANNELS, OTP_PURPOSES } from '@/utils/validation/enums';
-import { DEFAULT_PREFERENCES } from '@/utils/validation/preferences';
+import { sanitizeForLog } from '@/utils/log';
 
 import { resetTables } from '../helpers/database';
 import { seedUser, signedInUser } from '../helpers/session';
@@ -98,15 +100,15 @@ const ROLE_DELETE = {
   anchor: 'DELETE FROM roles r',
 } as const;
 const SELF_UPDATE_CTE = {
-  file: 'app/api/dash/users/[id]/handler.ts',
+  file: 'lib/users/edit.ts',
   anchor: 'RETURNING prev.name AS old_name',
 } as const;
 const LOCKING_SELECT = {
-  file: 'app/api/dash/users/[id]/handler.ts',
+  file: 'lib/users/delete.ts',
   anchor: 'FOR UPDATE OF u',
 } as const;
 const ADVISORY_LOCK = {
-  file: 'utils/otp.ts',
+  file: 'lib/otp/send.ts',
   anchor: 'pg_advisory_xact_lock',
 } as const;
 
@@ -581,7 +583,7 @@ describe('a transaction is one session', () => {
       const first = await tx.execute<{ pid: number }>(
         sql`SELECT pg_backend_pid() AS pid`
       );
-      // The statement `processOtpSend` really issues, read out of `utils/otp.ts`.
+      // The statement `processOtpSend` really issues, read out of `lib/otp/send.ts`.
       await tx.execute(
         productionStatement(ADVISORY_LOCK, [
           seeded().signedIn.user.userId,

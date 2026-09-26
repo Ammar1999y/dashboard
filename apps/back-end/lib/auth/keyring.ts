@@ -1,32 +1,23 @@
 /**
  * A versioned keyring of 32-byte server secrets, read from two environment
- * variables and validated at first use.
+ * variables and validated at first use: an active key id, the retained keys,
+ * and generation ordering so a consumer can tell "hashed under an older key"
+ * from "hashed under the current one". Every keyring binds to this one parser,
+ * so no copy of the rules can quietly accept what another rejects.
  *
- * Extracted from `password-pepper.ts` when OTP hashing needed the same
- * structure: an active key id, a set of retained keys, generation ordering so a
- * consumer can tell "hashed under an older key" from "hashed under the current
- * one". Two copies of this validation would have been two copies of the rules
- * about base64url length, duplicate generations and key-count ceilings — and the
- * copies drift, which for key material means one of them quietly accepts
- * something the other rejects.
+ * Parameterised by env var NAMES, so a failure names the variable an operator
+ * has to fix.
  *
- * Parameterised by env var NAMES rather than by pre-read values: the whole point
- * is to fail at load with a message naming the variable an operator has to fix.
- *
- * **No secret, and no slice of one, appears in any error message here.** Startup
- * logs are widely readable. Errors name the key ID — which is not secret, it is
- * stored in every hash envelope — and describe the rule that failed.
+ * **No secret, and no slice of one, may appear in an error message here**:
+ * startup logs are widely readable. Errors name the key ID, which every hash
+ * envelope stores anyway.
  */
 
 /** Key IDs travel inside hash envelopes, so they must stay envelope-safe. */
-const KEY_ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+export const KEY_ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 /** Unpadded base64url of exactly 32 bytes. */
-const BASE64URL_32_BYTES_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-/**
- * Retained-key ceiling. Every retained key is a key an attacker who obtains the
- * environment can use, so retention is a cost — the bound exists to make an
- * unbounded keyring impossible to configure by accident.
- */
+export const BASE64URL_32_BYTES_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+/** Every retained key is usable by whoever obtains the environment. */
 const MAX_KEYS = 8;
 const MAX_GENERATION = 2_147_483_647;
 
@@ -46,13 +37,7 @@ interface KeyringConfiguration {
   keys: ReadonlyMap<string, KeyMaterial>;
 }
 
-/**
- * One error class for every keyring, distinguished by its message.
- *
- * Separate subclasses per keyring were considered and rejected: nothing catches
- * this by type — it is a fatal misconfiguration — and a `catch` that wanted to
- * would be catching "the deployment is wrong", which has one response.
- */
+/** One class for every keyring: a fatal misconfiguration nothing catches by type. */
 class KeyringConfigurationError extends Error {
   constructor(message: string) {
     super(message);
@@ -60,7 +45,7 @@ class KeyringConfigurationError extends Error {
   }
 }
 
-export interface KeyringSpec {
+interface KeyringSpec {
   /** Env var holding the active key ID. */
   activeIdEnv: string;
   /** Env var holding the JSON keyring. */
@@ -73,7 +58,7 @@ export interface KeyringSpec {
  * A lazily-parsed keyring. `validate()` exists so `lib/env.server.ts` can force
  * the parse at startup instead of letting the first request discover the problem.
  */
-export interface Keyring {
+interface Keyring {
   validate: () => void;
   active: () => KeyringKey;
   byId: (id: string) => KeyringKey;
@@ -106,11 +91,8 @@ export function defineKeyring(spec: KeyringSpec): Keyring {
       );
 
     const decoded = Buffer.from(encoded, 'base64url');
-    // Re-encoding and comparing, not just checking the length: base64url decoding
-    // is lenient about a final character whose trailing bits are non-zero, so two
-    // different strings can decode to one buffer. Without this, a key could be
-    // written two ways, and only one of them would match the id recorded in
-    // existing envelopes.
+    // Re-encoded and compared, not just length-checked: decoding ignores non-zero
+    // trailing bits in the final character, so two strings can decode to one key.
     if (decoded.length !== 32 || decoded.toString('base64url') !== encoded)
       fail(
         `key "${id}" must be an unpadded base64url encoding of exactly 32 bytes`
@@ -125,9 +107,7 @@ export function defineKeyring(spec: KeyringSpec): Keyring {
 
     const entry = value as Record<string, unknown>;
     const fields = Object.keys(entry);
-    // Exactly these two, no extras: a typo'd field name (`generaton`) would
-    // otherwise be silently ignored and the key would take a default it never
-    // declared.
+    // Exactly these two: a misspelt field would otherwise be ignored silently.
     if (
       fields.length !== 2 ||
       !Object.hasOwn(entry, 'generation') ||
@@ -197,13 +177,8 @@ export function defineKeyring(spec: KeyringSpec): Keyring {
         `${spec.activeIdEnv} must identify a key present in ${spec.keyringEnv}`
       );
 
-    // The active key must own the HIGHEST generation, and this is the rule the
-    // file was missing.
-    //
-    // `generation` has exactly one consumer and it reads the field as staleness:
-    // `needsRehash: pepper.generation < activePepper.generation`
-    // (`lib/auth/password.ts`). So with keys `{"1":{generation:1},
-
+    // `generation` is read as staleness (`needsRehash` in `password/hash.ts`),
+    // so the active key must own the highest one.
     const activeGeneration = keys.get(activeId)?.generation ?? 0;
     const newest = Math.max(
       ...keys.values().map((material) => material.generation)
@@ -241,9 +216,6 @@ export function defineKeyring(spec: KeyringSpec): Keyring {
 
     byId(id: string) {
       const material = getConfiguration().keys.get(id);
-      // The message that matters most in practice: it fires when a key is
-      // RETIRED while values hashed under it are still live. Naming the id is
-      // what turns that into a one-line fix.
       if (!material) fail(`no key is configured for stored key ID "${id}"`);
       return { id, ...material };
     },

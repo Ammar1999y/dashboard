@@ -1,9 +1,9 @@
-import { errorClassOf } from '@/utils';
+import { errorClassOf } from '@/utils/log';
 
 /**
- * The one place the shutdown timing lives. `server.ts` applies it, the startup
- * log reports it, and `tests/unit/shutdown-coordinator.test.ts` checks the
- * runbook's copy of it against these values.
+ * `server.ts` applies these, the startup log reports them, and
+ * `tests/unit/shutdown-coordinator.test.ts` checks the runbook's copy against
+ * them.
  */
 export const SHUTDOWN_POLICY = {
   /** Added on top of the longest request ceiling; the orchestrator's grace must exceed the total. */
@@ -23,7 +23,7 @@ export function shutdownTimeoutMs(input: {
   );
 }
 
-export interface GracefulStopDeps {
+interface GracefulStopDeps {
   /** Elysia's `app.stop`; `true` closes active connections. */
   stop: (closeActiveConnections?: boolean) => Promise<unknown>;
   /** Bun's in-flight request count — `Server.pendingRequests`. */
@@ -39,21 +39,14 @@ export interface GracefulStopDeps {
 /**
  * Stop the listener, waiting for real work and force-closing only what is not.
  *
- * `app.stop()` alone can hang on a HALF-SENT request — a client that wrote
- * headers and no body keeps the connection open and the promise pending — so a
- * hard escalation to `app.stop(true)` after a fixed grace is required to make
- * a deploy terminate at all.
+ * `app.stop()` alone can hang forever on a HALF-SENT request (headers, no
+ * body), so it escalates to `app.stop(true)`. A fixed grace cannot tell that
+ * connection from a slow upload, so `pendingRequests` decides: a request in
+ * flight buys another grace interval, up to the caller's budget; nothing in
+ * flight escalates at once.
  *
- * What that fixed grace cannot tell apart is a half-sent connection from an
- * image upload in its ninth second — both are simply still open, and the route
- * and shutdown budgets allow the upload another two minutes. So
- * `pendingRequests` is what decides: a request in flight buys another grace
- * interval, up to the caller's budget; nothing in flight escalates immediately,
- * which is the half-sent case the escalation exists for.
- *
- * Never throws for slowness — a stop that ran out of budget still force-closes
- * and returns. Only a rejection from `stop` itself propagates, because that
- * means the listener's own teardown faulted, which is not a clean exit.
+ * Never throws for slowness. Only a rejection from `stop` itself propagates:
+ * the listener's own teardown faulted, which is not a clean exit.
  */
 export async function stopServerGracefully(
   deps: GracefulStopDeps
@@ -118,7 +111,7 @@ export async function stopServerGracefully(
   }
 }
 
-export interface ShutdownDeps {
+interface ShutdownDeps {
   /**
    * Stops accepting requests and drains or closes the ones in flight, within
    * the shutdown budget still unspent when it is called.
@@ -141,24 +134,19 @@ export interface ShutdownDeps {
  * The shutdown coordinator, with its dependencies injected so the sequence can
  * be driven in a test without a socket or a signal.
  *
- * The contract: the stop is clean when both drains have POSITIVELY reported
- * quiescence and the stores have closed before the forced-exit deadline;
- * anything still unproven at the deadline is reported and the exit code is 1.
- * "Positively reported" is the drain's own proof, not the instant the work
- * ended — the after-response queue, for one, has to observe itself empty for
- * `AFTER_RESPONSE_SETTLE_MS` before it says so — so work that ends inside that
- * last interval is still a forced exit. Both drains are advisory — neither
- * cancels the work it waits for — so a timed-out drain means a callback may
- * still touch a store, and the stores are closed ONLY on that proof. The drains
- * share the whole budget rather than fixed slices or a reserved tail: a slice
- * sized from one task's nominal duration reported failed deployments for tasks
- * that merely ran long, and a reserved tail stopped observing work that went
- * idle inside it. A phase that faulted — the server stop, a store close — is
- * likewise never an exit 0, however far the sequence then gets.
+ * The contract: the stop is clean only when both drains have POSITIVELY
+ * reported quiescence and the stores have closed before the forced-exit
+ * deadline; anything unproven at the deadline is reported and exits 1. The
+ * proof is the drain's own (the after-response queue must observe itself empty
+ * for `AFTER_RESPONSE_SETTLE_MS`), so work ending inside that last interval is
+ * still a forced exit. Neither drain cancels what it waits for, so the stores
+ * are closed ONLY on that proof. The drains share the whole budget, not fixed
+ * slices: a slice sized from a nominal duration fails deploys whose work merely
+ * ran long. A phase that faulted is never an exit 0.
  *
- * A fault that arrives while a shutdown is already running cannot restart the
- * sequence, but it must not be forgotten either: the highest exit code any call
- * asked for, or any phase failure raised, is the one the process ends with.
+ * A fault arriving mid-shutdown cannot restart the sequence, but the highest
+ * exit code any call asked for, or any phase failure raised, is the one the
+ * process ends with.
  */
 export function createShutdown(
   deps: ShutdownDeps,
@@ -179,11 +167,9 @@ export function createShutdown(
 
     deps.log({ msg: 'server stopping', signal });
 
-    // Once, whichever path gets there first: the timer when the loop is free, or
-    // the sequence itself when a step held the loop past the deadline — a timer
-    // cannot preempt synchronous work, and a continuation that then finds the
-    // budget spent must not take the clean path on the strength of a check that
-    // never ran.
+    // Once, from whichever path gets there first: the timer, or the sequence
+    // itself when a synchronous step held the loop past the deadline and the
+    // timer could not preempt it.
     const forcedState = { done: false };
     const forceExit = () => {
       if (forcedState.done) return;
@@ -204,13 +190,10 @@ export function createShutdown(
     const quiesced = { sweeps: false, afterResponse: false };
 
     // Its own boundary: a faulted stop must not skip the drains, or the guard
-    // below holds the stores open with nothing in flight and the forced exit
-    // reports a crash a whole budget later. Continuing to the stores is safe on
-    // this path because `Bun.Server.stop()` closes the listening socket when it
-    // is CALLED — measured on Bun: a connection attempted while the
-    // returned promise was still pending was refused — so a later rejection
-    // never means the listener is still admitting requests. It does mean the
-    // stop did not complete cleanly, so the exit code says so.
+    // below holds the stores open with nothing in flight until the forced exit.
+    // Continuing is safe because `Bun.Server.stop()` closes the listening
+    // socket when CALLED, so a later rejection never means the listener is
+    // still admitting requests; the exit code still records the fault.
     try {
       await deps.stopServer(remaining());
     } catch (error) {

@@ -2,11 +2,11 @@
  * Framework-independent post-response work. Audit writes remain transactional
  * because losing them after a committed mutation would break the audit trail.
  */
-import { errorClassOf } from '@/utils';
+import { errorClassOf } from '@/utils/log';
 
 type AfterResponseTask = () => void | Promise<void>;
 
-export interface RequestSummary {
+interface RequestSummary {
   method: string;
   path: string;
   status: number;
@@ -82,11 +82,10 @@ export const AFTER_RESPONSE_SETTLE_MS = 50;
  *
  * True ONLY when the queue was observed empty for `AFTER_RESPONSE_SETTLE_MS` and
  * that observation finished strictly before the deadline; never waits past the
- * deadline to finish one. The settle period is the proof
- * — it catches a batch registered while another was finishing — so an exhausted
- * deadline is answered false even when the set happens to be empty at that
- * instant: with no time left there is no observation, and the shutdown that asks
- * must not close stores on an unproven answer.
+ * deadline to finish one. The settle period is the proof — it catches a batch
+ * registered while another was finishing — so an exhausted deadline answers
+ * false even when the set is empty at that instant: the shutdown that asks must
+ * not close stores on an unproven answer.
  */
 export async function drainAfterResponse(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;

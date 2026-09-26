@@ -1,12 +1,11 @@
 /**
- * Boot smoke test — the CI gate that replaced `next build`.
+ * Boot smoke test.
  *
- * A Bun server has no build artefact, so nothing forces the module graph to be
- * evaluated before deploy. That matters here: `lib/env.server.ts` throws at
- * module load on missing configuration, `lib/auth.ts` constructs Better Auth at
- * load, and the SQLite stores open lazily on first use. Without this, the first
- * request in production would be what discovers a broken import, a missing
- * variable, or an unmounted volume.
+ * A Bun server has no build artefact, so nothing else evaluates the module
+ * graph before deploy: `lib/env.server.ts` throws at load on missing
+ * configuration, `lib/auth/index.ts` constructs Better Auth at load, and the
+ * SQLite stores open on first use. Without this, the first production request
+ * would discover a broken import, a missing variable or an unmounted volume.
  *
  * What it proves: the process starts, the route table builds, every SQLite
  * readiness check passes (so the volume opened, migrated, and reported the
@@ -14,23 +13,19 @@
  * path produces the API envelope rather than a framework default, Better Auth is
  * mounted, and every authenticated surface refuses an anonymous caller.
  *
- * What it does NOT prove: that PostgreSQL is reachable. Readiness now includes a
- * bounded `SELECT 1`, and CI runs this against a deliberately unreachable host —
- * so the SQLite checks are asserted individually and the aggregate `status` is
- * asserted to be CONSISTENT with `checks` rather than pinned to `ok`. Pinning it
- * would make this a database test, which is what the tiered suites are for.
+ * What it does NOT prove: that PostgreSQL is reachable. CI runs this against a
+ * deliberately unreachable host, so the SQLite checks are asserted one by one
+ * and the aggregate `status` only has to be CONSISTENT with `checks`.
  */
-// The LEAF, not `@/lib/audit`: that module pulls `db/schema`, zod and the OTP
-// config into this parent for one constant, and printed the OTP-disabled notice
-// into the smoke output whenever `NEXT_PUBLIC_ENABLED_OTP_CHANNELS` was unset.
+// The leaf, not `@/lib/audit`: that one loads `db/schema`, zod and the OTP
+// config into this parent process for one constant.
 import { TRUSTED_IP_HEADERS } from '@/lib/audit/constants';
 import { SECURITY_HEADERS } from '@/lib/http/security-headers';
 
 /**
- * `Number('')` is 0 and `Number('http')` is NaN, and both used to reach
- * `Bun.serve`: a NaN port makes the server pick a random free one and every
- * probe below then goes to 3999, where nothing is listening, so the run reports
- * "server did not boot" for a configuration mistake.
+ * Validated because a coerced port (`Number('')` is 0, a typo is NaN) makes the
+ * child bind a random one while every probe goes to the requested port, which
+ * reads as "server did not boot".
  */
 function smokePort(): number {
   const configured = process.env.SMOKE_PORT;
@@ -49,31 +44,18 @@ const BOOT_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 250;
 
 /**
- * The trusted edge header every real request carries.
- *
- * Sent on every probe below because `ipIdentifier` fails CLOSED without it: in
- * production `getClientIp` has no development fallback, so each `preAuth:
- * 'ip-limit'` route answers 503 and the boundary the check is aiming at is never
- * reached. Omitting it makes a production-posture run assert nothing about
- * routing or authorisation — it tests a deployment shape this application does
- * not support. Harmless in development, where the same admission path runs with
- * a loopback fallback.
+ * The trusted edge header every real request carries. Without it
+ * `ipIdentifier` fails CLOSED in production, so every `preAuth: 'ip-limit'`
+ * route would answer 503 before the boundary a check aims at.
  */
 const EDGE_HEADERS: Record<string, string> = {
   [TRUSTED_IP_HEADERS[0]]: '203.0.113.7',
 };
 
 /**
- * The maintenance token this run uses, and gives the child.
- *
- * `/api/health/storage` answers 401 without it — the WHOLE route, not only
- * `?deep=1` — so the readiness probe below cannot run anonymously at all. The
- * checks ARE what a boot test can prove, so this supplies one: an ambient value
- * is reused when the environment sets one (the production-posture CI run does),
- * otherwise a throwaway that lives for this process.
- *
- * 32 characters at minimum, and required in production — `lib/env.server.ts`
- * refuses a shorter one, and an absent one, at boot.
+ * The maintenance token this run uses and gives the child; readiness answers
+ * 401 without it. The ambient value when set, otherwise a throwaway, and at
+ * least 32 characters either way because `lib/env.server.ts` refuses shorter.
  */
 const MAINTENANCE_TOKEN =
   process.env.SQLITE_MAINTENANCE_TOKEN ||
@@ -91,12 +73,7 @@ interface Check {
   detail: string;
 }
 
-/**
- * The DEPLOYED command, flag for flag: `package.json`'s `start` is
- * `bun --bun server.ts`, and `--bun` is what makes a `#!/usr/bin/env node`
- * shebang in a dependency's binary resolve to Bun. A smoke test that boots
- * `bun server.ts` certifies a runtime posture the deployment does not use.
- */
+/** The DEPLOYED command, flag for flag; keep it in step with `package.json`'s `start`. */
 const SERVER_COMMAND = ['bun', '--bun', 'server.ts'] as const;
 
 const server = Bun.spawn([...SERVER_COMMAND], {
@@ -110,9 +87,8 @@ const server = Bun.spawn([...SERVER_COMMAND], {
 });
 
 /**
- * A signal to this process has to reach the CHILD, or an interrupted smoke run
- * leaves a server holding the port — the next run then probes someone else's
- * process and reports whatever it finds.
+ * A signal to this process must reach the CHILD, or an interrupted run leaves a
+ * server holding the port for the next run to probe.
  */
 for (const signal of ['SIGINT', 'SIGTERM'] as const)
   process.on(signal, () => {
@@ -161,18 +137,11 @@ async function runChecks(health: Response): Promise<Check[]> {
   const internal = await probe('/api/internal/sqlite-sweep', {
     method: 'POST',
   });
-  // Readiness itself, WITHOUT the token. The deployed health check is a CMD
-  // check that carries it; this is the other half — that a caller from outside
-  // the container gets nothing, including the poll that used to be free and
-  // spendable (the deployment-wide budget behind it made the orchestrator's own
-  // probe fail at 4 req/s).
+  // Readiness WITHOUT the token: a caller outside the container gets nothing.
   const anonymousHealth = await probe('/api/health/storage');
-  // The upload route's authentication gate, checked here because it is the only
-  // gate in the app that a request can reach WITHOUT a preflight: multipart is a
-  // CORS-simple content type, so CORS does not stand in front of it. It must
-  // answer 401 — and it must do so before reading the body, which is why the
-  // request below sends a real multipart form. A 400 would mean the body was
-  // parsed first; a 200 would mean this endpoint is open again.
+  // The one gate a browser reaches WITHOUT a preflight (multipart is a
+  // CORS-simple content type). A real form is sent so that a 400, meaning the
+  // body was parsed before authentication, is told apart from the 401.
   const uploadForm = new FormData();
   uploadForm.append(
     'files',
@@ -182,12 +151,8 @@ async function runChecks(health: Response): Promise<Check[]> {
     method: 'POST',
     body: uploadForm,
   });
-  // The CONSISTENCY gate moved to `tests/unit/openapi-contract.test.ts` when this
-  // route became authenticated — it needed no server, so it was always the
-  // stronger place for it. What is left to check here is the access boundary,
-  // which only a real request can show: the document maps every path, method,
-  // status code and query parameter this server serves, and an anonymous caller
-  // must not receive it.
+  // The access boundary only; consistency is `tests/unit/openapi-contract.test.ts`.
+  // The document maps the whole attack surface.
   const contract = await probe('/openapi.json');
   const contractText = await contract.text();
 
@@ -200,9 +165,6 @@ async function runChecks(health: Response): Promise<Check[]> {
 
   return [
     {
-      // Every SQLite check individually, because that is what a BOOT test can
-      // actually prove: the volume opened, migrated, and reported the PRAGMAs
-      // this build expects.
       name: 'every storage readiness check passes',
       ok: storageChecks.length > 0 && failedStorage.length === 0,
       detail:
@@ -211,12 +173,6 @@ async function runChecks(health: Response): Promise<Check[]> {
           : `${storageChecks.length} checked, failed=[${failedStorage.join(', ')}]`,
     },
     {
-      // Consistency, not a pinned value. CI points `DATABASE_URL` at an
-      // unreachable host on purpose, so `postgres: false` is the CORRECT answer
-      // there and `degraded` is the correct aggregate — while a deployment with
-      // a real database must still report `ok`. Pinning `ok` would either make
-      // this a database test or force readiness to ignore PostgreSQL, and the
-      // second is the defect that put `SELECT 1` there.
       name: 'readiness status agrees with its own checks',
       ok:
         healthBody.status === expectedStatus &&
@@ -224,16 +180,9 @@ async function runChecks(health: Response): Promise<Check[]> {
       detail: `HTTP ${health.status} status=${healthBody.status} expected=${expectedStatus} postgres=${String(checks.postgres)}`,
     },
     {
-      // By VALUE, not by presence. This checked
-      // `content-security-policy !== null`, which a regression to
-      // `default-src *` passes — and weakening a CSP is far likelier than
-      // deleting one. Compared against the production constant rather than a
-      // copy, which would drift and keep passing.
-      //
-      // Every header, not only the CSP: `X-Frame-Options`, `Referrer-Policy`
-      // and the cross-origin trio had no assertion anywhere. The child server
-      // inherits this process's environment, so its `isProduction` — and
-      // therefore whether HSTS is in the set — matches the constant here.
+      // By VALUE against the production constant: a weakened CSP is likelier
+      // than a deleted one. The child inherits this environment, so whether
+      // HSTS is in the set agrees with the constant here.
       name: 'security headers present, with their exact values',
       ok: wrongHeaders.length === 0,
       detail:
@@ -252,9 +201,6 @@ async function runChecks(health: Response): Promise<Check[]> {
       detail: `HTTP ${authProbe.status}`,
     },
     {
-      // The routes this used to probe are gone: both sweeps run in-process
-      // (`lib/schedule.ts`). What replaces the assertion is that the prefix is
-      // no longer served at all.
       name: 'no /api/internal route is served',
       ok: internal.status === 404,
       detail: `HTTP ${internal.status}`,

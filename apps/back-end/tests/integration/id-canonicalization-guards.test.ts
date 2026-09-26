@@ -8,12 +8,13 @@ import type { SignedInSession } from '../helpers/session';
 import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { permissionMsg } from '@/app/api/dash/permissions/messages';
-import { userMsg } from '@/app/api/dash/users/messages';
 import { db } from '@/db';
 import { accounts, roles, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { permissionMsg } from '@/lib/permissions/messages';
+import { userMsg } from '@/lib/users/messages';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';

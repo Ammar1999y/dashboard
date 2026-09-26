@@ -14,17 +14,18 @@ import {
 } from '@/db/schema';
 import { verifyGoogleIdToken } from 'better-auth/social-providers';
 import * as z from 'zod';
-import { auth } from '@/lib/auth';
-import * as adminReauth from '@/lib/auth/admin-reauth';
-import * as passkeyAssertion from '@/lib/auth/passkey-assertion';
-import * as eligibility from '@/lib/auth/user-eligibility';
-import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import {
   MSG_INVALID_CREDENTIALS,
   MSG_REAUTH_REQUIRED,
   REAUTH_REQUIRED_CODE,
-} from '@/utils/api-messages';
+} from '@app/shared/api-messages';
+
+import { auth } from '@/lib/auth';
+import * as passkeyAssertion from '@/lib/auth/passkey-assertion';
+import * as adminReauth from '@/lib/auth/reauth/window';
+import * as eligibility from '@/lib/auth/user-eligibility';
+import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';

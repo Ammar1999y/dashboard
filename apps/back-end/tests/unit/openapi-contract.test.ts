@@ -2,18 +2,13 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RouteManifestEntry } from '@/lib/http/route-manifest';
-import type { PaginationMeta } from '@/utils/api-response';
+import type { PaginationMeta } from '@app/shared/types/api';
 
 import { MEDIA_FILTER_COLUMNS } from '@/app/api/dash/media/handler';
 import { PERMISSIONS_FILTER_COLUMNS } from '@/app/api/dash/permissions/handler';
 import { USERS_FILTER_COLUMNS } from '@/app/api/dash/users/handler';
 import { ROUTES } from '@/routes';
-import { auth } from '@/lib/auth';
-import {
-  BETTER_AUTH_ENDPOINTS,
-  betterAuthServes,
-} from '@/lib/auth/allowed-paths';
-import { operatorsForSpec } from '@/lib/data-table/column-specs';
+
 import {
   MAX_FILTER_ITEMS,
   MAX_FILTER_VALUES,
@@ -21,29 +16,37 @@ import {
   MAX_ID_LENGTH,
   MAX_SORT_ITEMS,
   MAX_VALUE_LENGTH,
-} from '@/lib/data-table/parsers';
+} from '@app/shared/data-table/parsers';
+import {
+  MAX_DOCUMENT_SIZE_MB,
+  PASSWORD_MAX,
+  PASSWORD_MIN,
+} from '@app/shared/validation/constants';
+import { OTP_CHANNELS } from '@app/shared/validation/enums';
+import { isChannelEnabled } from '@app/shared/validation/otp';
+import { isTwoFactorMethodEnabled } from '@app/shared/validation/two-factor';
+
+import { auth } from '@/lib/auth';
+import {
+  BETTER_AUTH_ENDPOINTS,
+  betterAuthServes,
+} from '@/lib/auth/allowed-paths';
+import { operatorsForSpec } from '@/lib/data-table/column-specs';
 import {
   BETTER_AUTH_OVERRIDDEN_RESPONSES,
   BETTER_AUTH_TRUSTED_RESPONSES,
+} from '@/lib/http/openapi/better-auth';
+import { openApiDocument } from '@/lib/http/openapi/document';
+import {
   memoiseOpenApiDocument,
-  openApiDocument,
   resolveOpenApiDocument,
-} from '@/lib/http/openapi';
+} from '@/lib/http/openapi/route';
 import {
   toManifest,
   toPublishedManifest,
   toRegisteredRoutes,
 } from '@/lib/http/route-manifest';
 import { ALLOWED_MIME_TYPES } from '@/lib/media/allowlist';
-
-import {
-  MAX_DOCUMENT_SIZE_MB,
-  PASSWORD_MAX,
-  PASSWORD_MIN,
-} from '@/utils/validation/constants';
-import { OTP_CHANNELS } from '@/utils/validation/enums';
-import { isChannelEnabled } from '@/utils/validation/otp';
-import { isTwoFactorMethodEnabled } from '@/utils/validation/two-factor';
 
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 
@@ -1556,7 +1559,7 @@ describe('the statuses each Better Auth operation declares', () => {
    *
    *   400  POST /sign-in/email with no `x-captcha-response`; POST /sign-out with
    *        a body Better Auth's own validation refuses
-   *   401  POST /sign-in/email on rejected credentials (`lib/auth.ts` maps
+   *   401  POST /sign-in/email on rejected credentials (`lib/auth/index.ts` maps
    *        `LoginRejected`) and from the `session.create` hook both
    *        session-issuing paths run — asserted against a real database in
    *        `tests/integration/sign-in-controls.test.ts`

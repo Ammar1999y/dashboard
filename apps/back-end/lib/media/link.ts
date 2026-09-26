@@ -1,19 +1,19 @@
+import type { Actor } from './actor';
 import type { MediaFileRow } from './files';
-import type { Actor } from './folders';
 import type { UploadPurpose } from './policy';
 import type { Tx } from '@/db';
-import type { BucketType } from '@/lib/r2/client';
-import type { EntityID } from '@/types';
+import type { EntityID } from '@app/shared/types';
+import type { BucketType } from '@app/shared/validation/enums';
 
 import { and, inArray, isNotNull } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { files } from '@/db/schema';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
 
-import { FILE_COLUMNS } from './files';
+import { distinctIds, FILE_COLUMNS } from './files';
 import { claimFiles } from './lifecycle';
 import { mediaMsg } from './messages';
 import { usageVisibilities } from './usages';
@@ -25,28 +25,29 @@ interface LinkParams {
   actor: Actor;
 }
 
-type LinkRow = Pick<
-  MediaFileRow,
-  | 'id'
-  | 'status'
-  | 'kind'
-  | 'bucketType'
-  | 'transition'
-  | 'folderId'
-  | 'uploadedBy'
->;
+const LINK_COLUMNS = {
+  id: files.id,
+  status: files.status,
+  kind: files.kind,
+  bucketType: files.bucketType,
+  transition: files.transition,
+  folderId: files.folderId,
+  uploadedBy: files.uploadedBy,
+} as const;
+
+type LinkRow = Pick<MediaFileRow, keyof typeof LINK_COLUMNS>;
 
 /**
  * Which files this purpose may attach, and it is NOT "every active id".
  *
  * A grant to write the destination record authorises the destination, not the
  * source: without this a `users.create` holder could publish another record's
- * private file through here, a file the media routes answer 403 for
- * (reproduced). Three cases, and nothing else:
+ * private file through here, a file the media routes answer 403 for. Three
+ * cases, and nothing else:
  *
  * - a LIBRARY file (in a folder): visible to every media grant already, and
- *   promoting it for a public purpose is the "public by linkage" rule of the
- *   plan's section 1, not an escalation;
+ *   promoting it for a public purpose is publication by linkage, not an
+ *   escalation;
  * - the caller's OWN pending upload: the form that uploaded it is saving now,
  *   and `claimFiles` checks the uploader again under the lock;
  * - a file only PUBLIC sources reference, for a public purpose: world-readable
@@ -110,24 +111,16 @@ function assertLinkable(
 /**
  * Everything about the id set that can be decided before any object moves:
  * existence, eligibility, kind, status and a transition in flight. It runs
- * before `promoteForLink` because a rejected link that has already published a
- * private document is a rejected link with a permanent public URL (reproduced).
+ * before `promoteForLink` moves anything, because a rejected link that has
+ * already published a private document leaves it with a public URL.
  *
  * Not a substitute for the locked re-check in `attachFiles`: this reads without
  * a lock, so it settles authorisation, and the lock settles races.
  */
 async function checkLinkable(params: LinkParams): Promise<LinkRow[]> {
-  const ids = [...new Set(params.ids)];
+  const ids = distinctIds(params.ids);
   const rows = await db
-    .select({
-      id: files.id,
-      status: files.status,
-      kind: files.kind,
-      bucketType: files.bucketType,
-      transition: files.transition,
-      folderId: files.folderId,
-      uploadedBy: files.uploadedBy,
-    })
+    .select(LINK_COLUMNS)
     .from(files)
     .where(inArray(files.id, ids));
   if (rows.length !== ids.length)
@@ -151,21 +144,19 @@ async function checkLinkable(params: LinkParams): Promise<LinkRow[]> {
  *   FK does the rest.
  *
  * The re-check under the lock is the point. An unpublish can complete between
- * the promotion and the owner's commit (reproduced), and the FK alone would
- * still accept the referrer because it checks `status`, not the bucket. The
- * unpublish's first step locks the same row and sets `transition`, so whichever
- * of the two takes the lock first, the other refuses with 409.
+ * the promotion and the owner's commit, and the FK alone would still accept the
+ * referrer because it checks `status`, not the bucket. The unpublish's first
+ * step locks the same row and sets `transition`, so whichever of the two takes
+ * the lock first, the other refuses with 409.
  *
- * A promotion that succeeds and is then followed by a failed owner write leaves
- * a public library file with no referrer — the "public, unused" state the plan's
- * section 1 declares acceptable and one click from unpublish. Demoting it here
- * is what that section forbids, and a concurrent second link may already depend
- * on the public copy.
+ * A promotion followed by a failed owner write leaves a public library file
+ * with no referrer — an accepted state, one click from unpublish. It is never
+ * demoted here: a concurrent second link may already depend on the public copy.
  *
  * `linkFiles` runs both halves for a caller with no transaction of its own.
  */
 export async function promoteForLink(params: LinkParams): Promise<void> {
-  const ids = [...new Set(params.ids)];
+  const ids = distinctIds(params.ids);
   if (ids.length === 0) return;
   const rows = await checkLinkable({ ...params, ids });
   if (params.purpose.visibility !== 'public') return;
@@ -182,7 +173,7 @@ export async function promoteForLink(params: LinkParams): Promise<void> {
 }
 
 export async function attachFiles(tx: Tx, params: LinkParams): Promise<void> {
-  const ids = [...new Set(params.ids)];
+  const ids = distinctIds(params.ids);
   if (ids.length === 0) return;
 
   const rows = await tx

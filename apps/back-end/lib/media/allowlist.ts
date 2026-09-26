@@ -1,19 +1,18 @@
 import type { DetectResult } from './detect-result';
-import type { FileKind } from '@/db/schema';
+import type { FileKind } from '@app/shared/validation/enums';
 
-import { matchesMagicBytes } from '@/utils/images/raster-bytes';
+import { matchesAt, matchesMagicBytes } from '@app/shared/images/raster-bytes';
 
-import { detectCompoundFile } from './cfb';
-import { detectOoxml } from './ooxml';
+import { detectCompoundFile } from './office/cfb';
+import { detectOoxml } from './office/ooxml';
 
 /**
  * One admitted type: what it is, how it is stored, and how its bytes prove it.
  *
- * `detect` is REQUIRED. The image list already lives under this rule (every
- * admitted raster has a magic-byte signature, SVG is exempt only because the
- * sanitiser parses it in full), and `tests/unit/media-allowlist.test.ts` walks
- * this table so an entry added without a check fails the suite rather than
- * admitting whatever a client labels with that type.
+ * `detect` is REQUIRED — SVG is exempt only because the sanitiser parses it in
+ * full — and `tests/unit/media-allowlist.test.ts` walks this table, so an entry
+ * without a real check fails the suite rather than admitting whatever a client
+ * labels with that type.
  */
 export interface FileTypeSpec {
   kind: FileKind;
@@ -39,10 +38,11 @@ function signatureDetect(check: (bytes: Uint8Array) => boolean) {
  * Every type this application knows how to prove. Anything not here is refused
  * by name; anything here is refused when its bytes disagree with its label.
  *
- * Images keep the existing pipeline (`lib/r2/upload-helper.ts`): the check here
- * is the signature only, animation and decode caps are enforced there. SVG has
- * no signature — the sanitiser is its check, and `processImage` refuses what it
- * does not parse.
+ * Images go on through `lib/media/image/process.ts`: the check here is the
+ * signature only, animation and decode caps are enforced there. SVG has no
+ * signature — the sanitiser is its check, and `processImage` refuses what it
+ * does not parse. The image entries are also the image pipeline's own list
+ * (`ALLOWED_IMAGE_TYPES`).
  */
 export const FILE_TYPE_TABLE: ReadonlyMap<string, FileTypeSpec> = new Map<
   string,
@@ -75,9 +75,7 @@ export const FILE_TYPE_TABLE: ReadonlyMap<string, FileTypeSpec> = new Map<
     {
       kind: 'document',
       extension: 'pdf',
-      detect: signatureDetect((bytes) =>
-        PDF_SIGNATURE.every((byte, index) => bytes[index] === byte)
-      ),
+      detect: signatureDetect((bytes) => matchesAt(bytes, 0, PDF_SIGNATURE)),
     },
   ],
   [
@@ -117,9 +115,9 @@ export const FILE_TYPE_TABLE: ReadonlyMap<string, FileTypeSpec> = new Map<
 /**
  * Known types held back from the allowlist: uploads of these are refused, and
  * rows that already carry one keep working. Legacy `.doc`/`.xls` are held back
- * by the owner's decision while their inspector (`lib/media/cfb.ts`) stays
- * complete and tested. Re-enabling one is deleting it from this set; nothing
- * else changes.
+ * by the owner's decision while their inspector (`lib/media/office/cfb.ts`)
+ * stays complete and tested. Re-enabling one is deleting it from this set;
+ * nothing else changes.
  */
 export const DISABLED_FILE_TYPES: ReadonlySet<string> = new Set([
   DOC_MIME_TYPE,
@@ -147,12 +145,10 @@ function keysOfKind(kind?: FileKind): string[] {
 export const ALLOWED_MIME_TYPES: readonly string[] = keysOfKind();
 
 /**
- * What may EXIST. Holding a type back is documented as adding it to
- * `DISABLED_FILE_TYPES`, which says nothing about rows already stored, so the
- * published response schema and the list filter are closed over the whole table
- * — otherwise disabling a type after files of it exist makes every one of those
- * rows violate the schema this application publishes, and filtering for the
- * type answers 422 while the rows are still listed.
+ * What may EXIST: the whole table, disabled types included. The published
+ * response schema and the list filter are closed over this, so disabling a type
+ * after files of it are stored neither breaks the schema for those rows nor
+ * makes filtering for them a 422.
  */
 export const KNOWN_MIME_TYPES: readonly string[] =
   FILE_TYPE_TABLE.keys().toArray();

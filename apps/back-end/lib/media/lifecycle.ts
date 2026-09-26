@@ -1,16 +1,20 @@
-import type { MediaFileRow } from './files';
-import type { Actor, AuditActor, FolderDeleteOutcome } from './folders';
+import type { Actor, AuditActor } from './actor';
+import type { FolderDeleteOutcome } from './folders';
 import type { Tx } from '@/db';
-import type { DashboardPage } from '@/lib/permissions/constants';
-import type { BucketType } from '@/lib/r2/client';
-import type { EntityID } from '@/types';
+import type { DashboardPage } from '@app/shared/permissions/constants';
+import type { EntityID } from '@app/shared/types';
+import type { BucketType } from '@app/shared/validation/enums';
 
 import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
+import { isForeignKeyViolation } from '@/db/errors';
 import { files, folders as foldersTable } from '@/db/schema';
-import { isForeignKeyViolation, sanitizeForLog } from '@/utils';
-import { auditLog } from '@/lib/audit';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
+
 import { purgeUrls } from '@/lib/cloudflare/purge';
 import {
   deleteObjectsFromR2,
@@ -19,20 +23,19 @@ import {
   hasPublicUrl,
 } from '@/lib/r2/client';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { FOLDER_RECURSIVE_DELETE_MAX } from '@/utils/validation/constants';
+import { sanitizeForLog } from '@/utils/log';
 
-import { FILE_COLUMNS, governedIds, mediaGoverned } from './files';
-import { lockFolderFor, lockTree, subtreeFolders } from './folders';
+import { auditAs } from './actor';
+import { distinctIds, governedIds } from './files';
+import { lockFolderFor, lockTree, rowCount, subtreeFolders } from './folders';
 import { mediaMsg } from './messages';
 import { unreferenced, usedBy } from './usages';
 
 /**
  * How long an entity-form upload may stay unclaimed — the time between
- * uploading an image and saving the record that owns it. 24 hours covers
- * "started a form, came back the next morning"; lowering it deletes uploads out
- * from under an open form. Also the TTL of a library upload whose activation
+ * uploading an image and saving the record that owns it. It must cover a form
+ * left open overnight; lowering it deletes uploads out from under an open form.
+ * Also the TTL of a library upload whose activation
  * never ran, and of one whose object write failed ambiguously (the row is kept
  * so the sweep can remove whatever the store may have committed).
  */
@@ -66,16 +69,16 @@ export const unfiledNow = () =>
  *
  * Conditional on `status = 'pending'` and on the uploader, so a swept, already
  * claimed, or foreign upload is refused rather than silently attached — and so
- * the sweep and a claim racing on one row cannot both win (measured: the second
- * blocks on the row lock and then matches nothing). The caller inserts its
- * referrer rows AFTER this in the same transaction; the composite FK sees the
- * status flip. `attachFiles` in `./link.ts` is the usual way in.
+ * the sweep and a claim racing on one row cannot both win: the second blocks on
+ * the row lock and then matches nothing. The caller inserts its referrer rows
+ * AFTER this in the same transaction; the composite FK sees the status flip.
+ * `attachFiles` in `./link.ts` is the usual way in.
  */
 export async function claimFiles(
   tx: Tx,
   params: { ids: readonly EntityID[]; actor: AuditActor }
 ): Promise<EntityID[]> {
-  const ids = [...new Set(params.ids)];
+  const ids = distinctIds(params.ids);
   if (ids.length === 0) return [];
   const { actor } = params;
   const claimed = await tx
@@ -93,15 +96,12 @@ export async function claimFiles(
     throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.UNPROCESSABLE);
 
   for (const row of claimed)
-    await auditLog(tx, {
-      userId: actor.userId,
-      userEmail: actor.email,
+    await auditAs(tx, actor, {
       action: 'UPDATE',
       tableName: 'files',
       recordId: row.id,
       oldData: { status: 'pending' },
       newData: { status: 'active' },
-      meta: actor.meta,
     });
   return claimed.map((row) => row.id);
 }
@@ -120,30 +120,22 @@ interface DoomedRow {
  * cache purge of its public URL has failed: an object gone from the origin but
  * still served from the edge is not gone.
  *
- * ⚠️ EVERY enabled bucket, not the one the row names. A visibility transition
- * that lost its saga to the sweep can leave a copy in the other bucket, and the
- * row is then the only thing that records the key at all — deleting it on the
- * strength of its own `bucket_type` leaves that copy with no row, no marker and
- * no sweep that will ever look at it again (reproduced, ending with a readable
- * public object for a file the API reported deleted). `ux_files_r2_key` is what
- * makes this safe to do blind: one key belongs to one row, so the object being
- * removed from the other bucket cannot be anybody else's.
+ * ⚠️ EVERY enabled bucket, not the one the row names. A transition that lost
+ * its saga to the sweep can leave a copy in the other bucket, and the row is
+ * then the only record of the key: deleting by `bucket_type` alone strands that
+ * copy, readable if public, with nothing left to find it. `ux_files_r2_key`
+ * makes this safe to do blind: one key belongs to one row.
  *
- * ⚠️ And the row's OWN bucket is required to be among them. A deployment may
- * drop a bucket from its environment while rows still name it; those objects do
- * not disappear with the variable, and an unaddressed bucket is unavailable, not
- * clean. Treating it as clean deletes the only record of a key whose object is
- * still stored — and, for the public half, still readable. Such a row is
- * retained and reported pending until the bucket is configured again; the other
- * buckets are still cleaned in the meantime.
+ * ⚠️ And the row's OWN bucket must be among them. A bucket dropped from the
+ * environment is unavailable, not clean — its objects are still stored — so
+ * such a row is retained and reported pending until the bucket is configured
+ * again; the other buckets are still cleaned meanwhile.
  *
- * The purge follows the same rule rather than the row's bucket, and for the same
- * reason `removeObject` in `lib/media/visibility.ts` purges every public delete:
- * a stale public copy is reachable at a URL derivable from the key, so whether
- * the edge holds it is not a question this can answer from `bucket_type`. It is
- * decided on the PUBLIC delete alone: once the origin object is gone, an edge
- * copy outliving it by a year is not made less readable by another bucket's
- * outage, and the row is retained for that outage either way.
+ * The purge follows the same rule, for the reason `removeObject` in
+ * `lib/media/visibility.ts` purges every public delete: a stale public copy is
+ * reachable at a URL derived from the key, whatever `bucket_type` says. It is
+ * decided on the PUBLIC delete alone; another bucket's outage retains the row
+ * anyway.
  */
 async function finishDeleting(
   rows: readonly DoomedRow[]
@@ -246,7 +238,7 @@ export async function deleteFiles(params: {
    */
   authorizedByOwner?: boolean;
 }): Promise<{ deleted: EntityID[]; pending: EntityID[] }> {
-  const ids = [...new Set(params.ids)];
+  const ids = distinctIds(params.ids);
   const { actor } = params;
 
   let doomed: DoomedRow[];
@@ -278,9 +270,7 @@ export async function deleteFiles(params: {
       // Anything but `active`: the two sagas must not interleave, a repeat of a
       // delete in flight has nothing to add, and a `pending` row is an upload
       // still in progress — deleting its row lets the PUT that follows write an
-      // object nothing owns, discoverable only by reconciliation. The folder
-      // path and `lockFilesForEdit` both already demand `active`; this one
-      // named the two states it had seen instead.
+      // object nothing owns, discoverable only by reconciliation.
       if (visible.some((row) => row.status !== 'active' || row.transition))
         throw new CustomError(mediaMsg.fileBusy, HTTP_STATUS.CONFLICT);
 
@@ -290,9 +280,7 @@ export async function deleteFiles(params: {
         .where(inArray(files.id, ids));
 
       for (const row of visible)
-        await auditLog(tx, {
-          userId: actor.userId,
-          userEmail: actor.email,
+        await auditAs(tx, actor, {
           action: 'DELETE',
           tableName: 'files',
           recordId: row.id,
@@ -302,7 +290,6 @@ export async function deleteFiles(params: {
             bucketType: row.bucketType,
             key: row.r2Key,
           },
-          meta: actor.meta,
         });
 
       return visible.map((row) => ({
@@ -429,7 +416,7 @@ export async function deleteFolderTree(params: {
     const current = await subtreeFolders(tx, folderId);
     const tree = new Set(current.map((folder) => folder.id));
     const [remaining] = await tx
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: rowCount() })
       .from(files)
       .where(inArray(files.folderId, ids));
     if (
@@ -443,14 +430,11 @@ export async function deleteFolderTree(params: {
     // so a parent and its children may go together.
     await tx.delete(foldersTable).where(inArray(foldersTable.id, ids));
     for (const folder of plan.tree)
-      await auditLog(tx, {
-        userId: actor.userId,
-        userEmail: actor.email,
+      await auditAs(tx, actor, {
         action: 'DELETE',
         tableName: 'folders',
         recordId: folder.id,
         oldData: { name: folder.name, parentId: folder.parentId },
-        meta: actor.meta,
       });
     return ids.length;
   });
@@ -567,8 +551,8 @@ export async function sweepFiles(): Promise<FileSweepCount> {
     // subquery's snapshot can show a row as pending that a claim — holding its
     // lock until we are blocked on it — has just made active, and PostgreSQL
     // re-evaluates only the outer WHERE against the new row version. Without
-    // the repeat the sweep marked a freshly claimed, referenced file and threw
-    // on the FK (reproduced).
+    // the repeat the sweep marks a freshly claimed, referenced file and throws
+    // on the FK.
     return tx
       .update(files)
       .set({ status: 'deleting' })
@@ -596,16 +580,4 @@ export async function sweepFiles(): Promise<FileSweepCount> {
       retained.length > 0,
     degraded: retained.length > 0 || reap.refused > 0,
   };
-}
-
-/** One row with every column the wire shape needs plus whether the media API may act on it, or `null`. */
-export async function findFile(
-  id: EntityID,
-  executor: typeof db | Tx = db
-): Promise<(MediaFileRow & { governed: boolean }) | null> {
-  const [row] = await executor
-    .select({ ...FILE_COLUMNS, governed: mediaGoverned() })
-    .from(files)
-    .where(eq(files.id, id));
-  return row ?? null;
 }

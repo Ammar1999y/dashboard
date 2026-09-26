@@ -1,87 +1,75 @@
 import type { Handler } from '@/lib/http/contract';
 
-import { and, eq, isNull } from 'drizzle-orm';
-
 import { db, withTransaction } from '@/db';
-import { userContactColumn } from '@/db/queries';
 import { users } from '@/db/schema';
-import { sanitizeForLog } from '@/utils';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { OTP_AUTO_VERIFY } from '@app/shared/config';
+import { CustomError } from '@app/shared/error-class';
+import { contactKindOf } from '@app/shared/validation/enums';
+import { OTP_ENABLED, sendOtpSchema } from '@app/shared/validation/otp';
+
 import { getAuditMeta } from '@/lib/audit';
+import { ensureMinDelay, otpMsg } from '@/lib/auth/messages';
 import { verifyTurnstileRequest } from '@/lib/captcha';
 import { enqueueAfterResponse } from '@/lib/http/after-response';
+import { readJsonBody } from '@/lib/http/input';
+import {
+  apiSuccess,
+  handleApiError,
+  requireFeature,
+} from '@/lib/http/response';
+import { markContactVerified } from '@/lib/otp/contact';
+import { CONTACT_LABEL } from '@/lib/otp/content';
+import { processOtpSend } from '@/lib/otp/send';
+import { OTP_BASE_RESEND_DELAY_S } from '@/lib/otp/throttle';
 import {
   enforceOtpSurfaceSendQuota,
   enforceRateLimit,
   ipIdentifier,
 } from '@/lib/rate-limit';
+import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { OTP_AUTO_VERIFY } from '@/utils/config';
-import { CustomError } from '@/utils/error-class';
-import {
-  markContactVerified,
-  OTP_BASE_RESEND_DELAY_S,
-  processOtpSend,
-} from '@/utils/otp';
-import { OTP_ENABLED, sendOtpSchema } from '@/utils/validation/otp';
+import { sanitizeForLog } from '@/utils/log';
 
-import { ensureMinDelay, otpMsg } from '../messages';
-
-// Stripped of per-identifier counters so fake and real paths return the same
-// shape. Exposing attemptsRemaining leaks whether the account exists.
-// The ladder is FLAT on this surface, so the constant is the truth rather
-// than an optimistic guess — see `FLAT_RESEND_PURPOSES` in `utils/otp.ts`.
+// No per-identifier counters, so the fake and real paths answer the same
+// shape. The resend ladder is FLAT on this surface, so the constant is exact.
 const GENERIC_SEND_DATA = {
   nextAllowedIn: OTP_BASE_RESEND_DELAY_S,
 };
 
 export const POST: Handler = async (ctx) => {
-  // Start timing before any work so the floor covers the entire request,
-  // including the user lookup and (on the real path) delivery.
+  // Before any work, so the floor covers the lookup and, on the real path,
+  // the send.
   const start = Date.now();
   try {
-    if (!OTP_ENABLED)
-      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    requireFeature(OTP_ENABLED);
 
-    // Coarse per-IP cap BEFORE the captcha siteverify call: bounds the outbound
-    // HTTPS request to Cloudflare per IP, and blocks a single IP (or botnet
-    // node) from rotating through identifiers to pump SMS / WhatsApp / email
-    // delivery cost. The IP-level 429 leaks nothing about account existence
-    // (it is evaluated before any DB lookup), so it propagates as-is below.
+    // Per IP BEFORE the captcha siteverify call: bounds that outbound request
+    // and stops one IP rotating identifiers to pump delivery cost. It runs
+    // before any lookup, so its 429 reveals nothing and propagates as-is.
     await enforceRateLimit({
       scope: 'otp.send.ip',
       identifier: ipIdentifier(ctx.headers),
       limit: 60,
-      window: 60,
       failClosed: true,
     });
 
     const captchaOk = await verifyTurnstileRequest(ctx.headers);
     if (!captchaOk) {
-      // Not a privacy-sensitive status — return immediately without burning
-      // the full timing floor.
+      // Returned, not thrown: a captcha refusal is not privacy-sensitive, so it
+      // skips the timing floor.
       return handleApiError(
         new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN)
       );
     }
 
-    const body = requireJsonBody(await ctx.readJson());
+    const input = await readJsonBody(ctx, sendOtpSchema, {
+      message: otpMsg.invalidInput,
+    });
 
-    const parsed = sendOtpSchema.safeParse(body);
-    if (!parsed.success)
-      // Generic 422 — Zod's per-field message would distinguish "email shape"
-      // from "phone shape" and leak which channel the schema accepted.
-      throw new CustomError(otpMsg.invalidInput, HTTP_STATUS.UNPROCESSABLE);
-
-    const { channel } = parsed.data;
-    const identifier =
-      channel === 'email' ? parsed.data.email : parsed.data.phoneNumber;
-    const entityName = channel === 'email' ? 'البريد الإلكتروني' : 'رقم الهاتف';
+    const { channel } = input;
+    const identifier = contactIdentifier(input);
 
     await enforceOtpSurfaceSendQuota({
       channel,
@@ -95,8 +83,6 @@ export const POST: Handler = async (ctx) => {
         data: GENERIC_SEND_DATA,
       });
 
-    const whereClause = eq(userContactColumn(channel), identifier);
-
     const [userData] = await db
       .select({
         id: users.id,
@@ -104,9 +90,7 @@ export const POST: Handler = async (ctx) => {
         phoneNumberVerified: users.phoneNumberVerified,
       })
       .from(users)
-      .where(
-        and(whereClause, isNull(users.deletedAt), eq(users.isActive, true))
-      )
+      .where(activeUserWithContact(channel, identifier))
       .limit(1);
 
     if (
@@ -119,9 +103,8 @@ export const POST: Handler = async (ctx) => {
     }
 
     if (OTP_AUTO_VERIFY) {
-      // Bypass: approve the contact instantly without generating or sending a
-      // code (dev / no-OTP-provider mode). Errors are swallowed for the same
-      // privacy reason as delivery failures below.
+      // Approves the contact without a code. Errors are swallowed for the same
+      // reason delivery failures are below.
       try {
         await withTransaction((tx) =>
           markContactVerified(tx, {
@@ -129,9 +112,8 @@ export const POST: Handler = async (ctx) => {
             channel,
             auditMeta: getAuditMeta(ctx),
             onMissing: () => {
-              // Distinct internal signal: the user vanished/deactivated mid-flow
-              // under OTP_AUTO_VERIFY (no code involved). The client still sees
-              // the generic message for privacy.
+              // The user vanished or was deactivated mid-flow; logged apart
+              // from other failures, answered with the generic message.
               console.error(
                 sanitizeForLog({
                   msg: 'otp.send.autoVerify.userVanished',
@@ -157,16 +139,13 @@ export const POST: Handler = async (ctx) => {
           channel,
           purpose: 'verify_contact',
           sendTo: identifier,
-          entityName,
+          entityName: CONTACT_LABEL[contactKindOf(channel)],
 
           deferDelivery: (task) => enqueueAfterResponse(ctx.rawRequest, task),
         });
       } catch (error) {
-        // Delivery / internal failures must NOT distinguish real accounts
-        // from fake ones during a provider outage — that's a binary oracle
-        // for account existence. Privacy-sensitive CustomErrors
-        // (BAD_REQUEST / NOT_FOUND / TOO_MANY_REQUESTS) are also collapsed
-        // by the outer catch; here we additionally swallow delivery failures.
+        // A failure only a real account can reach must not answer differently
+        // from a fake one, or a provider outage becomes an existence oracle.
         console.error(
           sanitizeForLog({ msg: 'otp.send.deliveryFailed', error })
         );

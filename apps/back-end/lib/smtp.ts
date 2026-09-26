@@ -10,13 +10,6 @@ import type {
 
 import { createTransport } from 'nodemailer';
 
-/**
- * Nodemailer bounds each SMTP phase and each idle gap, never the whole
- * delivery, so a peer that keeps sending bytes holds `sendMail()` open for as
- * long as it likes. The one handle Nodemailer exposes on the live connection is
- * `getSocket`, its proxy seam: the socket is opened here, so the deadline can
- * destroy it, which fails the send inside Nodemailer instead of abandoning it.
- */
 class SmtpDeadlineExceeded extends Error {
   readonly code = 'EDEADLINE';
 
@@ -26,13 +19,12 @@ class SmtpDeadlineExceeded extends Error {
   }
 }
 
-/** A transport Nodemailer has already resolved a host for. */
 type ResolvedTransport = SMTPTransportOptions & { host: string };
 
 /**
  * The transport is checked at the one point where it is fully resolved:
  * `service` is merged into `host`/`port`/`secure` by Nodemailer's constructor,
- * so neither `smtpTransportOptions()` nor this module's own argument carries the
+ * so neither the caller's options nor this module's own argument carries the
  * answer — only the options handed to `getSocket` do.
  *
  * Refused rather than defaulted, because each default is a silent downgrade of
@@ -43,8 +35,8 @@ type ResolvedTransport = SMTPTransportOptions & { host: string };
  * `ignoreTLS` is the one way past the second check, and it is Nodemailer's own
  * flag rather than a local invention: renouncing transport security has to be
  * written down in the transport options, where it is greppable, instead of
- * following from the absence of a field. The only sender is Gmail
- * (`secure: true`); the loopback peers in `tests/fixtures` are what sets it.
+ * following from the absence of a field. Only the loopback peers in
+ * `tests/fixtures` set it.
  */
 function resolveTransport(
   options: SMTPTransportOptions
@@ -96,6 +88,13 @@ function openSocket(
   return socket;
 }
 
+/**
+ * Nodemailer bounds each SMTP phase and each idle gap, never the whole
+ * delivery, so a peer that keeps sending bytes holds `sendMail()` open for as
+ * long as it likes. The one handle Nodemailer exposes on the live connection is
+ * `getSocket`, its proxy seam: the socket is opened here, so the deadline can
+ * destroy it, which fails the send inside Nodemailer instead of abandoning it.
+ */
 export async function sendMailWithDeadline(
   options: SMTPTransportOptions,
   message: Mail.Options,

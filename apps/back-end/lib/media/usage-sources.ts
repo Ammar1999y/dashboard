@@ -1,13 +1,12 @@
-import type { DashboardPage } from '@/lib/permissions/constants';
-import type { BucketType } from '@/lib/r2/client';
+import type { DashboardPage } from '@app/shared/permissions/constants';
+import type { BucketType } from '@app/shared/validation/enums';
 
 /**
  * One table that references `files.id`.
  *
- * A leaf module: `scripts/migrate.ts` reads this registry to check the referrer
- * contract against the catalog, and that script must run without a password
- * pepper keyring, a Turnstile secret or a session signing key — which importing
- * anything that reaches `@/db` would require.
+ * A leaf module, with no runtime `@/` import: `scripts/migrate.ts` imports it by
+ * relative path to check the referrer contract, and must run without the
+ * server's secrets, which anything reaching `@/db` requires.
  *
  * Every referrer MUST be declared here, and the integration tier proves it: a
  * foreign key to `files` that has no entry fails

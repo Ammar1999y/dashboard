@@ -1,35 +1,28 @@
-import { UUID_V7_FRAGMENT, validID } from '@/utils';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import { safeDate } from '@app/shared/time';
+import { validID } from '@app/shared/utils';
+import {
+  SESSION_CURSOR_MAX_LENGTH,
+  SESSIONS_MAX_PAGE_SIZE,
+  SESSIONS_PAGE_SIZE,
+} from '@app/shared/validation/sessions';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { safeDate } from '@/utils/time';
-
-/**
- * Page size for the cursor-paginated session list. The previous fixed cap of
- * 50 newest sessions with no cursor meant an OLDER compromised session could
- * not be discovered at all — and selective revocation needs its id.
- */
-export const SESSIONS_PAGE_SIZE = 50;
-export const SESSIONS_MAX_PAGE_SIZE = 100;
-export const SESSION_CURSOR_MAX_LENGTH = 128;
-export const SESSION_CURSOR_PATTERN = String.raw`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\|${UUID_V7_FRAGMENT}$`;
+import { userMsg } from '@/lib/users/messages';
 
 /**
  * ONE canonical cursor format: `<ISO-8601 UTC with milliseconds>|<uuid>`.
  *
- * Accepting "anything `Date` can read" was the mistake behind every cursor
- * defect. `new Date()` normalises rather than rejects, so each permissive form
- * silently pointed at a different page than the one requested:
+ * Not "anything `Date` can read": `new Date()` normalises rather than rejects,
+ * so a permissive form silently points at a different page —
  *
- * - no timezone      → read in the SERVER's zone, so the same cursor meant
- *                      different instants on different hosts
+ * - no timezone      → read in the SERVER's zone, a different instant per host
  * - `T24:00:00Z`     → rolled forward to 00:00 the next day
- * - six fraction digits → truncated to JavaScript's millisecond precision
+ * - six fraction digits → truncated to millisecond precision
  *
- * None of those are emitted by `formatCursor`, so none of them can come from a
- * client that is paginating correctly. Everything else is a 422. The pattern is
- * fully anchored with fixed-width groups; the range checks below cover what a
- * regex cannot express.
+ * `formatCursor` emits none of them, so a correctly paginating client never
+ * sends one; everything else is a 422. The range checks below cover what the
+ * anchored pattern cannot express.
  */
 const CURSOR_TIMESTAMP =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;
@@ -61,22 +54,27 @@ function parseCursorTimestamp(raw: string): Date | null {
   if (month < 1 || month > 12) return null;
 
   const day = Number(d);
-  if (day < 1 || day > daysInMonth(year, month)) return null;
-  if (Number(h) > 23 || Number(mi) > 59 || Number(sec) > 59) return null;
+  if (
+    day < 1 ||
+    day > daysInMonth(year, month) ||
+    Number(h) > 23 ||
+    Number(mi) > 59 ||
+    Number(sec) > 59
+  )
+    return null;
 
   const parsed = safeDate(raw);
-  // Belt and braces: a value that satisfied every check above must also survive
-  // the round trip, or the two representations have drifted apart.
+  // A value that passed every check above must survive the round trip, or the
+  // two representations have drifted apart.
   return parsed && parsed.toISOString() === raw ? parsed : null;
 }
 
 export function parseCursor(
   raw: string | null
 ): { createdAt: Date; id: string } | null {
-  // Absent and malformed are DIFFERENT answers. Returning `null` for both meant
-  // a corrupted cursor silently restarted at page one: the client believed it
-  // was advancing while re-reading the same rows, which for a revocation list
-  // can hide the session it is hunting for.
+  // Absent and malformed are different answers: treating a corrupted cursor as
+  // absent restarts at page one while the client believes it is advancing,
+  // which in a revocation list can hide the session it is hunting for.
   if (raw === null) return null;
   if (!raw || raw.length > SESSION_CURSOR_MAX_LENGTH) invalidCursor();
   const separator = raw.lastIndexOf('|');
@@ -89,19 +87,15 @@ export function parseCursor(
 
 function invalidCursor(): never {
   throw new CustomError(
-    'مؤشر الصفحة غير صالح، اعد تحميل القائمة',
+    userMsg.invalidSessionsCursor,
     HTTP_STATUS.UNPROCESSABLE
   );
 }
 
 /**
- * Canonical decimal integers only.
- *
- * `Number()` accepts a whole family of spellings a query string has no business
- * carrying — `1e2`, `0x10`, `+1`, `' 5 '` and `'05'` all became numbers, so the
- * endpoint honoured page sizes the caller could not have meant to write, and the
- * over-cap rejection could be bypassed by spelling the number differently. The
- * pattern is checked before any numeric conversion.
+ * Canonical decimal integers only, checked before any numeric conversion:
+ * `Number()` also reads `1e2`, `0x10`, `+1`, `' 5 '` and `'05'`, which would let
+ * a caller spell past the cap.
  */
 const CANONICAL_INTEGER = /^(?:0|[1-9]\d*)$/;
 
@@ -109,8 +103,7 @@ export function parseLimit(raw: string | null): number {
   if (raw === null) return SESSIONS_PAGE_SIZE;
 
   // Over the maximum is rejected, not clamped: the message promises a value
-  // between 1 and the cap, and silently serving 100 rows for `limit=1000` makes
-  // that message a lie the client cannot detect.
+  // within the cap, and a silent clamp is a lie the client cannot detect.
   if (!CANONICAL_INTEGER.test(raw)) invalidLimit();
   const requested = Number(raw);
   if (requested < 1 || requested > SESSIONS_MAX_PAGE_SIZE) invalidLimit();
@@ -119,7 +112,7 @@ export function parseLimit(raw: string | null): number {
 
 function invalidLimit(): never {
   throw new CustomError(
-    `حجم الصفحة يجب أن يكون رقماً بين 1 و ${SESSIONS_MAX_PAGE_SIZE}`,
+    userMsg.invalidSessionsLimit,
     HTTP_STATUS.UNPROCESSABLE
   );
 }

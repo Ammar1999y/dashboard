@@ -1,51 +1,51 @@
 import { createHash } from 'node:crypto';
+import type { AuditActor } from './actor';
 import type { FileTypeSpec } from './allowlist';
 import type { DetectResult } from './detect-result';
 import type { MediaFileRow } from './files';
-import type { AuditActor } from './folders';
-import type { FileKind } from '@/db/schema';
-import type { BucketType, ObjectHead } from '@/lib/r2/client';
-import type { ValidatedSvgUpload } from '@/lib/r2/upload-helper';
-import type { EntityID } from '@/types';
+import type { ValidatedSvgUpload } from './image/process';
+import type { ObjectHead } from '@/lib/r2/client';
+import type { EntityID } from '@app/shared/types';
+import type { BucketType, FileKind } from '@app/shared/validation/enums';
 
 import { and, eq } from 'drizzle-orm';
 
-import { uploadMsg } from '@/app/api/upload/file/messages';
 import { db, withTransaction } from '@/db';
 import { files } from '@/db/schema';
-import { sanitizeForLog } from '@/utils';
-import { auditLog } from '@/lib/audit';
-import { MAX_REQUEST_BODY_BYTES } from '@/lib/http/request';
-import { generateUuidV7 } from '@/lib/id';
-import {
-  getCacheControlHeader,
-  getContentDisposition,
-  headObjectInR2,
-  isPreconditionFailedError,
-  uploadToR2,
-} from '@/lib/r2/client';
-import { measureEncodeCost } from '@/lib/r2/optimize-image';
-import {
-  processImage,
-  validateMagicBytes,
-  validateSvgUpload,
-} from '@/lib/r2/upload-helper';
-import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { sanitizeFilename } from '@/utils/sanitize-filename';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
 import {
   MAX_DOCUMENT_SIZE_MB,
   MAX_IMAGE_PIXELS,
   MAX_IMAGE_SIZE,
-  SERVER_MAX_IMAGE_SIZE,
-} from '@/utils/validation/constants';
+} from '@app/shared/validation/constants';
 
+import { MAX_REQUEST_BODY_BYTES } from '@/lib/http/request';
+import { generateUuidV7 } from '@/lib/id';
+import {
+  headObjectInR2,
+  isPreconditionFailedError,
+  uploadToR2,
+} from '@/lib/r2/client';
+import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
+
+import { sanitizeForLog } from '@/utils/log';
+
+import { auditAs } from './actor';
 import { fileTypeFor, normalizeMimeType } from './allowlist';
+import { sanitizeFilename } from './filename';
 import { FILE_COLUMNS, matchesRow } from './files';
+import { getCacheControlHeader, getContentDisposition } from './headers';
+import { measureEncodeCost } from './image/optimize';
+import {
+  processImage,
+  validateMagicBytes,
+  validateSvgUpload,
+} from './image/process';
 import { objectKey } from './keys';
-import { mediaMsg } from './messages';
+import { mediaMsg, uploadMsg } from './messages';
+import { MIB } from './units';
 
 /**
  * Requests admitted per user per minute BEFORE the body is read, on both upload
@@ -57,37 +57,24 @@ export const UPLOAD_ADMISSION_LIMIT = 20;
 
 /**
  * One limiter bucket for both upload routes, so the allowance above is per USER
- * and not per user per route — the kind budgets below already share theirs, and
- * two scopes would have made this ceiling twice what it says.
+ * and not per user per route, like the kind budgets below.
  */
 export const UPLOAD_ADMISSION_SCOPE = 'upload.admission';
 
 /**
- * The per-user IMAGE budget, in MEGAPIXELS of decode work rather than requests.
- *
- * A request count was the wrong unit here, and the two numbers were never sized
- * against each other: the encoder is process-global and serialized,
- * `MAX_IMAGE_PIXELS` admits 25 MP, and 20 such files per minute is ~91 s of
- * exclusive encoder demand per 60-second window from one account — so every
- * other uploader queues behind at most four others or is refused.
- *
- * Sized so the worst case the constants admit lands at four per window — about
- * 18 s of encoder demand, not 91.
+ * The per-user IMAGE budget, in MEGAPIXELS of decode work rather than requests:
+ * the encoder is process-global and serialized, so a request count lets one
+ * account hold it for most of every window with maximum-size images. Sized so
+ * the worst case the constants admit fits a few per window.
  */
 export const UPLOAD_MEGAPIXEL_BUDGET = 100;
 
 /**
- * The floor charge for ONE image request, whatever its pixels — and it is what
- * keeps the per-request ceiling where it was.
- *
- * At 1 unit the budget above silently quintupled the request rate, from 20/min
- * to 100/min, because a request's cost is `max(unit, megapixels)` and most
- * uploads are far under a megapixel. Every admitted request costs a multipart
- * parse, a metadata decode, an R2 PUT and two database writes regardless of
- * size, and an SVG never reaches `measureEncodeCost` at all — its cost is jsdom
- * plus svgo, both synchronous (measured: 419-605 ms for documents inside every
- * sanitiser ceiling). `BUDGET / UNIT` is the request ceiling, so this is the
- * number to move when that is what is meant.
+ * The floor charge for ONE image request, whatever its pixels. A request's cost
+ * is `max(unit, megapixels)`, most uploads are far under a megapixel, and every
+ * one still costs a parse, a decode, a PUT and two writes (an SVG costs jsdom
+ * and svgo and never reaches `measureEncodeCost`), so `BUDGET / UNIT` is the
+ * request ceiling — the number to move when that is what is meant.
  *
  * Exported with the budget so `tests/unit/upload-validation.test.ts` can state
  * both derived ceilings against the real values rather than against a copy.
@@ -106,25 +93,21 @@ export const DOCUMENT_BYTE_BUDGET_MIB = 60;
 export const DOCUMENT_REQUEST_UNIT = 2;
 
 function documentCost(sizeBytes: number): number {
-  return Math.max(DOCUMENT_REQUEST_UNIT, Math.ceil(sizeBytes / (1024 * 1024)));
+  return Math.max(DOCUMENT_REQUEST_UNIT, Math.ceil(sizeBytes / MIB));
 }
 
-const MAX_IMAGE_BYTES = MAX_IMAGE_SIZE * 1024 * 1024;
-const MAX_DOCUMENT_BYTES = MAX_DOCUMENT_SIZE_MB * 1024 * 1024;
+const MAX_IMAGE_BYTES = MAX_IMAGE_SIZE * MIB;
+const MAX_DOCUMENT_BYTES = MAX_DOCUMENT_SIZE_MB * MIB;
 
 /**
  * Mebibytes of multipart body per minute per user that this deployment will
  * BUFFER, charged from `Content-Length` before the parser touches the stream.
  *
- * The kind budgets below can only be charged once the bytes are already in
- * memory, and they charge the ADMITTED file. A body that is refused — over its
- * kind's ceiling, the wrong type, not a file at all — was parsed in full and
- * paid one admission unit, so `UPLOAD_ADMISSION_LIMIT` times
- * `MAX_REQUEST_BODY_BYTES` was the real per-user buffering ceiling.
+ * The kind budgets charge only the ADMITTED file, once it is in memory; a body
+ * that is refused was still parsed in full. Without this the real per-user
+ * buffering ceiling is `UPLOAD_ADMISSION_LIMIT` × `MAX_REQUEST_BODY_BYTES`.
  *
- * Twice the largest kind budget, so it cannot bind before one of them does: the
- * heaviest legitimate minute is six maximum-size documents (60 MiB) or twenty
- * maximum-size images (20 MiB).
+ * Twice the largest kind budget, so it cannot bind before one of them does.
  */
 const UPLOAD_BODY_BUDGET_MIB = 2 * DOCUMENT_BYTE_BUDGET_MIB;
 
@@ -135,8 +118,8 @@ const UPLOAD_BODY_BUDGET_MIB = 2 * DOCUMENT_BYTE_BUDGET_MIB;
  * A single legal maximum-size request must still fit in one window, or the size
  * ceiling admits a request the limiter can never charge — and `rateLimit`
  * refuses `cost > limit` WITHOUT a write, so it is a permanent 429 rather than a
- * slow path. Checked at load rather than stated in prose: each budget lives here
- * and each ceiling in another file, and nothing else connects the pairs.
+ * slow path. Checked at load: each budget lives here and each ceiling in
+ * another file, and nothing else connects the pairs.
  */
 const BUDGET_CEILINGS = [
   {
@@ -155,7 +138,7 @@ const BUDGET_CEILINGS = [
   {
     budgetName: 'UPLOAD_BODY_BUDGET_MIB',
     budget: UPLOAD_BODY_BUDGET_MIB,
-    maximumCost: Math.ceil(MAX_REQUEST_BODY_BYTES / (1024 * 1024)),
+    maximumCost: Math.ceil(MAX_REQUEST_BODY_BYTES / MIB),
   },
 ];
 
@@ -190,13 +173,13 @@ export async function chargeUploadBodyBudget(
     scope: 'upload.body',
     identifier: userIdentifier(userId),
     limit: UPLOAD_BODY_BUDGET_MIB,
-    cost: Math.ceil(bytes / (1024 * 1024)),
+    cost: Math.ceil(bytes / MIB),
     failClosed: true,
   });
 }
 
 /** Where an upload goes and what it may be, decided by the route — never by the client. */
-export interface UploadTarget {
+interface UploadTarget {
   visibility: BucketType;
   kinds: readonly FileKind[];
   /** Library uploads live in a folder; entity uploads have none until claimed. */
@@ -206,16 +189,14 @@ export interface UploadTarget {
 }
 
 /** One file past every byte-level check, with its bytes in hand. */
-export interface AdmittedUpload {
+interface AdmittedUpload {
   file: File;
   buffer: Buffer;
   /**
    * `file.type` with its parameters stripped and lowercased — the ONE string
-   * every downstream check must compare against. The allowlist lookup
-   * normalized and the byte-level checks did not, so `image/webp; charset=utf-8`
-   * resolved to the webp spec and then skipped animation detection, and
-   * `image/svg+xml; charset=utf-8` skipped sanitisation; both survived only
-   * because `processImage` happened to refuse the raw string later.
+   * every downstream check must compare against, or a parameterised type
+   * resolves to its spec and then skips the byte-level checks keyed on the
+   * bare type.
    */
   mimeType: string;
   spec: FileTypeSpec;
@@ -229,12 +210,9 @@ const MAX_FILES_PER_REQUEST = 1;
  * body was not multipart at all.
  *
  * ⚠️ EXACTLY one part, and nothing beside it. Both upload routes take every
- * other input from the query string, and the published multipart schema is
- * `additionalProperties: false` over this one field — but only the named field
- * was ever counted, while `request.formData()` has already BUFFERED every part
- * it was sent. A request could therefore carry a 1 KiB admitted file next to
- * megabytes of parts nothing reads, up to the server-wide
- * `MAX_REQUEST_BODY_BYTES`, and pay the byte budget of the small one.
+ * other input from the query string, and `request.formData()` has already
+ * BUFFERED every part it was sent, so an extra part would ride along unpriced
+ * beside a small admitted file.
  */
 export function takeSingleFile(formData: FormData | null, field: string): File {
   if (!formData)
@@ -325,9 +303,8 @@ export async function admitUpload(
 
   if (spec.kind !== 'image') return { file: entry, buffer, mimeType, spec };
 
-  // The image pipeline's own byte checks, kept where they were: animation is a
-  // refusal the signature check above cannot see, and the SVG sanitiser is the
-  // SVG's only check at all.
+  // The image pipeline's own byte checks: animation is a refusal the signature
+  // check above cannot see, and the SVG sanitiser is the SVG's only check.
   const magic = validateMagicBytes(buffer, mimeType);
   if (!magic.valid)
     throw new CustomError(
@@ -389,15 +366,12 @@ interface Prepared {
 
 async function prepare(admitted: AdmittedUpload): Promise<Prepared> {
   if (admitted.spec.kind === 'image') {
-    const image = await processImage(
-      {
-        file: admitted.file,
-        buffer: admitted.buffer,
-        mimeType: admitted.mimeType,
-        validatedSvg: admitted.validatedSvg,
-      },
-      SERVER_MAX_IMAGE_SIZE * 1024 * 1024
-    );
+    const image = await processImage({
+      file: admitted.file,
+      buffer: admitted.buffer,
+      mimeType: admitted.mimeType,
+      validatedSvg: admitted.validatedSvg,
+    });
     return {
       buffer: image.buffer,
       mimeType: image.mimeType,
@@ -434,12 +408,12 @@ async function prepare(admitted: AdmittedUpload): Promise<Prepared> {
  * assumed.
  *
  * The key is derived from a fresh row id, so something else at that key is a
- * primary-key collision — EXCEPT that the SDK retries (`maxAttempts: 3`), so a
- * first attempt that committed and lost its response makes the retry a 412
- * against our OWN object (reproduced against the installed client). Returning
- * means the write is ours and the upload continues to activation; anything else
- * throws, and the row is removed only for an object that is provably foreign,
- * since the pending row is the sweep's only record of what to clean up.
+ * primary-key collision — EXCEPT that the SDK retries, so a first attempt that
+ * committed and lost its response makes the retry a 412 against our OWN object.
+ * Returning means the write is ours and the upload continues to activation;
+ * anything else throws, and the row is removed only for an object that is
+ * provably foreign, since the pending row is the sweep's only record of what to
+ * clean up.
  */
 async function settleKeyCollision(params: {
   id: EntityID;
@@ -540,14 +514,11 @@ export async function storeUpload(params: {
   else
     await withTransaction(async (tx) => {
       await tx.insert(files).values(pendingRow);
-      await auditLog(tx, {
-        userId: actor.userId,
-        userEmail: actor.email,
+      await auditAs(tx, actor, {
         action: 'INSERT',
         tableName: 'files',
         recordId: id,
         newData: { ...audited, status: 'pending' },
-        meta: actor.meta,
       });
     });
 
@@ -604,14 +575,11 @@ export async function storeUpload(params: {
     if (!row)
       throw new CustomError(mediaMsg.uploadFailed, HTTP_STATUS.INTERNAL_ERROR);
 
-    await auditLog(tx, {
-      userId: actor.userId,
-      userEmail: actor.email,
+    await auditAs(tx, actor, {
       action: 'INSERT',
       tableName: 'files',
       recordId: id,
       newData: audited,
-      meta: actor.meta,
     });
     return row;
   });

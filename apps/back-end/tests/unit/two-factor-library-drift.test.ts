@@ -14,18 +14,25 @@ import { describe, expect, test } from 'bun:test';
 
 import { passkey } from '@better-auth/passkey';
 import { twoFactor } from 'better-auth/plugins/two-factor';
+
 import {
   TWO_FACTOR_ALLOWED_ATTEMPTS,
   TWO_FACTOR_CHALLENGE_MAX_AGE_S,
-} from '@/lib/auth/two-factor-challenge';
+} from '@/lib/auth/two-factor/challenge';
 
+// Located through the module resolver rather than a fixed `node_modules` path:
+// the workspace hoists both packages to the repository root, and a standalone
+// checkout keeps them beside this app. Both `dist/` roots are derived from the
+// entry files the resolver returns.
 const PACKAGE_ROOT = new URL(
-  '../../node_modules/better-auth/dist/',
-  import.meta.url
+  '../../',
+  Bun.pathToFileURL(
+    Bun.resolveSync('better-auth/plugins/two-factor', import.meta.dir)
+  )
 );
 const PASSKEY_ROOT = new URL(
-  '../../node_modules/@better-auth/passkey/dist/',
-  import.meta.url
+  './',
+  Bun.pathToFileURL(Bun.resolveSync('@better-auth/passkey', import.meta.dir))
 );
 
 async function source(root: URL, relative: string): Promise<string> {
@@ -34,7 +41,7 @@ async function source(root: URL, relative: string): Promise<string> {
 
 describe('the plugin shape `twoFactorAuth` reshapes', () => {
   test('exposes exactly one `hooks.after` entry, which we replace', async () => {
-    // `lib/auth/two-factor.ts` destructures `hooks` off the plugin and installs
+    // `lib/auth/two-factor/plugin.ts` destructures `hooks` off the plugin and installs
     // its own, because the plugin's own sign-in hook matches only the credential
     // paths while this deployment must issue the same challenge from
     // `/passwordless/verify`. A SECOND upstream hook would land in that discarded
@@ -48,7 +55,7 @@ describe('the plugin shape `twoFactorAuth` reshapes', () => {
 
   test('still exposes the three endpoints this deployment REMOVES', () => {
     // Enrolment, disable and backup-code generation are owned here
-    // (`lib/auth/two-factor-enrolment.ts`) and deleted from the plugin's map. If
+    // (`lib/auth/two-factor/enrolment.ts`) and deleted from the plugin's map. If
     // upstream renames one, the delete silently stops deleting and two endpoints
     // claim one path.
     const plugin = twoFactor({ twoFactorTable: 'twoFactorCredentials' });
@@ -137,7 +144,7 @@ describe('the private formats mirrored in two-factor-challenge.ts', () => {
 
 describe('the passkey endpoints this deployment REMOVES from the plugin map', () => {
   test('still exist under the keys the destructure names', () => {
-    // `passkeyManagement()` in `lib/auth/two-factor.ts` drops three endpoints
+    // `passkeyManagement()` in `lib/auth/two-factor/plugin.ts` drops three endpoints
     // by key. The library's conflict check only logs and resolves by plugin
     // order, so a renamed key would silently put the plugin's `delete-passkey`
     // — or its unauthenticated sign-in — back on the router.

@@ -1,0 +1,64 @@
+import type { Tx } from '@/db';
+import type { AuditMeta } from '@/lib/audit';
+import type { HandlerInput } from '@/lib/http/contract';
+import type { EntityID } from '@app/shared/types';
+
+import { auditLog, getAuditMeta } from '@/lib/audit';
+
+export interface Actor {
+  userId: EntityID;
+  email: string;
+  /** `own` narrows every write to the rows the actor created or uploaded. */
+  scope: 'all' | 'own';
+  meta: AuditMeta;
+}
+
+/** What an audit row needs about the caller; the scope is the route's business. */
+export type AuditActor = Pick<Actor, 'userId' | 'email' | 'meta'>;
+
+interface AuthorisedCaller {
+  userId: EntityID;
+  session: { user: { email: string } };
+}
+
+/** The authorised caller of a media route; the route states its own scope. */
+export function requestActor(
+  ctx: HandlerInput,
+  caller: AuthorisedCaller
+): AuditActor;
+export function requestActor(
+  ctx: HandlerInput,
+  caller: AuthorisedCaller,
+  scope: Actor['scope']
+): Actor;
+export function requestActor(
+  ctx: HandlerInput,
+  caller: AuthorisedCaller,
+  scope?: Actor['scope']
+): AuditActor | Actor {
+  return {
+    userId: caller.userId,
+    email: caller.session.user.email,
+    ...(scope && { scope }),
+    meta: getAuditMeta(ctx),
+  };
+}
+
+type ActorAuditEntry = Omit<
+  Parameters<typeof auditLog>[1],
+  'userId' | 'userEmail' | 'meta'
+>;
+
+/** One audit row written in the actor's name. */
+export function auditAs(
+  tx: Tx,
+  actor: AuditActor,
+  entry: ActorAuditEntry
+): Promise<void> {
+  return auditLog(tx, {
+    ...entry,
+    userId: actor.userId,
+    userEmail: actor.email,
+    meta: actor.meta,
+  });
+}

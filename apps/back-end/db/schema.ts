@@ -1,15 +1,20 @@
-// Unique indexes follow 'ux_<table>_<column>' convention (e.g. ux_users_email).
-// Violation resolvers match against the full index name — keep names unique across tables.
+// drizzle-kit loads this file without the server's environment: nothing it
+// imports may read a server-only variable.
 //
-// ⚠️ IMPORTANT: When adding new columns that will be searchable via ILIKE in the
-// data-table UI, you MUST also add a corresponding trigram (GIN) index in:
-//   db/migrations/001_add_trgm_indexes.sql
-// Without a trgm index, ILIKE '%text%' queries will cause full table scans.
+// Unique indexes follow `ux_<table>_<column>`. Violation resolvers match the
+// full index name, so keep names unique across tables.
+//
+// ⚠️ A column searchable via ILIKE in the data-table UI needs a trigram (GIN)
+// index in a `db/migrations/` SQL file, or `ILIKE '%text%'` is a full scan.
+//
+// ⚠️ Every imported constant is DDL — enum labels, widths, OTP budgets,
+// `PHONE_NUMBER_MODE`, `REQUIRE_ROLE_FOR_LOGIN` — so changing one requires a new
+// migration; `bun run check:schema-drift` catches a missed one.
 import type {
   PermissionAction,
   SessionMetadata,
-} from '@/lib/permissions/constants';
-import type { StoredPreferences } from '@/utils/validation/preferences';
+} from '@app/shared/permissions/constants';
+import type { StoredPreferences } from '@app/shared/validation/preferences';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
 import { relations, sql } from 'drizzle-orm';
@@ -30,89 +35,57 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-import { API_PATH_MAX, USER_AGENT_MAX } from '@/lib/audit/constants';
-import { generateUuidV7 as generateId } from '@/lib/id';
+import {
+  CREDENTIAL_ID_MAX,
+  OTP_IDENTIFIER_MAX,
+  URL_MAX,
+  VERIFICATION_IDENTIFIER_MAX,
+} from '@/db/limits';
+
+import { PHONE_NUMBER_MODE, PHONE_REQUIRED } from '@app/shared/config';
 import {
   CUSTOM_ROLE_VALUE,
   DASHBOARD_PAGE_NAMES,
   REQUIRE_ROLE_FOR_LOGIN,
   ROLE_SCOPE,
-} from '@/lib/permissions/constants';
-
-import { CREDENTIAL_ISSUER } from '@/utils/api-messages';
-import { PHONE_NUMBER_MODE, PHONE_REQUIRED } from '@/utils/config';
+} from '@app/shared/permissions/constants';
 import {
-  CREDENTIAL_ID_MAX,
   EMAIL_MAX,
   FOLDER_NAME_MAX,
   MEDIA_DISPLAY_NAME_MAX,
   NAME_MAX,
-  OTP_IDENTIFIER_MAX,
-  OTP_MAX_ATTEMPTS,
-  OTP_MAX_DAILY_VERIFY_ATTEMPTS,
-  OTP_MAX_VERIFY_ATTEMPTS,
   PHONE_NUMBER_MAX,
   ROLE_DESCRIPTION_MAX,
   ROLE_NAME_MAX,
-  URL_MAX,
-  VERIFICATION_IDENTIFIER_MAX,
-} from '@/utils/validation/constants';
+} from '@app/shared/validation/constants';
 import {
+  BUCKET_TYPES,
+  FILE_KINDS,
   OTP_CHANNELS,
   OTP_PURPOSES,
   TWO_FACTOR_METHODS,
-} from '@/utils/validation/enums';
+} from '@app/shared/validation/enums';
+
+import {
+  API_PATH_MAX,
+  IP_ADDRESS_MAX,
+  USER_AGENT_MAX,
+} from '@/lib/audit/constants';
+import { CREDENTIAL_ISSUER } from '@/lib/auth/credential';
+import { generateUuidV7 as generateId } from '@/lib/id';
+import {
+  OTP_MAX_ATTEMPTS,
+  OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+  OTP_MAX_VERIFY_ATTEMPTS,
+} from '@/lib/otp/limits';
 
 /**
- * `jsonb`, replacing `drizzle-orm/pg-core`'s — which double-encodes under
- * `bun:sql`.
- *
- * Drizzle's own `jsonb` returns `JSON.stringify(value)` from
- * `mapToDriverValue`, because most PostgreSQL drivers want JSON *text* for a
- * jsonb parameter. `bun:sql` does not: it JSON-encodes whatever JS value it is
- * given, so an already-serialised string is encoded a second time and the column
- * stores a jsonb STRING SCALAR rather than an object. Measured on Bun:
- * `insert into t (j) values (${'{"a":1}'})` stores `"{\"a\":1}"`, while the
- * same statement with the object stores `{"a":1}`.
- *
- * Drizzle's read path hid it — `mapFromDriverValue` JSON-parses a string, so the
- * double encode round-tripped invisibly through the ORM. What did not survive
- * was every SQL-level jsonb operation, because none of them go through that
- * mapper. `refreshRoleSessions` and `refreshUserSessions`
- * (`lib/permissions/utils.ts`) merge with `metadata || $1::jsonb`, and `||` on
- * two jsonb strings CONCATENATES INTO AN ARRAY instead of merging objects:
- * reproduced, `sessions.metadata` became
- * `["{\"keepMe\":…}","{\"roleName\":…}"]` and the permission patch was lost.
- * Anything reading these columns outside Drizzle — `db.execute`, `->`/`->>`,
- * `@>`, a jsonb index, psql — saw the same.
- *
- * So the value is passed through and encoded exactly once, by the driver. This
- * shadows the drizzle export deliberately: every column here keeps its
- * declaration, and the broken one is no longer in scope to be used by accident.
- * `dataType` still reports `jsonb`, so the generated DDL is unchanged.
- *
- * NOTE it is `prepare: true` that makes the bug reachable — without a prepared
- * statement Bun does not know the parameter is jsonb and sends it as text, which
- * PostgreSQL then parses correctly. Do not read a passing test under
- * `prepare: false` as evidence that this helper is unnecessary.
- *
- * **`fromDriver` is a pass-through, and that is a decision.** Drizzle's builtin
- * JSON-parses a string on the way out, which is precisely what hid the double
- * encode above: write twice, read twice, same object back, nothing to see. This
- * reports what the column actually holds. So these five columns TRUST THEIR
- * WRITERS — a jsonb string scalar reaching one of them (a `psql` fix-up, a script
- * that pre-stringifies) reads back as a `string` wearing the column's declared
- * type, and nothing complains. On the permission path that fails CLOSED (a
- * lookup on a string yields `undefined`, which denies), but it fails quietly.
- *
- * Throwing here instead was considered and rejected. `mapFromDriverValue` runs on
- * READ, so one bad row would 500 every request that touches it — a role-wide
- * auth outage to report a write-time mistake — and three of these columns
- * (`audit_logs`' `old_data`, `new_data`, `changed_fields`) are typed `unknown`,
- * where jsonb legitimately admits arrays and scalars; `changed_fields` already
- * stores an array. Refusing a non-object on read would assert an invariant the
- * type does not carry. A database CHECK constraint is the correct boundary for
- * any write-time invariant added here.
+ * Shadows `drizzle-orm/pg-core`'s `jsonb`, whose `JSON.stringify` in
+ * `mapToDriverValue` `bun:sql` encodes a second time under `prepare: true`: the
+ * column then holds a jsonb string scalar, on which SQL-level `||` concatenates
+ * instead of merging. `fromDriver` passes through by decision — these columns
+ * trust their writers, and a read-time throw would turn one bad row into an
+ * outage; a write-time invariant belongs in a CHECK constraint.
  */
 const jsonb = customType<{ data: unknown; driverData: unknown }>({
   dataType: () => 'jsonb',
@@ -126,54 +99,50 @@ const jsonb = customType<{ data: unknown; driverData: unknown }>({
  * means "not granted". Readers go through `sanitizePermissions`, which fills the
  * total shape; nothing may treat a row as total before that.
  */
-export type PermissionActions = Partial<Record<PermissionAction, boolean>>;
+type PermissionActions = Partial<Record<PermissionAction, boolean>>;
 
-// bun:sql returns `timestamptz` as Date; string mode would reapply host offset.
+// `bun:sql` returns `timestamptz` as a Date; string mode would reapply the host
+// offset.
+function timestamptz<TName extends string>(name: TName) {
+  return timestamp(name, { withTimezone: true, precision: 2 });
+}
+
+const createdAt = () => timestamptz('created_at').defaultNow().notNull();
+
 const timestamps = {
-  createdAt: timestamp('created_at', {
-    withTimezone: true,
-    precision: 2,
-  })
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp('updated_at', {
-    withTimezone: true,
-    precision: 2,
-  })
+  createdAt: createdAt(),
+  updatedAt: timestamptz('updated_at')
     .defaultNow()
     .$onUpdate(() => sql`now()`)
     .notNull(),
 };
 
-export const bucketTypeEnum = ['public', 'private'] as const;
-export const pageNameValues = DASHBOARD_PAGE_NAMES;
+export const bucketType = pgEnum('bucket_type', BUCKET_TYPES);
+export const auditLogAction = pgEnum('audit_log_action', [
+  'INSERT',
+  'UPDATE',
+  'DELETE',
+]);
+export const pageName = pgEnum('page_name', DASHBOARD_PAGE_NAMES);
 /**
- * Role Scope Values:
- * - 'system': Protected/immutable roles created by developer (e.g., superAdmin) - cannot be modified or deleted
- * - 'standard': Normal roles created via dashboard - fully editable and visible in permissions page
- * - 'custom': User-specific roles - only visible/editable when editing that specific user
+ * - `system`: created by the developer (e.g. superAdmin); never modified or
+ *   deleted through the dashboard.
+ * - `standard`: created and edited on the permissions page.
+ * - `custom`: one user's own role, visible only while editing that user.
  */
-export const roleScopeValues = [
+export const roleScope = pgEnum('role_scope', [
   ROLE_SCOPE.SYSTEM,
   ROLE_SCOPE.STANDARD,
   ROLE_SCOPE.CUSTOM,
-] as const;
-export const bucketType = pgEnum('bucket_type', bucketTypeEnum);
-export const auditLogActionEnum = ['INSERT', 'UPDATE', 'DELETE'] as const;
-export const auditLogAction = pgEnum('audit_log_action', auditLogActionEnum);
-export const pageName = pgEnum('page_name', pageNameValues);
-export const roleScope = pgEnum('role_scope', roleScopeValues);
+]);
 export const otpChannel = pgEnum('otp_channel', OTP_CHANNELS);
 export const otpPurpose = pgEnum('otp_purpose', OTP_PURPOSES);
 // The full method set, not the env-enabled subset: a deployment turning a method
 // off must not make existing rows unreadable.
-// ⚠️ Changing this list requires a DB migration (two_factor_method pgEnum).
 export const twoFactorMethod = pgEnum('two_factor_method', TWO_FACTOR_METHODS);
-// Whitelist of supported auth providers — extend here when adding OAuth.
-// Constraining the column to a known set prevents direct writes from
-// introducing provider IDs that downstream code cannot handle.
-export const providerIdEnumValues = ['credential', 'google'] as const;
-export const providerId = pgEnum('provider_id', providerIdEnumValues);
+// The providers the code handles, so a direct write cannot introduce one it
+// does not. A new OAuth provider is added here.
+export const providerId = pgEnum('provider_id', ['credential', 'google']);
 /**
  * The upload saga's durable step marker (see `lib/media/lifecycle.ts`):
  * `pending` between the row insert and the activation that follows the object
@@ -181,10 +150,12 @@ export const providerId = pgEnum('provider_id', providerIdEnumValues);
  * committed to removing the object. Referrers may point only at `active` rows —
  * enforced by the composite unique below, not by application code.
  */
-export const fileStatusEnum = ['pending', 'active', 'deleting'] as const;
-export const fileStatus = pgEnum('file_status', fileStatusEnum);
-export const fileKindEnum = ['image', 'document'] as const;
-export const fileKind = pgEnum('file_kind', fileKindEnum);
+export const fileStatus = pgEnum('file_status', [
+  'pending',
+  'active',
+  'deleting',
+]);
+export const fileKind = pgEnum('file_kind', FILE_KINDS);
 /**
  * A visibility change in flight: the object is being copied to the other
  * bucket (`to_public`/`to_private`), or the copy is done and the stale one
@@ -197,20 +168,18 @@ export const fileTransitionEnum = [
 ] as const;
 export const fileTransition = pgEnum('file_transition', fileTransitionEnum);
 
-export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
-
 export const users = pgTable(
   'users',
   {
     id: uuid('id').primaryKey().$defaultFn(generateId),
     name: varchar('name', { length: NAME_MAX }).notNull(),
     email: varchar('email', { length: EMAIL_MAX }).notNull(),
-    // Nullability is driven by PHONE_NUMBER_MODE (see @/utils/config). When the
-    // mode is 'required' the column is NOT NULL; otherwise it is optional.
     phoneNumber: PHONE_REQUIRED
       ? varchar('phone_number', { length: PHONE_NUMBER_MAX }).notNull()
       : varchar('phone_number', { length: PHONE_NUMBER_MAX }),
     emailVerified: boolean('email_verified').default(false).notNull(),
+    // Milliseconds, unlike every other timestamp here: compared against
+    // millisecond proof start times.
     authRevokedAt: timestamp('auth_revoked_at', {
       withTimezone: true,
       precision: 3,
@@ -219,10 +188,9 @@ export const users = pgTable(
       .default(false)
       .notNull(),
     // The property name is what Better Auth reads (not the SQL column), so it
-    // must stay `twoFactorEnabled`.
-    //
-    // "The user turned 2FA on", not "the user has a usable second factor" — see
-    // the downgrade path in lib/auth/two-factor-challenge.ts.
+    // must stay `twoFactorEnabled`. "The user turned 2FA on", not "the user has
+    // a usable second factor" — see the downgrade path in
+    // lib/auth/two-factor/challenge.ts.
     twoFactorEnabled: boolean('two_factor_enabled').default(false).notNull(),
     isActive: boolean('is_active').default(true).notNull(),
     roleId: uuid('role_id').references(() => roles.id, {
@@ -231,24 +199,15 @@ export const users = pgTable(
     createdBy: uuid('created_by').references((): AnyPgColumn => users.id, {
       onDelete: 'set null',
     }),
-    // TODO: Remove failedLoginAttempts & lockedUntil, and convert it to Redis or any KV store
+    // TODO: move failedLoginAttempts and lockedUntil to a KV store.
     failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
-    lockedUntil: timestamp('locked_until', {
-      withTimezone: true,
-      precision: 2,
-    }),
-    // Soft delete, and it stays soft. There is deliberately NO sweep that hard-
-    // deletes these rows: `auditLogs.userId` is `onDelete: 'restrict'`, so a
-    // purge would fail for exactly the users who did anything, and succeed only
-    // for the ones with no history — the opposite of a useful rule. Every read
-    // path already filters `isNull(deletedAt)`, and the partial unique indexes
-    // below release the email and phone for reuse, so the row costs a row.
-    // Erasing a user for real is a data-subject request, not a cron job: it has
-    // to decide what happens to their audit trail, which is a policy question.
-    deletedAt: timestamp('deleted_at', {
-      withTimezone: true,
-      precision: 2,
-    }),
+    lockedUntil: timestamptz('locked_until'),
+    // Soft delete, deliberately with NO purge sweep: `auditLogs.userId` is
+    // `onDelete: 'restrict'`, so a purge would fail for exactly the users who
+    // did anything. The partial unique indexes below release the email and
+    // phone for reuse. Erasing a user for real is a data-subject request that
+    // has to decide the fate of their audit trail, not a cron job.
+    deletedAt: timestamptz('deleted_at'),
     ...timestamps,
   },
   (t) => [
@@ -280,10 +239,10 @@ export const users = pgTable(
       'chk_phone_number_format',
       sql`phone_number IS NULL OR phone_number ~ '^9665[0-9]{8}$'`
     ),
-    // Phone-mode invariants (see @/utils/config PHONE_NUMBER_MODE):
+    // Phone-mode invariants:
     // - disabled: phone must never be set or verified.
-    // - optional/required: a verified flag requires a present number, so the
-    //   "verified but NULL phone" state (DATA-1) can never arise.
+    // - optional/required: a verified flag requires a present number.
+    // eslint-disable-next-line unicorn/prefer-minimal-ternary -- two different constraints, not one constraint with a varying part
     ...(PHONE_NUMBER_MODE === 'disabled'
       ? [
           check(
@@ -308,26 +267,20 @@ export const users = pgTable(
   ]
 );
 
-// Retention: `db/maintenance.ts` deletes rows 30 days past `expiresAt`, on the
-// `database-retention-sweep` schedule in `lib/schedule.ts`. Not a correctness
-// boundary — every read already filters on `expiresAt` — so the sweep only
-// reclaims disk, and the 30-day tail keeps a just-expired session inspectable
-// while someone is asking why a user was logged out.
+// Retention: `lib/maintenance/database.ts` deletes rows a grace period past
+// `expiresAt`. Not a correctness boundary — every read filters on `expiresAt`.
 export const sessions = pgTable(
   'sessions',
   {
     id: uuid('id').primaryKey().$defaultFn(generateId),
-    expiresAt: timestamp('expires_at', {
-      withTimezone: true,
-      precision: 2,
-    }).notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
     token: varchar('token', { length: 500 }).notNull(),
-    ipAddress: varchar('ip_address', { length: 45 }),
+    ipAddress: varchar('ip_address', { length: IP_ADDRESS_MAX }),
     userAgent: varchar('user_agent', { length: USER_AGENT_MAX }),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    // Session metadata for caching permissions
+    // The permission cache `refreshRoleSessions` merges into.
     metadata: jsonb('metadata').$type<SessionMetadata>(),
     ...timestamps,
   },
@@ -346,11 +299,10 @@ export const accounts = pgTable(
   {
     id: uuid('id').primaryKey().$defaultFn(generateId),
     accountId: varchar('account_id', { length: 255 }).notNull(),
-    // Better Auth 1.7 identifies an account by (issuer, accountId); `provider_id`
-    // alone no longer resolves one. `/sign-in/email` requires this to equal
-    // `local:credential` and answers a plain 401 otherwise, so the column is NOT
-    // NULL with a default rather than nullable: a row that reaches this table
-    // without it is an unauthenticatable user. See CREDENTIAL_ISSUER.
+    // Better Auth identifies an account by (issuer, accountId), not by
+    // `provider_id`. `/sign-in/email` requires `CREDENTIAL_ISSUER` here and
+    // answers a plain 401 otherwise, so NOT NULL with a default: a row without
+    // it is an unauthenticatable user.
     issuer: varchar('issuer', { length: 255 })
       .notNull()
       .default(CREDENTIAL_ISSUER),
@@ -379,16 +331,12 @@ export const accounts = pgTable(
       'chk_credential_password',
       sql`provider_id <> 'credential' OR password IS NOT NULL`
     ),
-    // Pins the pair the sign-in lookup matches on. The column default already
-    // supplies the value; this is what stops a caller from writing a different
-    // one, which would be a silent login outage rather than an error.
+    // Pins the pair the sign-in lookup matches on: a caller writing a different
+    // issuer would be a silent login outage rather than an error.
     //
-    // The literals are duplicated from CREDENTIAL_PROVIDER_ID / CREDENTIAL_ISSUER
-    // deliberately, and this is the one place that cannot be deduplicated:
-    // drizzle-kit DROPS interpolated params from a check constraint instead of
-    // inlining them. `sql\`... = ${CREDENTIAL_ISSUER}\`` generates
-    // `CHECK (provider_id <>  OR issuer = )` — measured — which is invalid DDL
-    // the migration only fails on when applied. Same reason the sibling
+    // Literals, not CREDENTIAL_PROVIDER_ID / CREDENTIAL_ISSUER: drizzle-kit
+    // DROPS interpolated params from a check constraint, generating invalid DDL
+    // that fails only when the migration is applied. Same reason the sibling
     // constraints above spell 'credential' out.
     check(
       'chk_credential_issuer',
@@ -427,10 +375,7 @@ export const verifications = pgTable(
       length: VERIFICATION_IDENTIFIER_MAX,
     }).notNull(),
     value: text('value').notNull(),
-    expiresAt: timestamp('expires_at', {
-      withTimezone: true,
-      precision: 2,
-    }).notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
     ...timestamps,
   },
   (t) => [
@@ -447,9 +392,10 @@ export const verifications = pgTable(
  * strands every row here — the reason it has no rotation story in
  * `lib/env.server.ts`.
  *
- * ⚠️ The export name must match `twoFactorTable` in `lib/auth.ts`: the adapter
- * resolves the plugin's `twoFactor` model as `schema[modelName]`, and renaming
- * one without the other makes every 2FA read throw.
+ * ⚠️ The export name must match `TWO_FACTOR_TABLE` in
+ * `lib/auth/two-factor/plugin.ts`: the adapter resolves the plugin's model as
+ * `schema[modelName]`, and renaming one without the other makes every 2FA read
+ * throw.
  *
  * ⚠️ A row here does NOT mean 2FA is on, and its absence does NOT mean it is
  * off: enabling OTP-only creates no row, which is why the plugin's lockout
@@ -464,41 +410,32 @@ export const twoFactorCredentials = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     secret: text('secret').notNull(),
     backupCodes: text('backup_codes').notNull(),
-    // `false` until an enrolment code proves the authenticator. Defaulting it
-    // true made an unconfirmed secret a usable factor the moment the row
-    // existed.
+    // `false` until an enrolment code proves the authenticator, so an
+    // unconfirmed secret is never a usable factor.
     verified: boolean('verified').default(false).notNull(),
     failedVerificationCount: integer('failed_verification_count')
       .default(0)
       .notNull(),
-    lockedUntil: timestamp('locked_until', {
-      withTimezone: true,
-      precision: 2,
-    }),
+    lockedUntil: timestamptz('locked_until'),
     // Ours: until the user confirms they stored the codes, `backup_code` is not
     // offered as a method.
-    backupCodesAcknowledgedAt: timestamp('backup_codes_acknowledged_at', {
-      withTimezone: true,
-      precision: 2,
-    }),
+    backupCodesAcknowledgedAt: timestamptz('backup_codes_acknowledged_at'),
     /**
      * ⚠️ Acknowledgement is bound to a SET, not to the column above.
      * Regenerating replaces every code and mints a new id; an acknowledgement
      * naming the previous set then no longer matches, so the method stops being
-     * offered until the user confirms the new codes. Without the pairing, one
-     * acknowledgement in 2023 kept advertising whatever set exists today.
+     * offered until the user confirms the new codes.
      *
-     * An ID rather than a counter, because the counter restarted: this row is
-     * deleted by `/two-factor/disable` and recreated by the next generation, so
-     * a per-row sequence hands set two of the new row the same name as set one
-     * of the old — and an acknowledgement held by a stale tab then lands on a
-     * set the user never saw. NULL until the first generation.
+     * An id rather than a per-row counter: `/two-factor/disable` deletes this
+     * row and the next generation recreates it, so a restarted counter would let
+     * a stale tab's acknowledgement land on a set the user never saw. NULL until
+     * the first generation.
      */
     backupCodesSetId: uuid('backup_codes_set_id'),
     backupCodesAcknowledgedSetId: uuid('backup_codes_acknowledged_set_id'),
     // How many of that set are unspent. An exhausted set is not recovery
     // material, and the encrypted blob cannot be counted without the key, so the
-    // count is kept here. See `lib/auth/two-factor-enrolment.ts` for who writes
+    // count is kept here. See `lib/auth/two-factor/enrolment.ts` for who writes
     // it and which direction it fails in.
     backupCodesRemaining: integer('backup_codes_remaining')
       .default(0)
@@ -511,9 +448,8 @@ export const twoFactorCredentials = pgTable(
      * Advanced under a guarded UPDATE, so two requests holding the same code
      * cannot both claim it.
      *
-     * `bigint` because a step is `floor(unixSeconds / 30)`, and `number` mode
-     * because that value stays inside `Number.MAX_SAFE_INTEGER` for the next
-     * 8.5 billion years.
+     * `bigint` because a step is `floor(unixSeconds / 30)`; `number` mode is
+     * safe because that value stays inside `Number.MAX_SAFE_INTEGER`.
      */
     lastTotpStep: bigint('last_totp_step', { mode: 'number' }),
     ...timestamps,
@@ -566,17 +502,16 @@ export const twoFactorMethods = pgTable(
       sql`CASE WHEN channel IS NULL THEN NULL WHEN channel = 'email' THEN 'email' ELSE 'phone' END`
     ),
     // The method the challenge routes to first. At most one row per user, and
-    // only ever a reorder WITHIN what the user has enrolled — see `D9`.
+    // only ever a reorder WITHIN what the user has enrolled.
     isDefault: boolean('is_default').default(false).notNull(),
     ...timestamps,
   },
   (t) => [
-    // ⚠️ Two partial indexes, not one over `(user_id, method)`. A user may hold
+    // ⚠️ Two partial indexes, not one over `(user_id, method)`: a user may hold
     // an OTP enrolment per CONTACT KIND — email and phone are different
-    // possessions — but only one row of every other method. A single key on
-    // `(user_id, method)` made a second OTP channel REPLACE the first through
-    // `recordMethodIntent`'s upsert. Both conflict targets in that function must
-    // stay in step with these two predicates.
+    // possessions — but only one row of every other method. Both conflict
+    // targets in `recordMethodIntent`'s upsert must stay in step with these two
+    // predicates.
     uniqueIndex('ux_two_factor_methods_user_otp_contact')
       .on(t.userId, t.contactKind)
       .where(sql`method = 'otp'`),
@@ -637,14 +572,14 @@ export const passkeys = pgTable(
 
 /**
  * Devices allowed to skip the second factor, and the ONLY mechanism in this
- * application that does so. Entirely ours — see `lib/auth/trusted-device.ts`.
+ * application that does so. Entirely ours — see `lib/auth/two-factor/trusted-device.ts`.
  *
  * `trustIdentifier` is the random half of the signed cookie, whose other half is
  * an HMAC over `<userId>!<trustIdentifier>`, so the cookie alone does not let a
  * holder name a different user's row.
  *
  * Revoked by the user from settings, and by every credential rotation
- * (`lib/auth/rotation.ts`).
+ * (`lib/auth/session/rotation.ts`).
  */
 export const trustedDevices = pgTable(
   'trusted_devices',
@@ -657,17 +592,9 @@ export const trustedDevices = pgTable(
       length: VERIFICATION_IDENTIFIER_MAX,
     }).notNull(),
     userAgent: varchar('user_agent', { length: USER_AGENT_MAX }),
-    ipAddress: varchar('ip_address', { length: 45 }),
-    lastUsedAt: timestamp('last_used_at', {
-      withTimezone: true,
-      precision: 2,
-    })
-      .defaultNow()
-      .notNull(),
-    expiresAt: timestamp('expires_at', {
-      withTimezone: true,
-      precision: 2,
-    }).notNull(),
+    ipAddress: varchar('ip_address', { length: IP_ADDRESS_MAX }),
+    lastUsedAt: timestamptz('last_used_at').defaultNow().notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
     ...timestamps,
   },
   (t) => [
@@ -706,7 +633,7 @@ export const userPreferences = pgTable(
 /**
  * The media library's tree. Pure organisation: a folder carries no visibility
  * and no object-store counterpart, so renaming or moving one is a single
- * `UPDATE` and no URL changes (`reports/file-manager-plan.md`, section 1).
+ * `UPDATE` and no URL changes.
  *
  * Depth (≤ `FOLDER_MAX_DEPTH`) and fan-out (≤ `FOLDER_MAX_CHILDREN`) are
  * enforced in `lib/media/folders.ts` under a `FOR UPDATE` on the parent — a
@@ -752,11 +679,10 @@ export const folders = pgTable(
  * `file_status` column fixed to `'active'`. That composite FK is what makes
  * deletion safe without a transaction open across the object store: marking a
  * row `deleting` fails while any referrer exists, and a referrer cannot be
- * created against a row that is not `active` — both directions measured under
- * concurrency, see `reports/file-manager-plan.md` section 13. Every referrer in
- * a project MUST use that shape; `lib/media/usages.ts` is where it is listed.
+ * created against a row that is not `active`. Every referrer in a project MUST
+ * use that shape and be listed in `lib/media/usage-sources.ts`.
  *
- * A `pending` row past its TTL is swept by `db/maintenance.ts` together with its
+ * A `pending` row past its TTL is swept by `lib/maintenance/database.ts` together with its
  * object. A row is `pending` between the insert and the object write's
  * confirmation (library uploads), or until an entity form claims it
  * (`claimFiles`). A `deleting` row is one whose delete has committed to going
@@ -816,7 +742,7 @@ export const files = pgTable(
     // referenced by no registered owner; cleared when it is filed or linked.
     // `UNFILED_RETENTION_DAYS` (`lib/media/lifecycle.ts`) after the stamp the
     // sweep deletes the file.
-    unfiledAt: timestamp('unfiled_at', { withTimezone: true, precision: 2 }),
+    unfiledAt: timestamptz('unfiled_at'),
     ...timestamps,
   },
   (t) => [
@@ -913,22 +839,17 @@ export const orphanedObjects = pgTable(
 
 /**
  * Retention: NOTHING deletes from this table, and that is a decision, not a gap.
- *
- * The retention sweep in `db/maintenance.ts` deliberately skips it. Two reasons,
- * and either alone is sufficient:
+ * Either reason alone is sufficient:
  *
  * 1. **It is the trail everything else is measured against.** The
  *    `verification_sessions` sweep is only safe because every flow that consumes
  *    a proof writes its row here — contact change, password reset, passwordless
- *    sign-in. Expiring these rows at 30 days would delete the history that
- *    justifies expiring those, leaving neither.
- * 2. **`userId` is `onDelete: 'restrict'`**, so these rows are also what pins a
+ *    sign-in.
+ * 2. **`userId` is `onDelete: 'restrict'`**, so these rows also pin a
  *    soft-deleted user's identity in place. See `users.deletedAt`.
  *
- * If volume ever forces the issue, the options in preference order are
- * partitioning with `pg_partman` and detaching cold partitions, or archiving to
- * R2 before deletion — never a bare `DELETE`. Revisit on measured table size,
- * not on a calendar.
+ * If volume ever forces the issue, partition with `pg_partman` and detach cold
+ * partitions, or archive to R2 before deletion — never a bare `DELETE`.
  */
 export const auditLogs = pgTable(
   'audit_logs',
@@ -944,21 +865,14 @@ export const auditLogs = pgTable(
     oldData: jsonb('old_data'),
     newData: jsonb('new_data'),
     changedFields: jsonb('changed_fields'),
-    ipAddress: varchar('ip_address', { length: 45 }),
+    ipAddress: varchar('ip_address', { length: IP_ADDRESS_MAX }),
     userAgent: varchar('user_agent', { length: USER_AGENT_MAX }),
     apiPath: varchar('api_path', { length: API_PATH_MAX }),
-    createdAt: timestamp('created_at', {
-      withTimezone: true,
-      precision: 2,
-    })
-      .defaultNow()
-      .notNull(),
+    createdAt: createdAt(),
   },
   (t) => [index('idx_audit_logs_table_record').on(t.tableName, t.recordId)]
 );
 
-// Roles Table (defined first for FK reference)
-// A future role-version column could invalidate assigned users after role changes.
 export const roles = pgTable(
   'roles',
   {
@@ -1001,12 +915,7 @@ export const rolePermissions = pgTable(
       .references(() => roles.id, { onDelete: 'cascade' }),
     pageName: pageName('page_name').notNull(),
     permissions: jsonb('permissions').$type<PermissionActions>().notNull(),
-    createdAt: timestamp('created_at', {
-      withTimezone: true,
-      precision: 2,
-    })
-      .defaultNow()
-      .notNull(),
+    createdAt: createdAt(),
   },
   (t) => [
     // No `(role_id)` index: it is a strict PREFIX of the unique index below,
@@ -1026,12 +935,10 @@ export const verificationSessions = pgTable(
     // Delivery transport of the most recent code. Informational after the fact:
     // nothing reads it to decide behaviour, and it is NOT part of the key.
     channel: otpChannel('channel').notNull(),
-    // What is actually being proven, derived from the transport so the two can
-    // never disagree. sms and whatsapp reach the same phone number, so keying
-    // sessions on the transport gave each one its own send cycle, its own
-    // 5-guess budget and its own 6-hour block — switching transport reset all
-    // three. Generated rather than written by the app: an INSERT cannot set it,
-    // so no code path can produce a row whose kind contradicts its channel.
+    // What is actually being proven. sms and whatsapp reach the same phone, so
+    // they must share one send cycle, verify budget and block; switching
+    // transport must reset none of them. Generated, so no INSERT can produce a
+    // row whose kind contradicts its channel.
     contactKind: text('contact_kind')
       .notNull()
       .generatedAlwaysAs(
@@ -1056,37 +963,19 @@ export const verificationSessions = pgTable(
     // on the proof row, so it is also lost when the row is deleted (a
     // verify_contact success, or a credential rotation).
     verifyAttemptDaily: integer('verify_attempt_daily').notNull().default(0),
-    verifyAttemptWindowStart: timestamp('verify_attempt_window_start', {
-      withTimezone: true,
-      precision: 2,
-    })
+    verifyAttemptWindowStart: timestamptz('verify_attempt_window_start')
       .notNull()
       .defaultNow(),
-    lastSentAt: timestamp('last_sent_at', {
-      withTimezone: true,
-      precision: 2,
-    }),
-    nextAllowedAt: timestamp('next_allowed_at', {
-      withTimezone: true,
-      precision: 2,
-    }),
+    lastSentAt: timestamptz('last_sent_at'),
+    nextAllowedAt: timestamptz('next_allowed_at'),
     isBlocked: boolean('is_blocked').notNull().default(false),
-    blockedUntil: timestamp('blocked_until', {
-      withTimezone: true,
-      precision: 2,
-    }),
+    blockedUntil: timestamptz('blocked_until'),
     // Single-use proof lifecycle for sensitive-action OTPs (change_email/phone).
     // `verifiedAt` is stamped when the code matches; `consumedAt` when the proof
     // is spent to commit the action. Both are written in the SAME transaction as
     // the action, so there is no verify→action replay window.
-    verifiedAt: timestamp('verified_at', {
-      withTimezone: true,
-      precision: 2,
-    }),
-    consumedAt: timestamp('consumed_at', {
-      withTimezone: true,
-      precision: 2,
-    }),
+    verifiedAt: timestamptz('verified_at'),
+    consumedAt: timestamptz('consumed_at'),
     ...timestamps,
   },
   (t) => [
@@ -1153,16 +1042,8 @@ export const verificationCodes = pgTable(
       .references(() => verificationSessions.id, { onDelete: 'cascade' }),
     // Stored as a keyed HMAC envelope via hashOtpCode, never plaintext.
     code: varchar('code', { length: 255 }).notNull(),
-    expiresAt: timestamp('expires_at', {
-      withTimezone: true,
-      precision: 2,
-    }).notNull(),
-    createdAt: timestamp('created_at', {
-      withTimezone: true,
-      precision: 2,
-    })
-      .defaultNow()
-      .notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    createdAt: createdAt(),
   },
   (t) => [uniqueIndex('ux_verification_codes_session').on(t.sessionId)]
 );
@@ -1220,31 +1101,6 @@ export const accountsRelations = relations(accounts, ({ one }) => ({
   }),
 }));
 
-export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
-export type Role = typeof roles.$inferSelect;
-export type NewRole = typeof roles.$inferInsert;
-export type Session = typeof sessions.$inferSelect;
-export type NewSession = typeof sessions.$inferInsert;
-export type Account = typeof accounts.$inferSelect;
-export type NewAccount = typeof accounts.$inferInsert;
+export type AuditAction = (typeof auditLogAction.enumValues)[number];
 export type File = typeof files.$inferSelect;
-export type NewFile = typeof files.$inferInsert;
-export type Folder = typeof folders.$inferSelect;
-export type NewFolder = typeof folders.$inferInsert;
-export type FileStatus = (typeof fileStatusEnum)[number];
-export type FileKind = (typeof fileKindEnum)[number];
 export type FileTransition = (typeof fileTransitionEnum)[number];
-export type AuditLog = typeof auditLogs.$inferSelect;
-export type NewAuditLog = typeof auditLogs.$inferInsert;
-export type RolePermission = typeof rolePermissions.$inferSelect;
-export type NewRolePermission = typeof rolePermissions.$inferInsert;
-export type VerificationSession = typeof verificationSessions.$inferSelect;
-export type NewVerificationSession = typeof verificationSessions.$inferInsert;
-export type VerificationCode = typeof verificationCodes.$inferSelect;
-export type NewVerificationCode = typeof verificationCodes.$inferInsert;
-
-// User with role included (for queries with relations)
-export type UserWithRole = User & { role: Role | null };
-
-export type RoleScopes = (typeof roleScopeValues)[number];

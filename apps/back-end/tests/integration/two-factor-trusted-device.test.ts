@@ -14,10 +14,11 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { sessions, trustedDevices, twoFactorCredentials } from '@/db/schema';
 import { symmetricDecrypt } from 'better-auth/crypto';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
 import { auth } from '@/lib/auth';
 import { PUBLIC_ORIGIN } from '@/lib/env';
-
-import { HTTP_STATUS } from '@/utils/api-messages';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';

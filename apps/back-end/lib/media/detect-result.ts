@@ -22,3 +22,6 @@ export type DetectResult =
         | 'embedded'
         | 'encrypted';
     };
+
+/** The Office application a document is declared for, in either container. */
+export type OfficeFamily = 'word' | 'excel';

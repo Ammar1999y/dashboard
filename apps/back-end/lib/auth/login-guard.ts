@@ -1,38 +1,25 @@
 import type { Tx } from '@/db';
-import type { EntityID } from '@/types';
+import type { AuditMeta } from '@/lib/audit';
+import type { EntityID } from '@app/shared/types';
 
 import { and, eq, isNull, sql } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
+
 import { auditLog } from '@/lib/audit';
 
-import { CREDENTIAL_PROVIDER_ID } from '@/utils/api-messages';
-
+import { CREDENTIAL_PROVIDER_ID } from './credential';
 import {
   hashPassword,
   runPasswordTimingGuard,
   verifyPasswordDetailed,
-} from './password';
+} from './password/hash';
 import { roleAllowsLoginFor } from './user-eligibility';
 
-/**
- * The lockout thresholds.
- *
- * Exported so a test can assert the boundary rather than restate the numbers.
- * `tests/integration/sign-in-controls.test.ts` drives exactly
- * `MAX_FAILED_ATTEMPTS` wrong passwords and asserts the lock engages on that
- * attempt and not the one before; with the values mirrored in the test, a change
- * here would move the behaviour and the assertion together and prove nothing.
- */
+/** Exported so tests assert the lockout boundary rather than restate it. */
 export const MAX_FAILED_ATTEMPTS = 5;
-export const LOCK_DURATION_SECONDS = 5 * 60; // 5 minutes
-
-interface AuditMeta {
-  ip: string | null;
-  userAgent: string | null;
-  apiPath: string;
-}
+export const LOCK_DURATION_SECONDS = 5 * 60;
 
 const PASSWORD_UPGRADE_AUDIT_META = {
   ip: null,
@@ -41,20 +28,11 @@ const PASSWORD_UPGRADE_AUDIT_META = {
 } satisfies AuditMeta;
 
 /**
- * What a password check is FOR.
+ * What a password check is FOR, labelling its `passwordVerified` audit event.
  *
- * Required rather than defaulted, because the audit event it labels used to say
- * something it could not know. `verifyLoginAttempt` writes its success row from
- * inside Better Auth's `before` hook — ahead of the session-creation hook that
- * can still reject an inactive role, a missing required role or an unverified
- * contact — and the same helper proves the current password for three
- * already-authenticated mutation routes, one of which then rejects the request
- * because the submitted address is unchanged. All of those wrote
- * `loginSuccess: true`, so a forensic query could not treat that marker as
- * evidence a session existed.
- *
- * What this labels is the PROOF. `loginSuccess` is written once, after issuance,
- * by the `session.create.after` hook in `lib/auth.ts`.
+ * The event records a PROOF, never a session: gates that can still refuse the
+ * request run after it. `loginSuccess` is written once, after issuance, by the
+ * `session.create.after` hook in `lib/auth/index.ts`.
  */
 type PasswordProofPurpose =
   | 'sign_in'
@@ -65,28 +43,18 @@ type PasswordProofPurpose =
 
 interface VerifyAttemptBase {
   password: string;
-  /** Find user by email (login flow) */
   email?: string;
-  /** Find user by ID (authenticated endpoints — skips email lookup) */
   userId?: EntityID;
-  /** Skip the Argon2 timing guard (for authenticated endpoints where user is known) */
+  /** For authenticated callers: the guard only hides account existence. */
   skipTimingGuard?: boolean;
   /** Return a CAS proof and leave the verified hash unchanged for an immediate password mutation */
   returnPasswordProof?: boolean;
 }
 
 /**
- * Auditing and its label travel together, and the TYPE is what says so.
- *
- * "Required whenever `auditMeta` is supplied" was prose over two optional
- * fields, enforced by a runtime `throw new Error` — which is not a `LoginRejected`
- * and so escapes the only mapping `lib/auth.ts` has for this call, surfacing as
- * an empty Better Auth 500 on a sign-in. Expressed as a union it is a compile
- * error at the call site instead, where the caller knows the answer.
- *
- * When provided, lockout enter/exit and password-proof events are recorded in
- * `audit_logs`. Failed-password attempts are intentionally not audited (high
- * volume, low signal); only the lockout transition is.
+ * Auditing and its label travel together. When audited, lockout enter/exit and
+ * password proofs are recorded; failed attempts deliberately are not (high
+ * volume, low signal), only the lockout transition.
  */
 type AuditedAttempt = {
   auditMeta: AuditMeta;
@@ -96,7 +64,7 @@ type AuditedAttempt = {
 /** `undefined` rather than absent, so an object literal cannot supply one alone. */
 type UnauditedAttempt = { auditMeta?: undefined; purpose?: undefined };
 
-export type VerifyAttemptOptions = VerifyAttemptBase &
+type VerifyAttemptOptions = VerifyAttemptBase &
   (AuditedAttempt | UnauditedAttempt);
 
 export interface VerifiedPasswordProof {
@@ -165,11 +133,7 @@ export async function verifyLoginAttempt(
     purpose,
   } = options;
 
-  // Kept behind the type above, not instead of it: `VerifyAttemptOptions` makes
-  // this unreachable from any type-checked caller, and this is the backstop for
-  // one that is not. It throws a plain Error, which `lib/auth.ts` does not map —
-  // so reaching it is a 500, which is the correct answer to a programming error
-  // and the wrong one to anything a request can cause.
+  // Backstop for a caller the type did not check: a programming error, so a 500.
   if (auditMeta && !purpose)
     throw new Error('verifyLoginAttempt requires a purpose with auditMeta');
 
@@ -199,28 +163,19 @@ export async function verifyLoginAttempt(
       .for('update')
       .limit(1);
 
-    // User not found — don't reveal whether account exists
-    if (!user) {
-      return {
-        outcome: 'reject_unknown_or_inactive',
-        passwordCostPaid: false,
-      };
-    }
-    if (!user.isActive) {
+    if (!user?.isActive) {
       return {
         outcome: 'reject_unknown_or_inactive',
         passwordCostPaid: false,
       };
     }
 
-    // Account locked and lock not yet expired
     if (user.lockedUntil) {
       const lockTime = user.lockedUntil.getTime();
       if (lockTime > Date.now()) {
         return { outcome: 'reject_locked', passwordCostPaid: false };
       }
 
-      // Lock expired — reset within the same transaction before proceeding
       const [reset] = await tx
         .update(users)
         .set({ failedLoginAttempts: 0, lockedUntil: null })
@@ -250,11 +205,7 @@ export async function verifyLoginAttempt(
         });
       }
 
-      // Adopt the post-reset row as the authoritative state. The branches
-      // below derive `willLock` and both audit payloads from these values;
-      // keeping the pre-reset counter made the next failed attempt report
-      // "attempt 6, accountLocked: true" while the DB actually stored
-      // attempt 1 and no lock.
+      // `willLock` and both audit payloads below derive from the post-reset row.
       user.failedLoginAttempts = reset?.failedLoginAttempts ?? 0;
       user.lockedUntil = reset?.lockedUntil ?? null;
     }
@@ -278,7 +229,6 @@ export async function verifyLoginAttempt(
     if (!verification.valid) {
       const willLock = user.failedLoginAttempts + 1 >= MAX_FAILED_ATTEMPTS;
 
-      // Increment counter + lock if threshold reached — single atomic UPDATE
       await tx
         .update(users)
         .set({
@@ -325,21 +275,14 @@ export async function verifyLoginAttempt(
       throw new Error('Verified credential account is missing its hash');
     }
 
-    // Clearing the lockout is the one thing a correct password writes, and it
-    // must not happen for an account `session.create.before` will refuse anyway:
-    // that refusal is the same generic 401 a WRONG password gets, so a correct
-    // guess against a role-ineligible account would silently buy an unbounded
-    // run of further guesses. The role is the only gate in that class — an
-    // inactive user is already rejected above, and the contact-verification
-    // gates answer with their own code, so the caller has been told the password
-    // was right and is expected to go and verify.
-    //
-    // Only `sign_in` reaches those gates; the reauth purposes end at this
-    // function and their callers are already authenticated.
+    // No lockout reset for an account `session.create.before` will refuse:
+    // that refusal is the same generic 401 a wrong password gets, so a correct
+    // guess would silently buy an unbounded run of further guesses. The role is
+    // the only such gate (inactive users are rejected above; the verification
+    // gates answer with their own code), and only `sign_in` reaches it.
     const eligible =
       purpose !== 'sign_in' || (await roleAllowsLoginFor(tx, user.roleId));
 
-    // Successful — reset attempts (no-op if already 0)
     if (eligible && user.failedLoginAttempts > 0) {
       await tx
         .update(users)
@@ -361,9 +304,7 @@ export async function verifyLoginAttempt(
         newData: {
           failedLoginAttempts: eligible ? 0 : user.failedLoginAttempts,
           lockedUntil: eligible ? null : user.lockedUntil,
-          // NOT `loginSuccess`: at this point a password has been proven and
-          // nothing more. The gates that can still refuse the request run after
-          // this returns.
+          // NOT `loginSuccess`: see `PasswordProofPurpose`.
           passwordVerified: true,
           purpose,
         },
@@ -410,16 +351,10 @@ export async function verifyLoginAttempt(
         // writer replaced the row with a hash that is neither of these.
         if (upgradedHash) return [verifiedHash, upgradedHash];
 
-        // ⚠️ The proof now carries a hash the row no longer holds, so
-        // `password.verify` rejects a CORRECT password and this login answers
-        // 401. That is ACCEPTED, and the obvious repair is worse than the
-        // defect: re-reading the row and minting the proof from the stored hash
-        // would accept whatever the concurrent writer put there — and that
-        // writer may have been a password CHANGE, which turns a narrow 401 into
-        // the old password minting a session. Verifying the re-read hash against
-        // the plaintext still in scope would be correct and is not worth the
-        // complexity for a race that needs two concurrent logins during a pepper
-        // rotation. Logged so it is diagnosable rather than mysterious.
+        // ⚠️ ACCEPTED: this login answers 401 on a correct password. Do not mint
+        // the proof from a re-read hash instead — the concurrent writer may
+        // have been a password CHANGE, and the old password would then mint a
+        // session.
         console.error(
           JSON.stringify({
             msg: 'auth.passwordHashUpgrade raceLost',
@@ -430,9 +365,6 @@ export async function verifyLoginAttempt(
           })
         );
       } catch (error) {
-        // Structured, like every other log call in this codebase: a
-        // two-argument `console.error` emits two values, and the second never
-        // reaches a JSON log pipeline as part of the first.
         console.error(
           JSON.stringify({
             msg: 'auth.passwordHashUpgrade failed',

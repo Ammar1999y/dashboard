@@ -2,29 +2,18 @@ import type { HandlerRequestMeta } from './contract';
 
 import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
 
-// Coarse pre-auth limit so traffic without a valid session can't force
-// repeated session lookups. Generous enough that a shared NAT egress isn't
-// punished, tight enough to cap unauthenticated abuse.
+// Generous enough that a shared NAT egress is not punished, tight enough to cap
+// unauthenticated abuse of the session layer.
 export const PRE_AUTH_LIMIT = 120;
 const PRE_AUTH_WINDOW_S = 60;
 const PRE_AUTH_SURFACE_SEGMENTS = 2;
 const PRE_AUTH_SEGMENT_MAX = 40;
 
 /**
- * Derive a per-surface limiter scope from the request path.
- *
- * A single shared scope let unrelated workloads throttle each other: anonymous
- * forgot-password / passwordless traffic and authenticated dashboard traffic
- * from the same office NAT drew on one counter, so abuse of one surface
- * produced deterministic 429/503 on the other. Two segments after `/api` is
- * the surface granularity (`/api/dash/users/<id>` -> `preauth.dash.users`,
- * `/api/auth/forgot-password/send` -> `preauth.auth.forgot-password`) — narrow
- * enough to isolate surfaces, coarse enough that dynamic ids don't explode the
- * keyspace.
- *
- * Exported for the suite, which derives the complete set of scopes the route
- * table can produce by walking `ROUTES` through this function rather than
- * keeping a second copy of the list — a copy that had already drifted.
+ * The limiter scope for a table route: two segments after `/api`
+ * (`/api/dash/users/<id>` → `preauth.dash.users`), so unrelated surfaces
+ * behind one NAT do not throttle each other while dynamic ids cannot explode
+ * the keyspace.
  */
 export function preAuthScope(pathname: string): string {
   return scopeFrom(pathname, PRE_AUTH_SURFACE_SEGMENTS);
@@ -34,20 +23,13 @@ export function preAuthScope(pathname: string): string {
 const PRE_AUTH_PATH_SEGMENTS = 8;
 
 /**
- * The scope for ONE path on a wildcard prefix's allowlist — the whole path, not
- * its first two segments.
+ * The scope for ONE path on a wildcard prefix's allowlist — the whole path, so
+ * a budget declared per path in `lib/auth/allowed-paths.ts` is also counted
+ * per path.
  *
- * Only safe because the caller has already matched the path against a
- * compile-time list, so the keyspace is that list and nothing a client sends
- * can widen it. Everything OUTSIDE the list still shares
- * `UNKNOWN_PREFIX_SCOPE`, which is what bounds path rotation.
- *
- * `preAuthScope`'s two-segment surface is wrong for these: the twelve
- * `/two-factor/*` endpoints declare budgets of 20, 30 and 60 in
- * `lib/auth/allowed-paths.ts`, and a budget stated per path but counted per
- * surface is not that budget — a dashboard reading `/two-factor/methods` at
- * 60/min exhausts the pool `/two-factor/otp/send` needs at 20/min, and a second
- * user behind the same NAT is refused a code they never over-requested.
+ * Only safe because the caller has matched the path against that compile-time
+ * list, so no client input can widen the keyspace. Everything outside it shares
+ * `UNKNOWN_PREFIX_SCOPE`.
  */
 export function allowlistedPathScope(pathname: string): string {
   return scopeFrom(pathname, PRE_AUTH_PATH_SEGMENTS);
@@ -63,49 +45,30 @@ function scopeFrom(pathname: string, maxSegments: number): string {
   return segments.length > 0 ? `preauth.${segments.join('.')}` : 'preauth.root';
 }
 
-/**
- * Coarse per-IP admission run before the handler on authenticated surfaces, so
- * unauthenticated traffic can't hammer the session layer.
- *
- * Fail-closed: this limiter exists specifically so unauthenticated traffic
- * can't hammer session lookup. Letting requests through on a degraded limiter
- * store would silently strip the protection it exists for, so a 503 is the
- * correct shape. Locally that now means a broken disk or schema rather than a
- * network outage, which makes failing closed more clearly right, not less.
- *
- * Lives outside any single adapter because every adapter needs it and a second
- * copy would let the two limits drift apart.
- *
- * Takes only the head of the request, deliberately: this is an ADMISSION check,
- * so it has to be callable before the body is parsed.
- */
-export interface PreAuthLimitOptions {
+interface PreAuthLimitOptions {
   /**
-   * Overrides `PRE_AUTH_LIMIT` for one path. Only the Better Auth prefix uses
-   * it: those four paths need budgets an order of magnitude apart (a session
-   * read on every dashboard navigation versus a credential submission), and
-   * routing them through this function rather than a second limiter is what
-   * keeps auth admission in ONE place — see `RoutePrefixPath.preAuthLimit`,
-   * declared per path in `lib/auth/allowed-paths.ts`.
+   * Overrides `PRE_AUTH_LIMIT` for one path — the Better Auth prefix's
+   * per-path budgets (`RoutePrefixPath.preAuthLimit`), routed through here so
+   * auth admission stays in one place.
    */
   limit?: number;
   /**
-   * Replaces the path-derived scope with a FIXED one.
-   *
-   * `preAuthScope` builds the key out of the request path, which is correct
-   * only while the set of paths is bounded by the route table. It is not on a
-   * wildcard prefix: an unauthenticated client rotating `/api/auth/<random>`
-   * minted a NEW limiter key per request — measured, three invented paths gave
-   * three distinct keys from one IP — so the limiter aggregated nothing and
-   * every request wrote another row into `rate_limit`. That is the same
-   * unbounded-keyspace failure the sweep ceiling is sized against.
-   *
-   * A caller serving a wildcard must therefore pass one fixed scope for
-   * everything outside its own allowlist.
+   * Replaces the path-derived scope with a FIXED one. A caller serving a
+   * wildcard must pass one for everything outside its allowlist: a scope built
+   * from an unbounded path mints a new limiter key, and a `rate_limit` row,
+   * per invented path.
    */
   scope?: string;
 }
 
+/**
+ * Coarse per-IP admission, run before the handler so unauthenticated traffic
+ * cannot hammer session lookup.
+ *
+ * Fail-closed: letting requests through on a degraded limiter store would strip
+ * the protection it exists for. Takes only the request head, so it runs before
+ * the body is parsed.
+ */
 export function enforcePreAuthIpLimit(
   ctx: Pick<HandlerRequestMeta, 'apiPath' | 'headers'>,
   options: PreAuthLimitOptions = {}
@@ -120,8 +83,7 @@ export function enforcePreAuthIpLimit(
 }
 
 /**
- * The single bucket every unrecognised path under a wildcard prefix shares.
- *
- * Fixed, so path rotation cannot multiply either the budget or the keyspace.
+ * The single bucket every unrecognised path under a wildcard prefix shares, so
+ * path rotation multiplies neither the budget nor the keyspace.
  */
 export const UNKNOWN_PREFIX_SCOPE = 'preauth.auth.unknown';

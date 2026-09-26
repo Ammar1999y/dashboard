@@ -10,9 +10,10 @@ const { seedUser, signIn, baseHeaders, uniquePhone } =
   await import('../helpers/session');
 const { app } = await import('@/app');
 const { PUBLIC_ORIGIN } = await import('@/lib/env');
-const { REAUTH_REQUIRED_CODE } = await import('@/utils/api-messages');
+const { REAUTH_REQUIRED_CODE } = await import('@app/shared/api-messages');
 const { startGoogle } = await import('../helpers/google');
-const { TWO_FACTOR_ENABLED } = await import('@/utils/validation/two-factor');
+const { TWO_FACTOR_ENABLED } =
+  await import('@app/shared/validation/two-factor');
 if (TWO_FACTOR_ENABLED) throw new Error('Two-factor feature must be disabled.');
 const owner = await seedUser();
 await db

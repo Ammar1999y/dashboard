@@ -1,0 +1,26 @@
+# Working trees are LF everywhere, including on Windows.
+#
+# At the ROOT because the rule has to cover every file in the repository, not
+# just the two app directories that used to carry a copy each: this machine has
+# `core.autocrlf=true`, which rewrites every file git checks out to CRLF, and
+# Prettier's `endOfLine` default is `lf` — so on a fresh Windows clone the
+# `shared format` and `root format` jobs failed on files nobody had touched.
+# That is a checkout artefact, not a source defect, so it is fixed here rather
+# than by relaxing the gate. `apps/back-end/.gitattributes` adds only the office
+# fixtures it owns.
+#
+# After changing this file, run `git add --renormalize .` once so the index
+# agrees with it.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.avif binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.db binary

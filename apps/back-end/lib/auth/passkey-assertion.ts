@@ -1,5 +1,5 @@
-import type { Tx } from '@/db';
-import type { EntityID } from '@/types';
+import type { Executor } from '@/db';
+import type { EntityID } from '@app/shared/types';
 import type {
   AuthenticationResponseJSON,
   AuthenticatorTransportFuture,
@@ -14,13 +14,14 @@ import {
   verifyAuthenticationResponse,
 } from '@simplewebauthn/server';
 import * as z from 'zod';
+
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { authenticationDenied } from './api-error';
+import { authenticationDenied } from './errors';
 
 /**
  * One RP identity for BOTH halves of the ceremony. The registration plugin is
- * configured from this and `PUBLIC_ORIGIN` in `lib/auth/two-factor.ts`; left to
+ * configured from this and `PUBLIC_ORIGIN` in `lib/auth/two-factor/plugin.ts`; left to
  * itself it would take `expectedOrigin` from the request's own `Origin` header.
  */
 export const RP_ID = new URL(PUBLIC_ORIGIN).hostname;
@@ -70,7 +71,7 @@ export async function passkeyOptions(
 export async function advancePasskeyCounter(
   passkeyId: string,
   to: number,
-  executor: Tx | typeof db = db
+  executor: Executor = db
 ): Promise<boolean> {
   if (to === 0) return true;
   const [advanced] = await executor

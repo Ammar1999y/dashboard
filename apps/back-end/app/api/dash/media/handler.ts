@@ -1,12 +1,19 @@
 import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
-import type { Handler } from '@/lib/http/contract';
+import type { MediaScope } from '@app/shared/validation/media';
 
 import { and, count, eq, isNotNull } from 'drizzle-orm';
 
 import { db } from '@/db';
-import { parseDataTableParams } from '@/db/queries/data-table';
-import { bucketTypeEnum, fileKindEnum, files } from '@/db/schema';
-import { validID } from '@/utils';
+import { files } from '@/db/schema';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import { BUCKET_TYPES, FILE_KINDS } from '@app/shared/validation/enums';
+import { MEDIA_SCOPES } from '@app/shared/validation/media';
+
+import { parseDataTableParams } from '@/lib/data-table/params';
+import { requireId } from '@/lib/http/input';
+import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { KNOWN_MIME_TYPES } from '@/lib/media/allowlist';
 import { FILE_COLUMNS, toMediaFiles } from '@/lib/media/files';
@@ -21,11 +28,6 @@ import { mediaMsg } from '@/lib/media/messages';
 import { ENABLED_VISIBILITIES } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { apiSuccess, handleApiError } from '@/utils/api-response';
-import { CustomError } from '@/utils/error-class';
-import { idRequired } from '@/utils/validation/rules';
-
 /**
  * Server-owned filter contract for the file list. Keys are the allowlist;
  * `displayName` carries a trigram index (`db/migrations/002_media_trgm_indexes.sql`).
@@ -38,23 +40,14 @@ export const MEDIA_FILTER_COLUMNS: FilterColumnSpecs = {
   displayName: { type: 'text' },
   sizeBytes: { type: 'number' },
   mimeType: { type: 'select', values: KNOWN_MIME_TYPES },
-  kind: { type: 'select', values: fileKindEnum },
-  bucketType: { type: 'select', values: bucketTypeEnum },
+  kind: { type: 'select', values: FILE_KINDS },
+  bucketType: { type: 'select', values: BUCKET_TYPES },
   createdAt: { type: 'date' },
   updatedAt: { type: 'date' },
 };
 
 /** Parameters this route reads itself; the data-table parser rejects unknown keys. */
 const OWN_PARAMS = new Set(['folder', 'scope']);
-
-/**
- * `folder`: one folder's view. `all`: every library file, plus folders by name.
- * `unfiled`: active files in no folder that no record references — former
- * entity uploads whose owner is gone — which the sweep deletes after
- * `UNFILED_RETENTION_DAYS` unless they are filed.
- */
-export const MEDIA_SCOPES = ['folder', 'all', 'unfiled'] as const;
-type MediaScope = (typeof MEDIA_SCOPES)[number];
 
 function requireScope(query: URLSearchParams): MediaScope {
   const raw = query.get('scope') ?? 'folder';
@@ -67,9 +60,7 @@ function requireScope(query: URLSearchParams): MediaScope {
 function requireFolderParam(query: URLSearchParams): string | null {
   const raw = query.get('folder');
   if (raw === null || raw === '') return null;
-  const id = validID(raw);
-  if (!id) throw new CustomError(idRequired, HTTP_STATUS.UNPROCESSABLE);
-  return id;
+  return requireId(raw);
 }
 
 function dataTableUrl(url: string): string {
@@ -78,120 +69,116 @@ function dataTableUrl(url: string): string {
   return parsed.href;
 }
 
-export const GET: Handler = async (ctx) => {
-  try {
-    const { userId, permissions } = await requirePermission(ctx, {
-      resource: 'media',
-      action: 'view',
-    });
+export const GET = withApiErrors(mediaMsg.fetchError, async (ctx) => {
+  const { userId, permissions } = await requirePermission(ctx, {
+    resource: 'media',
+    action: 'view',
+  });
 
-    await enforceRateLimit({
-      scope: 'media.get',
-      identifier: userIdentifier(userId),
-      limit: 120,
-    });
+  await enforceRateLimit({
+    scope: 'media.get',
+    identifier: userIdentifier(userId),
+    limit: 120,
+  });
 
-    const scope = requireScope(ctx.query);
-    const folderId = requireFolderParam(ctx.query);
+  const scope = requireScope(ctx.query);
+  const folderId = requireFolderParam(ctx.query);
 
-    const {
-      where,
-      orderBy,
-      limit,
-      offset,
-      page,
-      perPage,
-      search,
-      buildPageCount,
-    } = parseDataTableParams(files, {
-      url: dataTableUrl(ctx.url),
-      filterableColumns: MEDIA_FILTER_COLUMNS,
-      searchableColumns: ['displayName'],
-      defaultSort: { id: 'createdAt', desc: true },
-    });
+  const {
+    where,
+    orderBy,
+    limit,
+    offset,
+    page,
+    perPage,
+    search,
+    buildPageCount,
+  } = parseDataTableParams(files, {
+    url: dataTableUrl(ctx.url),
+    filterableColumns: MEDIA_FILTER_COLUMNS,
+    searchableColumns: ['displayName'],
+    defaultSort: { id: 'createdAt', desc: true },
+  });
 
-    const common = {
-      visibilities: [...ENABLED_VISIBILITIES],
-      canPublish: permissions?.['media']?.['publish'] === true,
-    };
+  const common = {
+    visibilities: [...ENABLED_VISIBILITIES],
+    canPublish: permissions?.['media']?.['publish'] === true,
+  };
 
-    // The library is the ACTIVE files that sit in a folder. Pending uploads,
-    // deleting rows and entity uploads a record holds are never listed; the
-    // unfiled scope is the active files in no folder that nobody holds.
-    const active = eq(files.status, 'active');
-    const filter =
-      scope === 'all'
-        ? and(active, isNotNull(files.folderId), where)
-        : scope === 'unfiled'
-          ? and(unfiledNow(), where)
-          : folderId === null
-            ? null
-            : and(active, eq(files.folderId, folderId), where);
+  // The library is the ACTIVE files that sit in a folder. Pending uploads,
+  // deleting rows and entity uploads a record holds are never listed; the
+  // unfiled scope is the active files in no folder that nobody holds.
+  const active = eq(files.status, 'active');
+  const filter =
+    scope === 'all'
+      ? and(active, isNotNull(files.folderId), where)
+      : scope === 'unfiled'
+        ? and(unfiledNow(), where)
+        : folderId === null
+          ? null
+          : and(active, eq(files.folderId, folderId), where);
 
-    if (scope === 'folder' && folderId !== null) {
-      const folder = await getFolder(folderId);
-      if (!folder)
-        throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
-    }
+  if (scope === 'folder' && folderId !== null) {
+    const folder = await getFolder(folderId);
+    if (!folder)
+      throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
+  }
 
-    const [rows, [totalRow]] = filter
-      ? await Promise.all([
-          db
-            .select(FILE_COLUMNS)
-            .from(files)
-            .where(filter)
-            .orderBy(...orderBy)
-            .limit(limit)
-            .offset(offset),
-          db.select({ total: count() }).from(files).where(filter),
-        ])
-      : [[], [{ total: 0 }]];
-    const total = totalRow?.total ?? 0;
-    const meta = { page, perPage, total, pageCount: buildPageCount(total) };
+  const [rows, [totalRow]] = filter
+    ? await Promise.all([
+        db
+          .select(FILE_COLUMNS)
+          .from(files)
+          .where(filter)
+          .orderBy(...orderBy)
+          .limit(limit)
+          .offset(offset),
+        db.select({ total: count() }).from(files).where(filter),
+      ])
+    : [[], [{ total: 0 }]];
+  const total = totalRow?.total ?? 0;
+  const meta = { page, perPage, total, pageCount: buildPageCount(total) };
 
-    if (scope === 'all') {
-      const hits = search
-        ? await searchFolders(search)
-        : { folders: [], truncated: false };
-      return apiSuccess({
-        message: mediaMsg.fetched,
-        data: {
-          ...common,
-          files: await toMediaFiles(rows),
-          folders: hits.folders,
-          foldersTruncated: hits.truncated,
-        },
-        meta,
-      });
-    }
-
-    if (scope === 'unfiled')
-      return apiSuccess({
-        message: mediaMsg.fetched,
-        data: {
-          ...common,
-          files: await toMediaFiles(rows),
-          retentionDays: UNFILED_RETENTION_DAYS,
-        },
-        meta,
-      });
-
-    const [trail, subfolders] = await Promise.all([
-      folderId === null ? Promise.resolve([]) : breadcrumbs(folderId),
-      listSubfolders(folderId),
-    ]);
-
+  if (scope === 'all') {
+    const hits = search
+      ? await searchFolders(search)
+      : { folders: [], truncated: false };
     return apiSuccess({
       message: mediaMsg.fetched,
       data: {
         ...common,
-        breadcrumbs: trail,
-        folders: subfolders,
         files: await toMediaFiles(rows),
+        folders: hits.folders,
+        foldersTruncated: hits.truncated,
       },
       meta,
     });
-  } catch (error) {
-    return handleApiError(error, mediaMsg.fetchError);
   }
-};
+
+  if (scope === 'unfiled')
+    return apiSuccess({
+      message: mediaMsg.fetched,
+      data: {
+        ...common,
+        files: await toMediaFiles(rows),
+        retentionDays: UNFILED_RETENTION_DAYS,
+      },
+      meta,
+    });
+
+  const [trail, subfolders] = await Promise.all([
+    folderId === null ? Promise.resolve([]) : breadcrumbs(folderId),
+    listSubfolders(folderId),
+  ]);
+
+  return apiSuccess({
+    message: mediaMsg.fetched,
+    data: {
+      ...common,
+      breadcrumbs: trail,
+      folders: subfolders,
+      files: await toMediaFiles(rows),
+    },
+    meta,
+  });
+});

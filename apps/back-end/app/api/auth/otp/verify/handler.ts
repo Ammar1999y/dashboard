@@ -1,70 +1,63 @@
 import type { Handler } from '@/lib/http/contract';
 
-import { and, eq, isNull } from 'drizzle-orm';
-
 import { db, withTransaction } from '@/db';
-import { userContactColumn } from '@/db/queries';
 import { users } from '@/db/schema';
-import { sanitizeForLog } from '@/utils';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { OTP_AUTO_VERIFY } from '@app/shared/config';
+import { CustomError } from '@app/shared/error-class';
+import { OTP_ENABLED, verifyOtpSchema } from '@app/shared/validation/otp';
+
 import { getAuditMeta } from '@/lib/audit';
+import { ensureMinDelay, otpMsg } from '@/lib/auth/messages';
 import { verifyTurnstileRequest } from '@/lib/captcha';
+import { readJsonBody } from '@/lib/http/input';
+import {
+  apiSuccess,
+  handleApiError,
+  requireFeature,
+} from '@/lib/http/response';
+import { markContactVerified } from '@/lib/otp/contact';
+import { collapseProofThrottle } from '@/lib/otp/throttle';
+import { processOtpVerify } from '@/lib/otp/verify';
 import {
   enforceOtpVerifyQuota,
   enforceRateLimit,
   ipIdentifier,
 } from '@/lib/rate-limit';
+import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { OTP_AUTO_VERIFY } from '@/utils/config';
-import { CustomError } from '@/utils/error-class';
-import {
-  collapseProofThrottle,
-  markContactVerified,
-  processOtpVerify,
-} from '@/utils/otp';
-import { OTP_ENABLED, verifyOtpSchema } from '@/utils/validation/otp';
-
-import { ensureMinDelay, otpMsg } from '../messages';
+import { sanitizeForLog } from '@/utils/log';
 
 export const POST: Handler = async (ctx) => {
-  // Start timing before any DB work so the floor covers lookup time too.
+  // Before any DB work, so the floor covers the lookup too.
   const start = Date.now();
   try {
-    if (!OTP_ENABLED)
-      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    requireFeature(OTP_ENABLED);
 
-    // Coarse per-IP cap BEFORE captcha so the outbound siteverify call is
-    // bounded per IP, and a single IP / botnet node can't spray 6-digit codes
-    // across identifiers to side-step the per-identifier verify cap.
+    // Per IP BEFORE the captcha, bounding the siteverify call and stopping one
+    // IP spraying codes across identifiers past the per-identifier cap.
     await enforceRateLimit({
       scope: 'otp.verify.ip',
       identifier: ipIdentifier(ctx.headers),
       limit: 60,
-      window: 60,
       failClosed: true,
     });
 
     const captchaOk = await verifyTurnstileRequest(ctx.headers);
     if (!captchaOk) {
+      // Returned, not thrown: the collapse below would turn this 403 into 400.
       return handleApiError(
         new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN)
       );
     }
 
-    const body = requireJsonBody(await ctx.readJson());
+    const input = await readJsonBody(ctx, verifyOtpSchema, {
+      message: otpMsg.invalidInput,
+    });
 
-    const parsed = verifyOtpSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(otpMsg.invalidInput, HTTP_STATUS.UNPROCESSABLE);
-
-    const { channel, code } = parsed.data;
-    const identifier =
-      channel === 'email' ? parsed.data.email : parsed.data.phoneNumber;
+    const { channel, code } = input;
+    const identifier = contactIdentifier(input);
 
     await enforceOtpVerifyQuota({
       channel,
@@ -72,27 +65,21 @@ export const POST: Handler = async (ctx) => {
       surface: 'verify_contact',
     });
 
-    const whereClause = eq(userContactColumn(channel), identifier);
-
     const [userData] = await db
       .select({ id: users.id, email: users.email })
       .from(users)
-      .where(
-        and(whereClause, isNull(users.deletedAt), eq(users.isActive, true))
-      )
+      .where(activeUserWithContact(channel, identifier))
       .limit(1);
 
-    if (!userData) {
-      // Raise the generic "invalid/expired" error so the catch branch applies
-      // the same timing floor as the real path.
+    // Thrown so the catch applies the same floor as the real path.
+    if (!userData)
       throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
-    }
 
     const auditMeta = getAuditMeta(ctx);
 
     const onMissing = (): never => {
-      // user vanished/deactivated mid-flow — distinct internal signal so this
-      // isn't confused with a wrong code; client still sees the generic error.
+      // The user vanished or was deactivated mid-flow: logged apart from a
+      // wrong code, answered with the same generic error.
       console.error(
         sanitizeForLog({
           msg: 'otp.verify.userVanished',
@@ -103,10 +90,9 @@ export const POST: Handler = async (ctx) => {
       throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
     };
 
-    // OTP_AUTO_VERIFY bypass flips the flag on request without validating a
-    // code (lets a frontend that still calls verify succeed idempotently).
-    // Otherwise markContactVerified runs inside the verify transaction, after a
-    // real code match, under the FOR UPDATE lock on the user row.
+    // OTP_AUTO_VERIFY flips the flag without a code, so a client that still
+    // calls verify succeeds idempotently. Otherwise the flag flips inside the
+    // verify transaction, after a real match, under the user row lock.
     try {
       await (OTP_AUTO_VERIFY
         ? withTransaction((tx) =>
@@ -134,10 +120,8 @@ export const POST: Handler = async (ctx) => {
               }),
           }));
     } catch (error) {
-      // Proof-row state is account-dependent. Only the pre-lookup limiter may
-      // expose 429 and Retry-After on this anonymous endpoint — which is exactly
-      // what the marker distinguishes, so this no longer swallows a limiter 429
-      // that happened to surface from inside the call.
+      // Proof-row state is account-dependent: only the pre-lookup limiters may
+      // expose a 429 and Retry-After on this anonymous endpoint.
       throw collapseProofThrottle(error, otpMsg.invalidOrExpired);
     }
 
@@ -150,11 +134,9 @@ export const POST: Handler = async (ctx) => {
   } catch (error) {
     await ensureMinDelay(Date.now() - start);
 
-    // Collapse all privacy-sensitive statuses into the same generic shape so
-    // attackers can't distinguish unknown user / bad code / missing session.
-    // 429 keeps its own headers, 503 must surface so failClosed rate-limit
-    // outages aren't masked as a wrong OTP, and unknown errors fall through
-    // to the centralised handler.
+    // Unknown user, wrong code and missing proof answer one generic shape.
+    // 429 keeps its headers, 503 surfaces so a fail-closed limiter outage is
+    // not masked as a wrong code, and 500/422 pass through.
     if (
       error instanceof CustomError &&
       error.status !== HTTP_STATUS.TOO_MANY_REQUESTS &&

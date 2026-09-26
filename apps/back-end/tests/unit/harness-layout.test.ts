@@ -309,7 +309,7 @@ describe('the stripper both detectors depend on', () => {
   });
 
   test('a comment naming a module produces no import edge', () => {
-    // The live instance: `utils/images/svg-optimizer.ts` said "use
+    // The live instance: `packages/shared/src/images/svg-optimizer.ts` said "use
     // sanitizeSvgServer from './server'" in a doc comment, and
     // `find-unused-files.ts` extracted `./server` from it as a real specifier.
     const stripped = stripComments(

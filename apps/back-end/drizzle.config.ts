@@ -1,17 +1,14 @@
 import { defineConfig } from 'drizzle-kit';
 
 /**
- * Drizzle Kit config for ONE command: `bun run db:generate`, which reads
- * `db/schema.ts` and writes SQL into `db/drizzle/`. It never connects.
+ * For `bun run db:generate` only, which reads `db/schema.ts` and writes SQL
+ * into `db/drizzle/` without connecting.
  *
- * No `dbCredentials`, and no `DATABASE_URL` check, deliberately. Every
- * drizzle-kit command that would use them — `migrate`, `push`, `pull`,
- * `studio` — connects through `pg`, `postgres`, `@neondatabase/serverless` or
- * `@vercel/postgres`, and this project has none of them: the client is
- * `bun:sql`. So the credentials could not be used even if they were here, while
- * requiring the variable made `db:generate` fail for no reason in any
- * environment that has the schema but not the database. Migrations are applied
- * by `bun run db:migrate` (`scripts/migrate.ts`), which owns the connection.
+ * No `dbCredentials` and no `DATABASE_URL` check, deliberately: every
+ * drizzle-kit command that would use them connects through a driver this
+ * project does not have (the client is `bun:sql`), and requiring the variable
+ * would fail `db:generate` where there is a schema but no database. Migrations
+ * are applied by `scripts/migrate.ts`.
  */
 export default defineConfig({
   out: './db/drizzle',

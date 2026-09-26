@@ -1,9 +1,9 @@
-/**
- * `lib/http/openapi.ts` refuses to build when a served path declares no 200, and
- * a local plugin endpoint has no generated schema unless it says so.
- */
 type JsonSchema = Record<string, unknown>;
 
+/**
+ * `lib/http/openapi/` refuses to build when a served path declares no 200, and
+ * a local plugin endpoint has no generated schema unless it says so.
+ */
 export function envelopeResponse(
   description: string,
   data: JsonSchema | null = null

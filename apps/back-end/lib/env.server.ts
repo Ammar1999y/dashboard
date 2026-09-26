@@ -1,17 +1,19 @@
 /* eslint-disable unicorn/no-top-level-side-effects -- the load-time crash IS this module's contract */
 import path from 'node:path';
 
-import { validateOtpKeyConfiguration } from '@/lib/auth/otp-key';
-import { validatePasswordPepperConfiguration } from '@/lib/auth/password-pepper';
+import { validatePasswordPepperConfiguration } from '@/lib/auth/password/pepper';
+import { validateOtpKeyConfiguration } from '@/lib/otp/key';
 import { R2_PRIVATE_BUCKET, R2_PUBLIC_BUCKET } from '@/lib/r2/buckets';
 
+import { missingServerEnvMessage } from '@/utils/missing-env';
+
 /**
- * Hard-fail at module-load time when a required server env var is missing.
+ * Throws at load, so any graph that reaches this module refuses to start on a
+ * misconfigured deployment instead of failing on the first request that reads
+ * an unset variable.
  *
- * Imported by every server-only module that depends on these values (auth,
- * DB, rate-limit, captcha, OTP) so a misconfigured production deploy crashes
- * during startup instead of intermittently failing on the first request that
- * hits an unset variable.
+ * ⚠️ `tests/unit/env-secret.test.ts` extracts every single-quoted string from
+ * this array and `REQUIRED_IN_PRODUCTION`, comments included.
  */
 const REQUIRED_SERVER_ENV = [
   'DATABASE_URL',
@@ -24,14 +26,13 @@ const REQUIRED_SERVER_ENV = [
   'OTP_HMAC_KEYRING',
 ] as const;
 
-// Vars that are only required outside development. The Turnstile module falls
-// back to a Cloudflare-published TEST_SECRET_KEY in dev; keeping that path
-// usable lets local contributors run without provisioning every credential.
-// `SQLITE_MAINTENANCE_TOKEN` is here because `GET /api/health/storage` — the
-// orchestrator's readiness probe — refuses every request without it, so an unset
-// value in production is a container that never becomes healthy. Failing at boot
-// says that once, instead of through a restart loop.
-
+/**
+ * Production only. Turnstile falls back to Cloudflare's published test secret
+ * in development, so contributors can run without every credential.
+ * `SQLITE_MAINTENANCE_TOKEN` gates the readiness probe, so without it a
+ * production container never becomes healthy; failing at boot says so once
+ * instead of through a restart loop.
+ */
 const REQUIRED_IN_PRODUCTION = [
   'TURNSTILE_SECRET_KEY',
   'SQLITE_MAINTENANCE_TOKEN',
@@ -55,7 +56,7 @@ const R2_CREDENTIALS = [
  * - no bucket at all in production, where every upload path would 422;
  * - one half of the cache-purge pair, which would look configured and do nothing;
  * - one bucket under both names, where a publish would copy an object onto
- *   itself and then delete the only copy (measured against the stub).
+ *   itself and then delete the only copy.
  *
  * `R2_PUBLIC_URL` is parsed because it is concatenated with object keys into
  * URLs that are stored nowhere and rebuilt on every read: a trailing slash or a
@@ -110,16 +111,10 @@ function r2ConfigurationErrors(production: boolean): string[] {
     );
   else if (production && publicUrl && !zoneId)
     // A warning, not a refusal: an uncached public origin needs no purge, and
-    // this cannot tell one from a cached custom domain. But the combination is
-    // the one where unpublish LIES — public objects are served
-    // `max-age=31536000, immutable`, the origin object is deleted, the route
-    // answers 200, and the edge keeps serving the bytes for up to a year with
-    // nothing in the response saying so. Whoever configured the public origin
-    // has to decide which case this is.
-    //
-    // Production only, like the `r2.dev` warning above: it is a statement about
-    // a deployment that has real public objects behind a real CDN, and several
-    // tests assert the exact set of diagnostics a boot produces.
+    // this cannot tell one from a cached custom domain. On a cached one,
+    // unpublish answers 200 while the edge keeps serving the immutable bytes for
+    // up to a year. Production only, because several tests assert the exact set
+    // of diagnostics a boot produces.
     console.warn(
       JSON.stringify({
         msg: 'media.cache-purge is not configured',
@@ -162,36 +157,27 @@ const BETTER_AUTH_SECRET_MIN_LENGTH = 32;
 /**
  * This project's signing-secret contract: `BETTER_AUTH_SECRET`, and only that.
  *
- * Scope, precisely: the caller runs this ONLY when `NODE_ENV === 'production'`,
- * so every rule below — including the `BETTER_AUTH_SECRETS` rejection — applies
- * in production and is not evaluated in development.
+ * Evaluated only in production.
  *
- * Better Auth also accepts a `BETTER_AUTH_SECRETS` keyring and an `AUTH_SECRET`
- * fallback. Neither is supported here — a dependency offering an input is not a
- * reason for this project to. Rotation would need its own deliberate design and
- * its own tests, so until then one name means one place to look.
+ * Better Auth's `BETTER_AUTH_SECRETS` keyring and `AUTH_SECRET` fallback are
+ * unsupported until rotation has its own design and tests. The keyring is
+ * REJECTED rather than ignored because Better Auth gives it precedence, so a
+ * stray value would silently take over signing from the validated variable.
  *
- * `BETTER_AUTH_SECRETS` is rejected rather than ignored: Better Auth gives the
- * keyring PRECEDENCE over the singular secret, so a stray value there would
- * silently take over signing from the variable this project validates.
+ * Better Auth rejects a missing or default secret only where it is
+ * constructed, and a build that evaluates the module graph prints that and
+ * still exits 0; this makes it fatal.
  *
- * Better Auth does reject a missing/default secret itself, but only where it
- * is constructed — a build step that evaluates the module graph prints the
- * rejection and still exits 0, so a deployment can be produced without one.
- * This is what makes it fatal here instead.
- *
- * No environment value, or any slice of one, appears in these messages: build
- * logs are widely readable and a mistakenly pasted secret must not leak a
- * prefix. `betterAuth({secret})` is out of scope — `lib/auth.ts` passes none,
- * and if that changes this check has to move.
+ * No environment value, or any slice of one, may appear in these messages:
+ * build logs are widely readable. `lib/auth/index.ts` passes no
+ * `betterAuth({ secret })`; if it ever does, this check has to move.
  */
 function betterAuthSecretError(): string | null {
   if (process.env.BETTER_AUTH_SECRETS !== undefined)
     return 'BETTER_AUTH_SECRETS is not supported by this project (it would take precedence over BETTER_AUTH_SECRET). Unset it and use BETTER_AUTH_SECRET.';
 
   const secret = process.env.BETTER_AUTH_SECRET;
-  if (!secret?.trim())
-    return 'Missing required server env var: BETTER_AUTH_SECRET';
+  if (!secret?.trim()) return missingServerEnvMessage(['BETTER_AUTH_SECRET']);
 
   // Rejected, not trimmed. Better Auth signs with the value verbatim, so padding
   // silently becomes part of the key — and comparing the untrimmed value against
@@ -225,10 +211,7 @@ function assertEnv(): void {
     if (secretError) throw new Error(secretError);
   }
 
-  if (missing.length > 0)
-    throw new Error(
-      `Missing required server env var${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`
-    );
+  if (missing.length > 0) throw new Error(missingServerEnvMessage(missing));
 
   const r2Errors = r2ConfigurationErrors(production);
   if (r2Errors.length > 0)
@@ -249,7 +232,7 @@ validateOtpKeyConfiguration();
  */
 function requireEnv(key: (typeof REQUIRED_SERVER_ENV)[number]): string {
   const value = process.env[key];
-  if (!value) throw new Error(`Missing required server env var: ${key}`);
+  if (!value) throw new Error(missingServerEnvMessage([key]));
   return value;
 }
 
@@ -279,7 +262,7 @@ function resolveSqliteDir(): string {
   if (!configured) {
     if (process.env.NODE_ENV === 'production')
       throw new Error(
-        'Missing required server env var: SQLITE_DIR. It must be an absolute path ' +
+        `${missingServerEnvMessage(['SQLITE_DIR'])}. It must be an absolute path ` +
           'to a persistent volume; see reports/coolify-deployment.md.'
       );
     return './data';
@@ -293,10 +276,7 @@ function resolveSqliteDir(): string {
   return configured;
 }
 
-/**
- * Exported because `lib/sqlite/writer-lock.ts` asserts single-writer ownership of
- * this DIRECTORY, not of one database file inside it.
- */
+/** `server.ts` claims this whole DIRECTORY with `acquireWriterLock`. */
 export const SQLITE_DIR = resolveSqliteDir();
 
 /** Rate-limit state: process-crash-safe, must survive deploys (the OTP cap). */
@@ -311,7 +291,7 @@ export const CACHE_DB_PATH = path.join(SQLITE_DIR, 'cache.db');
  * constant-time compare (it must — `timingSafeEqual` throws on a length
  * mismatch), so the token's exact LENGTH is recoverable before any content
  * guessing begins. A short token is therefore not merely weak, it is weak in a
- * measurable way. `SQLITE_MAINTENANCE_TOKEN=x` used to be accepted at boot.
+ * measurable way.
  *
  * The LENGTH rule lives here and the PRESENCE rule in `REQUIRED_IN_PRODUCTION`,
  * because they hold over different environments: a development or test process

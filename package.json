@@ -1,0 +1,46 @@
+{
+  "name": "app",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "npm": "use bun (run: node scripts/require-bun.mjs)",
+    "yarn": "use bun (run: node scripts/require-bun.mjs)",
+    "pnpm": "use bun (run: node scripts/require-bun.mjs)"
+  },
+  "scripts": {
+    "preinstall": "bun scripts/require-bun.mjs",
+    "prepare": "lefthook install && bun scripts/install-git-hooks.mjs",
+    "dev:api": "bun run --filter @app/back-end dev",
+    "dev:web": "bun run --filter @app/front-end dev",
+    "lint": "bun run lint:root && bun run --filter '*' lint",
+    "lint:root": "eslint scripts *.mjs --max-warnings 0",
+    "format": "bun run format:root && bun run --filter '*' format",
+    "format:root": "prettier --write \"scripts/**/*.mjs\" \"*.{js,mjs,json,yml}\" README.md \".github/**/*.yml\" \"patches/**/*.md\"",
+    "format:check": "bun run format:check:root && bun run --filter '*' format:check",
+    "format:check:root": "prettier --check \"scripts/**/*.mjs\" \"*.{js,mjs,json,yml}\" README.md \".github/**/*.yml\" \"patches/**/*.md\"",
+    "test": "bun run --filter @app/back-end test",
+    "check:deps": "bun scripts/check-dependency-parity.mjs"
+  },
+  "overrides": {
+    "esbuild": "^0.28"
+  },
+  "trustedDependencies": [
+    "argon2",
+    "sharp",
+    "unrs-resolver"
+  ],
+  "patchedDependencies": {
+    "@dnd-kit/core@6.3.1": "patches/@dnd-kit%2Fcore@6.3.1.patch"
+  },
+  "devDependencies": {
+    "@ianvs/prettier-plugin-sort-imports": "^4",
+    "eslint": "^10",
+    "lefthook": "^2",
+    "prettier": "^3"
+  }
+}

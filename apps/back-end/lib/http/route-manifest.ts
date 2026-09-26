@@ -1,89 +1,54 @@
 /**
- * The route table as DATA, and everything derived from it.
+ * The route table as data, and everything derived from it.
  *
- * Three separate defects shared one root cause — a route table that existed
- * only as a sequence of framework calls:
- *
- * 1. The security-relevant `preAuthIpLimit` option was an optional argument
- *    repeated at every call site, so a new dashboard route was one forgotten
- *    argument away from losing pre-auth protection, with no type error and no
- *    test failure.
- * 2. Nothing could answer "is this path registered under a different method?",
- *    so a wrong method on a known path returned 404 where the App Router
- *    returned 405.
- * 3. The route inventory was hand-counted, and the counts were wrong.
- *
- * A route is now a record with REQUIRED policy fields. Omitting `preAuth`,
+ * A route is a record with REQUIRED policy fields, so omitting `preAuth`,
  * `auth` or `body` does not compile. The framework file iterates this list
- * instead of carrying it, so the same table survives a move to Hono, and the
- * manifest below is derived from the registrations themselves rather than
- * maintained alongside them.
+ * rather than carrying it, and the lookups below are derived from the
+ * registrations themselves rather than maintained alongside them.
  */
 import type { BodyPolicy, Handler } from './contract';
 
 import { bodyPolicyCeiling } from './request';
 
 /**
- * Methods this application registers. Deliberately not `string`: the 405
- * boundary advertises this set in `Allow`, and a typo would advertise a method
- * that routes nowhere.
+ * Methods this application registers. Not `string`: the 405 boundary
+ * advertises this set in `Allow`, and a typo would advertise a method that
+ * routes nowhere.
  */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 /**
- * What `Allow` may name: the registered methods, plus `HEAD` where the runtime
- * actually serves it.
- *
- * A separate type from `HttpMethod` because `HEAD` is never registered — it is
- * derived — and a route table entry must not be able to declare it.
+ * What `Allow` may name. `HEAD` is derived from `GET`, never registered, so a
+ * route table entry must not be able to declare it.
  */
-export type AdvertisedMethod = HttpMethod | 'HEAD';
+type AdvertisedMethod = HttpMethod | 'HEAD';
 
-/**
- * Whether the coarse per-IP admission limit runs before the handler.
- *
- * Required on every route, and named rather than boolean, so the reader of a
- * route line sees which of the two it is instead of inferring it from a missing
- * argument. `none` is a decision; a missing option was an accident.
- */
+/** Whether the coarse per-IP admission limit runs before the handler. */
 type PreAuthPolicy = 'ip-limit' | 'none';
 
 /**
- * Which authentication refusals the handler can answer.
+ * Which authentication refusals the handler can answer, and so which 401/403
+ * the document publishes. Nothing static can derive it: the check lives inside
+ * the handler, often behind a helper.
  *
- * Required and named for exactly the reason `preAuth` is. Nothing static can
- * derive it — the check lives inside the handler, several routes reach it
- * through a helper rather than calling `requirePermission` directly — so a route
- * that did not state it published no 401 and no 403 at all, and a generated
- * client cannot represent a refusal it was never told about.
- *
- * `permission` INCLUDES `session`: every permission check reads the session
- * first and answers 401 when there is none (`lib/permissions/checker.ts`), then
- * 403 when the grant is missing. `public` is a decision.
+ * `permission` includes `session`: every permission check reads the session
+ * first and answers 401 without one (`lib/permissions/checker.ts`), then 403.
  */
 type AuthPolicy = 'public' | 'session' | 'permission';
 
 type ResponsePolicy = 'envelope' | 'openapi-document' | 'storage-health';
 
 /**
- * A query-string parameter a route reads, for the OpenAPI contract.
- *
- * Declared here rather than inferred, because a query parameter is invisible to
- * every other artefact: the path carries `:params`, `body` carries the payload,
- * and a value read from `ctx.query` appeared in no contract at all. That was
- * tolerable while every such parameter was optional — `limit`, `cursor`, `deep`
- * only refine a request that works without them — and stopped being tolerable
- * when the upload route grew a REQUIRED one. A client cannot guess a parameter it
- * must send.
+ * A query-string parameter a route reads, for the OpenAPI contract — the one
+ * part of a request no other artefact reveals.
  */
-interface RouteQueryParam {
+export interface RouteQueryParam {
   name: string;
   required: boolean;
   /** One line, shown in the generated document. */
   description: string;
   /** The value after standard OpenAPI query deserialization. */
   type?: 'string' | 'integer';
-  /** Closed value set, when there is one. */
   enum?: readonly string[];
   minimum?: number;
   maximum?: number;
@@ -101,67 +66,34 @@ export interface RouteDefinition {
   preAuth: PreAuthPolicy;
   auth: AuthPolicy;
   /**
-   * Does the handler call `verifyTurnstileRequest`?
-   *
-   * Its own field rather than a fourth `auth` value, because it is a different
-   * question with the same answer: a failed captcha is a 403, and it is
-   * reachable on routes whose `auth` is `public` and on routes whose `auth` is
-   * `session`. Folding it into `auth` would either publish 403 for routes that
-   * cannot answer it or make a captcha-guarded route indistinguishable from one
-   * that checks a grant.
+   * Does the handler call `verifyTurnstileRequest`? Separate from `auth`
+   * because a failed captcha is a 403 on `public` and `session` routes alike,
+   * and folding it in would make a captcha-guarded route indistinguishable from
+   * one that checks a grant.
    */
   captcha: boolean;
   /** Does the handler itself invoke the fail-closed rate limiter? */
   handlerRateLimit: boolean;
   body: BodyPolicy;
   response: ResponsePolicy;
-  /**
-   * Query parameters this route reads. Optional, and absent means none.
-   */
   query?: readonly RouteQueryParam[];
   /**
-   * Raises this request's idle timeout above the server-wide ceiling.
-   *
-   * Optional, unlike the required policies above, because it is a capacity knob and
-   * not a security control: forgetting it costs a dropped connection on one
-   * slow route, not a missing check. Only routes that legitimately outlast the
-   * global ceiling set it — see the upload route.
+   * Raises this request's idle timeout above the server-wide ceiling. Optional
+   * because it is a capacity knob, not a security control.
    */
   timeoutSeconds?: number;
   /**
-   * Raises this route's JSON body ceiling above `MAX_JSON_BODY_BYTES`.
-   *
-   * Optional, and deliberately opt-in per route: the default is sized for the
-   * schemas that exist, and a route that accepts a genuinely large document —
-   * a rich-text field, say — states its own bound here so the ceiling stays a
-   * per-route contract rather than one number every route inherits. Only
-   * meaningful with `body: 'json'`.
+   * Raises this route's JSON body ceiling above `MAX_JSON_BODY_BYTES`, so the
+   * ceiling stays a per-route contract. Only meaningful with `body: 'json'`.
    */
   maxJsonBodyBytes?: number;
 }
 
-/** The policy half of a route — everything except the handler function. */
-export interface RouteManifestEntry {
-  method: HttpMethod;
-  path: string;
-  preAuth: PreAuthPolicy;
-  auth: AuthPolicy;
-  captcha: boolean;
-  handlerRateLimit: boolean;
-  body: BodyPolicy;
-  response: ResponsePolicy;
-  query?: readonly RouteQueryParam[];
-  /**
-   * Raises this route's JSON body ceiling above `MAX_JSON_BODY_BYTES`.
-   *
-   * Optional, and deliberately opt-in per route: the default is sized for the
-   * schemas that exist, and a route that accepts a genuinely large document —
-   * a rich-text field, say — states its own bound here so the ceiling stays a
-   * per-route contract rather than one number every route inherits. Only
-   * meaningful with `body: 'json'`.
-   */
-  maxJsonBodyBytes?: number;
-}
+/** The policy half of a route — what the document is built from. */
+export type RouteManifestEntry = Omit<
+  RouteDefinition,
+  'handler' | 'timeoutSeconds'
+>;
 
 /** One sub-path of a prefix, with the methods that path actually answers. */
 export interface RoutePrefixPath {
@@ -170,73 +102,51 @@ export interface RoutePrefixPath {
   methods: readonly HttpMethod[];
   /**
    * The per-IP admission budget for this path, overriding `PRE_AUTH_LIMIT`.
-   *
-   * REQUIRED, for the reason every policy on `RouteDefinition` is: it lived in a
-   * fifth table keyed by the same four paths (`AUTH_PATH_LIMITS` in `app.ts`)
-   * while registration, the 404/405 lookup, the allowlist and the published
-   * document were all derived from this one — so adding a path here compiled,
-   * booted and passed every test while silently taking the shared default. A
-   * session read on every dashboard navigation and a credential submission need
-   * budgets an order of magnitude apart, which is exactly the decision a missing
-   * field hides.
+   * Required, like every policy on `RouteDefinition`: a session read on every
+   * dashboard navigation and a credential submission need budgets an order of
+   * magnitude apart.
    */
   preAuthLimit: number;
   /** Whether this Better Auth endpoint requires `x-captcha-response`. */
   captcha: boolean;
   /**
    * Which credential this path needs, and therefore what the OpenAPI document
-   * publishes as its `security`.
+   * publishes as its `security`. Required: an undeclared credential publishes
+   * as anonymous, and a generated client then omits the cookie.
    *
-   * REQUIRED, for the same reason `preAuthLimit` is: a path whose credential is
-   * not declared here publishes as anonymous, and a generated client then omits
-   * the cookie for an operation that answers 401 without it.
-   *
-   * - `'session'` — `sessionMiddleware` or equivalent; 401 without a cookie.
+   * - `'session'` — 401 without a session cookie.
    * - `'optional'` — answers with or without one (`/get-session`, `/sign-out`).
    * - `'challenge'` — the second step of sign-in; 401 without the two-factor
    *   challenge cookie, which has its own scheme.
    * - `'session-or-challenge'` — one endpoint serving both enrolment and the
-   *   second step, and it takes EITHER credential (`/two-factor/otp/*`).
+   *   second step, taking EITHER credential (`/two-factor/otp/*`).
    * - `'none'` — anonymous, or gated by a credential no scheme describes: an
-   *   OAuth state cookie, a single-use grant. Publishing a cookie scheme for
-   *   those would be a different lie from the one this field removes.
+   *   OAuth state cookie, a single-use grant.
    */
   session:
     'session' | 'optional' | 'challenge' | 'session-or-challenge' | 'none';
 }
 
 /**
- * A path prefix served by a handler that owns its own sub-routing.
- *
- * Better Auth is the only one. It is not a `RouteDefinition` because it is not
- * a project `Handler`: it takes the raw `Request` and routes internally. It
- * still has to appear in the manifest, or the 405 boundary would answer 404 for
- * a wrong method under `/api/auth/*`.
+ * A path prefix served by a handler that owns its own sub-routing — Better
+ * Auth, which takes the raw `Request` and so is not a `RouteDefinition`. It
+ * still feeds the lookups, or the 405 boundary would answer 404 for a wrong
+ * method under `/api/auth/*`.
  */
 export interface RoutePrefix {
   /** Prefix WITHOUT the trailing wildcard, e.g. `/api/auth`. */
   prefix: string;
   /**
-   * What the prefix handler is allowed to read, for the WHOLE prefix.
-   *
-   * Declared here and not per sub-path because the body ceiling is decided at
-   * `onRequest`, before the router has matched anything, and because the mount
-   * reads every sub-path's body through one parser. A prefix whose sub-paths
-   * genuinely disagreed would have to move the field down to
-   * `RoutePrefixPath` and give the boundary the sub-path lookup it currently
-   * does not need.
+   * What the prefix handler may read, for the WHOLE prefix: the ceiling is
+   * decided at `onRequest`, before the router has matched a sub-path. Sub-paths
+   * that disagreed would need this moved down to `RoutePrefixPath` and a
+   * sub-path lookup at that boundary.
    */
   body: BodyPolicy;
   /**
-   * The exact sub-paths the prefix handler actually serves, each with its own
-   * methods.
-   *
-   * Required, and it is the difference between an accurate boundary and a
-   * misleading one — in BOTH dimensions. Treating the whole prefix as registered
-   * made `PUT /api/auth/does-not-exist` answer `405 Allow: GET, POST` while
-   * `GET` on the same path answered `404`. Declaring the methods once for the
-   * prefix left the same over-claim in the method dimension: `GET /sign-out` was
-   * advertised in `Allow` and in the document while the handler answers 404.
+   * The exact sub-paths served, each with its own methods, so neither an
+   * unknown sub-path nor an unserved method is advertised in `Allow` or in the
+   * document.
    */
   paths: readonly RoutePrefixPath[];
 }
@@ -245,29 +155,7 @@ export function toManifest(
   routes: readonly RouteDefinition[]
 ): RouteManifestEntry[] {
   return routes.map(
-    ({
-      method,
-      path,
-      preAuth,
-      auth,
-      captcha,
-      handlerRateLimit,
-      body,
-      response,
-      query,
-      maxJsonBodyBytes,
-    }) => ({
-      method,
-      path,
-      preAuth,
-      auth,
-      captcha,
-      handlerRateLimit,
-      body,
-      response,
-      query,
-      maxJsonBodyBytes,
-    })
+    ({ handler: _handler, timeoutSeconds: _timeout, ...entry }) => entry
   );
 }
 
@@ -275,36 +163,22 @@ const DEVELOPMENT_ONLY_PREFIXES = ['/api/dev/'] as const;
 
 /**
  * Is this path development-only — both unregistered and unpublished outside
- * development?
+ * development? One predicate for both decisions, so a future `/api/dev/*` route
+ * cannot be registered in production by a handler that forgets its own
+ * `NODE_ENV` check.
  *
- * One predicate for both decisions, because they are the same decision. It used
- * to filter the published DOCUMENT only, so `/api/dev/sign-up` kept a real
- * registration in production: measured with `NODE_ENV=production`, `POST`
- * answered `403` with its distinctive body, `GET` answered `405 Allow: POST,
- * OPTIONS` and `OPTIONS` answered `204`, while a genuinely unrouted
- * `/api/dev/does-not-exist` answered 404 for all three. That confirms to any
- * unauthenticated caller that the deployment carries a dev sign-up endpoint, and
- * the only thing keeping it harmless was one `NODE_ENV` string comparison inside
- * the handler — which a future `/api/dev/*` route can omit or misspell with
- * nothing failing the build, the boot or the suite.
- *
- * Also exported for the document builder's own consistency check, which
- * otherwise reads "declared but not a route" for every schema belonging to a
- * route that merely isn't PUBLISHED.
+ * Also read by the document's consistency check, so a schema for an
+ * unpublished route is not reported as a leftover.
  */
 export function isDevelopmentOnlyPath(path: string): boolean {
   return DEVELOPMENT_ONLY_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 /**
- * The routes THIS PROCESS serves.
- *
- * `ROUTES` stays the complete table — `scripts/build-openapi.ts` builds the
- * deployed document from it whatever the local `NODE_ENV` is, and
- * `scripts/find-unused-files.ts` reads it statically to prove every handler is
- * registered somewhere. This is what `app.ts` registers, looks up for the
- * 404-vs-405 boundary, and answers OPTIONS from, so outside development a
- * development-only path is genuinely unrouted rather than guarded.
+ * The routes THIS PROCESS serves: what `app.ts` registers and answers 404/405
+ * and OPTIONS from. `ROUTES` stays the complete table, because
+ * `scripts/build-openapi.ts` builds the deployed document from it and
+ * `scripts/find-unused-files.ts` reads it statically.
  */
 export function toRegisteredRoutes(
   routes: readonly RouteDefinition[],
@@ -315,11 +189,10 @@ export function toRegisteredRoutes(
 }
 
 /**
- * `production` is a parameter rather than a read of `NODE_ENV` alone because the
- * build generates the DEPLOYED document on a machine that is not the deployment:
- * an artefact built on a developer box must contain exactly what production
- * serves, and forcing `NODE_ENV=production` to get that would also trip
- * `assertEnv` into demanding production secrets to write a static file.
+ * `production` is a parameter because the build generates the DEPLOYED
+ * document on a machine that is not the deployment, and forcing
+ * `NODE_ENV=production` there would also trip `assertEnv` into demanding
+ * production secrets to write a static file.
  */
 export function toPublishedManifest(
   routes: readonly RouteDefinition[],
@@ -331,11 +204,8 @@ export function toPublishedManifest(
 }
 
 /**
- * Compiles a `:param` path into an anchored matcher.
- *
- * A param matches one segment and never a `/`, so `/api/dash/users/:id` cannot
- * match `/api/dash/users/a/b`. Everything else in the path is escaped, so a
- * literal `.` in a future path is not a wildcard.
+ * Compiles a `:param` path into an anchored matcher. A param matches one
+ * segment and never a `/`; every other segment is escaped.
  */
 function compile(path: string): RegExp {
   const source = path
@@ -351,20 +221,14 @@ function compile(path: string): RegExp {
 }
 
 /**
- * Answers "which methods does this pathname actually answer?" for the 404-vs-405
- * boundary and for route-aware OPTIONS handling.
+ * Answers "which methods does this pathname actually answer?" for the
+ * 404-vs-405 boundary and route-aware OPTIONS. Elysia reports a wrong method on
+ * a registered path and an unknown path both as `NOT_FOUND`, so the answer has
+ * to come from here.
  *
- * Elysia does not distinguish the two cases itself — measured on the pinned
- * version, a wrong method on a registered path and a genuinely unknown path
- * both arrive as `NOT_FOUND` — so the answer has to come from here.
- *
- * `HEAD` is derived from `GET` for BOTH kinds of registration. Elysia dispatches
- * a HEAD to the matching GET route in either case (measured), so what decides
- * whether it is really served is what the handler does with it — and for the
- * Better Auth prefix that is `betterAuthServes`, which now answers HEAD from the
- * GET entry and hands `auth.handler` a GET. The two branches agreeing is the
- * point: while this one omitted HEAD, `HEAD /api/auth/get-session` was refused
- * `405` with `Allow: GET` — a boundary contradicting itself on one line.
+ * `HEAD` is derived from `GET` for both kinds of registration: Elysia
+ * dispatches HEAD to the matching GET route, and `betterAuthServes` answers
+ * HEAD from the GET entry. The two branches must keep agreeing.
  */
 export function createRouteLookup(
   routes: readonly RouteDefinition[],
@@ -395,19 +259,16 @@ export function createRouteLookup(
 
 /**
  * Answers "how many body bytes may this pathname carry?" for the admission
- * boundary in `app.ts`, which has to decide before the router has matched
- * anything — and for paths the router will never match to a table route at all.
+ * boundary in `app.ts`, which decides before the router has matched anything.
  *
  * The ceiling follows the POLICY the table declares, so a caller cannot buy the
- * multipart allowance for a JSON-only endpoint by writing `multipart/form-data`
- * on it. A path that matches nothing takes the default: it is about to 404, and
- * the default is the smaller of the two.
+ * multipart allowance by writing `multipart/form-data` on a JSON-only endpoint.
+ * A path that matches nothing takes the smaller default: it is about to 404.
  *
  * The LARGEST ceiling wins when two methods on one path disagree: this bound is
- * coarse by construction (it reads `Content-Length` off the head, for a request
- * nothing has parsed yet), and the exact per-route value is applied again by the
- * reader in `withBodyPolicy`. Taking the smallest here would refuse a request
- * the route it belongs to accepts.
+ * coarse by construction, the reader in `withBodyPolicy` applies the exact
+ * per-route value again, and taking the smallest would refuse a request the
+ * route it belongs to accepts.
  */
 export function createBodyCeilingLookup(
   routes: readonly RouteDefinition[],
@@ -435,11 +296,9 @@ export function createBodyCeilingLookup(
 }
 
 /**
- * The `Allow` header value for a path that has registrations.
- *
- * `OPTIONS` is added because the CORS layer answers it on every known path.
- * `HEAD` is not added here — see `createRouteLookup`, which is the only place
- * that can tell whether the runtime really serves it for this path.
+ * The `Allow` header value for a path that has registrations. `OPTIONS` is
+ * added because the CORS layer answers it on every known path; `HEAD` comes
+ * only from `createRouteLookup`, which knows whether it is served.
  */
 export function allowHeader(methods: ReadonlySet<AdvertisedMethod>): string {
   const advertised = new Set<string>(methods);

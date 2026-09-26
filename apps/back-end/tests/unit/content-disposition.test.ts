@@ -16,9 +16,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import { getContentDisposition } from '@/lib/r2/client';
-
-import { sanitizeFilename } from '@/utils/sanitize-filename';
+import { sanitizeFilename } from '@/lib/media/filename';
+import { getContentDisposition } from '@/lib/media/headers';
 
 /** Everything after `filename*=UTF-8''`. */
 const extValue = (header: string) =>

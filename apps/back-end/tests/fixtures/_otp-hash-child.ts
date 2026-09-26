@@ -6,12 +6,8 @@
  * JSON on stdout; a configuration failure is left to escape, so the test can
  * assert on a non-zero exit and the message on stderr.
  */
-import {
-  canEvaluateOtp,
-  hashOtpCode,
-  verifyOtpCode,
-} from '@/lib/auth/otp-hash';
-import { hashPassword } from '@/lib/auth/password';
+import { hashPassword } from '@/lib/auth/password/hash';
+import { canEvaluateOtp, hashOtpCode, verifyOtpCode } from '@/lib/otp/hash';
 
 const CODE = '123456';
 const WRONG = '654321';

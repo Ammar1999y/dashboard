@@ -1,29 +1,12 @@
 /**
- * The single parse of the public origin.
+ * The single parse of the public origin, read by both consumers that must
+ * agree on it: `@elysia/cors` in `app.ts` and Better Auth's `baseURL` in
+ * `lib/auth/index.ts`, which signs cookies against it.
  *
- * TypeScript, not JavaScript. It was `.js` so `next.config.js` could import it,
- * and Next is gone — but `tsconfig.json` sets `allowJs` WITHOUT `checkJs` and
- * this file carried no `// @ts-check`, so being in the program was not being
- * checked: `bun run lint` and `bun run build` both stayed green with an
- * arbitrary type error in it. The `@param`/`@returns` annotations it used to
- * carry were decorative, which is the worst state for the module that parses
- * `PUBLIC_ORIGIN` — the CORS allowlist, Better Auth's `baseURL`, and therefore
- * the origin cookies are signed against.
- *
- * One value, one parse, one canonical form — read by BOTH consumers that used
- * to disagree: `@elysia/cors` in `app.ts` and Better Auth's `baseURL` in
- * `lib/auth.ts`. Before this, CORS received a value canonicalised down to
- * scheme + hostname while Better Auth received the raw environment string, so
- * a path, a query, a fragment or embedded credentials were discarded by one
- * consumer and kept as input by the other. Security behaviour could not be
- * predicted from the configuration file alone.
- *
- * The rules are deliberately strict rather than forgiving. This value is an
- * ORIGIN: it is compared byte-for-byte against a browser `Origin` header and it
- * is the base Better Auth signs cookies against. Anything a browser would never
- * send in `Origin` — a path, a query, a fragment, `user:pass@` — is a
- * configuration mistake, and repairing it silently is how the two consumers
- * drifted apart in the first place.
+ * Strict rather than forgiving: the value is compared byte-for-byte against a
+ * browser `Origin` header, so anything a browser never sends there (a path, a
+ * query, a fragment, `user:pass@`) is a configuration mistake, and repairing
+ * it silently is how two consumers come to disagree.
  */
 
 /** Hostnames browsers treat as a secure context regardless of scheme. */
@@ -64,13 +47,8 @@ function readOriginEnv(): ConfiguredOrigin {
 }
 
 /**
- * Parse the value into a canonical origin, rejecting everything an origin
- * cannot contain.
- *
- * No scheme is inferred. The previous parser prepended `https://` to a bare
- * host and then forced the scheme to `https` regardless of what was written,
- * so `http://localhost:3000` silently became `https://localhost` — a value no
- * browser would ever match. An explicit scheme is required instead.
+ * The canonical origin, rejecting everything an origin cannot contain. No
+ * scheme is inferred: a guessed one yields a value no browser will match.
  */
 function parseOrigin(raw: string, name: string): string {
   let url: URL;
@@ -121,15 +99,11 @@ function parseOrigin(raw: string, name: string): string {
 const configured = readOriginEnv();
 
 /**
- * The browser origin, WITH its port — `https://example.com`,
- * `http://localhost:3000`.
+ * The browser origin WITH its port (`http://localhost:3000`), and the only
+ * exported form of the setting.
  *
- * This is the ONLY exported form of the setting. It is what the browser sends
- * in `Origin`, what `@elysia/cors` matches against, and what Better Auth signs
- * cookies against, so all three agree by construction.
- *
- * If the browser origin and the API origin ever need to differ, add a SECOND
- * variable and configure Better Auth `trustedOrigins` explicitly — do not
- * reintroduce a second derivation of this one.
+ * If the browser and API origins ever need to differ, add a SECOND variable
+ * and configure Better Auth `trustedOrigins` explicitly; do not derive a
+ * second value from this one.
  */
 export const PUBLIC_ORIGIN = parseOrigin(configured.value, configured.name);

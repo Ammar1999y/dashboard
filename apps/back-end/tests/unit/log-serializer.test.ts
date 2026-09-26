@@ -8,7 +8,7 @@
 import { SQL } from 'bun';
 import { expect, test } from 'bun:test';
 
-import { serializeForLog } from '@/utils';
+import { serializeForLog } from '@/utils/log';
 
 /**
  * One `bun test` case per assertion, keeping every original `check(...)` call

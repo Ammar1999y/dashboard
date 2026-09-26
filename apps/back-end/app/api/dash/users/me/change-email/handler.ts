@@ -1,54 +1,49 @@
-import type { Handler } from '@/lib/http/contract';
-
 import { and, eq, isNull } from 'drizzle-orm';
 
-import { otpMsg } from '@/app/api/auth/otp/messages';
 import { db, withTransaction } from '@/db';
 import { users } from '@/db/schema';
+
+import {
+  HTTP_STATUS,
+  MSG_NOT_FOUND,
+  MSG_UPDATE_ERROR,
+} from '@app/shared/api-messages';
+import { OTP_AUTO_VERIFY } from '@app/shared/config';
+import { CustomError } from '@app/shared/error-class';
+import { changeEmailSchema } from '@app/shared/validation/auth';
+import { EMAIL_OTP_AVAILABLE } from '@app/shared/validation/otp';
+
 import { getAuditMeta } from '@/lib/audit';
-import { requireReauthWindow } from '@/lib/auth/admin-reauth';
-import { LoginRejected, verifyLoginAttempt } from '@/lib/auth/login-guard';
+import { otpMsg } from '@/lib/auth/messages';
 import { verifyTurnstileRequest } from '@/lib/captcha';
+import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
+import { readJsonBody } from '@/lib/http/input';
+import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
+import { CONTACT_LABEL } from '@/lib/otp/content';
+import { processOtpSend } from '@/lib/otp/send';
+import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
   enforceOtpSurfaceSendQuota,
   enforceRateLimit,
   userIdentifier,
 } from '@/lib/rate-limit';
-
 import {
-  HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-  MSG_NOT_FOUND,
-  MSG_UPDATE_ERROR,
-} from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  handleUserUniqueViolation,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { OTP_AUTO_VERIFY } from '@/utils/config';
-import { CustomError } from '@/utils/error-class';
-import { processOtpSend } from '@/utils/otp';
-import { changeEmailSchema } from '@/utils/validation/auth';
-import { EMAIL_OTP_AVAILABLE } from '@/utils/validation/otp';
-import { zodIssueMessage } from '@/utils/validation/rules';
-
-import { userMsg } from '../../messages';
-import { commitEmailChange, refreshSessionCookies } from '../contact-change';
+  commitEmailChange,
+  refreshSessionCookies,
+} from '@/lib/users/contact-change';
+import { reauthenticateContactChange } from '@/lib/users/current-password';
+import { userMsg } from '@/lib/users/messages';
 
 /**
- * Initiate an email change. The new address is NEVER written to `users.email`
- * here — it stays a pending, unverified change until ownership of the new
- * address is proven:
- *  - normal flow: an OTP is sent to the NEW address; the change is committed at
- *    POST /change-email/verify only after the code matches.
- *  - OTP_AUTO_VERIFY: the change is committed immediately (no code), since the
- *    deployment has opted out of real verification.
+ * Initiates an email change. The new address is NEVER written to `users.email`
+ * here: an OTP goes to the NEW address and `POST /change-email/verify` commits
+ * it once the code matches. Under OTP_AUTO_VERIFY the deployment has opted out
+ * of verification, and the change commits at once.
  */
-export const POST: Handler = async (ctx) => {
-  try {
+export const POST = withApiErrors(
+  MSG_UPDATE_ERROR,
+  async (ctx) => {
     const { userId, sessionId } = await requireSession(ctx);
 
     await enforceRateLimit({
@@ -62,16 +57,10 @@ export const POST: Handler = async (ctx) => {
     if (!captchaOk)
       throw new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
 
-    const body = requireJsonBody(await ctx.readJson());
-    const parsed = changeEmailSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(
-        zodIssueMessage(parsed.error),
-        HTTP_STATUS.UNPROCESSABLE
-      );
+    const input = await readJsonBody(ctx, changeEmailSchema);
 
-    // Verification must be possible before we accept the request — otherwise we
-    // would either send to a dead channel or strand the change forever.
+    // Refused up front: otherwise the code goes to a dead channel or the change
+    // is stranded.
     if (!OTP_AUTO_VERIFY && !EMAIL_OTP_AVAILABLE)
       throw new CustomError(
         userMsg.verificationUnavailable,
@@ -79,32 +68,17 @@ export const POST: Handler = async (ctx) => {
       );
 
     const auditMeta = getAuditMeta(ctx);
-    // Re-auth in its own short tx so the later mutation doesn't hold a row lock
-    // across argon2.
-    try {
-      if (parsed.data.currentPassword === undefined)
-        await requireReauthWindow(userId, sessionId);
-      else
-        await verifyLoginAttempt({
-          userId,
-          password: parsed.data.currentPassword,
-          skipTimingGuard: true,
-          auditMeta,
-          purpose: 'reauth_change_email',
-        });
-    } catch (e) {
-      if (e instanceof LoginRejected)
-        throw new CustomError(
-          userMsg.currentPasswordIncorrect,
-          HTTP_STATUS.BAD_REQUEST
-        );
-      throw e;
-    }
+    await reauthenticateContactChange({
+      userId,
+      sessionId,
+      currentPassword: input.currentPassword,
+      auditMeta,
+      purpose: 'reauth_change_email',
+    });
 
-    // A "taken" address is NOT rejected here: revealing it before the user
-    // proves ownership of the new address would be an account-enumeration
-    // oracle. Uniqueness is enforced authoritatively by the unique index at
-    // commit time (→ 409). We only reject same-as-current (reveals nothing).
+    // A TAKEN address is not refused here: saying so before ownership is proven
+    // would be an enumeration oracle. The unique index decides at commit (409);
+    // only same-as-current, which reveals nothing, is refused.
     const [currentUser] = await db
       .select({
         email: users.email,
@@ -117,13 +91,9 @@ export const POST: Handler = async (ctx) => {
 
     if (!currentUser || !currentUser.isActive)
       throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-    if (!currentUser.roleId)
-      throw new CustomError(
-        MSG_INSUFFICIENT_PERMISSIONS,
-        HTTP_STATUS.FORBIDDEN
-      );
+    if (!currentUser.roleId) throw insufficientPermissions();
 
-    const newEmail = parsed.data.newEmail;
+    const newEmail = input.newEmail;
 
     if (currentUser.email === newEmail)
       throw new CustomError(
@@ -132,7 +102,6 @@ export const POST: Handler = async (ctx) => {
       );
 
     if (OTP_AUTO_VERIFY) {
-      // Bypass: commit the change now, no code entry.
       await withTransaction((tx) =>
         commitEmailChange({
           tx,
@@ -154,15 +123,10 @@ export const POST: Handler = async (ctx) => {
       destination: newEmail,
       surface: 'contact_change',
     });
-    // Delivery is AWAITED here, unlike the three anonymous surfaces.
-    //
-    // Deferring it is what makes their generic 200 constant-time, and their
-    // callers are told nothing either way. This caller is authenticated, owns
-    // the address and is about to wait for a code, so `otpSent: true` returned
-    // before the provider was even called was simply false — a rejected send
-    // reported success and left the user throttled, waiting for a code that was
-    // never dispatched. The provider calls are bounded at PROVIDER_TIMEOUT_MS,
-    // so the cost of awaiting is bounded too.
+    // AWAITED, unlike the anonymous surfaces, which defer delivery to keep a
+    // constant-time generic 200. This caller is authenticated and waiting for
+    // the code, so `otpSent: true` must mean the provider accepted it; the
+    // provider calls are bounded, so the wait is too.
     await processOtpSend({
       userId,
       identifier: newEmail,
@@ -170,18 +134,13 @@ export const POST: Handler = async (ctx) => {
       purpose: 'change_email',
       targetIdentifier: newEmail,
       sendTo: newEmail,
-      entityName: 'البريد الإلكتروني',
+      entityName: CONTACT_LABEL.email,
     });
 
     return apiSuccess({
       message: userMsg.emailChangeCodeSent,
       data: { otpSent: true },
     });
-  } catch (error) {
-    // Only a KNOWN constraint becomes a 409; an unrecognized one falls
-    // through to the 500 path so the schema/code mismatch is visible.
-    const conflict = handleUserUniqueViolation(error);
-    if (conflict) return conflict;
-    return handleApiError(error, MSG_UPDATE_ERROR);
-  }
-};
+  },
+  handleUserUniqueViolation
+);

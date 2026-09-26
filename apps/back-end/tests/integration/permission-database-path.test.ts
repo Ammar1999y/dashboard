@@ -24,12 +24,12 @@ import { eq } from 'drizzle-orm';
 import { app } from '@/app';
 import { db } from '@/db';
 import { roles, users } from '@/db/schema';
-import { REQUIRE_ROLE_FOR_LOGIN } from '@/lib/permissions/constants';
 
 import {
   HTTP_STATUS,
   MSG_INSUFFICIENT_PERMISSIONS,
-} from '@/utils/api-messages';
+} from '@app/shared/api-messages';
+import { REQUIRE_ROLE_FOR_LOGIN } from '@app/shared/permissions/constants';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';
@@ -122,7 +122,7 @@ describe('a role deactivated after sign-in', () => {
 
   test('a read WITH the cookie cache is still answered from it — the bounded tradeoff', async () => {
     // Pinned so the bound is visible: the cached grant lives at most
-    // `session.cookieCache.maxAge` (`lib/auth.ts`), and only reads honour it.
+    // `session.cookieCache.maxAge` (`lib/auth/index.ts`), and only reads honour it.
     // Tightening this to a database read is a deliberate contract change, not a
     // fix for a failing test.
     const response = await listUsers(fx().roleDeactivated);

@@ -12,26 +12,12 @@ const compat = new FlatCompat({
   baseDirectory: import.meta.dirname,
 });
 
-// This config is server-only, and that has one consequence worth stating: the
-// React, React-Hooks, JSX-a11y and `@next/next` rule sets are NOT registered and
-// their plugins are NOT installed (nothing in `bun.lock`; any copy in
-// `node_modules` is a leftover). Every rule in them needs JSX, a `next/*` import
-// or a Pages-Router export, so registering them would read as coverage while
-// never firing.
-//
-// IF a front-end is ever added: install those four as devDependencies, scope
-// them to the front-end files, and read `docs/next-config-eslint.md` for the
-// core-web-vitals severity upgrades.
-//
-// `import-x/no-anonymous-default-export` below is re-declared by hand because
-// `plugin:import/recommended` does not include it.
+// Server-only: no React, JSX or Next rule sets, which would read as coverage
+// while never firing. The repository root and `packages/shared` reuse this
+// config; the front-end has its own.
 const eslintConfig = [
   {
-    // `bench/**` is tracked project code but deliberately outside this config: it
-    // is a standalone harness with no tsconfig, targeting two runtimes (Node and
-    // Bun) with plain `.mjs` and console reporting, so the app's rules do not
-    // apply to it. Prettier still formats it, and `format:check` still gates it.
-    ignores: ['dist/**', 'out/**', 'build/**', 'bench/**'],
+    ignores: ['dist/**', 'out/**', 'build/**'],
   },
   ...tseslintConfigs.recommended,
   eslintPluginUnicorn.configs.recommended,
@@ -59,10 +45,8 @@ const eslintConfig = [
       },
     },
     rules: {
+      // Not part of `flatConfigs.recommended`.
       'import-x/no-anonymous-default-export': 'warn',
-
-      // CommonJS default imports legitimately expose named members.
-      // 'import-x/no-named-as-default-member': 'off',
 
       '@typescript-eslint/no-unused-vars': [
         'warn',
@@ -98,31 +82,28 @@ const eslintConfig = [
       'unicorn/no-computed-property-existence-check': 'off',
       'unicorn/prefer-ternary': 'off',
       'unicorn/prefer-early-return': 'off',
+      // The loop-body analogue of `prefer-early-return`, refused for the same
+      // reason: a guarded block reads as the case it handles.
+      'unicorn/prefer-continue': 'off',
 
       // Schema and action values follow the same verb-based naming as handlers.
       'unicorn/no-non-function-verb-prefix': 'off',
       // Explicit comparisons preserve narrowing for optional permission flags.
       'unicorn/no-unnecessary-boolean-comparison': 'off',
 
-      // `!` tells the compiler a value is present without proving it, which is
-      // the same assumption as `as` and fails the same way — silently, at the
-      // first input that breaks it. It lives in typescript-eslint's `stylistic`
-      // set, which this config does not spread, so nothing enforced it: a
-      // separate scanner reported occurrences and exited 0 unless given a
-      // `--fail` no caller passed. One gate, in the one command CI and pre-push
-      // already run.
+      // `!` asserts presence without proving it, the same assumption as `as`.
+      // Declared by hand: it lives in typescript-eslint's `stylistic` set, which
+      // this config does not spread.
       '@typescript-eslint/no-non-null-assertion': 'error',
       '@typescript-eslint/no-extra-non-null-assertion': 'error',
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
       '@typescript-eslint/no-non-null-asserted-nullish-coalescing': 'error',
       '@typescript-eslint/no-confusing-non-null-assertion': 'error',
 
-      // A server-only codebase. `tsconfig`'s `lib` still includes DOM (and
-      // importing jsdom reintroduces it whatever `lib` says), and
-      // typescript-eslint turns `no-undef` off, so both static gates were blind
-      // to the first `window` or `localStorage` anyone wrote. Only the
-      // browser-ONLY names: `fetch`, `Headers`, `Request`, `Blob`,
-      // `TextDecoder` and friends are web standards Bun implements.
+      // `tsconfig`'s `lib` includes DOM (and jsdom's types reintroduce it
+      // anyway) while typescript-eslint turns `no-undef` off, so this is the only
+      // gate on browser globals. Browser-ONLY names: `fetch`, `Headers`,
+      // `TextDecoder` and the other web standards Bun implements stay allowed.
       'no-restricted-globals': [
         'error',
         ...[
@@ -151,12 +132,12 @@ const eslintConfig = [
   },
   {
     // Catch ignored or misrouted promises in security and persistence paths.
+    // `lib/**` must stay: `tests/unit/lint-security-gate.test.ts` probes it.
     files: [
       'app/**/*.ts',
       'lib/**/*.ts',
       'db/**/*.ts',
       'utils/**/*.ts',
-      'types/**/*.ts',
       'tests/**/*.ts',
       'scripts/**/*.ts',
       'routes.ts',
@@ -175,9 +156,7 @@ const eslintConfig = [
     },
   },
   {
-    // Bun's built-in modules have no package on disk, so the import resolver
-    // cannot find them. They are provided by the runtime, exactly like
-    // `node:*` — which the resolver already knows about by name.
+    // Bun's built-in modules have no package on disk for the resolver to find.
     files: ['**/*.{ts,mts,cjs}'],
     rules: {
       'import-x/no-unresolved': ['error', { ignore: ['^bun:'] }],

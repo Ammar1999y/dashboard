@@ -29,17 +29,18 @@ import { eq } from 'drizzle-orm';
 import { app } from '@/app';
 import { db } from '@/db';
 import { auditLogs, roles, sessions, users } from '@/db/schema';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { PASSWORD_MAX } from '@app/shared/validation/constants';
+
 import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
-import { BASE_ERROR_CODES } from '@/lib/auth/code-errors';
+import { BASE_ERROR_CODES, CUSTOM_AUTH_CODE } from '@/lib/auth/errors';
 import {
   LOCK_DURATION_SECONDS,
   MAX_FAILED_ATTEMPTS,
 } from '@/lib/auth/login-guard';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { PRE_AUTH_LIMIT } from '@/lib/http/pre-auth';
-
-import { CUSTOM_AUTH_CODE, HTTP_STATUS } from '@/utils/api-messages';
-import { PASSWORD_MAX } from '@/utils/validation/constants';
 
 import { resetTables } from '../helpers/database';
 import { egressCallsTo, scriptEgress } from '../helpers/egress';
@@ -170,7 +171,7 @@ afterEach(() => {
 
 /**
  * The `before` hook substitutes a one-shot proof for the plaintext before Better
- * Auth's handler runs (`lib/auth/password-proof.ts`), and bounds any inbound
+ * Auth's handler runs (`lib/auth/password/proof.ts`), and bounds any inbound
  * `password` so that no value a client can send is proof-shaped.
  *
  * Both halves are asserted against the LIVE endpoint rather than the module,
@@ -599,7 +600,7 @@ describe('the cookie sign-in sets', () => {
   });
 
   test('Secure is set exactly when the configured origin is https', () => {
-    // Nothing in `lib/auth.ts` sets `useSecureCookies`, so Better Auth derives
+    // Nothing in `lib/auth/index.ts` sets `useSecureCookies`, so Better Auth derives
     // it from the baseURL scheme. The rule is what deserves pinning — it stays
     // right on a deployment that serves https — but on its own it would hold
     // whichever way the flag went, so the scheme this tier actually runs under

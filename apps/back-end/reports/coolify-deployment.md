@@ -20,10 +20,13 @@ One Coolify application on one VPS:
 - **Ingress:** Cloudflare → Coolify/Traefik.
 - **Process model:** one container, one `bun server.ts` process.
 
-No Dockerfile, so the build uses Nixpacks. Add a Dockerfile if the exact Bun
-version cannot be reproduced — the risk matters more now that Bun is the
-runtime, not just the build tool.
-[Nixpacks configuration](https://coolify.io/docs/applications/build-packs/nixpacks) ·
+The application is one workspace of a Bun monorepo (`apps/back-end`, beside
+`apps/front-end` and the `packages/shared` package both import), so the build
+context is the **repository root** and the image is described by
+`apps/back-end/Dockerfile`, not by Nixpacks: Nixpacks with a sub-directory as
+Base Directory never sees `packages/shared` or the root `bun.lock`. The
+Dockerfile also pins the Bun image to the `packageManager` version, which the
+old Nixpacks build could not guarantee. §2 has the settings.
 [Deploy Elysia to production](https://elysiajs.com/patterns/deploy)
 
 ## Settled decisions
@@ -36,7 +39,7 @@ Instructions below depend on these. Revisiting one changes the marked sections.
 | Retention sweep      | In-process `Bun.cron`, daily                                  | §9      |
 | Power-loss RPO       | `synchronous = NORMAL` on the limiter DB, incl. daily OTP cap | §4      |
 | Retained WAL ceiling | `journal_size_limit = 64 MiB` retained size, peak monitored   | §4, §10 |
-| Sweep trigger        | In-process `Bun.cron` (`lib/schedule.ts`)                     | §9      |
+| Sweep trigger        | In-process `Bun.cron` (`lib/maintenance/schedule.ts`)         | §9      |
 
 **The sweep-trigger decision was re-opened and reversed. Both sweeps now run
 in-process on `Bun.cron` — see §9.** The original decision was taken against
@@ -174,7 +177,7 @@ Do not expose production traffic until these are resolved.
     busy-handling, crash-recovery and backup/restore have only been verified
     against freshly created databases on a developer machine.
 
-**Resolved:** `utils/config.ts` now sets `OTP_AUTO_VERIFY = false`, so the OTP
+**Resolved:** `packages/shared/src/config.ts` now sets `OTP_AUTO_VERIFY = false`, so the OTP
 bypass gate is closed. (`NEXT_PUBLIC_OTP_AUTO_VERIFY` is referenced only in a
 comment; no code reads it.)
 
@@ -240,25 +243,44 @@ broken configuration.
 
 **Configuration > General:**
 
-| Field           | Value                                           |
-| --------------- | ----------------------------------------------- |
-| Build Pack      | `Nixpacks`                                      |
-| Base Directory  | `/`                                             |
-| Static Site     | Off                                             |
-| Ports Exposes   | `3000`                                          |
-| Port Mappings   | Empty                                           |
-| Install Command | `bun install --frozen-lockfile`                 |
-| Build Command   | `bun run build`                                 |
-| Start Command   | `bun scripts/build-openapi.ts && bun run start` |
+| Field               | Value                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------- |
+| Build Pack          | `Dockerfile`                                                                                      |
+| Base Directory      | `/` — the repository root, where `bun.lock` and `packages/` are                                   |
+| Dockerfile Location | `/apps/back-end/Dockerfile`                                                                       |
+| Static Site         | Off                                                                                               |
+| Ports Exposes       | `3000`                                                                                            |
+| Port Mappings       | Empty                                                                                             |
+| Watch Paths         | `apps/back-end/**`, `packages/shared/**`, `bun.lock`, `package.json`, `bunfig.toml`, `scripts/**` |
 
-`bun run build` is `bun scripts/build-openapi.ts && tsc --noEmit`. There is no
-bundle. The script generates `build/openapi.json` from the **production-filtered**
-route table, which is the only place a route table inconsistent with its request
-schemas can be caught: that filter withholds `/api/dev/*`, and the mismatch it
-created made `GET /openapi.json` return 500 for every authorised caller in
-production while every development check passed. The artefact is served by
-nothing — the runtime route reads it and still requires a live dashboard session
-— so `build/` must never be exposed as a static directory.
+Install, build and start live in the Dockerfile, so the three command fields
+stay empty. The image runs `bun run build` in a `verify` stage — the OpenAPI
+generation plus `tsc --noEmit`, which is the only place a route table
+inconsistent with its request schemas is caught: the production filter withholds
+`/api/dev/*`, and the mismatch it created once made `GET /openapi.json` return
+500 for every authorised caller in production while every development check
+passed — and starts the runtime stage with
+`bun scripts/build-openapi.ts && bun run start`. The generated `build/` artefact
+is served by nothing: the runtime route reads it and still requires a live
+dashboard session, so it must never be exposed as a static directory.
+
+**Watch Paths are load-bearing.** A push that touches only `apps/front-end`
+must not rebuild this application, and a push that touches `packages/shared`
+must, because the shared validation and types are compiled into this image. The
+front-end deployment (Coolify, Vercel or Cloudflare) needs the mirror-image
+rule — its own directory plus `packages/shared` — or the two deployments drift
+apart on exactly the code that was shared to stop them drifting.
+
+**Shared configuration reads the same variables in both deployments.**
+`packages/shared` derives the enabled OTP channels and two-factor methods from
+`NEXT_PUBLIC_ENABLED_OTP_CHANNELS`, `NEXT_PUBLIC_ENABLED_2FA_METHODS` and
+`NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS`. Set them identically for the back-end
+and the front-end. The front-end bakes them in at **build** time, so changing
+one there means a redeploy, not a restart.
+
+The Dockerfile's `FROM oven/bun:1.4.2` is the second home of the Bun pin. Bump
+it with `packageManager`; `scripts/require-bun.mjs` fails the image build when
+the image's Bun is older than the pin, and `server.ts` logs when it is newer.
 
 `bun run start` is `NODE_ENV=production bun --bun server.ts`. **If the start
 command is overridden in Coolify, `NODE_ENV=production` must be carried over** —
@@ -314,26 +336,36 @@ The pin now has exactly **one** home: `packageManager` in `package.json`.
 field at install time, so moving the pin means editing that field and `bun.lock`
 — there is no longer an `EXPECTED_BUN_VERSION` constant to keep in sync.
 
-### The install command now runs a runtime guard
+### The install runs a runtime guard
 
-`bun install --frozen-lockfile` runs the root `preinstall` script, which is
-`bun scripts/require-bun.mjs`. In the build container it enforces the same floor
-as startup, so a Nixpacks image with an older Bun fails at **install** with an
-actionable message instead of at container start.
+`bun install` runs `scripts/require-bun.mjs` (at the repository root) as a
+`preinstall` script. In the build container it enforces the same floor as
+startup, so an image with an older Bun fails at **install** with an actionable
+message instead of at container start. It also refuses a workspace whose
+`packageManager` disagrees with the root's, which is what keeps the copy
+`server.ts` reads at boot honest, and a foreign lockfile in any workspace.
+
+**Which `preinstall` runs it depends on the flags** (measured on Bun 1.4.2): a
+plain `bun install` runs the root's, but `bun install --filter …` — what the
+Dockerfile uses — runs only the selected workspaces' lifecycle scripts and
+skips the root's. Inside the image the guard therefore reaches the build
+through `apps/back-end/package.json`'s own `"preinstall": "bun
+../../scripts/require-bun.mjs"`. Removing that entry as "redundant with the
+root's" would silently drop the Bun-floor and pin-agreement gates from every
+image build. The same skip is what keeps the root `prepare` (`lefthook install`,
+which needs a git checkout) out of the build.
 
 Two things the operator must know about it:
 
 - **It can reach the network.** If the image's Bun is older than the pin, the
   guard runs Bun's official installer to correct it. That is right on a
   developer machine and wrong in a build container, where the toolchain should
-  come from the image. It is suppressed whenever `CI` is set — which GitHub
-  Actions sets and **Coolify's Nixpacks build does not**. Set
-  `BUN_GUARD_NO_AUTO_INSTALL=1` as a build-time variable so the build fails with
-  instructions rather than mutating itself. Add it to the "Required" table if the
-  build ever runs on an image whose Bun is not pinned.
+  come from the image. It is suppressed whenever `CI` or
+  `BUN_GUARD_NO_AUTO_INSTALL` is set; the Dockerfile sets the latter itself, so
+  no build-time variable is needed in Coolify. The build then fails with
+  instructions rather than mutating itself.
 - **It needs no Node.** The guard is plain `.mjs` but is invoked with `bun`, and
   it imports nothing from `node_modules` — it runs before the tree exists.
-  `NIXPACKS_NODE_VERSION` stays absent (§3, "Must be absent").
 
 ### Startup log
 
@@ -461,7 +493,7 @@ than one that does not start.
 
 ### Application-level switches with no environment variable
 
-These are code constants in `utils/config.ts`, not env vars, and each needs a
+These are code constants in `packages/shared/src/config.ts`, not env vars, and each needs a
 deploy to change. Listed here because each is an operational decision:
 
 | Constant               | Default | What it decides                                                                                                                                                                                          |
@@ -1001,7 +1033,7 @@ On signal:
    attempted while the promise was still pending was refused), so the drains and
    the store close still run; the failure is logged and forces exit **1**
 3. waits for a running scheduled sweep to reach its next batch boundary
-   (`lib/schedule.ts`), for as long as the shutdown budget allows
+   (`lib/maintenance/schedule.ts`), for as long as the shutdown budget allows
 4. waits for queued post-response work (`lib/http/after-response.ts`), again
    for the remainder of the budget. There is no fixed per-queue slice and no
    reserved tail: both drains share the one deadline, `shutdownTimeoutMs`. The
@@ -1029,6 +1061,26 @@ On signal:
    is still running may still touch a store, and closing underneath it produced
    `Statement has finalized` and refunds opening transactions on a closed pool.
    Exit 1 is the honest report of an unclean stop.
+
+**Prerequisite: the server process must be PID 1 in the container.** Docker —
+and Coolify through it — delivers `SIGTERM` to PID 1 only, so everything in this
+section is reachable only if PID 1 is `bun … server.ts` itself. Two ways it
+silently is not, both of which turn every stop and every redeploy into the
+`SIGKILL` at the end of the grace period:
+
+- starting it through `bun run start`. `bun run` spawns the script as a child
+  and does **not** forward signals on its single-script path (upstream
+  `oven-sh/bun#41478`); only `--filter`/`--parallel` do.
+- a shell that waits on the server instead of being replaced by it — hence the
+  `exec` in the `CMD` in `Dockerfile`.
+
+`--init`/`tini` does **not** substitute for either: it forwards to its direct
+child, which would be the intermediate process, not the server.
+
+Verify on the built image — `docker stop` should log
+`{"msg":"server stopping","signal":"SIGTERM"}` and return in seconds. A stop
+that instead takes the full grace period and exits **137** is this defect, not a
+slow drain.
 
 **Set Coolify's stop grace period longer than the `shutdownTimeoutMs` in the
 startup log — currently 135 s.** A shorter grace period means the orchestrator
@@ -1252,11 +1304,13 @@ curl -fsS -H "x-maintenance-token: $SQLITE_MAINTENANCE_TOKEN" \
 ```
 
 **Return code** is not a field of a CMD check and never was load-bearing: even
-for the HTTP type, Coolify's generated Nixpacks command uses `curl -f` with a
-`wget` fallback and decides health from the command's exit status — it does not
+for the HTTP type, Coolify's generated command uses `curl -f` with a `wget`
+fallback and decides health from the command's exit status — it does not
 interpolate `health_check_return_code`. The command above is explicit about it
 (`-f` plus `|| exit 1`). The external smoke test in §8 is what asserts the exact
-status.
+status. That generated command runs INSIDE the container, which is why the
+Dockerfile's runtime stage installs `curl`: a slim base image without it makes
+the check fail forever and the container restart-loop with nothing in its logs.
 [Health checks](https://coolify.io/docs/knowledge-base/health-checks) ·
 [generator source](https://github.com/coollabsio/coolify/blob/v4.x/app/Jobs/ApplicationDeploymentJob.php#L3239-L3283)
 
@@ -1386,7 +1440,7 @@ exact path and the driver belongs in `server.ts` beside the existing assertions
 
 **There are none to configure, and any that exist must be DELETED.**
 
-Both sweeps run inside the application process (`lib/schedule.ts`, on
+Both sweeps run inside the application process (`lib/maintenance/schedule.ts`, on
 `Bun.cron`). The two routes a Coolify scheduled task used to `curl` —
 `POST /api/internal/sqlite-sweep` and `POST /api/internal/db-sweep` — no longer
 exist; a task still pointing at either will 404 on every run.
@@ -1421,7 +1475,7 @@ maintenance token, two paths from the public OpenAPI document, and the
 itself — both sweeps are bounded batch loops holding a writer lock, and a second
 concurrent run is the contention that turns maintenance into an authentication
 outage — it adds no dependency, and it keeps the sweep independent of the web
-framework, which `lib/sqlite/maintenance.ts` states as its first line.
+framework, which `lib/maintenance/sqlite.ts` states as its first line.
 
 ### The schedule
 
@@ -1491,7 +1545,7 @@ and every fail-closed limiter answers 503 — the same total-authentication outa
 as §4.
 
 **If `hasMore` trips on consecutive runs, raise the frequency further** in
-`lib/schedule.ts` (the sweep is cheap and idempotent) rather than waiting for the
+`lib/maintenance/schedule.ts` (the sweep is cheap and idempotent) rather than waiting for the
 disk alert.
 
 A corrupt `cache.db` no longer fails the whole run: its half is contained, so the
@@ -1889,8 +1943,8 @@ Why, per file:
   so nothing existing is refused; only the old code's writes are.
 - `0016_drop_backup_code_version.sql` drops `backup_codes_version` and
   `backup_codes_acknowledged_version`. The previous release reads them in
-  `lib/auth/two-factor-challenge.ts`, `lib/auth/recovery-second-factor.ts` and
-  `lib/auth/two-factor-enrolment.ts`, so **every second-factor challenge,
+  `lib/auth/two-factor/challenge.ts`, `lib/auth/recovery/second-factor.ts` and
+  `lib/auth/two-factor/enrolment.ts`, so **every second-factor challenge,
   enrolment and recovery request answers `42703`** for as long as it keeps
   serving. `0015` must run before it — it is the hand-written backfill that gives
   each existing set its `backup_codes_set_id` and carries the acknowledgement
@@ -1949,7 +2003,7 @@ bucket CORS rule in the Cloudflare console — the API token cannot (measured
       `scheduled sweep degraded`, on `hasMore: true` across consecutive runs, and
       on a MISSING `scheduled sweep completed` for a job's period (§9).
 - [ ] Escalation on a persistent `hasMore: true` understood — raise the cron
-      frequency in `lib/schedule.ts` rather than waiting for the disk alert (§9).
+      frequency in `lib/maintenance/schedule.ts` rather than waiting for the disk alert (§9).
 - [ ] Pepper keyring and active id understood as a **two-variable** rollback
       (§3.2).
 - [ ] Named volume at `/app/data`; `SQLITE_DIR=/app/data`; directory `0700`.

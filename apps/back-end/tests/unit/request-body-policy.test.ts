@@ -13,14 +13,14 @@
  */
 import { describe, expect, test } from 'bun:test';
 
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
 import {
   buildRequestMeta,
   MAX_JSON_BODY_BYTES,
   MAX_REQUEST_BODY_BYTES,
   withBodyPolicy,
 } from '@/lib/http/request';
-
-import { HTTP_STATUS } from '@/utils/api-messages';
 
 const BOUNDARY = 'X';
 const MULTIPART_BODY =

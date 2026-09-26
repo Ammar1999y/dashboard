@@ -1,11 +1,8 @@
-import { SQL } from 'bun';
+import { assertPasswordHashEvaluable } from '@/lib/auth/password/hash';
 
-import { assertPasswordHashEvaluable } from '@/lib/auth/password';
+import { connectPreflightDatabase } from './preflight-database';
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error('DATABASE_URL is not set');
-
-const sql = new SQL(databaseUrl, { max: 1, connectionTimeout: 10 });
+const sql = connectPreflightDatabase();
 try {
   const rows = await sql<{ id: string; password: string }[]>`
     SELECT id, password

@@ -1,114 +1,101 @@
-import type { Handler } from '@/lib/http/contract';
-import type { OtpChannel } from '@/utils/validation/enums';
-
 import { eq } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { users } from '@/db/schema';
-import { readRecoveryGrant } from '@/lib/auth/recovery-grant';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
 import {
-  readEnrollmentState,
+  OTP_ENABLED,
+  recoverySecondFactorSendSchema,
+} from '@app/shared/validation/otp';
+
+import { otpMsg } from '@/lib/auth/messages';
+import { readRecoveryGrant } from '@/lib/auth/recovery/grant';
+import {
+  readEnrolmentState,
   recoveryOptions,
-} from '@/lib/auth/two-factor-challenge';
+} from '@/lib/auth/two-factor/methods';
+import { readJsonBody } from '@/lib/http/input';
+import { apiSuccess, requireFeature, withApiErrors } from '@/lib/http/response';
+import { CONTACT_LABEL } from '@/lib/otp/content';
+import { processOtpSend } from '@/lib/otp/send';
 import {
   enforceOtpSurfaceSendQuota,
   enforceRateLimit,
   ipIdentifier,
 } from '@/lib/rate-limit';
 
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { CustomError } from '@/utils/error-class';
-import { processOtpSend } from '@/utils/otp';
-import {
-  OTP_ENABLED,
-  recoverySecondFactorSendSchema,
-} from '@/utils/validation/otp';
-
-import { otpMsg } from '../../../otp/messages';
-
 /**
  * Sends the second-factor code for a recovery grant.
  *
- * ⚠️ The destination is read from the USER ROW and the option must be one the
- * grant issued, so nothing here can redirect a code: a caller holding the grant
- * cannot name `otp:email` on a grant whose recovery code arrived by email, and
- * cannot name a contact the account does not hold.
+ * ⚠️ The destination comes from the USER ROW and the option must be one the
+ * grant issued, so nothing here redirects a code: not to the contact the
+ * recovery code arrived on, not to a contact the account does not hold.
  *
- * Its own send budget (`recovery_second_factor`), because a shared one would let
- * the anonymous contact-verification surface exhaust the only channel a locked
- * out user has left.
+ * Its own send budget (`recovery_second_factor`): a shared one would let the
+ * anonymous contact-verification surface exhaust the only channel a locked-out
+ * user has left.
  */
-export const POST: Handler = async (ctx) => {
-  try {
-    if (!OTP_ENABLED)
-      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+export const POST = withApiErrors(otpMsg.sendError, async (ctx) => {
+  requireFeature(OTP_ENABLED);
 
-    await enforceRateLimit({
-      scope: 'forgot.second-factor.send.ip',
-      identifier: ipIdentifier(ctx.headers),
-      limit: 30,
-      window: 60,
-      failClosed: true,
-    });
+  await enforceRateLimit({
+    scope: 'forgot.second-factor.send.ip',
+    identifier: ipIdentifier(ctx.headers),
+    limit: 30,
+    failClosed: true,
+  });
 
-    const body = requireJsonBody(await ctx.readJson());
-    const parsed = recoverySecondFactorSendSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(otpMsg.invalidInput, HTTP_STATUS.UNPROCESSABLE);
-    const { grant: grantToken, option: requested } = parsed.data;
+  const { grant: grantToken, option: requested } = await readJsonBody(
+    ctx,
+    recoverySecondFactorSendSchema,
+    { message: otpMsg.invalidInput }
+  );
 
-    const grant = await readRecoveryGrant(grantToken);
-    if (!grant)
-      throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
+  const grant = await readRecoveryGrant(grantToken);
+  if (!grant)
+    throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
 
-    // The issued set narrowed by CURRENT capability: an enrolment that has gone
-    // since the grant was minted is not an option, and one that appeared is not
-    // one either.
-    const state = await readEnrollmentState(grant.userId);
-    const issued = new Set(grant.options);
-    const option = recoveryOptions(state, grant.excludeContactKind).find(
-      (entry) =>
-        issued.has(entry.id) && entry.method === 'otp' && entry.id === requested
-    );
-    if (!option?.channel)
-      throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
+  // The issued set narrowed by CURRENT capability: an enrolment gone since the
+  // grant was minted is no option, and one that appeared is none either.
+  const state = await readEnrolmentState(grant.userId);
+  const issued = new Set(grant.options);
+  const option = recoveryOptions(state, grant.excludeContactKind).find(
+    (entry) =>
+      issued.has(entry.id) && entry.method === 'otp' && entry.id === requested
+  );
+  if (!option?.channel)
+    throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
 
-    const [user] = await db
-      .select({ email: users.email, phoneNumber: users.phoneNumber })
-      .from(users)
-      .where(eq(users.id, grant.userId))
-      .limit(1);
-    const destination =
-      option.contactKind === 'email' ? user?.email : user?.phoneNumber;
-    if (!destination)
-      throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
+  const [user] = await db
+    .select({ email: users.email, phoneNumber: users.phoneNumber })
+    .from(users)
+    .where(eq(users.id, grant.userId))
+    .limit(1);
+  const destination =
+    option.contactKind === 'email' ? user?.email : user?.phoneNumber;
+  if (!destination)
+    throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
 
-    await enforceOtpSurfaceSendQuota({
-      channel: option.channel as OtpChannel,
-      destination,
-      surface: 'recovery_second_factor',
-    });
+  await enforceOtpSurfaceSendQuota({
+    channel: option.channel,
+    destination,
+    surface: 'recovery_second_factor',
+  });
 
-    const { nextAllowedIn } = await processOtpSend({
-      userId: grant.userId,
-      identifier: destination,
-      channel: option.channel as OtpChannel,
-      purpose: 'two_factor',
-      sendTo: destination,
-      entityName:
-        option.contactKind === 'email' ? 'البريد الإلكتروني' : 'رقم الهاتف',
-    });
+  const { nextAllowedIn } = await processOtpSend({
+    userId: grant.userId,
+    identifier: destination,
+    channel: option.channel,
+    purpose: 'two_factor',
+    sendTo: destination,
+    entityName:
+      CONTACT_LABEL[option.contactKind === 'email' ? 'email' : 'phone'],
+  });
 
-    return apiSuccess({
-      message: otpMsg.sendSuccess,
-      data: { nextAllowedIn },
-    });
-  } catch (error) {
-    return handleApiError(error, otpMsg.sendError);
-  }
-};
+  return apiSuccess({
+    message: otpMsg.sendSuccess,
+    data: { nextAllowedIn },
+  });
+});

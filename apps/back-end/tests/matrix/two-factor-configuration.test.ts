@@ -27,16 +27,18 @@ import {
   verificationCodes,
   verificationSessions,
 } from '@/db/schema';
-import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { hashOtpCode, otpSubjectFor, otpTextFor } from '@/utils/otp';
-import { clearOutbox, readOutbox } from '@/utils/otp-outbox';
+import { HTTP_STATUS } from '@app/shared/api-messages';
 import {
   ENABLED_TWO_FACTOR_METHODS,
   TWO_FACTOR_ENABLED,
   TWO_FACTOR_OTP_CHANNELS,
-} from '@/utils/validation/two-factor';
+} from '@app/shared/validation/two-factor';
+
+import { PUBLIC_ORIGIN } from '@/lib/env';
+import { otpSubjectFor, otpTextFor } from '@/lib/otp/content';
+import { hashOtpCode } from '@/lib/otp/hash';
+import { clearOutbox, readOutbox } from '@/lib/otp/outbox';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';

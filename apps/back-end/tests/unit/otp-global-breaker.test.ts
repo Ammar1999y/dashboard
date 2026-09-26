@@ -27,7 +27,7 @@
  * no shared module replaced.
  */
 import { beforeEach, describe, expect, test } from 'bun:test';
-import type { OtpSendSurface } from '@/lib/rate-limit/api';
+import type { OtpSendSurface } from '@/lib/rate-limit';
 
 import { getRateLimitStore } from '@/lib/rate-limit/store';
 
@@ -78,7 +78,7 @@ beforeEach(() => {
 
 describe('the pre-lookup send chain', () => {
   test('charges the per-surface key and NOT the shared provider breaker', async () => {
-    const { enforceOtpSurfaceSendQuota } = await import('@/lib/rate-limit/api');
+    const { enforceOtpSurfaceSendQuota } = await import('@/lib/rate-limit');
 
     // Exactly what a public send handler runs before it knows whether the
     // destination belongs to anyone: an address nobody owns.
@@ -104,7 +104,7 @@ describe('the pre-lookup send chain', () => {
   });
 
   test('recovery keeps its reserved send budget', async () => {
-    const { enforceOtpSurfaceSendQuota } = await import('@/lib/rate-limit/api');
+    const { enforceOtpSurfaceSendQuota } = await import('@/lib/rate-limit');
 
     await enforceOtpSurfaceSendQuota({
       channel: 'email',
@@ -126,7 +126,7 @@ describe('the pre-lookup send chain', () => {
   });
 
   test('exhausting one surface leaves every other surface untouched', async () => {
-    const { enforceOtpSurfaceSendQuota } = await import('@/lib/rate-limit/api');
+    const { enforceOtpSurfaceSendQuota } = await import('@/lib/rate-limit');
     const destination = 'victim@example.test';
 
     const charge = (surface: (typeof SEND_SURFACES)[number]) =>
@@ -154,8 +154,7 @@ describe('the pre-lookup send chain', () => {
   test.each([...SEND_SURFACES])(
     'surface %s never charges the breaker',
     async (surface) => {
-      const { enforceOtpSurfaceSendQuota } =
-        await import('@/lib/rate-limit/api');
+      const { enforceOtpSurfaceSendQuota } = await import('@/lib/rate-limit');
       await enforceOtpSurfaceSendQuota({
         channel: 'sms',
         destination: '966500000001',
@@ -169,7 +168,7 @@ describe('the pre-lookup send chain', () => {
 
 describe('the delivery boundary', () => {
   test('charges the breaker, and sms and whatsapp share one bucket', async () => {
-    const { enforceOtpGlobalSendBudget } = await import('@/lib/rate-limit/api');
+    const { enforceOtpGlobalSendBudget } = await import('@/lib/rate-limit');
 
     await enforceOtpGlobalSendBudget({ channel: 'whatsapp' });
     await enforceOtpGlobalSendBudget({ channel: 'sms' });

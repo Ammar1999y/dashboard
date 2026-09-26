@@ -14,7 +14,7 @@
  * header and body, and left the real proof in a six-hour blocked state as a side
  * effect.
  *
- * `collapseProofThrottle` (`utils/otp.ts`) is the shared fix: `blockedError`
+ * `collapseProofThrottle` (`lib/otp/throttle.ts`) is the shared fix: `blockedError`
  * marks the error with `OTP_PROOF_THROTTLE_CODE`, and every anonymous boundary
  * collapses THAT KIND rather than collapsing 429 by status — so a pre-lookup
  * IP or destination limiter, which fires for real and fake identifiers alike,
@@ -27,7 +27,7 @@
  */
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { SeedOptions } from '../helpers/session';
-import type { OtpPurpose } from '@/utils/validation/enums';
+import type { OtpPurpose } from '@app/shared/validation/enums';
 
 import { and, eq } from 'drizzle-orm';
 
@@ -35,8 +35,9 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { OTP_MAX_VERIFY_ATTEMPTS } from '@/utils/validation/constants';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
 
 import { resetTables } from '../helpers/database';
 import { settleDelivery } from '../helpers/mailbox';

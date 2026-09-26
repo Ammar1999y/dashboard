@@ -1,7 +1,7 @@
 # Encrypted legacy Office fixtures
 
 Real password-protected files from the Apache POI test corpus, used by
-`tests/unit/media-allowlist.test.ts` to prove that `lib/media/cfb.ts` refuses
+`tests/unit/media-allowlist.test.ts` to prove that `lib/media/office/cfb.ts` refuses
 legacy encryption by reading the FIB and BIFF records, not directory names.
 Synthetic fixtures cannot stand in for them: the encryption is inside the
 streams, exactly where a name-only inspector never looks.

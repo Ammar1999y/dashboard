@@ -15,16 +15,16 @@ import {
   verificationCodes,
   verificationSessions,
 } from '@/db/schema';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+
 import { MAX_FAILED_ATTEMPTS } from '@/lib/auth/login-guard';
 import { generateUuidV7 } from '@/lib/id';
-
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { hashOtpCode, processOtpSend, processOtpVerify } from '@/utils/otp';
-import {
-  OTP_MAX_ATTEMPTS,
-  OTP_MAX_VERIFY_ATTEMPTS,
-} from '@/utils/validation/constants';
+import { hashOtpCode } from '@/lib/otp/hash';
+import { OTP_MAX_ATTEMPTS, OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
+import { processOtpSend } from '@/lib/otp/send';
+import { processOtpVerify } from '@/lib/otp/verify';
 
 import { resetTables } from '../helpers/database';
 import { sentMail, settleDelivery } from '../helpers/mailbox';
@@ -95,8 +95,11 @@ test('CI still DECLARES a non-UTC timezone for the database tiers', () => {
   // Not asserted from `process.env` unconditionally: a developer whose own
   // machine sits at UTC would fail a suite they have not broken, and a gate that
   // fails for that reason is a gate that gets deleted.
+  // The workflows live at the repository root, two levels above this workspace.
   const workflowPath = path.join(
     import.meta.dir,
+    '..',
+    '..',
     '..',
     '..',
     '.github',

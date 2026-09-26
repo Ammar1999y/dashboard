@@ -1,56 +1,54 @@
 import type { Handler } from '@/lib/http/contract';
 
-import { and, eq, isNull } from 'drizzle-orm';
-
 import { db } from '@/db';
-import { userContactColumn } from '@/db/queries';
 import { users } from '@/db/schema';
-import { sanitizeForLog } from '@/utils';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { PASSWORDLESS_ENABLED } from '@app/shared/config';
+import { CustomError } from '@app/shared/error-class';
+import { contactKindOf } from '@app/shared/validation/enums';
+import { OTP_ENABLED, sendOtpSchema } from '@app/shared/validation/otp';
+
+import { ensureMinDelay, otpMsg } from '@/lib/auth/messages';
 import { verifyTurnstileRequest } from '@/lib/captcha';
 import { enqueueAfterResponse } from '@/lib/http/after-response';
+import { readJsonBody } from '@/lib/http/input';
+import {
+  apiSuccess,
+  handleApiError,
+  requireFeature,
+} from '@/lib/http/response';
+import { CONTACT_LABEL } from '@/lib/otp/content';
+import { processOtpSend } from '@/lib/otp/send';
+import { OTP_BASE_RESEND_DELAY_S } from '@/lib/otp/throttle';
 import {
   enforceOtpSurfaceSendQuota,
   enforceRateLimit,
   ipIdentifier,
 } from '@/lib/rate-limit';
+import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { PASSWORDLESS_ENABLED } from '@/utils/config';
-import { CustomError } from '@/utils/error-class';
-import { OTP_BASE_RESEND_DELAY_S, processOtpSend } from '@/utils/otp';
-import { OTP_ENABLED, sendOtpSchema } from '@/utils/validation/otp';
-
-import { ensureMinDelay, otpMsg } from '../../otp/messages';
+import { sanitizeForLog } from '@/utils/log';
 
 const GENERIC_SEND_DATA = { nextAllowedIn: OTP_BASE_RESEND_DELAY_S };
 
 /**
- * Passwordless login step 1: send a sign-in code (purpose=passwordless_login)
- * to whichever enabled channel the user chose. Always a REAL code (the
- * OTP_AUTO_VERIFY bypass never auto-issues a login). Privacy-preserving:
- * known/unknown identifiers get the same response + timing.
+ * Passwordless login step 1: a sign-in code (purpose=passwordless_login) to the
+ * chosen channel. Always a REAL code — OTP_AUTO_VERIFY never auto-issues a
+ * login. Known and unknown identifiers get the same response and timing.
  */
 export const POST: Handler = async (ctx) => {
   const start = Date.now();
   try {
-    // Both gates: the machinery has to exist AND this entry point has to be
-    // switched on. See `PASSWORDLESS_ENABLED`.
-    if (!OTP_ENABLED || !PASSWORDLESS_ENABLED)
-      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    // The machinery has to exist AND this entry point has to be switched on.
+    requireFeature(OTP_ENABLED && PASSWORDLESS_ENABLED);
 
-    // Per-IP cap BEFORE captcha so the outbound siteverify call is bounded per
-    // IP. The IP-level 429 is pre-lookup and leaks nothing about account
-    // existence, so it propagates as-is (not collapsed) below.
+    // Per IP BEFORE the captcha, bounding the siteverify call. It runs before
+    // any lookup, so its 429 reveals nothing and propagates as-is.
     await enforceRateLimit({
       scope: 'passwordless.send.ip',
       identifier: ipIdentifier(ctx.headers),
       limit: 60,
-      window: 60,
       failClosed: true,
     });
 
@@ -60,15 +58,12 @@ export const POST: Handler = async (ctx) => {
         new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN)
       );
 
-    const body = requireJsonBody(await ctx.readJson());
-    const parsed = sendOtpSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(otpMsg.invalidInput, HTTP_STATUS.UNPROCESSABLE);
+    const input = await readJsonBody(ctx, sendOtpSchema, {
+      message: otpMsg.invalidInput,
+    });
 
-    const { channel } = parsed.data;
-    const identifier =
-      channel === 'email' ? parsed.data.email : parsed.data.phoneNumber;
-    const entityName = channel === 'email' ? 'البريد الإلكتروني' : 'رقم الهاتف';
+    const { channel } = input;
+    const identifier = contactIdentifier(input);
 
     await enforceOtpSurfaceSendQuota({
       channel,
@@ -82,13 +77,7 @@ export const POST: Handler = async (ctx) => {
     const [userData] = await db
       .select({ id: users.id })
       .from(users)
-      .where(
-        and(
-          eq(userContactColumn(channel), identifier),
-          isNull(users.deletedAt),
-          eq(users.isActive, true)
-        )
-      )
+      .where(activeUserWithContact(channel, identifier))
       .limit(1);
 
     if (!userData) {
@@ -103,7 +92,7 @@ export const POST: Handler = async (ctx) => {
         channel,
         purpose: 'passwordless_login',
         sendTo: identifier,
-        entityName,
+        entityName: CONTACT_LABEL[contactKindOf(channel)],
 
         deferDelivery: (task) => enqueueAfterResponse(ctx.rawRequest, task),
       });

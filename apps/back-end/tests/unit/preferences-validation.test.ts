@@ -1,5 +1,5 @@
 /**
- * `utils/validation/preferences.ts`: the strict write schema and the lenient
+ * `@app/shared/validation/preferences`: the strict write schema and the lenient
  * read boundary, pinned as a pair so a "share one schema" refactor has to break
  * this file on purpose.
  */
@@ -9,7 +9,7 @@ import {
   DEFAULT_PREFERENCES,
   preferencesSchema,
   sanitizePreferences,
-} from '@/utils/validation/preferences';
+} from '@app/shared/validation/preferences';
 
 const VALID = {
   preset: 'modern-minimal',

@@ -137,7 +137,7 @@ describe('sign-in fixture', () => {
     //
     // This was briefly weakened to `not.toBe(401)` plus a write-path 422, because
     // the route answered 403 — `session.user.roleId` was always undefined
-    // (`lib/auth.ts` mapped it with `fieldName: 'role_id'` against a Drizzle
+    // (`lib/auth/index.ts` mapped it with `fieldName: 'role_id'` against a Drizzle
     // adapter that returns Drizzle keys). That is fixed, so the assertion is back
     // to what it has to be: `not.toBe(401)` cannot tell "authorization works" from
     // "authorization is broken for every read action".

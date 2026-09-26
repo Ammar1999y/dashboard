@@ -17,9 +17,11 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { processOtpSend, PROVIDER_TIMEOUT_MS } from '@/utils/otp';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+
+import { PROVIDER_TIMEOUT_MS } from '@/lib/otp/delivery';
+import { processOtpSend } from '@/lib/otp/send';
 
 import { resetTables } from '../helpers/database';
 import { delayMail, sentMail } from '../helpers/mailbox';

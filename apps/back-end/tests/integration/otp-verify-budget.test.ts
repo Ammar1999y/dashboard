@@ -16,7 +16,7 @@
  * per-failure timestamps, so the whole counter ages out together when its anchor
  * passes 24 hours — which is why two full budgets can fall inside one moving
  * 24-hour interval, one just before an anchor expires and one just after. That
- * is the accepted limitation recorded in `utils/otp.ts`, and the last describe
+ * is the accepted limitation recorded in `lib/otp/verify.ts`, and the last describe
  * block asserts it as behaviour rather than leaving it as a comment.
  *
  * **Every denial is asserted by ROW STATE, not only by status.** The budget lives
@@ -42,24 +42,26 @@ import type {
   OtpChannel,
   OtpPurpose,
   PhoneOtpChannel,
-} from '@/utils/validation/enums';
+} from '@app/shared/validation/enums';
 
 import { and, eq, sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
-import { generateUuidV7 } from '@/lib/id';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { hashOtpCode, processOtpVerify } from '@/utils/otp';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import { OTP_EXPIRY_MINUTES } from '@app/shared/validation/constants';
+import { OTP_PURPOSES, PHONE_OTP_CHANNELS } from '@app/shared/validation/enums';
+
+import { generateUuidV7 } from '@/lib/id';
+import { hashOtpCode } from '@/lib/otp/hash';
 import {
   OTP_BLOCK_DURATION_HOURS,
-  OTP_EXPIRY_MINUTES,
   OTP_MAX_DAILY_VERIFY_ATTEMPTS,
   OTP_MAX_VERIFY_ATTEMPTS,
-} from '@/utils/validation/constants';
-import { OTP_PURPOSES, PHONE_OTP_CHANNELS } from '@/utils/validation/enums';
+} from '@/lib/otp/limits';
+import { processOtpVerify } from '@/lib/otp/verify';
 
 import { resetTables } from '../helpers/database';
 import { seedUser } from '../helpers/session';

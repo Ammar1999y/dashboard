@@ -1,54 +1,45 @@
-import type { Handler } from '@/lib/http/contract';
-
 import { and, eq, isNull } from 'drizzle-orm';
 
-import { otpMsg } from '@/app/api/auth/otp/messages';
 import { db, withTransaction } from '@/db';
 import { users } from '@/db/schema';
+
+import {
+  HTTP_STATUS,
+  MSG_NOT_FOUND,
+  MSG_UPDATE_ERROR,
+} from '@app/shared/api-messages';
+import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@app/shared/config';
+import { CustomError } from '@app/shared/error-class';
+import { changePhoneSchema } from '@app/shared/validation/auth';
+import { isChannelEnabled } from '@app/shared/validation/otp';
+
 import { getAuditMeta } from '@/lib/audit';
-import { requireReauthWindow } from '@/lib/auth/admin-reauth';
-import { LoginRejected, verifyLoginAttempt } from '@/lib/auth/login-guard';
+import { otpMsg } from '@/lib/auth/messages';
 import { verifyTurnstileRequest } from '@/lib/captcha';
+import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
+import { readJsonBody } from '@/lib/http/input';
+import { apiSuccess, requireFeature, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
+import { CONTACT_LABEL } from '@/lib/otp/content';
+import { processOtpSend } from '@/lib/otp/send';
+import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
   enforceOtpSurfaceSendQuota,
   enforceRateLimit,
   userIdentifier,
 } from '@/lib/rate-limit';
-
-import {
-  HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-  MSG_NOT_FOUND,
-  MSG_PAGE_NOT_FOUND,
-  MSG_UPDATE_ERROR,
-} from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  handleUserUniqueViolation,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@/utils/config';
-import { CustomError } from '@/utils/error-class';
-import { processOtpSend } from '@/utils/otp';
-import { changePhoneSchema } from '@/utils/validation/auth';
-import { isChannelEnabled } from '@/utils/validation/otp';
-import { zodIssueMessage } from '@/utils/validation/rules';
-
-import { userMsg } from '../../messages';
-import { commitPhoneChange } from '../contact-change';
+import { commitPhoneChange } from '@/lib/users/contact-change';
+import { reauthenticateContactChange } from '@/lib/users/current-password';
+import { userMsg } from '@/lib/users/messages';
 
 /**
- * Initiate a phone-number change. Like email, the new
- * number is never written until ownership is proven via OTP — or committed
- * immediately under OTP_AUTO_VERIFY. The endpoint 404s entirely when phone is
- * disabled by PHONE_NUMBER_MODE.
+ * Initiates a phone-number change; like email, the new number is written only
+ * once ownership is proven by OTP, or at once under OTP_AUTO_VERIFY.
  */
-export const POST: Handler = async (ctx) => {
-  try {
-    if (!PHONE_ENABLED)
-      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+export const POST = withApiErrors(
+  MSG_UPDATE_ERROR,
+  async (ctx) => {
+    requireFeature(PHONE_ENABLED);
 
     const { userId, sessionId } = await requireSession(ctx);
 
@@ -63,15 +54,8 @@ export const POST: Handler = async (ctx) => {
     if (!captchaOk)
       throw new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
 
-    const body = requireJsonBody(await ctx.readJson());
-    const parsed = changePhoneSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(
-        zodIssueMessage(parsed.error),
-        HTTP_STATUS.UNPROCESSABLE
-      );
-
-    const { newPhoneNumber, channel } = parsed.data;
+    const input = await readJsonBody(ctx, changePhoneSchema);
+    const { newPhoneNumber, channel } = input;
 
     if (!OTP_AUTO_VERIFY && !isChannelEnabled(channel))
       throw new CustomError(
@@ -80,25 +64,13 @@ export const POST: Handler = async (ctx) => {
       );
 
     const auditMeta = getAuditMeta(ctx);
-    try {
-      if (parsed.data.currentPassword === undefined)
-        await requireReauthWindow(userId, sessionId);
-      else
-        await verifyLoginAttempt({
-          userId,
-          password: parsed.data.currentPassword,
-          skipTimingGuard: true,
-          auditMeta,
-          purpose: 'reauth_change_phone',
-        });
-    } catch (e) {
-      if (e instanceof LoginRejected)
-        throw new CustomError(
-          userMsg.currentPasswordIncorrect,
-          HTTP_STATUS.BAD_REQUEST
-        );
-      throw e;
-    }
+    await reauthenticateContactChange({
+      userId,
+      sessionId,
+      currentPassword: input.currentPassword,
+      auditMeta,
+      purpose: 'reauth_change_phone',
+    });
 
     const [currentUser] = await db
       .select({
@@ -112,14 +84,8 @@ export const POST: Handler = async (ctx) => {
 
     if (!currentUser || !currentUser.isActive)
       throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-    if (!currentUser.roleId)
-      throw new CustomError(
-        MSG_INSUFFICIENT_PERMISSIONS,
-        HTTP_STATUS.FORBIDDEN
-      );
-    // A "taken" number is NOT rejected here: revealing it before ownership is
-    // proven would be an enumeration oracle. Uniqueness is enforced by the
-    // unique index at commit time (→ 409). Same-as-current reveals nothing.
+    if (!currentUser.roleId) throw insufficientPermissions();
+    // A taken number is not refused here, for the reason `change-email` gives.
     if (currentUser.phoneNumber === newPhoneNumber)
       throw new CustomError(
         userMsg.newPhoneSameAsCurrent,
@@ -143,14 +109,13 @@ export const POST: Handler = async (ctx) => {
       });
     }
 
+    // `sms` and `whatsapp` share one per-destination budget, so switching
+    // transport does not double the paid messages one number can be sent.
     await enforceOtpSurfaceSendQuota({
       channel,
       destination: newPhoneNumber,
       surface: 'contact_change',
     });
-    // Aggregate per-destination cap. `sms` and `whatsapp` collapse onto one
-    // phone budget, so switching transport no longer doubles the number of
-    // paid messages a single number can be sent.
     await processOtpSend({
       userId,
       identifier: newPhoneNumber,
@@ -158,18 +123,13 @@ export const POST: Handler = async (ctx) => {
       purpose: 'change_phone',
       targetIdentifier: newPhoneNumber,
       sendTo: newPhoneNumber,
-      entityName: 'رقم الهاتف',
+      entityName: CONTACT_LABEL.phone,
     });
 
     return apiSuccess({
       message: userMsg.phoneChangeCodeSent,
       data: { otpSent: true },
     });
-  } catch (error) {
-    // Only a KNOWN constraint becomes a 409; an unrecognized one falls
-    // through to the 500 path so the schema/code mismatch is visible.
-    const conflict = handleUserUniqueViolation(error);
-    if (conflict) return conflict;
-    return handleApiError(error, MSG_UPDATE_ERROR);
-  }
-};
+  },
+  handleUserUniqueViolation
+);

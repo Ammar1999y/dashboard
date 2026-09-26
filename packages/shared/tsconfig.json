@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // No ambient types: `globals.d.ts` declares the whole Node surface allowed.
+    "types": []
+  },
+  "include": ["src/**/*.ts", "globals.d.ts"]
+}

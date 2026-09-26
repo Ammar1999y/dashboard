@@ -4,7 +4,7 @@
  *
  * Better Auth's router-level origin check skips a cookie-less request and leaves
  * it to the endpoint's own `formCsrfMiddleware`, which runs AFTER `hooks.before`
- * — where `lib/auth.ts` runs the real password verification for `/sign-in/email`
+ * — where `lib/auth/index.ts` runs the real password verification for `/sign-in/email`
  * and where `/passwordless/verify`, a local endpoint, declared no such middleware
  * at all. So an untrusted origin used to answer 403 only after the password had
  * been compared, the failed-attempt counter charged, or the OTP consumed and a
@@ -28,10 +28,11 @@ import {
   verificationCodes,
   verificationSessions,
 } from '@/db/schema';
-import { BASE_ERROR_CODES } from '@/lib/auth/code-errors';
-import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { CUSTOM_AUTH_CODE, HTTP_STATUS } from '@/utils/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { BASE_ERROR_CODES, CUSTOM_AUTH_CODE } from '@/lib/auth/errors';
+import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
 import { seedOtpProof } from '../helpers/otp';

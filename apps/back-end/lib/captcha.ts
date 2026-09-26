@@ -1,19 +1,19 @@
-import { sanitizeForLog } from '@/utils';
+import {
+  CAPTCHA_HEADER,
+  CAPTCHA_TOKEN_MAX_LENGTH,
+} from '@app/shared/validation/auth';
+
+import { sanitizeForLog } from '@/utils/log';
 
 import { getClientIp } from './audit';
 
+// Cloudflare's always-pass secret:
 // https://developers.cloudflare.com/turnstile/troubleshooting/testing/
 const TEST_SECRET_KEY = '1x0000000000000000000000000000000AA';
 
 const SITEVERIFY_URL =
   'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
-const CAPTCHA_HEADER = 'x-captcha-response';
-
-export const CAPTCHA_TOKEN_MAX_LENGTH = 2048;
-
-// Cap the outbound siteverify call so a Cloudflare slowdown can't stall
-// OTP/auth handlers indefinitely. Failure here flows through fail-closed.
 const SITEVERIFY_TIMEOUT_MS = 3000;
 
 /** Fails closed on any error. */
@@ -51,14 +51,9 @@ async function verifyTurnstileToken(
       signal: controller.signal,
     });
     if (!response.ok) return false;
-    // `unknown`, then a runtime check. Asserting `{ success?: boolean }` on a
-    // third-party body happened to fail closed — `null.success` throws into the
-    // catch, a string's is `undefined` — but only by accident of what the
-    // property access does, and a refactor that reads the field defensively
-    // would turn "the provider answered something else" into a pass.
     const data: unknown = await response.json();
     if (typeof data !== 'object' || data === null) return false;
-    return (data as Record<string, unknown>)['success'] === true;
+    return 'success' in data && data.success === true;
   } catch (error) {
     console.error(sanitizeForLog(error));
     return false;
@@ -68,9 +63,9 @@ async function verifyTurnstileToken(
 }
 
 /**
- * Reads token from `x-captcha-response`. The remote IP is sourced only from
- * trusted proxy headers via `getClientIp` — we never accept a client-supplied
- * IP override, which would let an attacker forge the IP sent to Turnstile.
+ * The remote IP comes only from `getClientIp`'s trusted proxy headers, never
+ * from a client-supplied override, which would let a caller forge the IP
+ * Turnstile scores.
  */
 export async function verifyTurnstileRequest(
   headers: Headers

@@ -3,16 +3,12 @@
 /**
  * `bun audit`, retried only when the registry itself failed.
  *
- * npm's bulk advisories endpoint returns 5xx often enough to fail a run on its
- * own — a 503 on 2026-09-04 failed CI on a commit whose dependencies had not
- * changed, and the same outage blocks the pre-push gate. What makes this
- * non-trivial is that a REAL advisory also exits non-zero: retrying every
- * failure would turn a genuine finding into three slow attempts and still
- * report it, so the retry is gated on the transport signature below and any
- * other failure is passed through on the first attempt.
+ * npm's bulk advisories endpoint returns 5xx often enough to fail CI and the
+ * pre-push gate on its own. A REAL advisory also exits non-zero, so the retry
+ * is gated on the transport signature below and any other failure passes
+ * through on the first attempt.
  *
- * Usage: `bun scripts/audit.ts` — the `audit` package.json script, the CI job
- * and the lefthook gate all go through here so there is one implementation.
+ * The `audit` script, the CI job and the lefthook gate all run this file.
  */
 
 /**

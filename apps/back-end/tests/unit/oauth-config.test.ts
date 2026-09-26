@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 
 import { auth } from '@/lib/auth';
 import { BETTER_AUTH_ALLOWED_PATH_SET } from '@/lib/auth/allowed-paths';
-import { GOOGLE_ENABLED } from '@/lib/auth/oauth-config';
+import { GOOGLE_ENABLED } from '@/lib/auth/oauth/config';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 test('OAuth is disabled by default, including direct Better Auth entrypoints', async () => {
@@ -61,7 +61,7 @@ test.each([
         'bun',
         '--no-env-file',
         '-e',
-        "await import('./lib/auth/oauth-config.ts')",
+        "await import('./lib/auth/oauth/config.ts')",
       ],
       {
         cwd: process.cwd(),

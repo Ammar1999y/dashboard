@@ -7,13 +7,14 @@
  * right one. `hashOtpCode` is the same envelope the real send writes, so the
  * verify path is exercised for real.
  */
-import type { OtpChannel, OtpPurpose } from '@/utils/validation/enums';
+import type { OtpChannel, OtpPurpose } from '@app/shared/validation/enums';
 
 import { db } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
 
-import { hashOtpCode } from '@/utils/otp';
-import { OTP_EXPIRY_MINUTES } from '@/utils/validation/constants';
+import { OTP_EXPIRY_MINUTES } from '@app/shared/validation/constants';
+
+import { hashOtpCode } from '@/lib/otp/hash';
 
 import { assertHarnessDatabase } from './database';
 

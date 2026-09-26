@@ -1,45 +1,34 @@
-import type { Handler } from '@/lib/http/contract';
-
-import { otpMsg } from '@/app/api/auth/otp/messages';
 import { withTransaction } from '@/db';
+
+import { HTTP_STATUS, MSG_UPDATE_ERROR } from '@app/shared/api-messages';
+import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@app/shared/config';
+import { CustomError } from '@app/shared/error-class';
+import { changePhoneVerifySchema } from '@app/shared/validation/auth';
+
 import { getAuditMeta } from '@/lib/audit';
+import { otpMsg } from '@/lib/auth/messages';
 import { verifyTurnstileRequest } from '@/lib/captcha';
+import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
+import { readJsonBody } from '@/lib/http/input';
+import { apiSuccess, requireFeature, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
+import { processOtpVerify } from '@/lib/otp/verify';
 import {
   enforceOtpVerifyQuota,
   enforceRateLimit,
   userIdentifier,
 } from '@/lib/rate-limit';
-
-import {
-  HTTP_STATUS,
-  MSG_PAGE_NOT_FOUND,
-  MSG_UPDATE_ERROR,
-} from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  handleUserUniqueViolation,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@/utils/config';
-import { CustomError } from '@/utils/error-class';
-import { processOtpVerify } from '@/utils/otp';
-import { changePhoneVerifySchema } from '@/utils/validation/auth';
-import { zodIssueMessage } from '@/utils/validation/rules';
-
-import { userMsg } from '../../../messages';
-import { commitPhoneChange } from '../../contact-change';
+import { commitPhoneChange } from '@/lib/users/contact-change';
+import { userMsg } from '@/lib/users/messages';
 
 /**
- * Step 2 of the phone change: verify the OTP sent to the NEW number and, in the
- * same transaction, commit `phone_number = newPhoneNumber` + `phoneNumberVerified
- * = true`. Atomic verify-commit — no replay window.
+ * Step 2 of the phone change: the code sent to the NEW number is verified and
+ * the number committed in the same transaction, so there is no replay window.
  */
-export const POST: Handler = async (ctx) => {
-  try {
-    if (!PHONE_ENABLED)
-      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+export const POST = withApiErrors(
+  MSG_UPDATE_ERROR,
+  async (ctx) => {
+    requireFeature(PHONE_ENABLED);
 
     const { session, userId, sessionId } = await requireSession(ctx);
 
@@ -54,15 +43,9 @@ export const POST: Handler = async (ctx) => {
     if (!captchaOk)
       throw new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
 
-    const body = requireJsonBody(await ctx.readJson());
-    const parsed = changePhoneVerifySchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(
-        zodIssueMessage(parsed.error),
-        HTTP_STATUS.UNPROCESSABLE
-      );
+    const input = await readJsonBody(ctx, changePhoneVerifySchema);
 
-    const { newPhoneNumber, channel } = parsed.data;
+    const { newPhoneNumber, channel } = input;
     const auditMeta = getAuditMeta(ctx);
 
     await enforceOtpVerifyQuota({
@@ -87,9 +70,9 @@ export const POST: Handler = async (ctx) => {
           channel,
           purpose: 'change_phone',
           identifier: newPhoneNumber,
-          code: parsed.data.code,
+          code: input.code,
           auditMeta,
-          // Commit the number bound to the proven session, not the request body.
+          // The number bound to the proven session, not the request body.
           onVerified: (tx, matched) =>
             commitPhoneChange({
               tx,
@@ -105,11 +88,6 @@ export const POST: Handler = async (ctx) => {
       message: userMsg.phoneChanged,
       data: { verified: true },
     });
-  } catch (error) {
-    // Only a KNOWN constraint becomes a 409; an unrecognized one falls
-    // through to the 500 path so the schema/code mismatch is visible.
-    const conflict = handleUserUniqueViolation(error);
-    if (conflict) return conflict;
-    return handleApiError(error, MSG_UPDATE_ERROR);
-  }
-};
+  },
+  handleUserUniqueViolation
+);

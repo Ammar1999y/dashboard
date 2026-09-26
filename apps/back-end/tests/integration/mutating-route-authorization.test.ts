@@ -21,13 +21,14 @@ import type { SignedInSession } from '../helpers/session';
 
 import { app } from '@/app';
 import { ROUTES } from '@/routes';
-import { generateUuidV7 } from '@/lib/id';
 
 import {
   HTTP_STATUS,
   MSG_INSUFFICIENT_PERMISSIONS,
   MSG_LOGIN_REQUIRED,
-} from '@/utils/api-messages';
+} from '@app/shared/api-messages';
+
+import { generateUuidV7 } from '@/lib/id';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, baseHeaders, signedInUser } from '../helpers/session';

@@ -34,11 +34,15 @@ import {
   symmetricDecrypt,
   symmetricEncrypt,
 } from 'better-auth/crypto';
-import { auth } from '@/lib/auth';
-import { consumeTotpCode, DELEGATED_TOTP_WINDOW } from '@/lib/auth/totp-replay';
-import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { auth } from '@/lib/auth';
+import {
+  consumeTotpCode,
+  DELEGATED_TOTP_WINDOW,
+} from '@/lib/auth/two-factor/totp-replay';
+import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
@@ -264,7 +268,7 @@ beforeAll(async () => {
  *
  * It has to be cleared between cases rather than after the one obvious
  * offender, because a REPLAY is charged exactly like a wrong code — see
- * `SPENT_TOTP_CODE` in `lib/auth/two-factor.ts` — so the replay and concurrency
+ * `SPENT_TOTP_CODE` in `lib/auth/two-factor/plugin.ts` — so the replay and concurrency
  * cases spend the same budget as the invalid-code ones. That charging is
  * asserted directly below; clearing it here is what keeps the assertion local
  * to the case that makes it.

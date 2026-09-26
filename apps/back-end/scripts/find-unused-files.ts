@@ -5,36 +5,33 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+
+import { compareCodeUnits } from '@/utils/text';
 
 import { stripComments } from './strip-comments';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = path.resolve(import.meta.dirname, '..');
 
 const SKIP_DIRECTORIES = new Set([
   '.git',
-  '.next',
-  '.turbo',
   '.vscode',
   'build',
   'coverage',
   'dist',
   'node_modules',
   'out',
-  'patches',
-  'public',
   'scripts',
 ]);
 
 const CODE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.js', '.jsx', '.mjs', '.cjs'];
-const RESOLVE_EXTENSIONS = [...CODE_EXTENSIONS, '.json', '.css'];
+const RESOLVE_EXTENSIONS = [...CODE_EXTENSIONS, '.json'];
 
-/** Tests and benchmarks are tool entry points; handlers must flow through `routes.ts`. */
-const ENTRY_DIRECTORIES = ['tests/', 'bench/'];
+/** Tests are tool entry points; handlers must flow through `routes.ts`. */
+const ENTRY_DIRECTORIES = ['tests/'];
 const ENTRY_FILE_PATTERN =
-  /^(server|app|routes|middleware|instrumentation|drizzle\.config|eslint\.config|prettier\.config|postcss\.config|tailwind\.config)\.[a-z]+$/;
+  /^(server|app|routes|drizzle\.config|eslint\.config|prettier\.config)\.[a-z]+$/;
 
-/** The generated route table. Every handler must be imported by this file. */
+/** The route table. Every handler must be imported by this file. */
 const ROUTE_TABLE = 'routes.ts';
 
 /** Keep exceptions explicit so a pattern cannot absorb future orphaned files. */
@@ -106,11 +103,7 @@ const resolveSpecifier = (
   );
 };
 
-/**
- * Every in-repo file a source imports. Extracted from the scan loop so its
- * `continue` is not inside a nested loop — see `enqueueUnreached` below for the
- * same reasoning.
- */
+/** Every in-repo file a source imports; a function for the reason `enqueueUnreached` gives. */
 const resolveImports = (
   source: string,
   fromKey: string,
@@ -161,32 +154,18 @@ const enqueueUnreached = (targets: readonly string[]) => {
   }
 };
 
-while (queue.length > 0) {
-  const current = queue.pop() as string;
+for (let current = queue.pop(); current !== undefined; current = queue.pop())
   enqueueUnreached(importsOf.get(current) ?? []);
-}
 
 /**
- * Reachability does not prove registration, so this is checked separately — and
- * an import does not prove it either.
+ * Registration is checked separately: a handler module can be imported and
+ * still export a method no `ROUTES` entry routes, which looks healthy to an
+ * import graph. So the table is read as a table: every `import * as NS` is
+ * mapped to its module, every `handler: NS.METHOD` inside `ROUTES` is
+ * collected, and every HTTP method a handler exports must be accounted for.
  *
- * Two distinct gaps, and the weaker check only closed the first:
- *
- * 1. A handler module nothing imports. The old scan could not see even this,
- *    because the commented Next route files carried an import edge to every
- *    handler.
- * 2. A handler module that IS imported but whose exported method never appears
- *    in a `ROUTES` entry. That endpoint is unreachable while looking perfectly
- *    healthy to an import-graph check — which is the exact shape of defect this
- *    scanner claims to catch.
- *
- * So the route table is read as a table: every `import * as NS from '…'` is
- * mapped to its module, every `handler: NS.METHOD` reference is collected, and
- * every HTTP method a handler module exports must be accounted for by one.
- *
- * Deliberately static. Importing `routes.ts` would pull in the whole
- * application, its environment validation and Better Auth, none of which CI has
- * configured for a file scan.
+ * Deliberately static: importing `routes.ts` would load the application, its
+ * environment validation and Better Auth, none of which a file scan configures.
  */
 const NAMESPACE_IMPORT = /import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g;
 const HANDLER_REFERENCE = /handler:\s*(\w+)\.(\w+)/g;
@@ -199,12 +178,9 @@ const HTTP_METHODS: ReadonlySet<string> = new Set([
   'DELETE',
 ]);
 /**
- * Declaration forms, one unambiguous regex each.
- *
- * `async` gets its own pattern rather than an optional group: in
- * `\s+(?:async\s+)?` a run of whitespace can be split two ways, which is the
- * backtracking shape `security/detect-unsafe-regex` flags. Three flat patterns
- * are cheaper than arguing with it and read better anyway.
+ * One flat pattern per declaration form: an optional `(?:async\s+)?` group can
+ * split a run of whitespace two ways, the backtracking shape
+ * `security/detect-unsafe-regex` flags.
  */
 const DECLARATION_PATTERNS: readonly RegExp[] = [
   /export\s+const\s+(GET|POST|PUT|DELETE)\b/g,
@@ -217,21 +193,13 @@ const EXPORT_CLAUSE = /export\s*\{([^}]*)\}/g;
 const AS_SEPARATOR = /\s+as\s+/;
 
 /**
- * Every form a handler module can export an HTTP method by.
+ * Every form a handler module can export an HTTP method by, so one exported
+ * as `export function POST` or `export { handler as POST }` cannot escape.
  *
- * `export const` alone was not enough, and the gap failed OPEN rather than
- * closed: a module using `export function POST` or `export { handler as POST }`
- * exported an unroutable endpoint that this check reported as "exports no HTTP
- * method" — or, alongside a routed `export const GET`, did not report at all.
- * Verified against both shapes. Every handler in the tree currently uses
- * `export const`; the rest exist so the next one is covered whichever form it
- * picks.
- *
- * The `export { … }` clause is split rather than pattern-matched in one go. Two
- * reasons: a single regex spanning the braces needs nested quantifiers, which is
- * a ReDoS shape even on trusted input; and the name that matters is the EXPORTED
- * one, so `{ GET as legacyGet }` must NOT count as a `GET` export while
- * `{ handler as GET }` must. Taking the segment after `as` gets both right.
+ * The `export { … }` clause is split by hand: one regex spanning the braces
+ * needs nested quantifiers (a ReDoS shape), and the name that counts is the
+ * EXPORTED one, so `{ GET as legacyGet }` is not a `GET` export while
+ * `{ handler as GET }` is.
  */
 function exportedMethods(source: string): Set<string> {
   const found = new Set<string>();
@@ -257,18 +225,12 @@ function exportedMethods(source: string): Set<string> {
 
 /**
  * The `[ … ]` of `export const ROUTES = [ … ]`, or null if it cannot be found.
+ * Only references inside it count: `handler: NS.METHOD` elsewhere in the file
+ * registers nothing.
  *
- * Scoping matters: `HANDLER_REFERENCE` applied to the whole file proved only that
- * the TEXT `handler: NS.METHOD` appears somewhere in `routes.ts`, not that the
- * entry is in the array the application iterates. Verified — moving a real entry
- * out of `ROUTES` into an unexported, never-iterated const left the route
- * genuinely unregistered and the gate still passed.
- *
- * Bracket-counted rather than matched with a regex, because the array contains
- * nested object and array literals. String and comment contents cannot confuse
- * the count: the caller strips comments first, and no route path in this table
- * contains a bracket. If that ever stops being true this returns a short slice
- * and the check gets LOUDER (unrouted handlers), not quieter.
+ * Bracket-counted, because the array nests literals. Comments are stripped by
+ * the caller and no route path contains a bracket; if one ever does, this
+ * returns a short slice and the check gets LOUDER, not quieter.
  */
 function routesArraySlice(table: string): string | null {
   const match = ROUTES_DECLARATION.exec(table);
@@ -350,7 +312,7 @@ const registrationProblems = (() => {
 
 const unused = codeFiles
   .filter((key) => !reachable.has(key) && !KNOWN_UNREACHABLE.has(key))
-  .toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+  .toSorted(compareCodeUnits);
 
 if (unused.length === 0) {
   console.log(

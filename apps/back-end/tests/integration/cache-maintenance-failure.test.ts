@@ -4,7 +4,7 @@ import { rmSync } from 'node:fs';
 
 import { cacheSet, closeCacheStore } from '@/lib/cache';
 import { CACHE_DB_PATH } from '@/lib/env.server';
-import { runMaintenanceSweep } from '@/lib/sqlite/maintenance';
+import { runMaintenanceSweep } from '@/lib/maintenance/sqlite';
 
 beforeAll(() => {
   cacheSet('expired', { value: true }, -1);

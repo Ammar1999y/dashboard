@@ -35,13 +35,13 @@ import {
   XLS_MIME_TYPE,
   XLSX_MIME_TYPE,
 } from '@/lib/media/allowlist';
-import { detectCompoundFile } from '@/lib/media/cfb';
+import { detectCompoundFile } from '@/lib/media/office/cfb';
 import {
   detectOoxml,
   EXCEL_MAIN_CONTENT_TYPE,
   OOXML_MAX_ENTRIES,
   WORD_MAIN_CONTENT_TYPE,
-} from '@/lib/media/ooxml';
+} from '@/lib/media/office/ooxml';
 
 const OFFICE_FIXTURES = path.join(import.meta.dir, '..', 'fixtures', 'office');
 

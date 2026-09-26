@@ -1,6 +1,6 @@
 /**
- * `lib/auth/password-proof.ts` — the value that stands in for a password between
- * `lib/auth.ts`'s `before` hook and Better Auth's `password.verify`.
+ * `lib/auth/password/proof.ts` — the value that stands in for a password between
+ * `lib/auth/index.ts`'s `before` hook and Better Auth's `password.verify`.
  *
  * The property under test is the FAILURE DIRECTION: every case asserting `false`
  * — a real plaintext, a replayed proof, another account's hash, an expired one —
@@ -11,12 +11,12 @@
  */
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 
+import { PASSWORD_MAX } from '@app/shared/validation/constants';
+
 import {
   consumePasswordProof,
   mintPasswordProof,
-} from '@/lib/auth/password-proof';
-
-import { PASSWORD_MAX } from '@/utils/validation/constants';
+} from '@/lib/auth/password/proof';
 
 /** Shaped like a real stored value, though nothing here parses it. */
 const HASH_A = `$argon2id$v=19$m=65536,t=3,p=4$${'a'.repeat(22)}$${'b'.repeat(43)}`;
@@ -74,7 +74,7 @@ test('minting with no usable hash throws rather than issuing a dead proof', () =
 });
 
 test('a proof is longer than any password this application accepts', () => {
-  // The second layer: `lib/auth.ts` rejects an inbound `password` over
+  // The second layer: `lib/auth/index.ts` rejects an inbound `password` over
   // PASSWORD_MAX on every allow-listed path, so no value that survives password
   // validation can be a proof. The module asserts this at load; asserting it
   // here is what fails the suite rather than the boot when the two drift.

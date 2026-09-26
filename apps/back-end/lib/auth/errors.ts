@@ -1,0 +1,175 @@
+import { APIError } from 'better-auth/api';
+
+import {
+  HTTP_STATUS,
+  MSG_INVALID_CREDENTIALS,
+  MSG_INVALID_INPUT,
+  MSG_REAUTH_REQUIRED,
+  REAUTH_REQUIRED_CODE,
+} from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+
+/**
+ * The `code` on every error this codebase raises through Better Auth, so the
+ * `after` hook can tell them from the library's own codes and leave their
+ * already-localised message alone.
+ */
+export const CUSTOM_AUTH_CODE = '__' as const;
+
+type AuthErrorStatus = NonNullable<ConstructorParameters<typeof APIError>[0]>;
+
+/**
+ * Better Call serialises the body object as built, so its key order is part of
+ * the response: sites that publish `{ code, message }` use `authErrorCodeFirst`.
+ */
+export function authError(
+  status: AuthErrorStatus,
+  message: string,
+  headers?: HeadersInit
+): APIError {
+  return new APIError(status, { message, code: CUSTOM_AUTH_CODE }, headers);
+}
+
+export function authErrorCodeFirst(
+  status: AuthErrorStatus,
+  message: string
+): APIError {
+  return new APIError(status, { code: CUSTOM_AUTH_CODE, message });
+}
+
+export function authenticationDenied(): APIError {
+  return authErrorCodeFirst(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
+}
+
+export function reauthenticationRequired(): APIError {
+  return new APIError(HTTP_STATUS.UNAUTHORIZED, {
+    code: REAUTH_REQUIRED_CODE,
+    message: MSG_REAUTH_REQUIRED,
+  });
+}
+
+/**
+ * Translate a project `CustomError` into Better Auth's error type.
+ *
+ * Better Call only understands `APIError`; any other throw escapes its
+ * boundary as a generic, empty 500. Throttles (429) and limiter outages (503)
+ * keep their status AND their `Retry-After` / `X-RateLimit-*` headers, so
+ * clients can back off and monitoring does not read throttling as failure.
+ *
+ * `genericMessage` answers every remaining status, which is how
+ * account-revealing failures stay collapsed into one response.
+ */
+export function toAuthApiError(
+  error: CustomError,
+  genericMessage: string
+): APIError {
+  switch (error.status) {
+    case HTTP_STATUS.UNAUTHORIZED: {
+      return error.code === REAUTH_REQUIRED_CODE
+        ? reauthenticationRequired()
+        : authenticationDenied();
+    }
+    case HTTP_STATUS.TOO_MANY_REQUESTS: {
+      return authError(
+        HTTP_STATUS.TOO_MANY_REQUESTS,
+        error.message,
+        error.responseHeaders
+      );
+    }
+    case HTTP_STATUS.SERVICE_UNAVAILABLE: {
+      return authError(
+        HTTP_STATUS.SERVICE_UNAVAILABLE,
+        error.message,
+        error.responseHeaders
+      );
+    }
+    case HTTP_STATUS.FORBIDDEN: {
+      return authError(HTTP_STATUS.FORBIDDEN, error.message);
+    }
+    case HTTP_STATUS.UNPROCESSABLE: {
+      return authError(HTTP_STATUS.UNPROCESSABLE, error.message);
+    }
+    default: {
+      return authError(HTTP_STATUS.BAD_REQUEST, genericMessage);
+    }
+  }
+}
+
+/** `toAuthApiError` for a caught value: an `APIError` or a non-project throw passes through. */
+export function asAuthError(caught: unknown, genericMessage: string): unknown {
+  if (caught instanceof APIError) return caught;
+  if (caught instanceof CustomError)
+    return toAuthApiError(caught, genericMessage);
+  return caught;
+}
+
+const MSG_UNTRUSTED_ORIGIN =
+  'تعذر إكمال الطلب من هذا الموقع. أعد تحميل الصفحة من الرابط الرسمي ثم حاول مرة أخرى.';
+
+/** Better Auth's own error codes, localised by the `after` hook and by `app.ts`. */
+export const BASE_ERROR_CODES: Record<string, string> = {
+  USER_NOT_FOUND: 'المستخدم غير موجود',
+  FAILED_TO_CREATE_USER:
+    'حدث خطأ ما في عملية إنشاء المستخدم، حاول مجددا، او اعد تحميل الصفحة',
+  FAILED_TO_CREATE_SESSION:
+    'حدث خطأ ما في عملية إنشاء الجلسة، حاول مجددا، او اعد تحميل الصفحة',
+  FAILED_TO_UPDATE_USER:
+    'حدث خطأ ما في عملية تحديث المستخدم، حاول مجددا، او اعد تحميل الصفحة',
+  FAILED_TO_GET_SESSION:
+    'حدث خطأ ما في عملية الحصول على بيانات الجلسة، حاول مجددا، او اعد تحميل الصفحة',
+  INVALID_PASSWORD: 'كلمة المرور غير صحيحة',
+  INVALID_EMAIL: 'البريد الالكتروني غير صحيح',
+  INVALID_EMAIL_OR_PASSWORD: MSG_INVALID_CREDENTIALS,
+  INVALID_TOKEN: 'حاول مجددا، او اعد تحميل الصفحة',
+  FAILED_TO_GET_USER_INFO:
+    'حدث خطأ ما في عملية الحصول على بيانات المستخدم، حاول مجددا، او اعد تحميل الصفحة',
+  USER_EMAIL_NOT_FOUND: 'البريد الالكتروني غير موجود',
+
+  SOCIAL_ACCOUNT_ALREADY_LINKED: 'Social account already linked',
+  PROVIDER_NOT_FOUND: 'Provider not found',
+  ID_TOKEN_NOT_SUPPORTED: 'id_token not supported',
+  PASSWORD_TOO_SHORT: 'Password too short',
+  PASSWORD_TOO_LONG: 'Password too long',
+  CREDENTIAL_ACCOUNT_NOT_FOUND: 'Credential account not found',
+  USER_ALREADY_HAS_PASSWORD:
+    'User already has a password. Provide that to delete the account.',
+  FAILED_TO_UNLINK_LAST_ACCOUNT: "You can't unlink your last account",
+
+  EMAIL_NOT_VERIFIED: 'البريد الالكتروني غير موثوق',
+  EMAIL_CAN_NOT_BE_UPDATED: 'لايمكن تحديث البريد الالكتروني',
+  SESSION_EXPIRED: 'قم باعادة تسجيل الدخول',
+  SESSION_NOT_FRESH: 'مضى وقت طويل على تسجيل دخولك، قم بتسجيل الدخول مرة أخرى',
+  ACCOUNT_NOT_FOUND: 'الحساب غير موجود',
+
+  // Origin / CSRF rejections on `/sign-in/email`: one message, since none
+  // reveals anything about an account. ⚠️ `trustedOrigins` is unset, so Better
+  // Auth trusts `baseURL` alone: a front-end served from another origin gets 403
+  // on every sign-in even though `app.ts`'s `CORS_POLICY` admits its preflight.
+  // Set `trustedOrigins` from the same value if the front-end goes cross-origin.
+  INVALID_ORIGIN: MSG_UNTRUSTED_ORIGIN,
+  MISSING_OR_NULL_ORIGIN: MSG_UNTRUSTED_ORIGIN,
+  CROSS_SITE_NAVIGATION_LOGIN_BLOCKED: MSG_UNTRUSTED_ORIGIN,
+
+  // No `METHOD_NOT_ALLOWED_DEFER_SESSION_REQUIRED`: `POST /get-session` is
+  // answered 405 by `app.ts` from `BETTER_AUTH_ENDPOINTS` before Better Auth runs.
+
+  USER_ALREADY_EXISTS:
+    'المستخدم موجود بالفعل، استخدم بريد الكتروني اخر لإنشاء الحساب',
+  USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL:
+    'المستخدم موجود بالفعل، استخدم بريد الكتروني اخر لإنشاء الحساب',
+
+  ux_users_phone_number: 'رقم الهاتف موجود من قبل، استخدم رقم هاتف اخر',
+
+  // The library's request-shape rejections, the only unmapped codes the mounted
+  // endpoints can produce; unmapped, they put raw English internals on the wire.
+  // `tests/integration/auth-error-localisation.test.ts` fails if another
+  // unmapped code becomes reachable.
+  VALIDATION_ERROR: MSG_INVALID_INPUT,
+  BAD_REQUEST: MSG_INVALID_INPUT,
+
+  MISSING_RESPONSE:
+    'تعذر التحقق من أنك لست روبوتاً. أعد تحميل الصفحة وحاول مرة أخرى',
+  VERIFICATION_FAILED:
+    'تعذر التحقق من أنك لست روبوتاً. أعد تحميل الصفحة وحاول مرة أخرى',
+  UNKNOWN_ERROR: 'حاول مجددا، او اعد تحميل الصفحة',
+};

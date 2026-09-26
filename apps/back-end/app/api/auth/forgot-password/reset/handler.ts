@@ -1,85 +1,79 @@
-import type { OfferedOption } from '@/lib/auth/two-factor-challenge';
+import type { OfferedOption } from '@/lib/auth/two-factor/methods';
 import type { Handler } from '@/lib/http/contract';
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { db } from '@/db';
-import { userContactColumn } from '@/db/queries';
 import { accounts, users } from '@/db/schema';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import { contactKindOf } from '@app/shared/validation/enums';
+import { OTP_ENABLED, resetPasswordSchema } from '@app/shared/validation/otp';
+
 import { auditLog, getAuditMeta } from '@/lib/audit';
-import { checkPasswordCompromise } from '@/lib/auth/check-password';
-import { hashPassword } from '@/lib/auth/password';
-import { issueRecoveryGrant } from '@/lib/auth/recovery-grant';
-import { revokeOtherSessions, revokePendingProofs } from '@/lib/auth/rotation';
+import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth/credential';
+import { ensureMinDelay, otpMsg } from '@/lib/auth/messages';
+import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
+import { hashPassword } from '@/lib/auth/password/hash';
+import { issueRecoveryGrant } from '@/lib/auth/recovery/grant';
+import {
+  revokeOtherSessions,
+  revokePendingProofs,
+} from '@/lib/auth/session/rotation';
 import {
   defaultOption,
-  readEnrollmentState,
+  readEnrolmentState,
   recoveryDefeatsTwoFactor,
   recoveryOptions,
-} from '@/lib/auth/two-factor-challenge';
+} from '@/lib/auth/two-factor/methods';
 import { verifyTurnstileRequest } from '@/lib/captcha';
+import { readJsonBody } from '@/lib/http/input';
+import {
+  apiSuccess,
+  handleApiError,
+  requireFeature,
+} from '@/lib/http/response';
+import { OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
+import { collapseProofThrottle } from '@/lib/otp/throttle';
+import { processOtpVerify } from '@/lib/otp/verify';
 import {
   enforceOtpVerifyQuota,
   enforceRateLimit,
   ipIdentifier,
-  otpContactKind,
 } from '@/lib/rate-limit';
-
-import {
-  CREDENTIAL_PROVIDER_ID,
-  HTTP_STATUS,
-  MSG_PAGE_NOT_FOUND,
-} from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { CustomError } from '@/utils/error-class';
-import { collapseProofThrottle, processOtpVerify } from '@/utils/otp';
-import { OTP_MAX_VERIFY_ATTEMPTS } from '@/utils/validation/constants';
-import { OTP_ENABLED, resetPasswordSchema } from '@/utils/validation/otp';
-
-import { ensureMinDelay, otpMsg } from '../../otp/messages';
+import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
 /**
- * Argon2id hashes one address may buy per minute on this route.
- *
- * Sized against what the process can actually do — ~10 hashes/second across the
- * whole process, measured — rather than against a request count, and floored by
- * what a real reset costs: `OTP_MAX_VERIFY_ATTEMPTS` is 5, so one user working
- * through a mistyped code must never meet this before the OTP quota answers.
- * Fifteen leaves that whole cycle plus a fresh one, and still cuts what a single
- * address can claim from six seconds of the pool per minute to one and a half.
+ * Argon2id hashes one address may buy per minute on this route, sized against
+ * the process's hashing capacity rather than a request count. Floored by a real
+ * reset: a user working through a mistyped code must meet the OTP quota before
+ * this, and three verify cycles leave room for that one plus a fresh start.
  */
 const RESET_HASH_BUDGET_PER_MINUTE = OTP_MAX_VERIFY_ATTEMPTS * 3;
 
 /**
- * Forgot-password step 2: verify the code (purpose=forgot_password) and, in the
- * same transaction, set the new password and revoke ALL of the user's sessions.
- * Always uses a real code (no OTP_AUTO_VERIFY bypass for recovery). Failures
- * collapse to a single generic error so the endpoint can't enumerate accounts.
+ * Forgot-password step 2: the code (purpose=forgot_password) is verified and,
+ * in the same transaction, the new password set and ALL the user's sessions
+ * revoked. Always a real code. Failures collapse to one generic error so the
+ * endpoint cannot enumerate accounts.
  *
- * ⚠️ For an account with a second factor this endpoint DOES NOT write the
- * password. A recovery code proves one contact, and the account's own rule is
- * that no single possession satisfies both proofs in one chain — so the code
- * verification commits a short-lived recovery grant instead, and
- * `/forgot-password/complete` writes the password against a proven second
- * factor.
+ * ⚠️ For an account with a second factor this DOES NOT write the password: a
+ * recovery code proves one contact, and no single possession may satisfy both
+ * proofs. It mints a short-lived recovery grant instead, and
+ * `/forgot-password/complete` writes the password against a proven factor.
  */
 export const POST: Handler = async (ctx) => {
   const start = Date.now();
   try {
-    if (!OTP_ENABLED)
-      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    requireFeature(OTP_ENABLED);
 
-    // Per-IP cap BEFORE captcha so the outbound siteverify call is bounded per
-    // IP; the IP-level 429 is pre-lookup and leaks nothing about existence.
+    // Per IP BEFORE the captcha, bounding the siteverify call; pre-lookup, so
+    // its 429 reveals nothing.
     await enforceRateLimit({
       scope: 'forgot.reset.ip',
       identifier: ipIdentifier(ctx.headers),
       limit: 60,
-      window: 60,
       failClosed: true,
     });
 
@@ -89,40 +83,31 @@ export const POST: Handler = async (ctx) => {
         new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN)
       );
 
-    const body = requireJsonBody(await ctx.readJson());
-    const parsed = resetPasswordSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(otpMsg.invalidInput, HTTP_STATUS.UNPROCESSABLE);
+    const input = await readJsonBody(ctx, resetPasswordSchema, {
+      message: otpMsg.invalidInput,
+    });
 
-    const { channel, code, newPassword } = parsed.data;
-    const identifier =
-      channel === 'email' ? parsed.data.email : parsed.data.phoneNumber;
+    const { channel, code, newPassword } = input;
+    const identifier = contactIdentifier(input);
 
     await enforceOtpVerifyQuota({ channel, identifier, surface: 'recovery' });
 
-    // The pre-proof work, priced separately from the request that carries it.
-    // The admission counter above bounds SIGHTINGS of this route; what follows
-    // is an outbound HIBP request and a 64 MiB Argon2id hash, and both run for
-    // any syntactically valid body — before the account is looked up or the
-    // code is checked, deliberately (see below).
-    //
-    // Its own scope rather than a heavier `cost` on the admission counter: the
-    // captcha budget and the hashing budget answer different questions, and
-    // collapsing them would make the cheap refusals below consume the expensive
-    // allowance. Still per IP and still account-independent, so it is not an
-    // existence oracle. A human resetting a password spends one or two.
+    // The pre-proof work, priced apart from the request that carries it: an
+    // outbound HIBP request and an Argon2id hash run for any valid body, before
+    // the lookup, deliberately (see below). Its own scope rather than a heavier
+    // `cost` on the admission counter, so cheap refusals cannot consume the
+    // expensive allowance. Per IP and account-independent: no existence oracle.
     await enforceRateLimit({
       scope: 'forgot.reset.work.ip',
       identifier: ipIdentifier(ctx.headers),
       limit: RESET_HASH_BUDGET_PER_MINUTE,
-      window: 60,
       failClosed: true,
     });
 
-    // Breach screen + hash BEFORE the transaction (account-independent, so it
-    // leaks nothing about whether the identifier exists) and so we never hold a
-    // row lock across Argon2id. The compromised-password error is surfaced as-is
-    // (not privacy-collapsed) — it reveals nothing about the account.
+    // Screened and hashed BEFORE the lookup, which keeps them account-independent,
+    // and outside the transaction, so no row lock is held across Argon2id. A
+    // compromised password is answered as-is: it reveals nothing about the
+    // account.
     try {
       await checkPasswordCompromise(newPassword);
     } catch (e) {
@@ -134,23 +119,16 @@ export const POST: Handler = async (ctx) => {
     const [userData] = await db
       .select({ id: users.id, email: users.email })
       .from(users)
-      .where(
-        and(
-          eq(userContactColumn(channel), identifier),
-          isNull(users.deletedAt),
-          eq(users.isActive, true)
-        )
-      )
+      .where(activeUserWithContact(channel, identifier))
       .limit(1);
 
     if (!userData)
       throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
 
     const auditMeta = getAuditMeta(ctx);
-    const contactKind = otpContactKind(channel);
-    // Populated inside the proof transaction and acted on after it commits: the
-    // grant cannot be minted in there, because a failure to mint it must not
-    // roll back the consumption of a recovery code that WAS presented.
+    const contactKind = contactKindOf(channel);
+    // Set inside the proof transaction and acted on after it commits: a failure
+    // to mint the grant must not roll back the consumption of a presented code.
     let pendingSecondFactor: OfferedOption[] | null = null;
 
     await processOtpVerify({
@@ -162,11 +140,10 @@ export const POST: Handler = async (ctx) => {
       code,
       auditMeta,
       onVerified: async (tx, matched) => {
-        // Refused, not gated: if every second factor reaches the contact this
-        // recovery code arrived on — or is one this flow cannot check — then
-        // requiring it here proves nothing or cannot be done at all. Checked
-        // inside the proof transaction so the decision and the write cannot
-        // separate.
+        // Refused, not gated: when every second factor reaches the contact
+        // this code arrived on, or is one this flow cannot check, requiring it
+        // proves nothing. Inside the proof transaction, so the decision and
+        // the write cannot separate.
         if (await recoveryDefeatsTwoFactor(userData.id, contactKind, tx))
           throw new CustomError(
             otpMsg.recoveryBlockedByTwoFactor,
@@ -174,7 +151,7 @@ export const POST: Handler = async (ctx) => {
           );
 
         // The second-factor branch. Nothing about the password is written here.
-        const state = await readEnrollmentState(userData.id, tx);
+        const state = await readEnrolmentState(userData.id, tx);
         if (state.enabled) {
           const options = recoveryOptions(state, contactKind);
           if (options.length > 0) {
@@ -220,10 +197,8 @@ export const POST: Handler = async (ctx) => {
           .set({ password: hashedPassword })
           .where(eq(accounts.id, account.id));
 
-        // Credential rotation — same policy as every other rotation path:
-        // revoke every auth session (no session to keep here) and drop the
-        // user's other pending proofs, keeping only the one being consumed so
-        // it survives as an auditable single-use record.
+        // Every session goes, and every pending proof but the one being
+        // consumed, which survives as an auditable single-use record.
         await revokeOtherSessions(tx, userData.id);
         await revokePendingProofs(
           tx,
@@ -271,22 +246,19 @@ export const POST: Handler = async (ctx) => {
     });
   } catch (caught) {
     await ensureMinDelay(Date.now() - start);
-    // A proof-state throttle is account-dependent — a proof row exists only for
-    // a real account — so it collapses to the generic 400 BEFORE the status
-    // filter below, which deliberately lets a 429 keep its own shape. The
-    // pre-lookup IP and destination limiters carry no marker and still surface.
+    // A proof-state throttle exists only for a real account, so it collapses
+    // BEFORE the status filter, which lets a 429 keep its shape. The pre-lookup
+    // limiters carry no marker and still surface.
     const error = collapseProofThrottle(caught, otpMsg.invalidOrExpired);
-    // Collapse privacy-sensitive statuses; keep 429/503/500/422 distinct (and
-    // password-compromised surfaces its own message).
+    // Privacy-sensitive statuses collapse; 429/503/500/422 stay distinct.
     if (
       error instanceof CustomError &&
       error.status !== HTTP_STATUS.TOO_MANY_REQUESTS &&
       error.status !== HTTP_STATUS.SERVICE_UNAVAILABLE &&
       error.status !== HTTP_STATUS.INTERNAL_ERROR &&
       error.status !== HTTP_STATUS.UNPROCESSABLE &&
-      // The two-factor refusal must reach the user: collapsing it to "invalid
-      // or expired code" would leave someone holding a CORRECT code retrying
-      // forever. Safe because the branch is only reachable after a valid code.
+      // The two-factor refusal must reach the user, who holds a CORRECT code;
+      // safe because only a valid code reaches it.
       error.status !== HTTP_STATUS.FORBIDDEN
     ) {
       const generic = new CustomError(

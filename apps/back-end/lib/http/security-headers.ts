@@ -1,31 +1,14 @@
 /**
- * Response security headers, ported from the `headers()` block that used to
- * live in `next.config.js`.
+ * Response security headers for a server that serves ONLY a JSON API.
  *
- * Two deliberate differences from that block, both because this server now
- * serves ONLY a JSON API:
+ * - The CSP is `default-src 'none'`: no response should ever be treated as a
+ *   document, and denying every fetch directive says exactly that.
+ * - They apply in development too, so a header bug surfaces locally. HSTS is
+ *   the exception: on `http://localhost` it pins the whole host to HTTPS in the
+ *   developer's browser, unrelated projects on other ports included.
  *
- * 1. **The CSP is `default-src 'none'`.** The Next CSP enumerated `script-src`
- *    (with an inline hash), `style-src`, `font-src`, `img-src`, `frame-src`,
- *    `worker-src` and friends for a front-end this repository does not contain.
- *    On a JSON API those directives grant nothing and hide the one thing that
- *    matters — that a response should never be treated as a document. Denying
- *    every fetch directive by default says exactly that, and keeps
- *    `frame-ancestors` / `base-uri` / `form-action` locked as before.
- *
- * 2. **They apply in development too.** The Next block emitted NOTHING outside
- *    production, so every local request exercised a different response than the
- *    deployed one and no header bug could surface until deploy. HSTS is the one
- *    exception and stays production-only, because a `Strict-Transport-Security`
- *    header on `http://localhost` pins the whole host to HTTPS in the
- *    developer's browser — including unrelated projects on other ports.
- *
- * Also dropped, deliberately: the static `Access-Control-Allow-Origin` header.
- * A hand-written ACAO answers no preflight and carries no `Vary: Origin`, so it
- * was never a working CORS configuration. `@elysia/cors` in `app.ts` does
- * that job now. The `Cache-Control` rules for `/_next/static`, `/pwa`, `/public`
- * and friends are gone with the asset routes they described — this server has
- * no static files.
+ * CORS is not here: `@elysia/cors` in `app.ts` answers preflights and sets
+ * `Vary: Origin`, which a static `Access-Control-Allow-Origin` cannot.
  */
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -44,7 +27,6 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze(
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'strict-origin',
     'Cross-Origin-Opener-Policy': 'same-origin',
-    // Not for PDF responses — see the note this replaces in next.config.js.
     'Cross-Origin-Resource-Policy': 'same-origin',
     'Cross-Origin-Embedder-Policy': 'credentialless',
     // Disables the legacy, buggy XSS auditor rather than enabling it.
@@ -60,11 +42,9 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze(
 );
 
 /**
- * Writes the header set onto a framework's mutable header bag.
- *
- * Assign, don't overwrite the bag: the CORS plugin and the route handler have
- * already written to it by the time this runs, and replacing it would drop
- * `Access-Control-Allow-Origin` and `Vary`.
+ * Writes the header set onto a framework's mutable header bag — key by key,
+ * because the CORS plugin has already written `Access-Control-Allow-Origin` and
+ * `Vary` there and replacing the bag would drop them.
  */
 export function applySecurityHeaders(
   target: Record<string, string | number | undefined>

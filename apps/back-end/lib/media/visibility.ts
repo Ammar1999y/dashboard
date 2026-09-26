@@ -1,37 +1,38 @@
+import type { Actor } from './actor';
 import type { MediaFileRow } from './files';
-import type { Actor } from './folders';
 import type { FileTransition } from '@/db/schema';
-import type { BucketType } from '@/lib/r2/client';
-import type { EntityID } from '@/types';
+import type { EntityID } from '@app/shared/types';
+import type { BucketType } from '@app/shared/validation/enums';
 
 import { and, eq, isNotNull, lt, ne, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { files, orphanedObjects } from '@/db/schema';
-import { sanitizeForLog } from '@/utils';
-import { auditLog } from '@/lib/audit';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+
 import { purgeUrls } from '@/lib/cloudflare/purge';
 import { generateUuidV7 } from '@/lib/id';
 import {
   copyFileInR2,
   deleteFromR2,
-  getCacheControlHeader,
-  getContentDisposition,
   getPublicUrl,
   hasPublicUrl,
   headObjectInR2,
   isVisibilityEnabled,
 } from '@/lib/r2/client';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
+import { sanitizeForLog } from '@/utils/log';
 
+import { auditAs } from './actor';
 import {
   downloadFilename,
   FILE_COLUMNS,
   governedIds,
   matchesRow,
 } from './files';
+import { getCacheControlHeader, getContentDisposition } from './headers';
 import { mediaMsg } from './messages';
 import { hasPublicUsage } from './usages';
 
@@ -46,17 +47,16 @@ const TRANSITION_STALE_AFTER = '10 minutes';
  * How many times one cleanup will delete again because a losing attempt
  * recorded a copy landing during the previous delete (`files.cleanupRequests`).
  *
- * Small on purpose: every round is another R2 delete on the request's own clock,
- * and a round is only entered when a demand actually arrived. Exhausting them
- * leaves the marker set, which costs a ten-minute staleness window and nothing
- * else — `retryTransitions` finishes exactly this work.
+ * Small on purpose: every round is another R2 delete on the request's own clock.
+ * Exhausting them leaves the marker set, which costs one staleness window —
+ * `retryTransitions` finishes exactly this work.
  */
 const CLEANUP_ROUNDS = 3;
 
 /**
- * Orphan demands one drain pass will work through. Each one is an R2 delete and
- * possibly a purge call, and the table holds a row only for a leftover that has
- * already failed once, so the realistic depth is zero.
+ * Orphan demands one drain pass will work through, each an R2 delete and
+ * possibly a purge call. The table holds a row only for a leftover whose delete
+ * already failed once.
  */
 export const ORPHAN_DRAIN_BATCH = 100;
 
@@ -149,20 +149,17 @@ async function clearOrphanDemand(demand: OrphanDemand): Promise<boolean> {
 /**
  * `removeObject`, made durable, for the one caller whose row is already gone.
  *
- * Recorded before the attempt and cleared only after it succeeds. The order is
- * the whole point: a refused delete or an unpurged edge copy has no marker, no
- * counter and no `deleting` row to fall back on once the file row is deleted, so
- * an unrecorded best-effort call here is the difference between a leftover the
- * next sweep finishes and one that is readable until somebody notices by hand.
- * See `orphanedObjects`.
+ * Recorded before the attempt and cleared only after it succeeds: with the file
+ * row gone there is no marker, counter or `deleting` row to fall back on, so an
+ * unrecorded failure is a leftover nothing will ever retry. See
+ * `orphanedObjects`.
  *
  * The enqueue advances `cleanup_requests` on conflict rather than doing nothing,
- * because the row is shared: two abandoned writers can hold a copy of the same
- * key in the same bucket, and the clear below has to be able to tell its own
- * demand from a newer one. A writer whose clear is refused has still removed
- * every copy that landed before it — each writer records only after its own copy
- * has landed — so the surviving row is the newer writer's, and only its own
- * failure is at stake.
+ * because two abandoned writers can hold a copy of the same key in the same
+ * bucket, and the clear has to tell its own demand from a newer one. A writer
+ * whose clear is refused has still removed every copy that landed before it —
+ * each writer records only after its own copy has landed — so the surviving row
+ * is the newer writer's.
  */
 async function removeOrphanedObject(
   key: string,
@@ -190,23 +187,21 @@ async function removeOrphanedObject(
 /**
  * Ownership of the cleanup, and what a caller that cannot take it leaves behind.
  *
- * One statement, because the alternative has a hole: a caller that reads the row
- * as busy and then records its demand can have the owner clear the marker
- * between the two, and the demand then sits on an idle row nobody will read
- * again. So claiming and recording are the same UPDATE.
+ * One statement: a caller that reads the row as busy and then records its
+ * demand can have the owner clear the marker in between, leaving the demand on
+ * an idle row nobody reads again. So claiming and recording are the same UPDATE.
  *
  * Three outcomes, all against the bucket the row does NOT name:
  * - the caller already owns the row — kept, and `updated_at` restamped so the
  *   staleness window covers the delete it is about to issue;
- * - the row is idle — claimed under a fresh `cleanup`, which is also what keeps
- *   the next publish out until the delete has finished;
- * - somebody else owns it — `cleanup_requests` is bumped and the caller gets
- *   nothing. See that column: the bump is the demand the owner has to honour.
+ * - the row is idle — claimed under a fresh `cleanup`, which also keeps the next
+ *   publish out until the delete has finished;
+ * - somebody else owns it — `cleanup_requests` is bumped, the demand the owner
+ *   has to honour, and the caller gets nothing.
  *
- * No row at all is two different states — the row is gone, or it now NAMES this
- * bucket and the object in it is live — and they need opposite handling, so the
- * caller tells them apart rather than this returning a third outcome nobody but
- * `removeStaleCopy` could act on.
+ * No row at all is two states needing opposite handling — the row is gone, or
+ * it now NAMES this bucket and the object in it is live — so the caller tells
+ * them apart.
  */
 async function claimCleanup(
   fileId: EntityID,
@@ -247,37 +242,28 @@ interface CleanupOutcome {
  * settled row.
  *
  * **Never the live object, and never one that can BECOME live while the delete
- * is in flight.** Re-reading `bucket_type` answers only the first: R2 has no
- * conditional delete, so between a read and the delete landing another
- * transition can copy into that bucket and commit it, and the delete then
- * removes the winner's only copy (reproduced). What holds across the call is the
- * transition token — while an attempt owns it, `transitionFile` refuses the row
- * as busy and `retryTransitions` cannot claim it inside the staleness window. So
- * ownership is re-asserted in the statement that also restamps `updated_at`: the
- * window reopens as the delete is issued, and one R2 delete is bounded by
- * `R2_REQUEST_TIMEOUT_MS` × `maxAttempts` — 45 seconds against ten minutes.
+ * is in flight.** R2 has no conditional delete, so re-reading `bucket_type` is
+ * not enough: another transition can copy into that bucket and commit between
+ * the read and the delete. What holds across the call is the transition token —
+ * while an attempt owns it, `transitionFile` refuses the row as busy and
+ * `retryTransitions` cannot claim it inside the staleness window. So ownership
+ * is re-asserted in the statement that also restamps `updated_at`, and one R2
+ * delete (`R2_REQUEST_TIMEOUT_MS` × `maxAttempts`) must stay well inside
+ * `TRANSITION_STALE_AFTER`.
  *
- * ⚠️ Deleting is not enough, because another attempt's copy can land in that
- * same bucket WHILE the delete is in flight — its flip then fails, it finds this
- * row busy, and it has no marker to hand its leftover to. In the public bucket
- * that leftover is readable at the file's own URL. `claimCleanup` is what makes
- * that case survive: the loser bumps `cleanup_requests`, the clear below refuses
- * to run against a bumped value, and this goes round again. Giving up leaves the
- * marker set, which is the sweep's own signal.
+ * ⚠️ Another attempt's copy can land in that same bucket WHILE the delete is in
+ * flight; its flip then fails and it has no marker to hand the leftover to.
+ * `claimCleanup` covers it: the loser bumps `cleanup_requests`, the clear below
+ * refuses to run against a bumped value, and this goes round again. Giving up
+ * leaves the marker set, which is the sweep's own signal.
  *
- * ⚠️ And the row itself can be GONE, which is the one case neither the token nor
- * the counter can carry, because both live on it. A saga the sweep reverted
- * releases the row; an ordinary delete then takes it, removes the object from
- * every bucket and drops the row — all while this caller's copy is still in
- * flight. The copy lands afterwards, with nothing left that names the key:
- * `claimCleanup` matches nothing, the transition sweep has no row to find, and
- * reconciliation deliberately only reports (`lib/media/reconcile.ts`), so the
- * object would stay readable for a file the API reported deleted (reproduced).
- * An absent row is the proof this caller needs — the key embeds the row's
- * primary key (`lib/media/keys.ts`) and `ux_files_r2_key` is unique, so a key
- * whose row is gone can never belong to anything again — and the writer removes
- * what it wrote, through `removeOrphanedObject` so that a refused delete or an
- * unpurged edge copy is owed to the drain rather than dropped on the floor.
+ * ⚠️ And the row itself can be GONE — reverted by the sweep, then deleted —
+ * while this caller's copy is in flight, leaving nothing that names the key:
+ * `claimCleanup` matches nothing and reconciliation only reports. An absent row
+ * is proof enough — the key embeds the row's primary key (`lib/media/keys.ts`)
+ * and `ux_files_r2_key` is unique, so the key can never belong to anything
+ * again — and the writer removes what it wrote through `removeOrphanedObject`,
+ * so a failure is owed to the drain rather than lost.
  *
  * Every path that abandons a copy comes through here, the verification failure
  * as much as the lost flip; they differ only in which step noticed.
@@ -351,8 +337,8 @@ async function removeStaleCopy(
  *    for `to_private` — if a public owner still references it);
  * 2. `HeadObject` the source and check it against the row; copy with the
  *    target's headers; `HeadObject` the target and require the source's length
- *    and ETag — R2's single-part ETag is the content MD5 (measured), so equal
- *    ETags are equal bytes;
+ *    and ETag — R2's single-part ETag is the content MD5, so equal ETags are
+ *    equal bytes;
  * 3. flip `bucket_type`, mark `cleanup`, audit — from here URLs point at the
  *    target;
  * 4. delete the stale source object (and purge its public URL if it had one);
@@ -470,15 +456,12 @@ export async function transitionFile(params: {
       .where(ownedBy(transitionToken))
       .returning(FILE_COLUMNS);
     if (!updated) return null;
-    await auditLog(tx, {
-      userId: actor.userId,
-      userEmail: actor.email,
+    await auditAs(tx, actor, {
       action: 'UPDATE',
       tableName: 'files',
       recordId: id,
       oldData: { bucketType: from },
       newData: { bucketType: to },
-      meta: actor.meta,
     });
     return updated;
   });
@@ -546,16 +529,11 @@ export async function retryTransitions(): Promise<{
       continue;
     }
 
-    // CLAIMED before a single byte is touched, and the claim is what makes this
-    // exclusive with the request that started the saga. Re-reading the marker
-    // is not: both write the same marker VALUE, so a slow-but-alive publish can
-    // flip the row — and then delete the source — while the delete below is in
-    // flight, leaving the row active with no object at all. Taking the token
-    // makes that flip fail its own guard, so the saga cleans up after itself
-    // and answers 409.
-    //
-    // Still guarded on the staleness window, so a saga that started while this
-    // batch was being read is not taken over on its first second.
+    // CLAIMED before a single byte is touched: the token, not the marker value
+    // both sides write, is what makes this exclusive with a slow-but-alive
+    // request still running the saga — its flip then fails its own guard and it
+    // cleans up after itself. Still guarded on the staleness window, so a saga
+    // started while this batch was read is not taken over at once.
     const claim = generateUuidV7();
     const [claimed] = await db
       .update(files)
@@ -604,12 +582,10 @@ export async function retryTransitions(): Promise<{
  * what makes the retention sweep report `degraded` until it clears.
  *
  * ⚠️ Least recently touched first, and a failed attempt is restamped. Oldest
- * first is the obvious order and it starves: once `ORPHAN_DRAIN_BATCH` demands
- * fail for a reason of their own — one bucket gone, one key wedged — every later
- * pass selects that same prefix and nothing behind it is ever attempted, however
- * healthy (reproduced). Restamping costs one UPDATE per failure and makes the
- * queue a rotation, so every outstanding demand is reached within
- * ⌈rows / batch⌉ passes.
+ * first starves: once a batch's worth of demands fail for a reason of their own,
+ * every later pass selects that same prefix and nothing behind it is attempted.
+ * Restamping makes the queue a rotation, so every outstanding demand is reached
+ * within ⌈rows / batch⌉ passes.
  *
  * `hasMore` reports work this bounded pass did not settle — rows it never
  * reached, and rows a concurrent writer re-recorded while it was working — which

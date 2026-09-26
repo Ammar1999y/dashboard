@@ -19,18 +19,19 @@ import { eq, inArray, like, sql } from 'drizzle-orm';
 import { app } from '@/app';
 import { db } from '@/db';
 import { auditLogs, folders } from '@/db/schema';
-import { updateFolder } from '@/lib/media/folders';
-import { mediaMsg } from '@/lib/media/messages';
 
 import {
   HTTP_STATUS,
   MSG_INSUFFICIENT_PERMISSIONS,
-} from '@/utils/api-messages';
+} from '@app/shared/api-messages';
 import {
   FOLDER_MAX_CHILDREN,
   FOLDER_MAX_DEPTH,
-} from '@/utils/validation/constants';
-import { mediaValidationMsg } from '@/utils/validation/media';
+} from '@app/shared/validation/constants';
+import { mediaValidationMsg } from '@app/shared/validation/media';
+
+import { updateFolder } from '@/lib/media/folders';
+import { mediaMsg } from '@/lib/media/messages';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';
@@ -65,12 +66,31 @@ interface FolderData {
   createdBy: string | null;
 }
 
-function folderOf(answer: Answer): FolderData {
-  if (answer.status !== HTTP_STATUS.CREATED && answer.status !== HTTP_STATUS.OK)
+interface CreatedFolder {
+  id: string;
+  name: string;
+}
+
+function createdFolderOf(answer: Answer): CreatedFolder {
+  if (answer.status !== HTTP_STATUS.CREATED)
     throw new Error(
       `expected a folder, got ${answer.status}: ${answer.body.message}`
     );
-  return answer.body.data as FolderData;
+  return answer.body.data as CreatedFolder;
+}
+
+async function storedFolder(id: string) {
+  const [row] = await db
+    .select({
+      name: folders.name,
+      parentId: folders.parentId,
+      createdBy: folders.createdBy,
+      updatedAt: folders.updatedAt,
+    })
+    .from(folders)
+    .where(eq(folders.id, id));
+  if (!row) throw new Error(`folder ${id} is not stored`);
+  return row;
 }
 
 /** A fixture row, written directly so it costs no request budget. */
@@ -127,7 +147,13 @@ describe('creating folders', () => {
       name: '  Brand   Assets ',
     });
     expect(root.status).toBe(HTTP_STATUS.CREATED);
-    expect(folderOf(root)).toMatchObject({
+    // The id it minted and the name as normalised, nothing the client sent.
+    const rootFolder = createdFolderOf(root);
+    expect(rootFolder).toEqual({
+      id: expect.any(String),
+      name: 'Brand Assets',
+    });
+    expect(await storedFolder(rootFolder.id)).toMatchObject({
       name: 'Brand Assets',
       parentId: null,
       createdBy: admin().user.userId,
@@ -135,10 +161,12 @@ describe('creating folders', () => {
 
     const child = await call(admin(), 'POST', '/api/dash/media/folders', {
       name: 'Logos',
-      parentId: folderOf(root).id,
+      parentId: rootFolder.id,
     });
     expect(child.status).toBe(HTTP_STATUS.CREATED);
-    expect(folderOf(child).parentId).toBe(folderOf(root).id);
+    const childFolder = createdFolderOf(child);
+    const childStored = await storedFolder(childFolder.id);
+    expect(childStored.parentId).toBe(rootFolder.id);
 
     const audits = await db
       .select({ recordId: auditLogs.recordId, action: auditLogs.action })
@@ -146,8 +174,8 @@ describe('creating folders', () => {
       .where(eq(auditLogs.tableName, 'folders'));
     expect(audits).toEqual(
       expect.arrayContaining([
-        { recordId: folderOf(root).id, action: 'INSERT' },
-        { recordId: folderOf(child).id, action: 'INSERT' },
+        { recordId: rootFolder.id, action: 'INSERT' },
+        { recordId: childFolder.id, action: 'INSERT' },
       ])
     );
   });
@@ -214,7 +242,7 @@ describe('creating folders', () => {
 
     const tooDeep = await call(admin(), 'POST', '/api/dash/media/folders', {
       name: 'Too deep',
-      parentId: folderOf(last).id,
+      parentId: createdFolderOf(last).id,
     });
     expect(tooDeep.status).toBe(HTTP_STATUS.UNPROCESSABLE);
     expect(tooDeep.body.message).toBe(mediaMsg.folderTooDeep);
@@ -239,7 +267,12 @@ describe('renaming and moving folders', () => {
       name: 'A renamed',
     });
     expect(renamed.status).toBe(HTTP_STATUS.OK);
-    expect(folderOf(renamed).name).toBe('A renamed');
+    const renamedStored = await storedFolder(a);
+    expect(renamed.body.data).toEqual({
+      name: 'A renamed',
+      updatedAt: renamedStored.updatedAt.toISOString(),
+    });
+    expect(renamedStored.name).toBe('A renamed');
 
     const self = await call(admin(), 'PUT', `/api/dash/media/folders/${a}`, {
       parentId: a,
@@ -263,7 +296,12 @@ describe('renaming and moving folders', () => {
       parentId: null,
     });
     expect(toRoot.status).toBe(HTTP_STATUS.OK);
-    expect(folderOf(toRoot).parentId).toBeNull();
+    // A move sends no name, so none comes back.
+    const movedStored = await storedFolder(c);
+    expect(toRoot.body.data).toEqual({
+      updatedAt: movedStored.updatedAt.toISOString(),
+    });
+    expect(movedStored.parentId).toBeNull();
 
     // An empty body is a 422, not a silent 200.
     const nothing = await call(

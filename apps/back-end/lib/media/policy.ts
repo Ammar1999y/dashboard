@@ -1,6 +1,7 @@
-import type { FileKind } from '@/db/schema';
-import type { DashboardPage } from '@/lib/permissions/constants';
-import type { BucketType } from '@/lib/r2/client';
+import type { DashboardPage } from '@app/shared/permissions/constants';
+import type { BucketType, FileKind } from '@app/shared/validation/enums';
+
+import { PURPOSE_NAME_PATTERN } from '@app/shared/validation/media';
 
 /**
  * What an upload through `POST /api/upload/file` is FOR, declared in code.
@@ -32,7 +33,7 @@ export const DEFAULT_UPLOAD_PURPOSE: UploadPurpose = {
  *
  *   projects: { cover: { visibility: 'public', kinds: ['image'] } }
  *
- * and lists the matching referrer in `lib/media/usages.ts`.
+ * and lists the matching referrer in `lib/media/usage-sources.ts`.
  * `tests/integration/media-usages.test.ts` checks that every purpose has a
  * source with the same resource and visibility, and every source a purpose.
  */
@@ -40,9 +41,7 @@ export const UPLOAD_PURPOSES: Readonly<
   Partial<Record<DashboardPage, Readonly<Record<string, UploadPurpose>>>>
 > = {};
 
-export const PURPOSE_NAME_MAX = 50;
-/** One segment, ASCII, so it can travel in a query string without encoding. */
-export const PURPOSE_NAME_PATTERN = '^[a-z][a-zA-Z0-9_-]{0,49}$';
+// eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern from @app/shared, never input
 const PURPOSE_NAME = new RegExp(PURPOSE_NAME_PATTERN);
 
 /**

@@ -1,5 +1,4 @@
-import type { Handler } from '@/lib/http/contract';
-import type { DashboardPage } from '@/lib/permissions/constants';
+import type { PermissionRows } from '@/lib/permissions/utils';
 
 import {
   and,
@@ -13,16 +12,34 @@ import {
 
 import { db, withTransaction } from '@/db';
 import { rolePermissions, roles, sessions, users } from '@/db/schema';
-import { validID } from '@/utils';
-import { auditLog, getAuditMeta } from '@/lib/audit';
-import { revokeSessionArtifacts } from '@/lib/auth/rotation';
-import { requirePermission } from '@/lib/http/session';
+
 import {
-  CUSTOM_ROLE_VALUE,
+  HTTP_STATUS,
+  MSG_DELETE_ERROR,
+  MSG_DELETED,
+  MSG_FETCH_ERROR,
+  MSG_FETCHED,
+  MSG_NOT_FOUND,
+  MSG_UPDATE_ERROR,
+  MSG_UPDATED,
+} from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import {
   REQUIRE_ROLE_FOR_LOGIN,
   ROLE_SCOPE,
-} from '@/lib/permissions/constants';
+} from '@app/shared/permissions/constants';
+import { adminUpdatePermissionBodySchema } from '@app/shared/validation/permissions';
+
+import { auditLog, getAuditMeta } from '@/lib/audit';
+import { revokeSessionArtifacts } from '@/lib/auth/session/rotation';
+import { handlePermissionUniqueViolation } from '@/lib/http/constraint-errors';
+import { readJsonBody, requireId } from '@/lib/http/input';
+import { apiSuccess, withApiErrors } from '@/lib/http/response';
+import { requirePermission } from '@/lib/http/session';
+import { insufficientPermissions } from '@/lib/permissions/checker';
+import { permissionMsg } from '@/lib/permissions/messages';
 import {
+  assertStandardRoleName,
   collapseToNotFound,
   diffPermissionMatrices,
   PERMISSION_AUDIT_METADATA_FIELDS,
@@ -36,90 +53,63 @@ import {
 } from '@/lib/permissions/utils';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-import {
-  HTTP_STATUS,
-  MSG_DELETE_ERROR,
-  MSG_DELETED,
-  MSG_FETCH_ERROR,
-  MSG_FETCHED,
-  MSG_INSUFFICIENT_PERMISSIONS,
-  MSG_NOT_FOUND,
-  MSG_UPDATE_ERROR,
-  MSG_UPDATED,
-} from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  handlePermissionUniqueViolation,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { CustomError } from '@/utils/error-class';
-import { adminUpdatePermissionSchema } from '@/utils/validation/permissions';
-import { idRequired, zodIssueMessage } from '@/utils/validation/rules';
+export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
+  const { userId, scope } = await requirePermission(ctx, {
+    resource: 'permissions',
+    action: 'view',
+  });
 
-import { permissionMsg } from '../messages';
+  await enforceRateLimit({
+    scope: 'permissions.id.get',
+    identifier: userIdentifier(userId),
+    limit: 60,
+  });
 
-export const GET: Handler = async (ctx) => {
-  try {
-    const { userId, scope } = await requirePermission(ctx, {
-      resource: 'permissions',
-      action: 'view',
-    });
+  const roleId = requireId(ctx.params.id);
 
-    await enforceRateLimit({
-      scope: 'permissions.id.get',
-      identifier: userIdentifier(userId),
-      limit: 60,
-    });
-
-    const roleId = validID(ctx.params.id);
-    if (!roleId) throw new CustomError(idRequired, HTTP_STATUS.UNPROCESSABLE);
-
-    const roleData = await db.query.roles.findFirst({
-      where: (roles, { eq, and }) =>
-        and(eq(roles.id, roleId), eq(roles.scope, ROLE_SCOPE.STANDARD)),
-      columns: {
-        id: true,
-        roleName: true,
-        description: true,
-        isActive: true,
-        createdBy: true,
-      },
-      with: {
-        rolePermissions: {
-          columns: {
-            pageName: true,
-            permissions: true,
-          },
+  const roleData = await db.query.roles.findFirst({
+    where: (roles, { eq, and }) =>
+      and(eq(roles.id, roleId), eq(roles.scope, ROLE_SCOPE.STANDARD)),
+    columns: {
+      id: true,
+      roleName: true,
+      description: true,
+      isActive: true,
+      createdBy: true,
+    },
+    with: {
+      rolePermissions: {
+        columns: {
+          pageName: true,
+          permissions: true,
         },
       },
-    });
+    },
+  });
 
-    if (!roleData) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (!roleData) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 
-    if (scope === 'own' && roleData.createdBy !== userId)
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (scope === 'own' && roleData.createdBy !== userId)
+    throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 
-    return apiSuccess({
-      message: MSG_FETCHED,
-      data: {
-        id: roleData.id,
-        roleName: roleData.roleName,
-        description: roleData.description,
-        isActive: roleData.isActive,
-        permissions: roleData.rolePermissions.map((p) => ({
-          name: p.pageName,
-          permissions: p.permissions,
-        })),
-      },
-    });
-  } catch (error) {
-    return handleApiError(error, MSG_FETCH_ERROR);
-  }
-};
+  return apiSuccess({
+    message: MSG_FETCHED,
+    data: {
+      id: roleData.id,
+      roleName: roleData.roleName,
+      description: roleData.description,
+      isActive: roleData.isActive,
+      permissions: roleData.rolePermissions.map((p) => ({
+        name: p.pageName,
+        permissions: p.permissions,
+      })),
+    },
+  });
+});
 
-export const PUT: Handler = async (ctx) => {
-  try {
+export const PUT = withApiErrors(
+  MSG_UPDATE_ERROR,
+  async (ctx) => {
     const {
       session,
       userId: actorUserId,
@@ -129,8 +119,6 @@ export const PUT: Handler = async (ctx) => {
     } = await requirePermission(ctx, {
       resource: 'permissions',
       action: 'edit',
-      // `D12`: this action lowers ANOTHER account's security posture, so it is
-      // in the re-authentication class. Either all of them are or none are.
       reauth: true,
     });
 
@@ -141,40 +129,22 @@ export const PUT: Handler = async (ctx) => {
       failClosed: true,
     });
 
-    const body = requireJsonBody(await ctx.readJson());
+    const roleId = requireId(ctx.params.id);
 
-    // Strict server contract: unknown keys are rejected rather than stripped.
-    const validatedDataParsed = adminUpdatePermissionSchema.safeParse({
-      ...body,
-      id: ctx.params.id,
-    });
-
-    if (!validatedDataParsed.success)
-      throw new CustomError(
-        zodIssueMessage(validatedDataParsed.error),
-        HTTP_STATUS.UNPROCESSABLE
-      );
-
-    const roleId = validatedDataParsed.data.id;
+    // The BODY schema, not the with-`id` variant merged with the path: `id` is
+    // not in the published contract, so the strict schema must reject it.
+    const input = await readJsonBody(ctx, adminUpdatePermissionBodySchema);
 
     if (actorRoleId === roleId)
       throw new CustomError(
         permissionMsg.cannotEditOwnRole,
         HTTP_STATUS.FORBIDDEN
       );
-    const validatedData = validatedDataParsed.data;
 
-    if (
-      validatedData.roleName.toLowerCase().startsWith(`${CUSTOM_ROLE_VALUE}-`)
-    )
-      throw new CustomError(
-        permissionMsg.customPrefixForbidden(`${CUSTOM_ROLE_VALUE}-`),
-        HTTP_STATUS.BAD_REQUEST
-      );
+    assertStandardRoleName(input.roleName);
 
-    if (actorPermissions && validatedData.permissions?.length) {
-      validatePermissionScope(actorPermissions, validatedData.permissions);
-    }
+    if (actorPermissions && input.permissions?.length)
+      validatePermissionScope(actorPermissions, input.permissions);
 
     const auditMeta = getAuditMeta(ctx);
 
@@ -198,8 +168,8 @@ export const PUT: Handler = async (ctx) => {
         throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 
       if (actorPermissions) {
-        // Reachability: this is the role being EDITED, and 403-vs-404 here
-        // told an actor without `permissions.view` which roles outrank them.
+        // Reachability, because this is the role being EDITED: a 403 would tell
+        // an actor without `permissions.view` which roles outrank them.
         await validateRolePermissionScope(
           actorPermissions,
           roleId,
@@ -213,23 +183,15 @@ export const PUT: Handler = async (ctx) => {
         (actorPermissions?.['permissions']?.['deleteOwn'] === true &&
           existingRole.createdBy === actorUserId);
 
-      if (
-        !canDeactivate &&
-        existingRole.isActive &&
-        validatedData.isActive === false
-      ) {
-        throw new CustomError(
-          MSG_INSUFFICIENT_PERMISSIONS,
-          HTTP_STATUS.FORBIDDEN
-        );
-      }
+      if (!canDeactivate && existingRole.isActive && input.isActive === false)
+        throw insufficientPermissions();
 
       const [roleUpdated] = await tx
         .update(roles)
         .set({
-          roleName: validatedData.roleName,
-          description: validatedData.description,
-          isActive: validatedData.isActive,
+          roleName: input.roleName,
+          description: input.description,
+          isActive: input.isActive,
         })
         .where(standardRoleFilter(roleId))
         .returning({ id: roles.id, updatedAt: roles.updatedAt });
@@ -237,19 +199,13 @@ export const PUT: Handler = async (ctx) => {
       if (!roleUpdated)
         throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 
-      let oldPermissionsForAudit: Array<{
-        pageName: string;
-        permissions: unknown;
-      }> = [];
-      let newPermissionsForAudit: Array<{
-        pageName: string;
-        permissions: unknown;
-      }> = [];
+      let oldPermissionsForAudit: PermissionRows = [];
+      let newPermissionsForAudit: PermissionRows = [];
 
       let permissionsChanged = false;
-      if (validatedData?.permissions?.length) {
-        const permissionsData = validatedData.permissions.map((p) => ({
-          roleId: roleId,
+      if (input.permissions?.length) {
+        const permissionsData = input.permissions.map((p) => ({
+          roleId,
           pageName: p.name,
           permissions: p.permissions,
         }));
@@ -265,7 +221,7 @@ export const PUT: Handler = async (ctx) => {
         permissionsChanged = !permissionsEqual(
           existingPermissions.map((p) => ({
             pageName: p.pageName,
-            permissions: p.permissions as Record<string, boolean>,
+            permissions: p.permissions,
           })),
           permissionsData.map((p) => ({
             pageName: p.pageName,
@@ -279,14 +235,12 @@ export const PUT: Handler = async (ctx) => {
             permissions: p.permissions,
           }));
           newPermissionsForAudit = permissionsData.map((p) => ({
-            pageName: p.pageName as string,
-            permissions: p.permissions as unknown,
+            pageName: p.pageName,
+            permissions: p.permissions,
           }));
 
-          // Per-row UPSERT against ux_role_permissions_role_page so unchanged
-          // pages keep their created_at and we only rewrite what actually
-          // differs. Rows for pages dropped from the payload are deleted in a
-          // single follow-up statement.
+          // Upsert against `ux_role_permissions_role_page`, so unchanged pages
+          // keep their `created_at`; dropped pages go in one statement after.
           await tx
             .insert(rolePermissions)
             .values(permissionsData)
@@ -313,10 +267,8 @@ export const PUT: Handler = async (ctx) => {
         action: 'UPDATE',
         tableName: 'roles',
         recordId: roleId,
-        // Permission matrices use the SAME `{ pageName, permissions }` shape on
-        // both sides, plus the same `changedPermissions` summary the custom-role
-        // audit emits — one forensic contract for both role types. The request
-        // payload uses `name`, so it is mapped rather than stored verbatim.
+        // The `{ pageName, permissions }` shape and `changedPermissions`
+        // summary every role event uses; the request keys pages as `name`.
         oldData: {
           auditVersion: PERMISSION_AUDIT_VERSION,
           roleName: existingRole.roleName,
@@ -328,9 +280,9 @@ export const PUT: Handler = async (ctx) => {
         },
         newData: {
           auditVersion: PERMISSION_AUDIT_VERSION,
-          roleName: validatedData.roleName,
-          description: validatedData.description,
-          isActive: validatedData.isActive,
+          roleName: input.roleName,
+          description: input.description,
+          isActive: input.isActive,
           ...(permissionsChanged && {
             permissions: newPermissionsForAudit,
             changedPermissions: diffPermissionMatrices(
@@ -343,7 +295,7 @@ export const PUT: Handler = async (ctx) => {
         meta: auditMeta,
       });
 
-      if (existingRole.isActive && validatedData.isActive === false) {
+      if (existingRole.isActive && input.isActive === false) {
         const revoked = await tx
           .delete(sessions)
           .where(
@@ -356,23 +308,22 @@ export const PUT: Handler = async (ctx) => {
             )
           )
           .returning({ id: sessions.id });
-        // Deactivating the role revokes its holders' sessions; their
-        // re-authentication windows and two-factor proofs are keyed by session
-        // id and are unreachable once the session rows are gone.
+        // Their re-authentication windows and two-factor proofs are keyed by
+        // session id, so they go with the sessions.
         await revokeSessionArtifacts(
           tx,
           revoked.map((session) => session.id)
         );
       } else if (
         permissionsChanged ||
-        validatedData.roleName !== existingRole.roleName
+        input.roleName !== existingRole.roleName
       ) {
-        const precomputed = validatedData?.permissions?.length
+        const precomputed = input.permissions?.length
           ? {
-              roleName: validatedData.roleName,
+              roleName: input.roleName,
               roleScope: ROLE_SCOPE.STANDARD,
               permissions: sanitizePermissions(
-                validatedData.permissions.map((p) => ({
+                input.permissions.map((p) => ({
                   pageName: p.name,
                   permissions: p.permissions,
                 }))
@@ -385,155 +336,134 @@ export const PUT: Handler = async (ctx) => {
       return { updatedAt: roleUpdated.updatedAt };
     });
 
-    // The client reads `updatedAt` off the response to refresh its cache;
-    // returning `data: null` made it throw and surface as a false 503.
+    // The client refreshes its cache from `updatedAt`.
     return apiSuccess({ message: MSG_UPDATED, data: updated });
-  } catch (error) {
-    // Only a KNOWN constraint becomes a 409; an unrecognized one falls
-    // through to the 500 path so the schema/code mismatch is visible.
-    const conflict = handlePermissionUniqueViolation(error, {
-      nameExists: permissionMsg.nameExists,
-      duplicatePagePermission: permissionMsg.duplicatePagePermission,
-    });
-    if (conflict) return conflict;
-    return handleApiError(error, MSG_UPDATE_ERROR);
-  }
-};
+  },
+  (error) => handlePermissionUniqueViolation(error, permissionMsg)
+);
 
-export const DELETE: Handler = async (ctx) => {
-  try {
-    const {
-      session,
-      userId: actorUserId,
-      permissions: actorPermissions,
-      scope: deleteScope,
-    } = await requirePermission(ctx, {
-      resource: 'permissions',
-      action: 'delete',
-      // `D12`: this action lowers ANOTHER account's security posture, so it is
-      // in the re-authentication class. Either all of them are or none are.
-      reauth: true,
-    });
+export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
+  const {
+    session,
+    userId: actorUserId,
+    permissions: actorPermissions,
+    scope: deleteScope,
+  } = await requirePermission(ctx, {
+    resource: 'permissions',
+    action: 'delete',
+    reauth: true,
+  });
 
-    await enforceRateLimit({
-      scope: 'permissions.id.delete',
-      identifier: userIdentifier(actorUserId),
-      limit: 10,
-      failClosed: true,
-    });
+  await enforceRateLimit({
+    scope: 'permissions.id.delete',
+    identifier: userIdentifier(actorUserId),
+    limit: 10,
+    failClosed: true,
+  });
 
-    const roleId = validID(ctx.params.id);
-    if (!roleId) throw new CustomError(idRequired, HTTP_STATUS.UNPROCESSABLE);
+  const roleId = requireId(ctx.params.id);
 
-    const auditMeta = getAuditMeta(ctx);
+  const auditMeta = getAuditMeta(ctx);
 
-    await withTransaction(async (tx) => {
-      const [existingRole] = await tx
-        .select({
-          id: roles.id,
-          roleName: roles.roleName,
-          description: roles.description,
-          isActive: roles.isActive,
-          createdBy: roles.createdBy,
-        })
-        .from(roles)
-        .where(standardRoleFilter(roleId))
+  await withTransaction(async (tx) => {
+    const [existingRole] = await tx
+      .select({
+        id: roles.id,
+        roleName: roles.roleName,
+        description: roles.description,
+        isActive: roles.isActive,
+        createdBy: roles.createdBy,
+      })
+      .from(roles)
+      .where(standardRoleFilter(roleId))
+      .for('update');
+    if (!existingRole)
+      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+
+    if (deleteScope === 'own' && existingRole.createdBy !== actorUserId)
+      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+
+    const existingPermissions = await tx
+      .select({
+        pageName: rolePermissions.pageName,
+        permissions: rolePermissions.permissions,
+      })
+      .from(rolePermissions)
+      .where(eq(rolePermissions.roleId, roleId))
+      .for('share');
+
+    if (actorPermissions) {
+      const targetPerms = existingPermissions.map((p) => ({
+        name: p.pageName,
+        permissions: (p.permissions || {}) as Record<string, boolean>,
+      }));
+      try {
+        validatePermissionScope(actorPermissions, targetPerms);
+      } catch (error) {
+        // The reachability question PUT asks through
+        // `validateRolePermissionScope`: a deletion grants nothing, so "this
+        // role outranks me" answers 404 like every unreachable-target gate.
+        // Inline because the rows above are already read `FOR SHARE`.
+        collapseToNotFound(error);
+      }
+    }
+
+    // With REQUIRE_ROLE_FOR_LOGIN the FK is RESTRICT, so soft-deleted users
+    // still pinning `role_id` would block the DELETE; they are unpinned first.
+    // Without it the FK is `set null`.
+    //
+    // Every pinning user is locked first: under READ COMMITTED a concurrent
+    // restore committing between the unpin and the NOT EXISTS check would trip
+    // the FK or leave the restored user with no role.
+    if (REQUIRE_ROLE_FOR_LOGIN) {
+      await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.roleId, roleId))
         .for('update');
-      if (!existingRole)
-        throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 
-      if (deleteScope === 'own' && existingRole.createdBy !== actorUserId)
-        throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+      await tx
+        .update(users)
+        .set({ roleId: null })
+        .where(and(eq(users.roleId, roleId), isNotNull(users.deletedAt)));
+    }
 
-      const existingPermissions = await tx
-        .select({
-          pageName: rolePermissions.pageName,
-          permissions: rolePermissions.permissions,
-        })
-        .from(rolePermissions)
-        .where(eq(rolePermissions.roleId, roleId))
-        .for('share');
+    // The scope condition mirrors `standardRoleFilter()`.
+    const deleted = await tx.execute(sql`
+      DELETE FROM roles r
+      WHERE r.id = ${roleId}
+        AND r.scope = ${ROLE_SCOPE.STANDARD}
+        AND NOT EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.role_id = r.id AND u.deleted_at IS NULL
+        )
+      RETURNING r.id
+    `);
 
-      if (actorPermissions) {
-        const targetPerms = existingPermissions.map((p) => ({
-          name: p.pageName as DashboardPage,
-          permissions: (p.permissions || {}) as Record<string, boolean>,
-        }));
-        try {
-          validatePermissionScope(actorPermissions, targetPerms);
-        } catch (error) {
-          // The same question the sibling PUT asks through
-          // `validateRolePermissionScope(..., 'reachability')`: a deletion grants
-          // nothing, so "this role outranks me" has to answer 404 like every
-          // other unreachable-target gate rather than "you cannot GRANT
-          // permissions you don't own". Inline because the rows above were
-          // already read `FOR SHARE`; the collapse is the shared helper.
-          collapseToNotFound(error);
-        }
-      }
+    if (deleted.length === 0)
+      throw new CustomError(permissionMsg.hasUsers, HTTP_STATUS.BAD_REQUEST);
 
-      // When REQUIRE_ROLE_FOR_LOGIN is on, the FK is RESTRICT — soft-deleted
-      // users still pinning role_id would block the role DELETE with an FK
-      // violation. Null them out first so the DELETE proceeds. With the flag
-      // off the FK is `set null` and Postgres handles this on its own.
-      //
-      // FOR UPDATE on every user pinning this role first: under READ
-      // COMMITTED a concurrent restore (`deleted_at = NULL`) committing
-      // between our UPDATE-soft-deleted and the DELETE-not-exists check
-      // would either trip the RESTRICT FK or leave the restored user with
-      // role_id = NULL. Locking serialises the restore against this delete.
-      if (REQUIRE_ROLE_FOR_LOGIN) {
-        await tx
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.roleId, roleId))
-          .for('update');
-
-        await tx
-          .update(users)
-          .set({ roleId: null })
-          .where(and(eq(users.roleId, roleId), isNotNull(users.deletedAt)));
-      }
-
-      // SYNC: scope condition mirrors standardRoleFilter() in lib/permissions/utils.ts
-      const deleted = await tx.execute(sql`
-        DELETE FROM roles r
-        WHERE r.id = ${roleId}
-          AND r.scope = ${ROLE_SCOPE.STANDARD}
-          AND NOT EXISTS (
-            SELECT 1 FROM users u
-            WHERE u.role_id = r.id AND u.deleted_at IS NULL
-          )
-        RETURNING r.id
-      `);
-
-      if (deleted.length === 0)
-        throw new CustomError(permissionMsg.hasUsers, HTTP_STATUS.BAD_REQUEST);
-
-      await auditLog(tx, {
-        userId: actorUserId,
-        userEmail: session.user.email,
-        action: 'DELETE',
-        tableName: 'roles',
-        recordId: roleId,
-        // Same field set the UPDATE and custom-role events record, so a
-        // deleted role can be reconstructed from its own event alone.
-        oldData: {
-          auditVersion: PERMISSION_AUDIT_VERSION,
-          scope: ROLE_SCOPE.STANDARD,
-          roleName: existingRole.roleName,
-          description: existingRole.description,
-          isActive: existingRole.isActive,
-          createdBy: existingRole.createdBy,
-          permissions: existingPermissions,
-        },
-        metadataFields: PERMISSION_AUDIT_METADATA_FIELDS,
-        meta: auditMeta,
-      });
+    await auditLog(tx, {
+      userId: actorUserId,
+      userEmail: session.user.email,
+      action: 'DELETE',
+      tableName: 'roles',
+      recordId: roleId,
+      // Same field set the UPDATE and custom-role events record, so a
+      // deleted role can be reconstructed from its own event alone.
+      oldData: {
+        auditVersion: PERMISSION_AUDIT_VERSION,
+        scope: ROLE_SCOPE.STANDARD,
+        roleName: existingRole.roleName,
+        description: existingRole.description,
+        isActive: existingRole.isActive,
+        createdBy: existingRole.createdBy,
+        permissions: existingPermissions,
+      },
+      metadataFields: PERMISSION_AUDIT_METADATA_FIELDS,
+      meta: auditMeta,
     });
+  });
 
-    return apiSuccess({ message: MSG_DELETED });
-  } catch (error) {
-    return handleApiError(error, MSG_DELETE_ERROR);
-  }
-};
+  return apiSuccess({ message: MSG_DELETED });
+});

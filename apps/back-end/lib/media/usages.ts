@@ -1,20 +1,18 @@
 import type { UsageSource } from './usage-sources';
-import type { Tx } from '@/db';
-import type { DashboardPage } from '@/lib/permissions/constants';
-import type { BucketType } from '@/lib/r2/client';
-import type { EntityID } from '@/types';
+import type { Executor } from '@/db';
+import type { DashboardPage } from '@app/shared/permissions/constants';
+import type { EntityID } from '@app/shared/types';
+import type { BucketType } from '@app/shared/validation/enums';
 import type { SQL } from 'drizzle-orm';
 
 import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { files } from '@/db/schema';
-import { DASHBOARD_PAGE_NAMES } from '@/lib/permissions/constants';
+
+import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 
 import { USAGE_SOURCES } from './usage-sources';
-
-export type { UsageSource } from './usage-sources';
-export { registeredFileColumns, USAGE_SOURCES } from './usage-sources';
 
 interface Usage {
   label: string;
@@ -22,7 +20,7 @@ interface Usage {
   recordId: string;
 }
 
-export interface UsageSummary {
+interface UsageSummary {
   /** Usages on resources the caller may view. */
   visible: Usage[];
   /** How many more exist on resources the caller may not view. */
@@ -31,9 +29,8 @@ export interface UsageSummary {
 
 /**
  * One bound parameter per id rather than one array parameter: the driver
- * encodes a JS array as JSON text, which `::uuid[]` refuses (22P02, measured
- * the first time a source was registered). `fileIds` is bounded by the request
- * schema (`IDS_ARRAY_MAX`).
+ * encodes a JS array as JSON text, which `::uuid[]` refuses. `fileIds` is
+ * bounded by the request schema (`IDS_ARRAY_MAX`).
  */
 const usageQuery = (source: UsageSource, fileIds: readonly EntityID[]) => sql`
   select ${sql.identifier(source.column)}::text as file_id,
@@ -63,7 +60,7 @@ export function viewablePages(
 export async function usedBy(
   fileIds: readonly EntityID[],
   viewable: ReadonlySet<DashboardPage>,
-  executor: typeof db | Tx = db
+  executor: Executor = db
 ): Promise<Map<EntityID, UsageSummary>> {
   const summaries = new Map<EntityID, UsageSummary>();
   for (const id of fileIds) summaries.set(id, { visible: [], hidden: 0 });
@@ -108,7 +105,7 @@ function tally(
  */
 export async function usageVisibilities(
   fileIds: readonly EntityID[],
-  executor: typeof db | Tx = db
+  executor: Executor = db
 ): Promise<Map<EntityID, Set<BucketType>>> {
   const held = new Map<EntityID, Set<BucketType>>();
   for (const id of fileIds) held.set(id, new Set());
@@ -167,7 +164,7 @@ export function unreferenced(): SQL {
 /** Does any PUBLIC owner reference this file? Decides whether it may be unpublished. */
 export async function hasPublicUsage(
   fileId: EntityID,
-  executor: typeof db | Tx = db
+  executor: Executor = db
 ): Promise<boolean> {
   for (const source of USAGE_SOURCES) {
     if (source.visibility !== 'public') continue;

@@ -28,12 +28,17 @@ import {
 } from 'bun:test';
 import type { SignedInSession } from '../helpers/session';
 import type { FileTypeSpec } from '@/lib/media/allowlist';
+import type { BucketType } from '@app/shared/validation/enums';
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db, withTransaction } from '@/db';
 import { auditLogs, files, orphanedObjects } from '@/db/schema';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
+
 import * as purge from '@/lib/cloudflare/purge';
 import { generateUuidV7 } from '@/lib/id';
 import { FILE_TYPES } from '@/lib/media/allowlist';
@@ -47,9 +52,6 @@ import {
   transitionFile,
 } from '@/lib/media/visibility';
 import * as r2 from '@/lib/r2/client';
-
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { FOLDER_RECURSIVE_DELETE_MAX } from '@/utils/validation/constants';
 
 import { resetTables } from '../helpers/database';
 import {
@@ -598,7 +600,13 @@ describe('listing, renaming, moving', () => {
       }
     );
     expect(renamed.status).toBe(HTTP_STATUS.OK);
-    expect((renamed.body.data as MediaFile).displayName).toBe('New name');
+    // A rename answers the stored name and the new timestamp, nothing else.
+    expect(renamed.body.data).toEqual({
+      displayName: 'New name',
+      updatedAt: expect.any(String),
+    });
+    const renamedRow = await rowOf(file.id);
+    expect(renamedRow?.displayName).toBe('New name');
 
     const moved = await call(
       admin(),
@@ -609,7 +617,12 @@ describe('listing, renaming, moving', () => {
       }
     );
     expect(moved.status).toBe(HTTP_STATUS.OK);
-    expect((moved.body.data as MediaFile).folderId).toBe(to);
+    expect(moved.body.data).toEqual({
+      unfiledAt: null,
+      updatedAt: expect.any(String),
+    });
+    const movedRow = await rowOf(file.id);
+    expect(movedRow?.folderId).toBe(to);
 
     // Neither touched the object store: the key is immutable.
     expect(storeOps().length).toBe(before);
@@ -2112,7 +2125,8 @@ describe('entity uploads: claiming, governance, unfiled', () => {
         { folderId }
       );
       expect(adopted.status).toBe(HTTP_STATUS.OK);
-      expect(adopted.body.data).toMatchObject({ folderId, unfiledAt: null });
+      expect(adopted.body.data).toMatchObject({ unfiledAt: null });
+      expect(await rowOf(file.id)).toMatchObject({ folderId, unfiledAt: null });
       const inFolder = await call(
         admin(),
         'GET',
@@ -2478,9 +2492,10 @@ describe('moving a batch of files', () => {
         folderId: to,
       });
       expect(answer.status, JSON.stringify(answer.body)).toBe(HTTP_STATUS.OK);
-      const moved = answer.body.data as MediaFile[];
-      expect(moved.map((file) => file.folderId)).toEqual([to, to, to]);
-      expect(moved.every((file) => file.unfiledAt === null)).toBe(true);
+      expect(answer.body.data).toEqual({
+        unfiledAt: null,
+        updatedAt: expect.any(String),
+      });
 
       for (const id of [one.id, two.id, orphan.id])
         expect(await rowOf(id)).toMatchObject({
@@ -2755,8 +2770,8 @@ async function until(
  * and hands back the restore. The membership of this set is what every consumer
  * reads; the environment variable behind it is read once at module load.
  */
-function withoutBucket(bucket: r2.BucketType): () => void {
-  const enabled = r2.ENABLED_VISIBILITIES as Set<r2.BucketType>;
+function withoutBucket(bucket: BucketType): () => void {
+  const enabled = r2.ENABLED_VISIBILITIES as Set<BucketType>;
   const configured = [...enabled];
   enabled.delete(bucket);
   return () => {

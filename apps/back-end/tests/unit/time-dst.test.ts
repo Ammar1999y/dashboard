@@ -3,9 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { PgDialect } from 'drizzle-orm/pg-core';
 
 import { users } from '@/db/schema';
-import { filterColumns } from '@/lib/data-table/filter-columns';
 
-import { BUSINESS_TIMEZONE } from '@/utils/config';
+import { BUSINESS_TIMEZONE } from '@app/shared/config';
 /**
  * DST / calendar-boundary probe for utils/time.ts (C-14).
  *
@@ -21,7 +20,9 @@ import {
   toCalendarDate,
   zonedDayStart,
   zonedNextDayStart,
-} from '@/utils/time';
+} from '@app/shared/time';
+
+import { filterColumns } from '@/lib/data-table/filter-columns';
 
 /**
  * One `bun test` case per assertion, keeping every original `check(...)` call

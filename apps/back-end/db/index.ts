@@ -5,7 +5,7 @@
  * The driver has to hold real TCP sessions: `FOR UPDATE` across statements,
  * `pg_advisory_xact_lock` and `SET LOCAL` throughout this codebase all assume a
  * transaction runs on one backend connection. A per-query HTTP driver breaks
- * every one of them silently (`reports/comment-evidence.md`).
+ * every one of them silently.
  */
 import { SQL } from 'bun';
 import type { PgTransactionConfig } from 'drizzle-orm/pg-core';
@@ -32,8 +32,9 @@ const client = new SQL(DATABASE_URL, { max: MAX_POOL_CONNECTIONS });
 
 export const db = drizzle<typeof schema>({ client, schema });
 
-/** A transaction handle. Named for the transaction, not for the driver. */
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export type Executor = typeof db | Tx;
 
 /** Keeps transaction boundaries independent of the database driver at call sites. */
 export function withTransaction<T>(
@@ -49,9 +50,8 @@ export function withTransaction<T>(
  * sleep abandons the query without stopping it, and the abandoned probe then
  * delays the auth and dashboard queries it exists to report on.
  *
- * `statement_timeout` is scoped to this pool only: the standing decision not to
- * set one on the application pool stands until the slowest legitimate query has
- * been profiled against the target host. `select 1` needs no profiling.
+ * `statement_timeout` is scoped to this pool only; see `client` for why the
+ * application pool has none. `select 1` needs no profiling.
  */
 export const PROBE_TIMEOUT_MS = 2000;
 
@@ -65,8 +65,8 @@ const probeClient = new SQL(DATABASE_URL, {
  * Single-flight on the QUERY, not on the caller's wait: the entry is cleared
  * only when PostgreSQL has answered or the driver has given up, so a hanging
  * peer costs one queued statement however often the public health route is
- * polled. A caller-side clear let each poll start another query behind the
- * abandoned one on this single connection.
+ * polled. A caller-side clear would let each poll queue another query behind
+ * the abandoned one on this single connection.
  */
 const probe: { inFlight: Promise<{ error: unknown } | null> | null } = {
   inFlight: null,
@@ -108,13 +108,9 @@ export function pingDatabase(): Promise<boolean> {
 }
 
 /**
- * Closes the pool on shutdown.
- *
- * Unlike the SQLite stores, this always has something to close — the pool is
- * constructed at module load, and this module is only reachable from a process
- * that imported the application. `close()` waits for in-flight queries; the
+ * Closes both pools on shutdown. `close()` waits for in-flight queries; the
  * shutdown path in `server.ts` is already bounded by its own forced-exit timer,
- * so this does not need a second timeout of its own.
+ * so this needs no timeout of its own.
  */
 export async function closeDatabase(): Promise<void> {
   await Promise.all([client.close(), probeClient.close()]);

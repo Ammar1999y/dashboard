@@ -1,27 +1,23 @@
 /**
- * The route table, as data.
+ * The route table, as data. No framework import: `app.ts` does the
+ * Elysia-specific registration, so the table survives a framework move. The
+ * 405 boundary and the unused-file scanner read the manifest derived from it.
  *
- * Framework-free on purpose: this file imports no server library, so it is the
- * one artefact a move to Hono keeps unchanged. `app.ts` iterates it and does the
- * Elysia-specific registration; the 405 boundary and the unused-file scanner
- * read the manifest derived from it.
+ * Paths mirror the handler files: `app/api/dash/users/[id]/handler.ts` serves
+ * `/api/dash/users/:id`.
  *
- * Paths are reproduced verbatim from the Next file-system routes so no client
- * contract changes: `app/api/dash/users/[id]/route.ts` became
- * `/api/dash/users/:id`, and so on.
+ * Every row states its request and response policies; the fields are required,
+ * so an omission is a compile error rather than an unsafe default. The profiles
+ * below name a shared set of them, and a row spreads one and states the rest.
  *
- * Every row states its request and response policies explicitly. Required
- * fields make omission a compile error rather than an unsafe default.
+ * `auth` is read off the handler: `requirePermission` / `requireAnyPermission` /
+ * `requireDashboardAccess` are `permission`, `requireSession` alone is
+ * `session`, and none of them is `public`. It publishes each operation's 401
+ * and 403 in `lib/http/openapi.ts`.
  *
- * `auth` is read off the handler, not guessed: `requirePermission` /
- * `requireAnyPermission` / `requireDashboardAccess` are `permission`,
- * `requireSession` alone is `session`, and a handler that calls none of them is
- * `public`. It is what publishes each operation's 401 and 403 in
- * `lib/http/openapi.ts`.
- *
- * Order matters only for readability here. Elysia resolves static segments
- * before wildcards regardless of registration order, which is why
- * `/api/dash/users/me/...` still wins over `/api/dash/users/:id`.
+ * Row order is the order of the document's `paths`. Elysia resolves static
+ * segments before wildcards regardless, so `/api/dash/users/me/...` wins over
+ * `/api/dash/users/:id`.
  */
 import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
 import type { RouteDefinition, RoutePrefix } from '@/lib/http/route-manifest';
@@ -46,11 +42,6 @@ import * as dashPermissions from '@/app/api/dash/permissions/handler';
 import * as dashRoles from '@/app/api/dash/roles/handler';
 import * as dashUsersId from '@/app/api/dash/users/[id]/handler';
 import * as dashUsersIdSessions from '@/app/api/dash/users/[id]/sessions/handler';
-import {
-  SESSION_CURSOR_MAX_LENGTH,
-  SESSION_CURSOR_PATTERN,
-  SESSIONS_MAX_PAGE_SIZE,
-} from '@/app/api/dash/users/[id]/sessions/pagination';
 import * as dashUsersIdTwoFactor from '@/app/api/dash/users/[id]/two-factor/handler';
 import * as dashUsers from '@/app/api/dash/users/handler';
 import * as meChangeEmail from '@/app/api/dash/users/me/change-email/handler';
@@ -62,13 +53,8 @@ import * as mePreferences from '@/app/api/dash/users/me/preferences/handler';
 import * as devSignUp from '@/app/api/dev/sign-up/handler';
 import * as healthStorage from '@/app/api/health/storage/handler';
 import * as uploadFile from '@/app/api/upload/file/handler';
-import { UUID_V7_PATTERN } from '@/utils';
-import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
-import {
-  describeFilterColumns,
-  filterColumnIds,
-} from '@/lib/data-table/column-specs';
-import { dataTableConfig } from '@/lib/data-table/config';
+
+import { dataTableConfig } from '@app/shared/data-table/config';
 import {
   DEFAULT_PER_PAGE,
   MAX_FILTER_ITEMS,
@@ -82,54 +68,52 @@ import {
   MAX_SORT_RAW_LENGTH,
   MAX_VALUE_LENGTH,
   MIN_SEARCH_LENGTH,
-} from '@/lib/data-table/parsers';
-import { openApiRouteHandler } from '@/lib/http/openapi';
+} from '@app/shared/data-table/parsers';
+import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
+import { UUID_V7_PATTERN } from '@app/shared/utils';
+import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
+import {
+  MEDIA_SCOPES,
+  PURPOSE_NAME_MAX,
+  PURPOSE_NAME_PATTERN,
+} from '@app/shared/validation/media';
+import {
+  SESSION_CURSOR_MAX_LENGTH,
+  SESSION_CURSOR_PATTERN,
+  SESSIONS_MAX_PAGE_SIZE,
+} from '@app/shared/validation/sessions';
+
+import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
+import {
+  describeFilterColumns,
+  filterColumnIds,
+} from '@/lib/data-table/column-specs';
+import { openApiRouteHandler } from '@/lib/http/openapi/route';
 import {
   toPublishedManifest,
   toRegisteredRoutes,
 } from '@/lib/http/route-manifest';
-// Types and constants only, so the framework-free property above holds.
-import { PURPOSE_NAME_MAX, PURPOSE_NAME_PATTERN } from '@/lib/media/policy';
-// A plain frozen object of page keys — no server library, so the framework-free
-// property above holds.
-import { DASHBOARD_PAGE_NAMES } from '@/lib/permissions/constants';
-
-import { FOLDER_RECURSIVE_DELETE_MAX } from '@/utils/validation/constants';
 
 /**
  * The idle-timeout ceiling for the media routes that call R2 in the request.
  *
- * A CHOSEN bound, not a derived worst case, and the distinction matters because
- * this comment used to claim the second. The arithmetic runs past 120 s: the
- * visibility saga makes three R2 calls before the flip and a fourth plus a purge
- * after it (`lib/media/visibility.ts`), which at the client's 45 s per call —
- * `maxAttempts` 3 × a 15 s request timeout — plus the purge module's own 25 s
- * budget is 205 s; a two-bucket bulk delete (`lib/media/lifecycle.ts`) is
- * 2 × (45 + 25) = 140 s.
+ * A CHOSEN bound, not a derived worst case: the visibility saga
+ * (`lib/media/visibility.ts`) and a two-bucket bulk delete
+ * (`lib/media/lifecycle.ts`) can each run past it with every R2 retry and the
+ * purge budget spent. It covers the healthy path with a wide margin; past it
+ * the connection drops with the destructive half already logged and the
+ * remainder left to the retention sweep, the accepted residual risk. The
+ * global `IDLE_TIMEOUT_SECONDS` would drop the healthy path mid-operation.
  *
- * 120 s covers the healthy path with a wide margin and is deliberately short of
- * those numbers. Past it the connection is dropped with the destructive half
- * already logged, and the remainder is left to the retention sweep — which is
- * the accepted residual risk, not an oversight. The global ceiling
- * (`IDLE_TIMEOUT_SECONDS`, 60 s) is what this replaces: it dropped the
- * connection mid-operation on the healthy path.
- *
- * SIX routes carry it, and the count is load-bearing: it is the largest term in
- * `MAX_ROUTE_TIMEOUT_SECONDS`, which sets the shutdown drain window
- * (`lib/shutdown.ts`). Raising it lengthens every deploy.
+ * ⚠️ It is the largest term in `MAX_ROUTE_TIMEOUT_SECONDS`, which sets the
+ * shutdown drain window (`lib/shutdown.ts`): raising it lengthens every deploy.
  */
 const MEDIA_ROUTE_TIMEOUT_SECONDS = 120;
 
 /**
  * The list-query parameters for one route, DERIVED from the descriptor map the
- * handler actually enforces.
- *
- * It used to take a hand-written comma-separated string of column ids, kept
- * beside the real map rather than taken from it, and published none of the item
- * or value caps — so the document accepted a 21-filter request the runtime
- * answers 422 to, and a column added to one list and not the other was
- * invisible. `specs` is the same object passed to `parseDataTableParams`, so
- * the two cannot disagree.
+ * handler enforces: `specs` is the object passed to `parseDataTableParams`, so
+ * the document and the runtime cannot disagree.
  */
 const dataTableQuery = (
   specs: FilterColumnSpecs
@@ -188,18 +172,39 @@ const dataTableQuery = (
   },
 ];
 
+/** A route behind a permission grant. */
+const PERMISSION_ROUTE = {
+  preAuth: 'ip-limit',
+  auth: 'permission',
+  captcha: false,
+  handlerRateLimit: true,
+  response: 'envelope',
+} as const satisfies Partial<RouteDefinition>;
+
+/** A route behind a session alone; each row states its captcha. */
+const SESSION_ROUTE = {
+  preAuth: 'ip-limit',
+  auth: 'session',
+  handlerRateLimit: true,
+  response: 'envelope',
+} as const satisfies Partial<RouteDefinition>;
+
+/** An anonymous auth flow with its own limiter; each row states its pre-auth and captcha. */
+const PUBLIC_AUTH_ROUTE = {
+  auth: 'public',
+  handlerRateLimit: true,
+  body: 'json',
+  response: 'envelope',
+} as const satisfies Partial<RouteDefinition>;
+
 export const ROUTES: readonly RouteDefinition[] = [
-  // ---- auth ---------------------------------------------------------------
   {
     method: 'POST',
     path: '/api/auth/forgot-password/reset',
     handler: authForgotReset.POST,
+    ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
-    auth: 'public',
     captcha: true,
-    handlerRateLimit: true,
-    body: 'json',
-    response: 'envelope',
   },
   // The two halves of a reset for an account that holds a second factor. No
   // captcha: reaching either needs a recovery grant, which follows a solved
@@ -208,34 +213,25 @@ export const ROUTES: readonly RouteDefinition[] = [
     method: 'POST',
     path: '/api/auth/forgot-password/second-factor/send',
     handler: authForgotSecondFactorSend.POST,
+    ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
-    auth: 'public',
     captcha: false,
-    handlerRateLimit: true,
-    body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/auth/forgot-password/complete',
     handler: authForgotComplete.POST,
+    ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
-    auth: 'public',
     captcha: false,
-    handlerRateLimit: true,
-    body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/auth/forgot-password/send',
     handler: authForgotSend.POST,
+    ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
-    auth: 'public',
     captcha: true,
-    handlerRateLimit: true,
-    body: 'json',
-    response: 'envelope',
   },
   // No pre-auth limit: the OTP endpoints carry their own per-identifier and
   // per-destination budgets, which are tighter than the coarse per-IP one.
@@ -243,251 +239,170 @@ export const ROUTES: readonly RouteDefinition[] = [
     method: 'POST',
     path: '/api/auth/otp/send',
     handler: authOtpSend.POST,
+    ...PUBLIC_AUTH_ROUTE,
     preAuth: 'none',
-    auth: 'public',
     captcha: true,
-    handlerRateLimit: true,
-    body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/auth/otp/verify',
     handler: authOtpVerify.POST,
+    ...PUBLIC_AUTH_ROUTE,
     preAuth: 'none',
-    auth: 'public',
     captcha: true,
-    handlerRateLimit: true,
-    body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/auth/passwordless/send',
     handler: authPasswordlessSend.POST,
+    ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
-    auth: 'public',
     captcha: true,
-    handlerRateLimit: true,
-    body: 'json',
-    response: 'envelope',
   },
 
-  // ---- dashboard: permissions & roles -------------------------------------
   {
     method: 'GET',
     path: '/api/dash/permissions',
     handler: dashPermissions.GET,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
     query: dataTableQuery(dashPermissions.PERMISSIONS_FILTER_COLUMNS),
   },
   {
     method: 'POST',
     path: '/api/dash/permissions',
     handler: dashPermissions.POST,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'GET',
     path: '/api/dash/permissions/:id',
     handler: dashPermissionsId.GET,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
   },
   {
     method: 'PUT',
     path: '/api/dash/permissions/:id',
     handler: dashPermissionsId.PUT,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'DELETE',
     path: '/api/dash/permissions/:id',
     handler: dashPermissionsId.DELETE,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
   },
   {
     method: 'GET',
     path: '/api/dash/roles',
     handler: dashRoles.GET,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
   },
 
-  // ---- dashboard: self-service (static, so it wins over /:id) -------------
   {
     method: 'POST',
     path: '/api/dash/users/me/change-email',
     handler: meChangeEmail.POST,
-    preAuth: 'ip-limit',
-    auth: 'session',
+    ...SESSION_ROUTE,
     captcha: true,
-    handlerRateLimit: true,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/dash/users/me/change-email/verify',
     handler: meChangeEmailVerify.POST,
-    preAuth: 'ip-limit',
-    auth: 'session',
+    ...SESSION_ROUTE,
     captcha: true,
-    handlerRateLimit: true,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/dash/users/me/change-password',
     handler: meChangePassword.POST,
-    preAuth: 'ip-limit',
-    auth: 'session',
+    ...SESSION_ROUTE,
     captcha: true,
-    handlerRateLimit: true,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/dash/users/me/change-phone',
     handler: meChangePhone.POST,
-    preAuth: 'ip-limit',
-    auth: 'session',
+    ...SESSION_ROUTE,
     captcha: true,
-    handlerRateLimit: true,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/dash/users/me/change-phone/verify',
     handler: meChangePhoneVerify.POST,
-    preAuth: 'ip-limit',
-    auth: 'session',
+    ...SESSION_ROUTE,
     captcha: true,
-    handlerRateLimit: true,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'GET',
     path: '/api/dash/users/me/preferences',
     handler: mePreferences.GET,
-    preAuth: 'ip-limit',
-    auth: 'session',
+    ...SESSION_ROUTE,
     captcha: false,
-    handlerRateLimit: true,
     body: 'none',
-    response: 'envelope',
   },
   {
     method: 'PUT',
     path: '/api/dash/users/me/preferences',
     handler: mePreferences.PUT,
-    preAuth: 'ip-limit',
-    auth: 'session',
+    ...SESSION_ROUTE,
     captcha: false,
-    handlerRateLimit: true,
     body: 'json',
-    response: 'envelope',
   },
 
-  // ---- dashboard: users ---------------------------------------------------
   {
     method: 'GET',
     path: '/api/dash/users',
     handler: dashUsers.GET,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
     query: dataTableQuery(dashUsers.USERS_FILTER_COLUMNS),
   },
   {
     method: 'POST',
     path: '/api/dash/users',
     handler: dashUsers.POST,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'GET',
     path: '/api/dash/users/:id',
     handler: dashUsersId.GET,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
   },
   {
     method: 'PUT',
     path: '/api/dash/users/:id',
     handler: dashUsersId.PUT,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'DELETE',
     path: '/api/dash/users/:id',
     handler: dashUsersId.DELETE,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
   },
   {
     method: 'GET',
     path: '/api/dash/users/:id/sessions',
     handler: dashUsersIdSessions.GET,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
     query: [
       {
         name: 'limit',
@@ -514,50 +429,34 @@ export const ROUTES: readonly RouteDefinition[] = [
     method: 'POST',
     path: '/api/dash/auth/reauth',
     handler: dashAuthReauth.POST,
-    preAuth: 'ip-limit',
-    auth: 'session',
+    ...SESSION_ROUTE,
     captcha: false,
-    handlerRateLimit: true,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/dash/users/:id/two-factor/reset',
     handler: dashUsersIdTwoFactor.POST,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
   },
   // The only DELETE with a body: it takes the session ids to revoke.
   {
     method: 'DELETE',
     path: '/api/dash/users/:id/sessions',
     handler: dashUsersIdSessions.DELETE,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
 
-  // ---- dashboard: media library -------------------------------------------
   // Folders and files are addressed by id, never by path: a folder path would
   // need a `/` inside a path parameter, which `:param` cannot carry.
   {
     method: 'GET',
     path: '/api/dash/media',
     handler: dashMedia.GET,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
     query: [
       {
         name: 'folder',
@@ -571,7 +470,7 @@ export const ROUTES: readonly RouteDefinition[] = [
         required: false,
         description:
           '`folder` (default) lists one folder with its breadcrumbs and subfolders; `all` searches every library file and, when `search` is given, folder names; `unfiled` lists active files in no folder that no record references, which are deleted `retentionDays` after they were first found unfiled unless moved into a folder.',
-        enum: dashMedia.MEDIA_SCOPES,
+        enum: MEDIA_SCOPES,
       },
       ...dataTableQuery(dashMedia.MEDIA_FILTER_COLUMNS),
     ],
@@ -580,12 +479,8 @@ export const ROUTES: readonly RouteDefinition[] = [
     method: 'POST',
     path: '/api/dash/media/files',
     handler: dashMediaFiles.POST,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'multipart',
-    response: 'envelope',
     // Read from the query, not the form: it is checked before the multipart
     // body is parsed.
     query: [
@@ -603,103 +498,67 @@ export const ROUTES: readonly RouteDefinition[] = [
     method: 'PUT',
     path: '/api/dash/media/files',
     handler: dashMediaFiles.PUT,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'DELETE',
     path: '/api/dash/media/files',
     handler: dashMediaFiles.DELETE,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
     timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
   },
   {
     method: 'GET',
     path: '/api/dash/media/files/:id',
     handler: dashMediaFilesId.GET,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
   },
   {
     method: 'PUT',
     path: '/api/dash/media/files/:id',
     handler: dashMediaFilesId.PUT,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'POST',
     path: '/api/dash/media/files/:id/publish',
     handler: dashMediaFilesIdPublish.POST,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
     timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
   },
   {
     method: 'POST',
     path: '/api/dash/media/files/:id/unpublish',
     handler: dashMediaFilesIdUnpublish.POST,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
     timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
   },
   {
     method: 'POST',
     path: '/api/dash/media/folders',
     handler: dashMediaFolders.POST,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'PUT',
     path: '/api/dash/media/folders/:id',
     handler: dashMediaFoldersId.PUT,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'json',
-    response: 'envelope',
   },
   {
     method: 'DELETE',
     path: '/api/dash/media/folders/:id',
     handler: dashMediaFoldersId.DELETE,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'none',
-    response: 'envelope',
     timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
     query: [
       {
@@ -711,24 +570,15 @@ export const ROUTES: readonly RouteDefinition[] = [
     ],
   },
 
-  // ---- upload -------------------------------------------------------------
-  // A `multipart` route whose body is read lazily — the handler authorises the
-  // caller and runs its own per-user limiter before calling `readFormData()`.
-  //
-  // `ip-limit`, like every other authenticated surface: the handler performs a
-  // session lookup and a permissions read, so unauthenticated traffic must be
-  // bounded before it can force either. Its own limiter is keyed per user, which
-  // by definition cannot bound a caller that has no session yet.
+  // The body is read lazily: the handler authorises the caller and runs its
+  // per-user limiter before `readFormData()`. `ip-limit` still, because a
+  // per-user limiter cannot bound a caller that has no session yet.
   {
     method: 'POST',
     path: '/api/upload/file',
     handler: uploadFile.POST,
-    preAuth: 'ip-limit',
-    auth: 'permission',
-    captcha: false,
-    handlerRateLimit: true,
+    ...PERMISSION_ROUTE,
     body: 'multipart',
-    response: 'envelope',
     // Required, and read from the query rather than the form because the
     // permission check on it has to run before the multipart body is parsed.
     query: [
@@ -752,7 +602,6 @@ export const ROUTES: readonly RouteDefinition[] = [
     timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
   },
 
-  // ---- operations ---------------------------------------------------------
   // `preAuth: 'none'` and no handler limiter, and neither is an omission: the
   // handler refuses every request without `x-maintenance-token` before it
   // touches a store, and a per-IP limiter would answer 503 to the container's
@@ -779,7 +628,6 @@ export const ROUTES: readonly RouteDefinition[] = [
     ],
   },
 
-  // ---- dev-only -----------------------------------------------------------
   // Present in the table, ABSENT from `REGISTERED_ROUTES` outside development —
   // see `toRegisteredRoutes`. It stays here so the registration scanner can see
   // its handler and so `bun run build` publishes the same filtered document
@@ -796,12 +644,10 @@ export const ROUTES: readonly RouteDefinition[] = [
     response: 'envelope',
   },
 
-  // ---- contract ------------------------------------------------------------
-  // In the table, not registered separately on the framework instance. A route
-  // outside the table is invisible to everything the table drives: it got no
-  // 405 boundary, no trailing-slash redirect and no route-aware OPTIONS, and it
-  // would not have appeared in its own document. `ROUTES` is referenced lazily
-  // inside the handler, which runs long after this array is built.
+  // In the table rather than registered on the framework instance: a route
+  // outside it gets no 405 boundary, trailing-slash redirect or route-aware
+  // OPTIONS, and is absent from its own document. `ROUTES` is read lazily
+  // inside the handler, long after this array is built.
   {
     method: 'GET',
     path: '/openapi.json',
@@ -830,7 +676,7 @@ export const REGISTERED_ROUTES = toRegisteredRoutes(ROUTES);
  * rather than a set of routes.
  *
  * The reachable surface is exact in both dimensions — path AND method — from the
- * same table `lib/auth.ts` enforces and `lib/http/openapi.ts` publishes. Not the
+ * same table `lib/auth/index.ts` enforces and `lib/http/openapi.ts` publishes. Not the
  * whole prefix and not one method set for all of it: Better Auth 404s every path
  * outside the list and every method a path does not declare, so anything broader
  * made the 405 boundary claim operations the handler itself rejects.

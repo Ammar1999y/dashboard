@@ -12,7 +12,7 @@
  */
 /* eslint-disable unicorn/no-process-exit -- this fixture IS a process entry
    point: its stdout and exit code are the assertion. */
-import { startSchedule } from '@/lib/schedule';
+import { startSchedule } from '@/lib/maintenance/schedule';
 
 const mode = process.argv[2] === 'timeout' ? 'timeout' : 'drain';
 const JOB_MS = mode === 'timeout' ? 5000 : 300;

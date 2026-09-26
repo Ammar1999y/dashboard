@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
 
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@/utils/api-messages';
+import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@app/shared/api-messages';
 
 const state = { origin: '' };
 const guardedPath = '/api/health/storage?deep=1';
@@ -41,7 +41,7 @@ describe('Host-independent route extraction', () => {
   // handlers (200 from the health route, 401 from a dash route) while matching
   // no path-prefix edge rule and writing the crafted path into
   // `audit_logs.api_path`. The measured case was
-  // `POST /zz/api/internal/sqlite-sweep`; that route is gone (`lib/schedule.ts`),
+  // `POST /zz/api/internal/sqlite-sweep`; that route is gone (`lib/maintenance/schedule.ts`),
   // so the same shape is driven through the routes that remain.
   test.each([
     ['x', '/qq/api/health/storage', 'GET'],

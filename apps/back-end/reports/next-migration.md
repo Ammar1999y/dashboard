@@ -99,6 +99,7 @@ naming, and logic are exactly as they exist in the file right now.
 import type { Handler, HandlerInput, HandlerOutput } from '../contract';
 
 import { NextResponse } from 'next/server';
+
 import { getClientIp } from '@/lib/audit';
 import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
 
@@ -359,6 +360,7 @@ that doesn't fit the plain shape):
 
 ```ts
 import { toNextJsHandler } from 'better-auth/next-js';
+
 import { auth } from '@/lib/auth';
 
 export const { GET, POST } = toNextJsHandler(auth.handler);

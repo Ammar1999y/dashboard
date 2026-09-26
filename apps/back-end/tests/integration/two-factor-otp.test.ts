@@ -26,11 +26,12 @@ import {
   verifications,
   verificationSessions,
 } from '@/db/schema';
-import { TWO_FACTOR_ALLOWED_ATTEMPTS } from '@/lib/auth/two-factor-challenge';
-import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { hashOtpCode } from '@/utils/otp';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { TWO_FACTOR_ALLOWED_ATTEMPTS } from '@/lib/auth/two-factor/challenge';
+import { PUBLIC_ORIGIN } from '@/lib/env';
+import { hashOtpCode } from '@/lib/otp/hash';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';

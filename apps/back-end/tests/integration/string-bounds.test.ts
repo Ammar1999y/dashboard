@@ -29,15 +29,16 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { db } from '@/db';
 import { roles } from '@/db/schema';
 import * as z from 'zod';
-import { generateUuidV7 } from '@/lib/id';
 
-import { createUserSchema } from '@/utils/validation/auth';
+import { createUserSchema } from '@app/shared/validation/auth';
 import {
   EMAIL_MAX,
   NAME_MAX,
   ROLE_DESCRIPTION_MAX,
   ROLE_NAME_MAX,
-} from '@/utils/validation/constants';
+} from '@app/shared/validation/constants';
+
+import { generateUuidV7 } from '@/lib/id';
 
 import { resetTables } from '../helpers/database';
 

@@ -23,6 +23,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
+
 import { SECURITY_HEADERS } from '@/lib/http/security-headers';
 
 import { baseHeaders } from '../helpers/session';

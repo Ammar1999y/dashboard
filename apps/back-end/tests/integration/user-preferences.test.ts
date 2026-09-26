@@ -5,17 +5,17 @@
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { SignedInSession } from '../helpers/session';
-import type { StoredPreferences } from '@/utils/validation/preferences';
+import type { StoredPreferences } from '@app/shared/validation/preferences';
 
 import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
+import { getConstraintName } from '@/db/errors';
 import { userPreferences } from '@/db/schema';
-import { getConstraintName } from '@/utils';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { DEFAULT_PREFERENCES } from '@/utils/validation/preferences';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { DEFAULT_PREFERENCES } from '@app/shared/validation/preferences';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';
@@ -108,7 +108,8 @@ describe('writing', () => {
   test('a valid document round-trips through the column', async () => {
     const written = await writePreferences(owner(), CHOSEN);
     expect(written.status).toBe(HTTP_STATUS.OK);
-    expect(written.body.data.preferences).toEqual(CHOSEN);
+    // Only what the server produced: the client already holds the document.
+    expect(Object.keys(written.body.data)).toEqual(['updatedAt']);
 
     const { body } = await readPreferences(owner());
     expect(body.data.preferences).toEqual(CHOSEN);

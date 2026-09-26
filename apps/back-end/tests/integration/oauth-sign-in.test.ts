@@ -13,18 +13,19 @@ import {
   users,
 } from '@/db/schema';
 import { ROUTES } from '@/routes';
+
+import { REQUIRE_EMAIL_VERIFICATION } from '@app/shared/config';
+
 import { auth } from '@/lib/auth';
-import { hasAdminReauth } from '@/lib/auth/admin-reauth';
+import { hasAdminReauth } from '@/lib/auth/reauth/window';
 import {
   revokeOtherSessions,
   revokePendingProofs,
   unlinkGoogle,
-} from '@/lib/auth/rotation';
+} from '@/lib/auth/session/rotation';
 import { PUBLIC_ORIGIN } from '@/lib/env';
-import { openApiDocument } from '@/lib/http/openapi';
+import { openApiDocument } from '@/lib/http/openapi/document';
 import { toPublishedManifest } from '@/lib/http/route-manifest';
-
-import { REQUIRE_EMAIL_VERIFICATION } from '@/utils/config';
 
 import { resetTables } from '../helpers/database';
 import { startGoogle } from '../helpers/google';
@@ -510,7 +511,7 @@ describe('Google sign-in through the routed OAuth exchange', () => {
       ]);
       expect(
         responses.map((response) => response.status).toSorted((a, b) => a - b)
-      ).toEqual(different ? [200, 401] : [200, 200]);
+      ).toEqual([200, different ? 401 : 200]);
       const after = await userState(owner.userId);
       expect(
         after.accounts.filter((account) => account.providerId === 'google')

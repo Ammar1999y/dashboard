@@ -1,0 +1,22 @@
+# Workspace-wide settings. `[test]` lives in each workspace: bunfig is resolved
+# from the working directory and not inherited, so `bun test` inside
+# `apps/back-end` reads that workspace's file and never this one.
+
+# Bun runs the tooling too; see the same key in `apps/back-end/bunfig.toml`.
+[run]
+bun = true
+
+[install]
+# The flat `node_modules` layout the applications were written against. They
+# import packages reached only through their dependencies (better-auth's
+# internals among them), which Bun's isolated default would refuse.
+linker = "hoisted"
+# The install-side half of the release-age policy that `renovate.json` applies
+# through `security:minimumReleaseAgeNpm`: three days, in seconds, so a
+# compromised release has time to be caught before `bun add` or `bun update`
+# pulls it. Renovate exempts security fixes; here an urgent patch inside the
+# window is installed with `--minimum-release-age=0`, deliberately and once.
+minimumReleaseAge = 259200
+# Bun's runtime and its types are pinned together by `packageManager`, and the
+# window would only block the matching pair landing on the same day.
+minimumReleaseAgeExcludes = ["bun", "@types/bun", "bun-types"]

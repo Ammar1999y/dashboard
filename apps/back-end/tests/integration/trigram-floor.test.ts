@@ -3,7 +3,7 @@
  *
  * The predicate approximates pg_trgm's `ISWORDCHR`, which is
  * `t_isalpha || t_isdigit` under the SERVER's ctype — so the class in
- * `lib/data-table/parsers.ts` is a statement about the deployment's C library,
+ * `@app/shared/data-table/parsers` is a statement about the deployment's C library,
  * not about Unicode. It is not restated here: it is MEASURED, by building a GIN
  * trigram index over a scratch table and reading how many rows the bitmap index
  * scan returns for each term. A pattern with no usable trigram makes GIN return
@@ -21,13 +21,15 @@
  *   choice the class makes deliberately.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { SearchAnchor } from '@/lib/data-table/parsers';
+import type { SearchAnchor } from '@app/shared/data-table/parsers';
 
 import { sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
+
+import { isTrigramIndexable } from '@app/shared/data-table/parsers';
+
 import { escapeLike } from '@/lib/data-table/filter-columns';
-import { isTrigramIndexable } from '@/lib/data-table/parsers';
 
 import { assertHarnessDatabase } from '../helpers/database';
 

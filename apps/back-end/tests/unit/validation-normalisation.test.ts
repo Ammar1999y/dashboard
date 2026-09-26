@@ -22,12 +22,12 @@ import { describe, expect, test } from 'bun:test';
 
 import * as z from 'zod';
 
-import * as authSchemas from '@/utils/validation/auth';
-import * as mediaSchemas from '@/utils/validation/media';
-import * as otpSchemas from '@/utils/validation/otp';
-import * as permissionSchemas from '@/utils/validation/permissions';
-import * as ruleSchemas from '@/utils/validation/rules';
-import * as twoFactorSchemas from '@/utils/validation/two-factor';
+import * as authSchemas from '@app/shared/validation/auth';
+import * as mediaSchemas from '@app/shared/validation/media';
+import * as otpSchemas from '@app/shared/validation/otp';
+import * as permissionSchemas from '@app/shared/validation/permissions';
+import * as ruleSchemas from '@app/shared/validation/rules';
+import * as twoFactorSchemas from '@app/shared/validation/two-factor';
 
 const MODULES = {
   auth: authSchemas,

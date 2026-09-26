@@ -16,17 +16,16 @@
  * after the object is already gone. The result is lost bytes with a dangling
  * reference, and nothing in the request path can detect it.
  *
- * Driver-agnostic on purpose: `scripts/migrate.ts` runs this over its own
- * `bun:sql` client, before any application module exists, and the integration
- * tier runs it over Drizzle. One definition, two callers.
+ * Driver-agnostic, with no runtime `@/` import: `scripts/migrate.ts` imports it
+ * by relative path and runs it over its own `bun:sql` client, and the
+ * integration tier runs it over Drizzle.
  */
+
 /** Runs one parameterless catalog statement and returns its rows. */
-export type CatalogQuery = (
-  statement: string
-) => Promise<Record<string, unknown>[]>;
+type CatalogQuery = (statement: string) => Promise<Record<string, unknown>[]>;
 
 /** `table.column` for every registered `files` reference. */
-export type RegisteredColumns = ReadonlySet<string>;
+type RegisteredColumns = ReadonlySet<string>;
 
 interface ForeignKey {
   table: string;

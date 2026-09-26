@@ -14,14 +14,14 @@
 import { describe, expect, test } from 'bun:test';
 import type {
   EnrolledMethod,
-  EnrollmentState,
+  EnrolmentState as EnrollmentState,
   OfferedOption,
-} from '@/lib/auth/two-factor-challenge';
-import type { OtpChannel, TwoFactorMethod } from '@/utils/validation/enums';
+} from '@/lib/auth/two-factor/methods';
+import type { OtpChannel, TwoFactorMethod } from '@app/shared/validation/enums';
 
-import { defaultOption, offeredMethods } from '@/lib/auth/two-factor-challenge';
+import { ENABLED_TWO_FACTOR_METHODS } from '@app/shared/validation/two-factor';
 
-import { ENABLED_TWO_FACTOR_METHODS } from '@/utils/validation/two-factor';
+import { defaultOption, offeredMethods } from '@/lib/auth/two-factor/methods';
 
 /** Everything capable, so a case only has to say what it takes away. */
 const CAPABLE: EnrollmentState['capability'] = {

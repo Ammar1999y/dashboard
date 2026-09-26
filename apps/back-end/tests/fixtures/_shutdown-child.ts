@@ -2,6 +2,7 @@
    point: its exit code is the assertion. */
 import { app } from '@/app';
 import { closeDatabase } from '@/db';
+
 import { closeCacheStore } from '@/lib/cache';
 import { closeRateLimitStore } from '@/lib/rate-limit/store';
 import { stopServerGracefully } from '@/lib/shutdown';

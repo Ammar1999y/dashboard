@@ -21,9 +21,13 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
+
 import { UPLOAD_PURPOSES } from '@/lib/media/policy';
 import { referrerContractViolations } from '@/lib/media/referrer-contract';
-import { registeredFileColumns, USAGE_SOURCES } from '@/lib/media/usages';
+import {
+  registeredFileColumns,
+  USAGE_SOURCES,
+} from '@/lib/media/usage-sources';
 
 import { resetTables } from '../helpers/database';
 

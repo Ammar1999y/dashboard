@@ -5,7 +5,7 @@
  * Neither had an assertion before this file, and the gap is structural rather
  * than accidental: `tests/integration/upload-auth-gate.test.ts` uploads a benign
  * `<svg><rect/></svg>` precisely *because* SVG is exempt from the magic-byte
- * check (`lib/r2/upload-helper.ts:99`), so the one fixture that reaches the
+ * check (`lib/media/image/process.ts:99`), so the one fixture that reaches the
  * pipeline is the one fixture that exercises neither guard.
  *
  * Why the SVG half is a security test and not a formatting test: the sanitised
@@ -32,28 +32,9 @@
 import { describe, expect, spyOn, test } from 'bun:test';
 import zlib from 'node:zlib';
 
-import { uploadMsg } from '@/app/api/upload/file/messages';
 import { JSDOM } from 'jsdom';
-import {
-  admitUpload,
-  DOCUMENT_BYTE_BUDGET_MIB,
-  DOCUMENT_REQUEST_UNIT,
-  UPLOAD_MEGAPIXEL_BUDGET,
-  UPLOAD_REQUEST_UNIT,
-} from '@/lib/media/upload';
-import {
-  MAX_ICC_PROFILE_BYTES,
-  measureEncodeCost,
-  optimizeImage,
-} from '@/lib/r2/optimize-image';
-import {
-  ALLOWED_IMAGE_TYPES,
-  isAllowedImageType,
-  validateMagicBytes,
-  validateSvgUpload,
-} from '@/lib/r2/upload-helper';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
 import {
   ANIMATION_ELEMENTS,
   DANGEROUS_ATTRIBUTES,
@@ -62,18 +43,41 @@ import {
   safeDecodeURI,
   SVG_MAX_ELEMENTS,
   SVG_MAX_RENDERED_NODES,
-} from '@/utils/images/config';
-import { iccProfileChunk, rasterDimensions } from '@/utils/images/raster-bytes';
-import { imageToRgba } from '@/utils/images/rgba';
-import { sanitizeSvgServer, svgOptimizerServer } from '@/utils/images/server';
-import { sanitizeSvg } from '@/utils/images/svg-optimizer';
+} from '@app/shared/images/config';
+import {
+  iccProfileChunk,
+  rasterDimensions,
+} from '@app/shared/images/raster-bytes';
+import { sanitizeSvg } from '@app/shared/images/svg-optimizer';
 import {
   MAX_DOCUMENT_SIZE_MB,
   MAX_IMAGE_EDGE,
   MAX_IMAGE_PIXELS,
   MAX_IMAGE_SIZE,
   SERVER_MAX_IMAGE_SIZE,
-} from '@/utils/validation/constants';
+} from '@app/shared/validation/constants';
+
+import {
+  MAX_ICC_PROFILE_BYTES,
+  measureEncodeCost,
+  optimizeImage,
+} from '@/lib/media/image/optimize';
+import {
+  ALLOWED_IMAGE_TYPES,
+  isAllowedImageType,
+  validateMagicBytes,
+  validateSvgUpload,
+} from '@/lib/media/image/process';
+import { imageToRgba } from '@/lib/media/image/rgba';
+import { sanitizeSvgServer, svgOptimizerServer } from '@/lib/media/image/svg';
+import { uploadMsg } from '@/lib/media/messages';
+import {
+  admitUpload,
+  DOCUMENT_BYTE_BUDGET_MIB,
+  DOCUMENT_REQUEST_UNIT,
+  UPLOAD_MEGAPIXEL_BUDGET,
+  UPLOAD_REQUEST_UNIT,
+} from '@/lib/media/upload';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const XLINK_NS = 'http://www.w3.org/1999/xlink';
@@ -376,11 +380,9 @@ describe('the structural gates on an SVG', () => {
   });
 
   test('sanitizeSvg fails closed when no DOMParser is supplied', () => {
-    // Bun has no global `DOMParser`, and `sanitizeSvg`'s parser argument is
-    // optional. `utils/validation/rules.ts:246` (`SVGIconSchema`) calls it with
-    // no parser — on the server that path therefore rejects every SVG, valid or
-    // not. Recorded here because "fails closed" is the safe direction and the
-    // caller is not otherwise covered.
+    // Bun has no global `DOMParser` and the parser argument is optional, so a
+    // server caller that omits it has every SVG rejected, valid or not. Server
+    // code must go through `sanitizeSvgServer`.
     expect(typeof DOMParser).toBe('undefined');
 
     const result = sanitizeSvg(svg('<rect width="8" height="8"/>'));
@@ -1835,7 +1837,7 @@ describe('validateMagicBytes — the animated-PNG branch', () => {
 
 describe('the encoder shape the blurhash decoder depends on', () => {
   /**
-   * `utils/images/rgba.ts` is not a general PNG decoder. It reads exactly what
+   * `lib/media/image/rgba.ts` is not a general PNG decoder. It reads exactly what
    * `Bun.Image(...).png({ compressionLevel: 0 })` emits — 8-bit,
    * non-interlaced, colour type 0/2/4/6 — because everything it decodes comes
    * from that encoder. A runtime change to any of those is what would silently

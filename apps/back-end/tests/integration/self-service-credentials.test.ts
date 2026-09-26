@@ -38,7 +38,7 @@
  * **Where the code comes from, and why not the database.** The brief said to
  * read the OTP out of `verification_codes`. That column does not hold one:
  * `hashOtpCode` stores an `o1:<keyId>:<mac>` HMAC envelope
- * (`lib/auth/otp-hash.ts`), so the row is not invertible. The plaintext exists
+ * (`lib/otp/hash.ts`), so the row is not invertible. The plaintext exists
  * in exactly one place a test can reach — the message that was delivered — so
  * `sentMail()` is the seam, and reading it there also proves the send path
  * reached delivery at all and addressed it correctly.
@@ -70,8 +70,6 @@ import type { SignedInSession } from '../helpers/session';
 import { and, eq } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { otpMsg } from '@/app/api/auth/otp/messages';
-import { userMsg } from '@/app/api/dash/users/messages';
 import { db } from '@/db';
 import {
   accounts,
@@ -80,7 +78,6 @@ import {
   users,
   verificationSessions,
 } from '@/db/schema';
-import { generateUuidV7 } from '@/lib/id';
 
 import {
   HTTP_STATUS,
@@ -88,13 +85,17 @@ import {
   MSG_INVALID_INPUT,
   MSG_LOGIN_REQUIRED,
   MSG_PASSWORD_COMPROMISED,
-} from '@/utils/api-messages';
-import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@/utils/config';
-import { PASSWORD_MAX } from '@/utils/validation/constants';
+} from '@app/shared/api-messages';
+import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@app/shared/config';
+import { PASSWORD_MAX } from '@app/shared/validation/constants';
 import {
   EMAIL_OTP_AVAILABLE,
   PHONE_OTP_AVAILABLE,
-} from '@/utils/validation/otp';
+} from '@app/shared/validation/otp';
+
+import { otpMsg } from '@/lib/auth/messages';
+import { generateUuidV7 } from '@/lib/id';
+import { userMsg } from '@/lib/users/messages';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
@@ -113,7 +114,7 @@ import { resetSqliteStores } from '../helpers/sqlite';
  * What a stored credential actually looks like: `p1:<pepperId>:$argon2id$…`.
  *
  * Three assertions in this file used `toStartWith('$argon2id$')` and failed —
- * correctly, because that is NOT the stored format. `lib/auth/password.ts`
+ * correctly, because that is NOT the stored format. `lib/auth/password/hash.ts`
  * wraps the PHC string in a peppered envelope (`HASH_ENVELOPE_VERSION`, the
  * pepper id, then the hash), and `parsePasswordHash` rejects anything else. The
  * bare-prefix form would have passed only if the pepper had been silently
@@ -688,7 +689,7 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
  * `PASSWORD_MAX` has to be ONE bound, and two validators measure it.
  *
  * `passwordSchema` is a Zod string maximum, which Zod counts in code points; the
- * early guard in `lib/auth.ts` runs ahead of it on the Better Auth paths and is
+ * early guard in `lib/auth/index.ts` runs ahead of it on the Better Auth paths and is
  * the only thing a password reaching `/sign-in/email` meets first. An astral
  * character is one code point and two UTF-16 units, so it is the only input that
  * can tell the two rules apart — and a disagreement here is not a validation

@@ -14,7 +14,7 @@
  * from the environment: the point is to ask before the environment changes.
  *
  * ⚠️ Everything imported here has to be free of load-time environment reads, or
- * that is not true. `utils/validation/enums.ts` exists for it: importing the two
+ * that is not true. `@app/shared/validation/enums` exists for it: importing the two
  * runtime modules instead made the preflight print `twoFactor.disabled` before
  * examining anything, and made a malformed CURRENT value throw — which is
  * exactly the state an operator runs this to get out of.
@@ -23,18 +23,18 @@
  *   bun scripts/check-two-factor-rollout.ts totp,otp sms
  *
  * Exit code 1 when anyone would be stranded. The intersection here MUST mirror
- * `offeredMethods` in `lib/auth/two-factor-challenge.ts`; it is expressed in SQL
+ * `offeredMethods` in `lib/auth/two-factor/methods.ts`; it is expressed in SQL
  * because it has to run against a database this process does not otherwise open.
  */
-import { SQL } from 'bun';
-
-import { PHONE_ENABLED } from '../utils/config';
+import { PHONE_ENABLED } from '@app/shared/config';
 import {
   isPhoneChannel,
   OTP_CHANNELS,
   TWO_FACTOR_METHODS,
-} from '../utils/validation/enums';
-import { parseEnumList } from '../utils/validation/env-list';
+} from '@app/shared/validation/enums';
+import { parseEnumList } from '@app/shared/validation/env-list';
+
+import { connectPreflightDatabase } from './preflight-database';
 
 const [methodsArg, channelsArg] = process.argv.slice(2);
 if (!methodsArg)
@@ -42,8 +42,7 @@ if (!methodsArg)
     'usage: bun scripts/check-two-factor-rollout.ts <methods> [otp-channels]'
   );
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error('DATABASE_URL is not set');
+const sql = connectPreflightDatabase();
 
 /**
  * ⚠️ The RUNTIME's parser and the runtime's lists, never a copy of either. A
@@ -92,7 +91,6 @@ interface StrandedRow {
   enrolled: string | null;
 }
 
-const sql = new SQL(databaseUrl, { max: 1, connectionTimeout: 10 });
 try {
   // `usable` is the intersection, per user: the method is in the proposed list,
   // the capability behind it exists, and for `otp` the channel is in the
@@ -151,7 +149,8 @@ try {
         proposedOtpChannels: channels,
         ...(droppedChannels.length > 0 && {
           ignoredOtpChannels: droppedChannels,
-          ignoredBecause: 'PHONE_NUMBER_MODE is disabled in utils/config.ts',
+          ignoredBecause:
+            'PHONE_NUMBER_MODE is disabled in packages/shared/src/config.ts',
         }),
         accountsWithTwoFactor: enabled?.total ?? 0,
         strandedAccounts: stranded.length,

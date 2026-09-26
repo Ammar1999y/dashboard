@@ -1,5 +1,6 @@
-import { sanitizeForLog } from '@/utils';
-import { rateLimit } from '@/lib/rate-limit';
+import { rateLimit } from '@/lib/rate-limit/fixed-window';
+
+import { sanitizeForLog } from '@/utils/log';
 
 const ZONE_ID = process.env.CLOUDFLARE_ZONE_ID;
 const TOKEN = process.env.CLOUDFLARE_CACHE_PURGE_TOKEN;
@@ -16,30 +17,24 @@ const ATTEMPTS = 2;
  * The wall clock ONE call may spend, however many batches it was handed.
  *
  * Worst case per batch is `DEADLINE_MS * ATTEMPTS`, and a recursive folder
- * delete can hand this seven batches (`FOLDER_RECURSIVE_DELETE_MAX` / 30) —
- * 140 seconds against a 60-second connection ceiling, so the client lost the
- * answer while the destructive half of the operation went on running. A batch
- * not STARTED before this passes is reported in `failed`, which every caller
- * already treats as "the row keeps its `deleting` marker"; `sweepFiles` retries
- * it. A healthy purge answers in well under a second per batch and never
- * reaches this.
+ * delete hands this up to `FOLDER_RECURSIVE_DELETE_MAX / PURGE_BATCH_SIZE`
+ * batches, which must not outlast the route's connection ceiling. A batch not
+ * STARTED before this passes is reported in `failed`, which every caller treats
+ * as "the row keeps its `deleting` marker"; `sweepFiles` retries it.
  */
 const TOTAL_BUDGET_MS = 25_000;
 
 /**
  * Deployment-wide ceiling on outbound Cloudflare API calls.
  *
- * Cloudflare's limit is 1200 requests per five minutes PER USER, and exceeding
- * it blocks EVERY API call from that token — not only purges — for the next
- * five minutes
- * (`developers.cloudflare.com/fundamentals/api/reference/limits`). Nothing else
- * bounds this: one recursive folder delete is up to seven calls (fourteen with
- * retries) and the media routes admit many such requests per minute per user,
- * so a handful of authenticated users could spend the account's whole API
- * allowance and leave later privacy deletions with live edge copies.
+ * Cloudflare's per-user API limit, once exceeded, blocks EVERY call from that
+ * token — not only purges — for the rest of its window
+ * (`developers.cloudflare.com/fundamentals/api/reference/limits`), so a handful
+ * of users issuing recursive deletes could spend the whole allowance and leave
+ * later privacy deletions with live edge copies. Set below the provider ceiling
+ * so an operator's own token use still fits.
  *
- * Below the provider ceiling so an operator's own dashboard and token use still
- * fit. Refusal is not an error here: the URLs go into `failed` like any other
+ * Refusal is not an error here: the URLs go into `failed` like any other
  * unconfirmed batch. Fail-OPEN when the limiter store is unreachable — a stale
  * edge copy of deleted content is the worse outcome, and the provider's own 429
  * is the backstop.
@@ -65,7 +60,7 @@ async function reserveApiCall(): Promise<boolean> {
   return success;
 }
 
-export interface PurgeOutcome {
+interface PurgeOutcome {
   /** URLs handed to the API, after batching. 0 when unconfigured. */
   attempted: number;
   /** URLs in batches the API acknowledged. */
@@ -105,7 +100,7 @@ async function purgeBatch(urls: readonly string[]): Promise<boolean> {
       }
     } catch (error) {
       if (attempt === ATTEMPTS) {
-        // Class only: the error text can carry the request URL, which carries
+        // Class only: the error text can carry the request URL, and with it
         // the zone id.
         console.error(
           sanitizeForLog({

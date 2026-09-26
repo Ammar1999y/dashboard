@@ -17,11 +17,12 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
 import { ROUTES } from '@/routes';
+
+import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@app/shared/api-messages';
+
 import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
 import { PRE_AUTH_LIMIT } from '@/lib/http/pre-auth';
 import { getRateLimitStore } from '@/lib/rate-limit/store';
-
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@/utils/api-messages';
 
 import { egressCallsTo } from '../helpers/egress';
 import { baseHeaders } from '../helpers/session';

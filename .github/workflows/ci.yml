@@ -1,0 +1,311 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    # Workspace steps run inside `apps/back-end`; install, lockfile and dedupe
+    # steps run at the repository root, where the one `bun.lock` lives.
+    defaults:
+      run:
+        working-directory: apps/back-end
+    env:
+      NODE_ENV: development
+      PUBLIC_URL: http://localhost:3000
+      NEXT_PUBLIC_ENABLED_OTP_CHANNELS: email
+      NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+      TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
+      DATABASE_URL: postgres://ci:ci@db.example.com/ci?sslmode=require
+      BETTER_AUTH_SECRET: ci-placeholder-better-auth-secret-000000
+      SQLITE_DIR: /tmp/ci-sqlite
+      PASSWORD_PEPPER_ACTIVE_ID: ci
+      PASSWORD_PEPPER_KEYRING: '{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
+      OTP_HMAC_ACTIVE_ID: ci
+      OTP_HMAC_KEYRING: '{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No bun-version: the action reads package.json's `packageManager` field,
+      # so the version lives in exactly one place and Renovate bumps it there.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Assert the lockfile is present
+        # On the pinned Bun, `--frozen-lockfile` installs from `package.json`
+        # and exits 0 when no lockfile exists at all, so a checkout or ignore
+        # mistake removes the supply-chain anchor without failing anything.
+        working-directory: ${{ github.workspace }}
+        run: test -f bun.lock
+      - working-directory: ${{ github.workspace }}
+        run: bun install --frozen-lockfile
+      - name: Typecheck and lint
+        run: bun run lint
+      - name: Format check
+        run: bun run format:check
+      - name: Shared package typecheck, lint and format
+        # `@app/shared` is type-checked again inside each app's program, but
+        # only its own run lints it and applies the stricter tsconfig on its own.
+        working-directory: packages/shared
+        run: bun run lint && bun run format:check
+      - name: Root files lint and format
+        # The guard script, hooks, workflows and manifests live above every
+        # workspace; without this step nothing would check them.
+        working-directory: ${{ github.workspace }}
+        run: bun run lint:root && bun run format:check:root
+      - name: Dependency specifier parity
+        # One `bun.lock` still resolves two specifiers to two copies, and the
+        # dedupe check further down reports only the collapsible ones.
+        working-directory: ${{ github.workspace }}
+        run: bun run check:deps
+      - name: Build
+        # Generates the OpenAPI artefact from the production-filtered route
+        # table. It is here rather than only in the deploy because a route table
+        # inconsistent with its request schemas throws only under that filter —
+        # which made the endpoint 500 in production while every development
+        # check passed.
+        run: bun run build
+      - name: Unit tests
+        # The cheap tier: no database, no port. `bun run test` is
+        # `bun tests/helpers/run.ts unit`, which runs `bun test --isolate
+        # tests/unit`.
+        #
+        # It used to be `bun test scripts/probe/local`, and that was a silent
+        # hole: `bun test <path>` treats its arguments as filename FILTERS, so a
+        # test file outside that directory was skipped and the run still exited
+        # 0. `bunfig.toml`'s `[test] root` and
+        # `tests/unit/harness-layout.test.ts` close it from both ends — the
+        # latter fails if any file under `tests/` is in no tier.
+        run: bun run test
+      - name: Schema drift
+        # Migration generation is manual, and nothing else here notices that it
+        # was skipped: a CHECK constraint, column width, FK action or enum label
+        # raised in `db/schema.ts` alone typechecks and lints, and the test
+        # template is migrated from `db/drizzle/` rather than from the schema —
+        # so it enforces the OLD rule, exactly as a deployed database will.
+        # Needs no service container: `drizzle-kit generate` never connects.
+        run: bun run check:schema-drift
+      - name: Unreachable files and unregistered handlers
+        # This scanner checks handler registration; Knip below covers files under
+        # `tests/`, which this import graph treats as entry points.
+        run: bun scripts/find-unused-files.ts
+      - name: Unused files, exports and types
+        run: bun run find:unused-files
+      - name: Collapsible duplicate dependencies
+        # What Bun checks, and not more: duplicates whose ranges OVERLAP, so
+        # one version could serve both. A lockfile carrying two incompatible
+        # majors of one package passes this and is not what it reports on.
+        working-directory: ${{ github.workspace }}
+        run: bun dedupe --check
+      - name: Boot smoke test
+        # Replaces `next build`. A Bun server has no build artefact, so this is
+        # what forces the module graph to evaluate — lib/env.server.ts throws at
+        # load on a missing var, and the SQLite stores open lazily. It boots the
+        # real server and asserts readiness, headers, routing and the maintenance
+        # guard.
+        #
+        # No PostgreSQL or network access is required — but that is now a
+        # property of the driver rather than a free consequence of it. The old
+        # `neon-http` client was a `fetch` wrapper that could not connect until
+        # a query ran. `bun:sql` is a real TCP pool, and this step works only
+        # because Bun opens it LAZILY: `new SQL(url)` against the unreachable
+        # host below constructs without a connection attempt, and `close()` on a
+        # never-connected pool resolves immediately. If a startup ping or an
+        # eager connect is ever added, this step fails and the failure will look
+        # like a network problem. See reports/test-strategy.md §7.4e.
+        #
+        # These are throwaway values shaped to pass validation only — no real
+        # credential belongs in this file.
+        run: bun run smoke
+      - name: Boot smoke test (production posture)
+        # The same boot, in the posture that is actually deployed — because the
+        # job above runs as `development` and therefore evaluated a DIFFERENT
+        # module graph from production's. Measured: `development` emits 11
+        # security headers and production emits 12, and the whole of
+        # `betterAuthSecretError` plus the production branch of `assertEnv` were
+        # unreachable from any whole-process check. A regression that drops HSTS
+        # or breaks a production-only module-load path passed every gate and
+        # would be found by the first production request.
+        #
+        # `smoke` asserts `SECURITY_HEADERS` by value and the child inherits this
+        # environment, so the 12-header set — HSTS included — is what gets
+        # compared here. `http://localhost` is exempt from the https-origin rule
+        # (`lib/env.ts`), which is what lets this run on a runner at all.
+        #
+        # A boot on the runner, NOT a run against production: `DATABASE_URL`
+        # stays unreachable, `SQLITE_DIR` is a throwaway temp path, and every
+        # credential below is shaped to pass validation and nothing else. The
+        # boot-refuses-a-missing-variable cases live in
+        # `tests/process/startup-gates.test.ts`, which asserts exit codes rather
+        # than needing a step per variable.
+        env:
+          NODE_ENV: production
+          SMOKE_PORT: 3998
+          SQLITE_DIR: /tmp/ci-sqlite-production
+          BETTER_AUTH_SECRET: ci-placeholder-better-auth-secret-000000
+          SMTP_USER: ci@example.invalid
+          SMTP_PASS: ci-placeholder
+          R2_ACCOUNT_ID: ci-placeholder
+          R2_ACCESS_KEY_ID: ci-placeholder
+          R2_SECRET_ACCESS_KEY: ci-placeholder
+          # Two distinct names, and the public URL beside them: production
+          # refuses one bucket serving both visibilities, and refuses a public
+          # bucket it cannot address. Collapsing these back to one placeholder
+          # fails the boot, which is the point of running it in this posture.
+          R2_PUBLIC_BUCKET: ci-placeholder-public
+          R2_PRIVATE_BUCKET: ci-placeholder-private
+          R2_PUBLIC_URL: https://ci-placeholder.example.invalid
+        run: bun run smoke
+
+  # The database-backed tiers. Their own job because they need a PostgreSQL
+  # service container, and because keeping them out of `verify` means a lint
+  # failure and an integration failure are two separate signals.
+  #
+  # Nothing here is preserved between runs: the container dies with the runner
+  # VM, so a destructive suite has nothing to damage and needs no cleanup logic.
+  # The harness still provisions and drops its own databases, because the same
+  # command has to be safe on a developer machine where that is not true.
+  tests:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/back-end
+    services:
+      postgres:
+        # Pinned to the VPS's major. A different major trades one fidelity gap
+        # for a smaller one rather than closing it.
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Bun honors TZ for tests. +03 keeps timestamp decoding bugs visible.
+      TZ: Asia/Riyadh
+      REQUIRE_NON_UTC_TZ: '1'
+      # The harness reads this and derives every database name from it; the
+      # database component is ignored (it connects to `postgres` for DDL).
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # `DATABASE_URL` is overwritten per worker by the preload. It is set here
+      # only because `lib/env.server.ts` requires it to be PRESENT at module
+      # load, and the value must not be the one the tests end up using.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      PUBLIC_URL: http://localhost:3000
+      # Email is the enabled OTP channel for this tier; the integration suite
+      # (tests/integration/self-service-credentials.test.ts) asserts phone OTP
+      # channels are disabled to test rejection and refusal boundaries.
+      NEXT_PUBLIC_ENABLED_OTP_CHANNELS: email
+      NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+      TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
+      BETTER_AUTH_SECRET: ci-placeholder-better-auth-secret-000000
+      SQLITE_DIR: /tmp/ci-sqlite
+      SQLITE_MAINTENANCE_TOKEN: ci-maintenance-token-0123456789012
+      PASSWORD_PEPPER_ACTIVE_ID: ci
+      PASSWORD_PEPPER_KEYRING: '{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
+      OTP_HMAC_ACTIVE_ID: ci
+      OTP_HMAC_KEYRING: '{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # Its own step, deliberately. `package.json` was once edited without
+      # regenerating `bun.lock`, so every CI install would have failed while
+      # every local command passed, because `node_modules` was already
+      # populated. No test that assumes an installed tree can detect that.
+      - name: Assert the lockfile is present
+        # On the pinned Bun, `--frozen-lockfile` installs from `package.json`
+        # and exits 0 when no lockfile exists at all, so a checkout or ignore
+        # mistake removes the supply-chain anchor without failing anything.
+        working-directory: ${{ github.workspace }}
+        run: test -f bun.lock
+      - working-directory: ${{ github.workspace }}
+        run: bun install --frozen-lockfile
+      - name: Integration tests
+        # The harness migration builds the test template, so no separate migrate
+        # step can drift from the schema used by the tests.
+        #
+        # The reporters come from `bunfig.toml`, which wins over
+        # `--coverage-reporter` on the command line (measured). Without the gate
+        # in the next step these flags computed coverage and threw it away, which
+        # reads as a gate and gates nothing.
+        run: >-
+          bun run test:integration --
+          --reporter=junit --reporter-outfile=reports/junit-integration.xml
+          --coverage
+      - name: Publish integration test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-integration
+          path: apps/back-end/reports/junit-integration.xml
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Process tests
+        # Its own step for the same reason `bun run smoke` is separate: every
+        # test here owns a real socket, a real child process or a real signal.
+        # It is also the tier where the win32-skipped cases actually run.
+        run: bun run test:process
+      - name: Configuration matrix tests
+        # The ONLY tier that boots the disabled, TOTP-only, backup-only,
+        # passkey-only, OTP-email and OTP-WhatsApp configurations, each of which
+        # is decided at MODULE LOAD and therefore unreachable from any other
+        # tier. Nothing ran it: `test:all` did, and no gate calls `test:all`.
+        run: bun run test:matrix
+      - name: Coverage floor
+        # LAST in this job, and that placement is the point: a coverage dip is a
+        # ratchet signal rather than a correctness failure, and sitting ahead of
+        # the process tier it skipped `tests/process/startup-gates.test.ts` — the
+        # fail-closed admission gates — over a percentage.
+        #
+        # Bun's own `coverageThreshold` cannot express this floor: it is applied
+        # per FILE on 1.4.X, and this repository has files a given tier
+        # legitimately never loads. See the script's header.
+        run: bun scripts/check-coverage.ts
+
+  workflows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+      - name: Lint workflows
+        run: actionlint
+
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Assert the lockfile is present
+        # On the pinned Bun, `--frozen-lockfile` installs from `package.json`
+        # and exits 0 when no lockfile exists at all, so a checkout or ignore
+        # mistake removes the supply-chain anchor without failing anything.
+        run: test -f bun.lock
+      - run: bun install --frozen-lockfile
+      - name: Dependency audit
+        # One lockfile for the whole workspace, so this audits every app.
+        working-directory: apps/back-end
+        # `scripts/audit.ts`, not `bun audit`: it retries a registry 5xx and
+        # passes a real advisory straight through. Same command as the pre-push
+        # gate.
+        run: bun run audit

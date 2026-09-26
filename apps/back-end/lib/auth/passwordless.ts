@@ -2,50 +2,46 @@ import type { BetterAuthPlugin } from 'better-auth';
 
 import { and, eq, isNull } from 'drizzle-orm';
 
-import { ensureMinDelay, otpMsg } from '@/app/api/auth/otp/messages';
 import { db } from '@/db';
-import { userContactColumn } from '@/db/queries';
 import { users } from '@/db/schema';
-import { sanitizeForLog } from '@/utils';
-import { APIError, createAuthEndpoint } from 'better-auth/api';
+import { createAuthEndpoint } from 'better-auth/api';
 import { expireCookie, setSessionCookie } from 'better-auth/cookies';
 import * as z from 'zod';
 
+import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@app/shared/api-messages';
+import { PASSWORDLESS_ENABLED } from '@app/shared/config';
+import { CustomError } from '@app/shared/error-class';
+import { contactKindOf } from '@app/shared/validation/enums';
 import {
-  CUSTOM_AUTH_CODE,
-  HTTP_STATUS,
-  MSG_PAGE_NOT_FOUND,
-} from '@/utils/api-messages';
-import { PASSWORDLESS_ENABLED } from '@/utils/config';
-import { CustomError } from '@/utils/error-class';
-import {
-  collapseProofThrottle,
-  markContactVerified,
-  processOtpVerify,
-} from '@/utils/otp';
-import { OTP_ENABLED, passwordlessVerifySchema } from '@/utils/validation/otp';
+  OTP_ENABLED,
+  passwordlessVerifySchema,
+} from '@app/shared/validation/otp';
 
-import { auditLog } from '../audit';
-import { verifyTurnstileRequest } from '../captcha';
-import { enforceOtpVerifyQuota, otpContactKind } from '../rate-limit';
-import { toAuthApiError } from './api-error';
-import { authAuditMeta } from './audit-meta';
-import { submittedRememberMe } from './remember-me';
-import { recordAbandonedSession } from './session-audit';
+import { auditLog } from '@/lib/audit';
+import { verifyTurnstileRequest } from '@/lib/captcha';
+import { markContactVerified } from '@/lib/otp/contact';
+import { collapseProofThrottle } from '@/lib/otp/throttle';
+import { processOtpVerify } from '@/lib/otp/verify';
+import { enforceOtpVerifyQuota } from '@/lib/rate-limit';
+import { userContactColumn } from '@/lib/users/contact';
+
+import { sanitizeForLog } from '@/utils/log';
+
+import { authAuditMeta, requestHeaders } from './context';
+import { asAuthError, authError } from './errors';
+import { ensureMinDelay, otpMsg } from './messages';
+import { recordAbandonedSession } from './session/audit';
+import { submittedRememberMe } from './session/remember-me';
 import {
   issueTwoFactorChallenge,
   twoFactorUnavailableError,
-} from './two-factor-challenge';
+} from './two-factor/challenge';
 
 /**
- * Passwordless login (step 2 / verify). Reuses the project's hardened OTP
- * system (processOtpVerify, dual counters, captcha, audit, privacy collapse)
- * and delegates ONLY the session issuance to Better Auth, so there is a single
- * OTP system. Implemented as a Better Auth plugin endpoint because issuing a
- * signed session cookie + running the session-creation databaseHook can only be
- * done from inside a Better Auth endpoint context.
- *
- * Path: POST /api/auth/passwordless/verify  (also added to ALLOWED_PATHS).
+ * Passwordless login (verify step). Reuses the project's OTP system and
+ * delegates ONLY the session issuance to Better Auth: a signed session cookie
+ * and the session-creation database hook exist only inside a Better Auth
+ * endpoint context. Listed in `allowed-paths.ts`.
  */
 export const passwordless = () =>
   ({
@@ -84,46 +80,30 @@ export const passwordless = () =>
           },
         },
         async (ctx) => {
-          const headers: Headers =
-            (ctx as { headers?: Headers }).headers ??
-            (ctx as { request?: Request }).request?.headers ??
-            new Headers();
+          const headers = requestHeaders(ctx);
 
-          // Floor the response time across the account-revealing paths below
-          // (unknown identifier returns fast with no Argon2id; a real verify runs
-          // it) so timing can't be used to enumerate accounts.
-          const start = Date.now();
           // Only failures that could reveal whether an account exists pay the
-          // timing floor; universally-reachable rejections (captcha, malformed
+          // timing floor; universally reachable rejections (captcha, malformed
           // input, throttling) may return fast.
+          const start = Date.now();
           let accountRevealing = false;
 
           // Every limiter call lives INSIDE this boundary. Outside it, a
           // CustomError (429 throttle, 503 missing-IP / limiter outage) is not
           // an APIError and Better Call turns it into an empty 500.
           try {
-            // Surfaced directly (not account-specific → no enumeration risk).
             // Both gates: the machinery has to exist AND this entry point has to
-            // be switched on. See `PASSWORDLESS_ENABLED`.
+            // be switched on.
             if (!OTP_ENABLED || !PASSWORDLESS_ENABLED)
-              throw new APIError(HTTP_STATUS.NOT_FOUND, {
-                message: MSG_PAGE_NOT_FOUND,
-                code: CUSTOM_AUTH_CODE,
-              });
+              throw authError(HTTP_STATUS.NOT_FOUND, MSG_PAGE_NOT_FOUND);
 
             const captchaOk = await verifyTurnstileRequest(headers);
             if (!captchaOk)
-              throw new APIError(HTTP_STATUS.FORBIDDEN, {
-                message: otpMsg.captchaFailed,
-                code: CUSTOM_AUTH_CODE,
-              });
+              throw authError(HTTP_STATUS.FORBIDDEN, otpMsg.captchaFailed);
 
             const parsed = passwordlessVerifySchema.safeParse(ctx.body);
             if (!parsed.success)
-              throw new APIError(HTTP_STATUS.UNPROCESSABLE, {
-                message: otpMsg.invalidInput,
-                code: CUSTOM_AUTH_CODE,
-              });
+              throw authError(HTTP_STATUS.UNPROCESSABLE, otpMsg.invalidInput);
 
             const { channel, code } = parsed.data;
             const identifier =
@@ -157,8 +137,8 @@ export const passwordless = () =>
 
             const auditMeta = authAuditMeta(ctx, '/passwordless/verify');
 
-            // The OTP to email/phone proves control of that contact, so flip the
-            // matching verified flag too (also satisfies the login gate below).
+            // The code proves control of the contact, so it also satisfies the
+            // verification gate in `session.create.before`.
             await processOtpVerify({
               userId: userData.id,
               userEmail: userData.email,
@@ -180,19 +160,14 @@ export const passwordless = () =>
                   },
                 });
 
-                // The authoritative forensic record, written in the SAME
-                // transaction as the proof consumption (the mutation this
-                // endpoint actually owns). It survives whatever happens next:
-                // if the role/verification gate then rejects the login, the
-                // trail still shows that a valid code was presented and spent.
+                // The authoritative record, in the SAME transaction as the
+                // proof consumption: it survives a gate that then rejects the
+                // login.
                 await auditLog(tx, {
                   userId: userData.id,
                   userEmail: userData.email,
                   action: 'UPDATE',
                   tableName: 'verification_sessions',
-                  // The row this event is actually about. Recording the user
-                  // id under a `verification_sessions` table name made the
-                  // event unjoinable to the proof it describes.
                   recordId: matched.verificationSessionId,
                   oldData: {},
                   newData: {
@@ -204,8 +179,7 @@ export const passwordless = () =>
               },
             });
 
-            // Load the user BEFORE creating the session: a failure here used to
-            // leave an orphaned session row behind with no way to reach it.
+            // Before `createSession`, so a failure here cannot orphan a row.
             const user = await ctx.context.internalAdapter.findUserById(
               userData.id
             );
@@ -215,10 +189,8 @@ export const passwordless = () =>
                 HTTP_STATUS.BAD_REQUEST
               );
 
-            // Issue the session. createSession runs the session.create
-            // databaseHook (active/role/verification gates + permission
-            // metadata), so passwordless logins are gated exactly like password
-            // logins. A gate failure surfaces as its own APIError.
+            // `createSession` runs `session.create.before`, so passwordless
+            // logins pass the same gates as password logins.
             const dontRememberMe = !rememberMe;
             const session = await ctx.context.internalAdapter.createSession(
               userData.id,
@@ -236,17 +208,16 @@ export const passwordless = () =>
             //
             // The contact kind just proved is excluded: a second code to the
             // mailbox this login already read one from proves nothing. When that
-            // leaves nothing to ask for the login is REFUSED, not completed —
-            // this path mints a session outright, so a downgrade here is worth
-            // more to an attacker than the password reset it replaces. The
-            // password route still exists for this population.
+            // leaves nothing to ask, the login is REFUSED, not completed — this
+            // path mints a session outright. The password route still exists
+            // for this population.
             const outcome = await issueTwoFactorChallenge(ctx, {
               userId: userData.id,
               userEmail: userData.email,
               session: { id: session.id, token: session.token },
               firstFactor: 'passwordless',
               rememberMe,
-              excludeContactKind: otpContactKind(channel),
+              excludeContactKind: contactKindOf(channel),
               auditMeta,
             });
             if (outcome.kind !== 'proceed') {
@@ -263,16 +234,10 @@ export const passwordless = () =>
               if (!dontRememberMe)
                 expireCookie(ctx, ctx.context.authCookies.dontRememberToken);
             } catch (cookieError) {
-              // The row exists but its token was never delivered. Leaving it
-              // would put a session the user cannot see or use into their
-              // active-session list, so compensate explicitly.
-              //
-              // `createSession` above already fired `session.create.after`, so a
-              // `loginSuccess` row for this session is committed and CANNOT be
-              // withdrawn — an audit log is append-only. The compensating event
-              // below is what keeps the trail honest: without it the marker
-              // describes a session that no longer exists, which is the exact
-              // invariant centralising the write was meant to restore.
+              // The row exists but its token was never delivered, so it is
+              // deleted. `session.create.after` has already committed a
+              // `loginSuccess` row for it, and an audit log is append-only: the
+              // compensating event is what keeps that marker honest.
               await recordAbandonedSession({
                 userId: userData.id,
                 userEmail: userData.email,
@@ -282,16 +247,9 @@ export const passwordless = () =>
               await ctx.context.internalAdapter
                 .deleteSession(session.token)
                 .catch(() => {
-                  // Fixed fields ONLY — deliberately not the error.
-                  //
-                  // This deletion is parameterised by the session TOKEN, and a
-                  // driver error embeds its bound parameters in the message. So
-                  // the one log written when revocation fails was the one most
-                  // likely to print a token that is still live. `serializeForLog`
-                  // now withholds such messages, but in development it returns
-                  // the raw object, so the safe thing here is to never hand it
-                  // the error at all. `sessionId` is the row's public id, not a
-                  // credential, and is enough to find the orphan.
+                  // Fixed fields ONLY, never the error: this delete is bound to
+                  // the live session TOKEN, and a driver error embeds its bound
+                  // parameters. `sessionId` is public and enough to find the row.
                   console.error(
                     sanitizeForLog({
                       msg: 'passwordless.orphanSessionCleanup.failed',
@@ -303,12 +261,8 @@ export const passwordless = () =>
               throw cookieError;
             }
 
-            // No `loginSuccess` row here any more: `lib/auth.ts`'s
-            // `session.create.after` hook writes exactly one, for every method
-            // that issues a session, and this endpoint's `createSession` above
-            // triggers it. Two writers meant two rows for one login. The channel
-            // this login used is on the in-transaction proof event above, which
-            // is the record that matters.
+            // No `loginSuccess` row here: `session.create.after` in
+            // `lib/auth/index.ts` writes the only one.
             await ensureMinDelay(Date.now() - start);
             return ctx.json({
               success: true,
@@ -322,11 +276,10 @@ export const passwordless = () =>
             // ANONYMOUS endpoint it has to become the same generic 400 an unknown
             // address gets. The pre-lookup limiter 429s above are unmarked and
             // still surface.
-            const e = collapseProofThrottle(caught, otpMsg.invalidOrExpired);
-            if (e instanceof APIError) throw e;
-            if (e instanceof CustomError)
-              throw toAuthApiError(e, otpMsg.invalidOrExpired);
-            throw e;
+            throw asAuthError(
+              collapseProofThrottle(caught, otpMsg.invalidOrExpired),
+              otpMsg.invalidOrExpired
+            );
           }
         }
       ),

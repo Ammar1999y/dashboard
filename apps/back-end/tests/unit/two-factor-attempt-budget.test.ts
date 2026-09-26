@@ -15,12 +15,12 @@
  * outcome` is the case that fails against it.
  */
 import { expect, test } from 'bun:test';
-import type { AuthContext } from '@/lib/auth/two-factor-challenge';
+import type { AuthContext } from '@/lib/auth/context';
 
 import {
   spendChallengeAttempt,
   TWO_FACTOR_ALLOWED_ATTEMPTS,
-} from '@/lib/auth/two-factor-challenge';
+} from '@/lib/auth/two-factor/challenge';
 
 interface StoredValue {
   value: string;

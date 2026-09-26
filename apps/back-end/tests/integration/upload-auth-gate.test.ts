@@ -31,16 +31,16 @@ import type { SignedInSession } from '../helpers/session';
 import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { uploadMsg } from '@/app/api/upload/file/messages';
 import { db } from '@/db';
 import { files, sessions } from '@/db/schema';
-import { mediaMsg } from '@/lib/media/messages';
 
 import {
   HTTP_STATUS,
   MSG_INSUFFICIENT_PERMISSIONS,
   MSG_LOGIN_REQUIRED,
-} from '@/utils/api-messages';
+} from '@app/shared/api-messages';
+
+import { mediaMsg, uploadMsg } from '@/lib/media/messages';
 
 import { resetTables } from '../helpers/database';
 import { storeOps, storeOpsOf } from '../helpers/object-store';
@@ -193,7 +193,7 @@ function failure(message: string) {
  * `processImage` routes it away from `Bun.Image`, so the fixture needs neither a
  * hand-assembled zlib stream nor a copy of the magic-byte table to stay correct.
  * The image pipeline's own assertions — magic bytes, animated WebP, blurhash —
- * belong to the shard that owns `lib/r2/upload-helper.ts`, not to the gate.
+ * belong to the shard that owns `lib/media/image/process.ts`, not to the gate.
  */
 function imageForm(): FormData {
   const svg =

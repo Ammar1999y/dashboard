@@ -24,24 +24,25 @@
 import type {
   DashboardPage,
   PermissionAction,
-} from '@/lib/permissions/constants';
+} from '@app/shared/permissions/constants';
 
 import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
 import { accounts, rolePermissions, roles, users } from '@/db/schema';
-import { hashPassword } from '@/lib/auth/password';
-import { generateUuidV7 } from '@/lib/id';
+
 import {
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,
-} from '@/lib/permissions/constants';
+} from '@app/shared/permissions/constants';
 
 import {
   CREDENTIAL_ISSUER,
   CREDENTIAL_PROVIDER_ID,
-} from '@/utils/api-messages';
+} from '@/lib/auth/credential';
+import { hashPassword } from '@/lib/auth/password/hash';
+import { generateUuidV7 } from '@/lib/id';
 
 import { assertHarnessDatabase } from './database';
 

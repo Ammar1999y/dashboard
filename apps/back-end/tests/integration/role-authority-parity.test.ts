@@ -30,7 +30,7 @@ import type { SeededUser, SignedInSession } from '../helpers/session';
 
 import { app } from '@/app';
 
-import { HTTP_STATUS, MSG_NOT_FOUND } from '@/utils/api-messages';
+import { HTTP_STATUS, MSG_NOT_FOUND } from '@app/shared/api-messages';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, seedUser, signedInUser } from '../helpers/session';

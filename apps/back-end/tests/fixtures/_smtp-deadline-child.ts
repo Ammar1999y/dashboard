@@ -22,6 +22,7 @@
 import type { Socket } from 'bun';
 
 import * as x509 from '@peculiar/x509';
+
 import { sendMailWithDeadline } from '@/lib/smtp';
 
 type Mode =

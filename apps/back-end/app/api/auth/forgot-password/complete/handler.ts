@@ -1,90 +1,88 @@
-import type { RecoveryVerdict } from '@/lib/auth/recovery-second-factor';
+import type { RecoveryVerdict } from '@/lib/auth/recovery/second-factor';
 import type { Handler } from '@/lib/http/contract';
-import type { OtpChannel } from '@/utils/validation/enums';
 
 import { and, eq, isNull } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
+
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import {
+  OTP_ENABLED,
+  recoveryCompleteSchema,
+} from '@app/shared/validation/otp';
+
 import { auditLog, getAuditMeta } from '@/lib/audit';
-import { checkPasswordCompromise } from '@/lib/auth/check-password';
-import { hashPassword } from '@/lib/auth/password';
+import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth/credential';
+import { ensureMinDelay, otpMsg, twoFactorMsg } from '@/lib/auth/messages';
+import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
+import { hashPassword } from '@/lib/auth/password/hash';
 import {
   consumeRecoveryGrant,
   readRecoveryGrant,
   spendRecoveryAttempt,
-} from '@/lib/auth/recovery-grant';
+} from '@/lib/auth/recovery/grant';
 import {
   consumeRecoveryBackupCode,
   verifyRecoveryTotp,
-} from '@/lib/auth/recovery-second-factor';
-import { revokeOtherSessions, revokePendingProofs } from '@/lib/auth/rotation';
+} from '@/lib/auth/recovery/second-factor';
 import {
-  readEnrollmentState,
+  revokeOtherSessions,
+  revokePendingProofs,
+} from '@/lib/auth/session/rotation';
+import { lockUser } from '@/lib/auth/two-factor/enrolment';
+import {
+  readEnrolmentState,
   recoveryOptions,
-} from '@/lib/auth/two-factor-challenge';
-import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
-
-import {
-  CREDENTIAL_PROVIDER_ID,
-  HTTP_STATUS,
-  MSG_PAGE_NOT_FOUND,
-} from '@/utils/api-messages';
+} from '@/lib/auth/two-factor/methods';
+import { readJsonBody } from '@/lib/http/input';
 import {
   apiSuccess,
   handleApiError,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { CustomError } from '@/utils/error-class';
-import { otpGuessWasEvaluated, processOtpVerify } from '@/utils/otp';
-import { OTP_ENABLED, recoveryCompleteSchema } from '@/utils/validation/otp';
-
-import { ensureMinDelay, otpMsg, twoFactorMsg } from '../../otp/messages';
+  requireFeature,
+} from '@/lib/http/response';
+import { otpGuessWasEvaluated, processOtpVerify } from '@/lib/otp/verify';
+import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
 
 /**
- * Forgot-password step 3, and the half that makes the reset a two-possession
+ * Forgot-password step 3, the half that makes the reset a two-possession
  * operation.
  *
- * ⚠️ The grant is NOT sufficient alone. Holding it proves the recovery contact
- * and nothing else; this endpoint writes the password only after a factor from
- * the grant's own issued set — excluding the contact that recovery code arrived
- * on — has been proven in this request. Both the proof and the write happen
- * against the SAME grant, which is consumed in the write's transaction, so a
- * grant cannot be spent twice.
+ * ⚠️ The grant is NOT sufficient alone: it proves the recovery contact and
+ * nothing else. The password is written only after a factor from the grant's
+ * issued set — excluding the contact the recovery code arrived on — is proven
+ * in this request, against the SAME grant, consumed in the write's transaction.
  */
 export const POST: Handler = async (ctx) => {
   const start = Date.now();
   try {
-    if (!OTP_ENABLED)
-      throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    requireFeature(OTP_ENABLED);
 
     await enforceRateLimit({
       scope: 'forgot.complete.ip',
       identifier: ipIdentifier(ctx.headers),
       limit: 30,
-      window: 60,
       failClosed: true,
     });
 
-    const body = requireJsonBody(await ctx.readJson());
-    const parsed = recoveryCompleteSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(otpMsg.invalidInput, HTTP_STATUS.UNPROCESSABLE);
     const {
       grant: grantToken,
       option: requested,
       code: suppliedCode,
       newPassword,
-    } = parsed.data;
+    } = await readJsonBody(ctx, recoveryCompleteSchema, {
+      message: otpMsg.invalidInput,
+    });
 
     const grant = await readRecoveryGrant(grantToken);
     if (!grant)
       throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
 
     // The issued set intersected with CURRENT capability. Narrowing only: a
-    // method enrolled since the grant was minted is not something the holder was
-    // challenged on, and one removed since is no longer a factor at all.
-    const state = await readEnrollmentState(grant.userId);
+    // method enrolled since the grant was minted was never challenged, and one
+    // removed since is no factor at all.
+    const state = await readEnrolmentState(grant.userId);
     const issued = new Set(grant.options);
     const option = recoveryOptions(state, grant.excludeContactKind).find(
       (entry) => issued.has(entry.id) && entry.id === requested
@@ -140,7 +138,7 @@ export const POST: Handler = async (ctx) => {
         await processOtpVerify({
           userId: user.id,
           userEmail: user.email,
-          channel: option.channel as OtpChannel,
+          channel: option.channel,
           purpose: 'two_factor',
           identifier: destination,
           code: suppliedCode,
@@ -149,9 +147,8 @@ export const POST: Handler = async (ctx) => {
         verdict = 'matched';
       }
     } catch (caught) {
-      // The same rule the sign-in challenge follows: only a code that was
-      // COMPARED and lost is a guess. A missing OTP proof row or a fault before
-      // the comparison produced no verdict and is refunded.
+      // The sign-in challenge's rule: only a code COMPARED and lost is a guess.
+      // A missing proof row or a fault before the comparison is refunded.
       await (otpGuessWasEvaluated(caught)
         ? attempt.recordFailure()
         : attempt.restore());
@@ -159,25 +156,21 @@ export const POST: Handler = async (ctx) => {
     }
 
     if (verdict !== 'matched') {
-      // The TOTP and backup-code checks report the same distinction as a
-      // verdict: `rejected` was compared, `unavailable` never got that far.
+      // The same distinction as a verdict: `rejected` was compared,
+      // `unavailable` never got that far.
       await (verdict === 'rejected'
         ? attempt.recordFailure()
         : attempt.restore());
       throw new CustomError(twoFactorMsg.invalidCode, HTTP_STATUS.BAD_REQUEST);
     }
 
-    // One transaction: the grant is spent, the password is written, and every
-    // session, pending proof and trusted device goes with it. Recovery revokes
-    // device trust — the person doing this may not be the account's owner.
+    // One transaction: the grant is spent, the password written, and every
+    // session, pending proof and trusted device goes with it — the person
+    // recovering may not be the account's owner.
     const written = await withTransaction(async (tx) => {
-      // The user row first, then the grant rows: every other writer that
-      // touches this user's `verifications` rows already holds the user lock.
-      await tx
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.id, user.id))
-        .for('update');
+      // The user row before the grant rows: every other writer of this user's
+      // `verifications` rows already holds the user lock.
+      await lockUser(tx, user.id);
 
       if (!(await consumeRecoveryGrant(tx, grantToken, user.id))) return false;
 

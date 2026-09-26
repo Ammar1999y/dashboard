@@ -43,7 +43,7 @@ lib/http/response-policy.ts    the final response policy              — shared
 lib/http/pre-auth.ts           enforcePreAuthIpLimit(meta)            — shared
 lib/http/after-response.ts     the post-response seam                 — shared
 lib/http/security-headers.ts   the header set, as data                — shared
-lib/http/openapi.ts            the contract, from the manifest + Zod  — shared
+lib/http/openapi/              the contract, from the manifest + Zod  — shared
 lib/http/adapters/elysia.ts    ~25 lines: glue only
 lib/http/adapters/hono.ts.disabled   the same shape, for later
 app/api/**/handler.ts          UNCHANGED except the upload's lazy multipart read.
@@ -74,7 +74,7 @@ changed — no caller did.
 inside the handlers. Declaring the same schemas again in Elysia's `t` would
 couple the route table to Elysia and create two sources of truth for the same
 contract. The cost of that decision — no machine-readable contract — has since
-been paid down without reversing it: `lib/http/openapi.ts` generates the
+been paid down without reversing it: `lib/http/openapi/` generates the
 document from the route manifest and the same Zod schemas, using Zod 4's native
 `toJSONSchema`. No plugin, no second schema language.
 
@@ -136,7 +136,7 @@ Everything else is byte-identical. These are not:
 parses it — and so does `/openapi.json`, whose shape the spec fixes. Both went
 onto the `Handler` contract via `apiRaw`, the escape hatch for a body that cannot
 be the envelope. The SQLite sweep no longer has a route at all: it runs in-process
-from `lib/schedule.ts`, so nothing external parses its body.
+from `lib/maintenance/schedule.ts`, so nothing external parses its body.
 
 ## 5. Rolling back to Next.js
 

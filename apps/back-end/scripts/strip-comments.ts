@@ -6,24 +6,13 @@
  * (`'https://x'`) is not a comment, and a quote inside a comment does not open a
  * string. Template literals are tracked too — a `//` inside one is content.
  *
- * **REGEX literals are tracked as well, and that is not a refinement.** Without
- * it, `/it's/` put the scanner into a fake string state that ran to the next
- * apostrophe, so every `//` in between survived as code. Measured over all 236
- * source files, 11 kept an un-stripped comment line and one produced a real
- * comment-derived import edge — `utils/images/svg-optimizer.ts`'s
- * "use sanitizeSvgServer from './server'" was extracted as a specifier — which
- * is precisely the false reachability `find-unused-files.ts` strips comments to
- * prevent. The other consumer is worse: `tests/unit/harness-layout.test.ts`'s
- * ownership detector, which enforces `assertHarnessDatabase()`, missed a
- * synthetic file whose unguarded `db.execute` sat behind such a regex.
+ * REGEX literals are tracked as well, and that is load-bearing: without it
+ * `/it's/` opens a fake string that runs to the next apostrophe, every `//` in
+ * between survives as code, and a comment can become a false import edge for
+ * `find-unused-files.ts` or hide code from `tests/unit/harness-layout.test.ts`.
  *
- * Comment bodies become spaces rather than being deleted, and newlines are kept,
- * so nothing that was on separate lines is joined into a new token and line
- * numbers are preserved for anything that reports them.
- *
- * Its own module because `find-unused-files.ts` needs it and it is the kind of
- * thing a second consumer will want; keeping it inline would guarantee a second
- * copy.
+ * Comment bodies become spaces and newlines are kept, so no tokens are joined
+ * and line numbers survive.
  */
 
 /** One backslash. Named because `'\\'` reads as two at a glance. */
@@ -175,7 +164,7 @@ function skipRegex(source: string, start: number): number {
   let index = start + 1;
   let inClass = false;
   while (index < source.length) {
-    const char = source[index] as string;
+    const char = source.charAt(index);
     if (char === '\n') return start + 1;
     if (char === BACKSLASH) {
       index += 2;
@@ -197,7 +186,7 @@ export function stripComments(source: string): string {
   const state: TokenState = { token: '', previous: '', inIdentifier: false };
 
   while (index < source.length) {
-    const char = source[index] as string;
+    const char = source.charAt(index);
 
     if (quote) {
       out.push(char);

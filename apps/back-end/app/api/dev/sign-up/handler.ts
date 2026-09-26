@@ -1,70 +1,38 @@
-import type { Handler } from '@/lib/http/contract';
-
 import { withTransaction } from '@/db';
 import { accounts, rolePermissions, roles, users } from '@/db/schema';
-import * as z from 'zod';
-import { hashPassword } from '@/lib/auth/password';
+
+import {
+  HTTP_STATUS,
+  MSG_CREATE_ERROR,
+  MSG_CREATED,
+} from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
 import {
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,
-} from '@/lib/permissions/constants';
+} from '@app/shared/permissions/constants';
+import { devSignUpSchema } from '@app/shared/validation/dev';
 
 import {
   CREDENTIAL_ISSUER,
   CREDENTIAL_PROVIDER_ID,
-  HTTP_STATUS,
-  MSG_CREATE_ERROR,
-  MSG_CREATED,
-} from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  handleUserUniqueViolation,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { CustomError } from '@/utils/error-class';
-import { NAME_MAX } from '@/utils/validation/constants';
-import {
-  emailSchema,
-  passwordSchema,
-  zodIssueMessage,
-} from '@/utils/validation/rules';
-
-/** Exported for the OpenAPI document — see the note in the sessions handler. */
-export const devSignUpSchema = z.object({
-  name: z
-    .string()
-    .min(2, 'الاسم مطلوب')
-    .max(NAME_MAX, `الاسم يجب أن لا يتجاوز ${NAME_MAX} حرفاً`),
-  email: emailSchema,
-  password: passwordSchema,
-});
+} from '@/lib/auth/credential';
+import { hashPassword } from '@/lib/auth/password/hash';
+import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
+import { readJsonBody } from '@/lib/http/input';
+import { apiSuccess, withApiErrors } from '@/lib/http/response';
 
 /**
- * No environment gate here, deliberately — the decision moved UP.
- *
- * `toRegisteredRoutes` (`lib/http/route-manifest.ts`) removes every `/api/dev/*`
- * entry from the table `app.ts` registers outside development, so this path is
- * genuinely unrouted there: 404 on every method, no `Allow`, no OPTIONS answer,
- * and this function is never reached. The per-handler `NODE_ENV !==
- * 'development'` check it replaces confirmed the endpoint's existence by status
- * code and by `Allow`, and it was one forgotten or misspelled comparison away
- * from shipping live — which matters, because on the development branch below
- * this mints a `ROLE_SCOPE.SYSTEM` role with every permission of every page from
- * an unauthenticated request.
+ * ⚠️ No environment gate here, deliberately: `toRegisteredRoutes`
+ * (`lib/http/route-manifest.ts`) leaves every `/api/dev/*` entry unregistered
+ * outside development, so this is never reached there. It matters, because
+ * this mints a `ROLE_SCOPE.SYSTEM` role holding every permission from an
+ * unauthenticated request.
  */
-export const POST: Handler = async (ctx) => {
-  try {
-    const body = requireJsonBody(await ctx.readJson());
-
-    const parsed = devSignUpSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(
-        zodIssueMessage(parsed.error),
-        HTTP_STATUS.UNPROCESSABLE
-      );
-
-    const { name, email, password } = parsed.data;
+export const POST = withApiErrors(
+  MSG_CREATE_ERROR,
+  async (ctx) => {
+    const { name, email, password } = await readJsonBody(ctx, devSignUpSchema);
     const hashedPassword = await hashPassword(password);
 
     const newId = await withTransaction(async (tx) => {
@@ -82,11 +50,10 @@ export const POST: Handler = async (ctx) => {
 
       const allPermissions = DEFAULT_PAGE_PERMISSIONS.map((page) => ({
         roleId: systemRole.id,
-        pageName:
-          page.name as (typeof rolePermissions.$inferInsert)['pageName'],
+        pageName: page.name,
         permissions: Object.fromEntries(
           page.availablePermissions.map((action) => [action, true])
-        ) as (typeof rolePermissions.$inferInsert)['permissions'],
+        ),
       }));
 
       await tx.insert(rolePermissions).values(allPermissions);
@@ -104,8 +71,8 @@ export const POST: Handler = async (ctx) => {
       if (!newUser)
         throw new CustomError(MSG_CREATE_ERROR, HTTP_STATUS.INTERNAL_ERROR);
 
-      // See the note on the same insert in app/api/dash/users/handler.ts:
-      // (issuer, accountId) is the pair Better Auth's sign-in lookup matches on.
+      // (issuer, accountId) is the pair Better Auth's sign-in lookup matches
+      // on, as on the users collection POST.
       await tx.insert(accounts).values({
         accountId: newUser.id,
         issuer: CREDENTIAL_ISSUER,
@@ -122,13 +89,6 @@ export const POST: Handler = async (ctx) => {
       data: { id: newId },
       status: HTTP_STATUS.CREATED,
     });
-  } catch (error) {
-    // Shared exact-name resolver, like every other user endpoint: `includes()`
-    // would classify any constraint whose name merely CONTAINS a known one, and
-    // an unrecognized constraint must reach the logged 500 rather than be
-    // reported to the client as a conflict it can fix.
-    const conflict = handleUserUniqueViolation(error);
-    if (conflict) return conflict;
-    return handleApiError(error, MSG_CREATE_ERROR);
-  }
-};
+  },
+  handleUserUniqueViolation
+);

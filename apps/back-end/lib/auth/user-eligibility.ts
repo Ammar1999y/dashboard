@@ -1,11 +1,12 @@
 import type { Tx } from '@/db';
-import type { EntityID } from '@/types';
+import type { EntityID } from '@app/shared/types';
 import type { SQL } from 'drizzle-orm';
 
 import { eq } from 'drizzle-orm';
 
 import { roles, users } from '@/db/schema';
-import { REQUIRE_ROLE_FOR_LOGIN } from '@/lib/permissions/constants';
+
+import { REQUIRE_ROLE_FOR_LOGIN } from '@app/shared/permissions/constants';
 
 export function roleAllowsLogin(
   role: Pick<typeof roles.$inferSelect, 'isActive'> | null | undefined

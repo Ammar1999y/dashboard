@@ -1,10 +1,10 @@
 import type { FilterColumnSpec, FilterColumnSpecs } from './column-specs';
-import type { SearchAnchor } from './parsers';
+import type { SearchAnchor } from '@app/shared/data-table/parsers';
 import type {
   ExtendedColumnFilter,
   FilterOperator,
   JoinOperator,
-} from '@/types/data-table';
+} from '@app/shared/types/data-table';
 import type { SQL, Table } from 'drizzle-orm';
 
 import {
@@ -25,13 +25,21 @@ import {
   notIlike,
   notInArray,
   or,
+  sql,
 } from 'drizzle-orm';
 
-import { isEmpty, isNotEmpty } from '@/db/queries';
-
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { toCalendarDate, zonedDayStart, zonedNextDayStart } from '@/utils/time';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import {
+  isTrigramIndexable,
+  MIN_SEARCH_LENGTH,
+  searchTermLength,
+} from '@app/shared/data-table/parsers';
+import { CustomError } from '@app/shared/error-class';
+import {
+  toCalendarDate,
+  zonedDayStart,
+  zonedNextDayStart,
+} from '@app/shared/time';
 
 import {
   isArrayValueOperator,
@@ -40,11 +48,6 @@ import {
   isSearchOperator,
   operatorAllowedForType,
 } from './column-specs';
-import {
-  isTrigramIndexable,
-  MIN_SEARCH_LENGTH,
-  searchTermLength,
-} from './parsers';
 
 export const MSG_INVALID_FILTER = 'أحد عوامل التصفية غير صالح، أعد ضبط التصفية';
 const MSG_SHORT_SEARCH = `نص البحث في التصفية يجب أن يتضمن ${MIN_SEARCH_LENGTH} أحرف أو أرقام على الأقل`;
@@ -57,10 +60,9 @@ function searchAnchorOf(operator: FilterOperator): SearchAnchor {
 }
 
 /**
- * Reject instead of silently dropping. A dropped filter does not merely
- * "ignore" the client's request — under `and` it broadens the result set and
- * under `or` it narrows it, so the caller is shown data they did not ask for
- * while receiving a 200.
+ * Reject instead of silently dropping. A dropped filter broadens an `and`
+ * result set and narrows an `or` one, so the caller is shown data they did not
+ * ask for while receiving a 200.
  */
 function invalidFilter(message = MSG_INVALID_FILTER): never {
   throw new CustomError(message, HTTP_STATUS.UNPROCESSABLE);
@@ -70,14 +72,29 @@ function invalidFilter(message = MSG_INVALID_FILTER): never {
  * Whether the column can actually hold an empty string, which decides whether
  * `isEmpty` may compare against `''` at all.
  *
- * `select` / `multiSelect` name a value set, not a storage type, and
- * `FilterColumnSpec` now requires that set — a closed set is a PostgreSQL enum
- * in practice and cannot hold `''`, so `isEmpty` on one would generate
- * `enum_column = ''`, a cast error. That leaves `text` as the only string-like
- * type, and the type system rather than a runtime probe is what says so.
+ * `select` / `multiSelect` name a value set, not a storage type, and a closed
+ * set is a PostgreSQL enum in practice: `enum_column = ''` is a cast error.
+ * That leaves `text` as the only string-like type.
  */
 function isStringLike(spec: FilterColumnSpec): boolean {
   return spec.type === 'text';
+}
+
+/**
+ * ⚠️ TEXT COLUMNS ONLY — see `isStringLike`. A bare boolean expression rather
+ * than a `CASE`, because the planner can match only the former against an
+ * index; the parentheses keep it intact under `and`/`or` composition.
+ */
+function isEmpty(column: Column) {
+  return sql<boolean>`(${column} is null or ${column} = '')`;
+}
+
+/**
+ * Its own expression rather than `not(isEmpty(column))`: `IS NOT NULL AND
+ * <> ''` is what an index can be matched against, a negated disjunction is not.
+ */
+function isNotEmpty(column: Column) {
+  return sql<boolean>`(${column} is not null and ${column} <> '')`;
 }
 
 /** Every supplied member of a closed-set filter is one of the set's values. */
@@ -94,11 +111,9 @@ function membersAllowed(
 }
 
 /**
- * Canonical decimal only — the same grammar `positiveInt` enforces on the
- * pagination bounds, for the same reason: bare `Number()` accepts a family of
- * spellings a query string has no business carrying, and two spelling policies
- * in one API is one of them being wrong. `Number('')` is 0, so an empty filter
- * value silently became a filter FOR ZERO; `'0x10'` was 16 and `'1e2'` was 100.
+ * Canonical decimal only — the grammar `positiveInt` enforces on the
+ * pagination bounds. Bare `Number()` accepts spellings a query string has no
+ * business carrying: `Number('')` is 0, `'0x10'` is 16, `'1e2'` is 100.
  *
  * Fractions are allowed where `positiveInt` forbids them: this bounds a numeric
  * COLUMN, which may be `numeric`, not a page index.
@@ -145,11 +160,8 @@ function assertFilterAllowed(
 ): 'apply' | 'skip' {
   if (!operatorAllowedForType(spec.type, filter.operator)) invalidFilter();
 
-  // Before the no-value early return, not after it with the value checks. A
-  // no-value operator used to leave `assertFilterAllowed` above the scan-only
-  // gate, so adding one to `SCAN_ONLY_OPERATORS` would have compiled, read as
-  // enforced, and enforced nothing. The policy is a property of the OPERATOR;
-  // nothing about it depends on there being a value.
+  // Before the no-value early return: the scan-only policy is a property of
+  // the OPERATOR and must hold whether or not it takes a value.
   if (isScanOnlyOperator(filter.operator) && !spec.allowScanOnly)
     invalidFilter();
 
@@ -158,9 +170,8 @@ function assertFilterAllowed(
   const valueIsArray = Array.isArray(filter.value);
   if (isArrayValueOperator(filter.operator) !== valueIsArray) invalidFilter();
 
-  // `isBetween` is a fixed [lower, upper] pair. A third slot used to be read as
-  // far as index 1 and the rest ignored, so `['1','2','3']` answered a question
-  // nobody asked with a 200 instead of reporting the malformed range.
+  // A fixed [lower, upper] pair: a third slot is a malformed range, not one to
+  // truncate.
   if (
     filter.operator === 'isBetween' &&
     (filter.value as string[]).length !== 2
@@ -197,6 +208,10 @@ function assertFilterAllowed(
   return 'apply';
 }
 
+// Every negated form below adds `or(..., isNull(column))`: under SQL
+// three-valued logic `NULL <> x`, `NULL NOT ILIKE …` and `NULL NOT IN (…)` are
+// NULL, not TRUE, so a row with no value would silently fail a predicate that
+// plainly describes it — absent from the rows and from `meta.total`.
 function buildCondition(
   column: Column,
   filter: ExtendedColumnFilter<Table>,
@@ -209,13 +224,6 @@ function buildCondition(
       return ilike(column, `%${escapeLike(value as string)}%`);
     }
     case 'notILike': {
-      // `or(..., isNull)`, matching what `isEmpty` fourteen lines down already
-      // does for the same reason. SQL three-valued logic makes
-      // `NULL NOT ILIKE '%abc%'` evaluate to NULL, not TRUE, so a row with no
-      // value was EXCLUDED from a predicate that plainly describes it — absent
-      // from the list and from `meta.total`, with a 200. Reachable today on
-      // `roles.description`, and inherited by every future nullable text column
-      // because the defect is in the shared operator.
       return or(
         notIlike(column, `%${escapeLike(value as string)}%`),
         isNull(column)
@@ -232,9 +240,6 @@ function buildCondition(
     case 'ne': {
       const negated = filter.operator === 'ne';
 
-      // Same three-valued-logic rule as `notILike` above on every negated form:
-      // `NULL <> x` is NULL, so a row with no value silently fails a predicate
-      // it satisfies.
       if (spec.type === 'boolean') {
         const bool = parseBoolean(value);
         if (bool === null) invalidFilter();
@@ -244,12 +249,6 @@ function buildCondition(
       }
       if (spec.type === 'date') {
         const { start, next } = dayBounds(value);
-        // `NULL < start` and `NULL >= next` are both NULL, so without the
-        // third arm "not on day X" hides every row with no date. Unreachable
-        // while the only registered date columns are the NOT NULL
-        // `createdAt`/`updatedAt`; `users.deleted_at`, `users.locked_until`
-        // and `files.unfiled_at` sit on the same tables and arm it the moment
-        // one is registered.
         return negated
           ? or(lt(column, start), gte(column, next), isNull(column))
           : and(gte(column, start), lt(column, next));
@@ -271,12 +270,6 @@ function buildCondition(
       const values = (value as string[]).filter(Boolean);
       if (values.length === 0) invalidFilter();
 
-      // The same three-valued-logic rule `notILike` and `ne` above already
-      // apply, on the third negated form — which was not swept with them.
-      // `NULL NOT IN ($1)` evaluates to NULL, not TRUE, so "does not contain any
-      // of […]" hid every row with no value from both the rows and `meta.total`,
-      // with a 200. Not reachable while the only registered `boolean` columns
-      // are NOT NULL; a nullable `multiSelect` column arms it.
       const excludeNulls = (condition: SQL) =>
         negated ? or(condition, isNull(column)) : condition;
 
@@ -322,20 +315,11 @@ function buildCondition(
       return compareNumber(column, value, gte);
     }
 
-    // The bounds are ORDERED, not taken positionally.
-    //
-    // Presence was validated and ordering was not — the same class this file
-    // rejects fourteen lines above `buildCondition`, where a third slot is a
-    // 422 because a malformed range "answered a question nobody asked with a
-    // 200 instead of reporting the malformed range". A `createdAt` range of
-    // `["2026-12-31", "2026-01-01"]` generated an unsatisfiable predicate and
-    // returned `200, data: [], total: 0`, so a user who transposed two dates
-    // was told there are no matching records.
-    //
-    // Sorting rather than rejecting, deliberately: the smaller value IS the
-    // start of the range, which is what the user meant, and a half-filled range
-    // is already meaningful — one bound alone bounds one side and leaves the
-    // other open, which is why each `undefined` below is not an error.
+    // The bounds are ORDERED, not taken positionally: the smaller value is the
+    // start of the range whichever slot it arrived in, so a transposed pair is
+    // the range the user meant rather than an unsatisfiable one. One bound alone
+    // bounds its own side and leaves the other open, which is why each
+    // `undefined` below is not an error.
     case 'isBetween': {
       const [rawStart, rawEnd] = value as string[];
 
@@ -355,13 +339,9 @@ function buildCondition(
         );
       }
 
-      // Absent and uncoercible must not collapse into one `null`. They did, and
-      // only the first legitimately means an open-ended side: `isBetween
-      // ["abc","100"]` printed `WHERE col <= $1` with `[100]`, so a client that
-      // expressed a lower bound got a 200 whose rows include everything below it
-      // — strictly broader than the request, with no error. Every sibling
-      // operator (`gt "abc"`, the date branch, `isBetween ["abc","def"]`) already
-      // rejects the same input; this was the one that dropped.
+      // Absent and uncoercible must not collapse into one `null`: only absence
+      // means an open side. An uncoercible bound is a 422, as it is for every
+      // sibling operator; read as absent it would widen the range silently.
       const first = rawStart?.trim()
         ? (safeNumber(rawStart) ?? invalidFilter())
         : null;
@@ -369,20 +349,16 @@ function buildCondition(
         ? (safeNumber(rawEnd) ?? invalidFilter())
         : null;
       if (first === null && second === null) invalidFilter();
-      // Both: the smaller bound is the start, whichever slot it arrived in.
       if (first !== null && second !== null)
         return and(
           gte(column, Math.min(first, second)),
           lte(column, Math.max(first, second))
         );
-      // One: it bounds its own side and leaves the other open.
       return first === null ? lte(column, second) : gte(column, first);
     }
 
-    // `isEmpty` compares against '' and casts to text, which PostgreSQL
-    // rejects outright on boolean/timestamp/numeric columns ("invalid input
-    // syntax for type boolean: \"\"") — a 500, not a filter. For those types
-    // the only meaningful emptiness is NULL.
+    // `''` is rejected outright on boolean/timestamp/numeric columns ("invalid
+    // input syntax for type boolean"), so for those the only emptiness is NULL.
     case 'isEmpty': {
       return isStringLike(spec) ? isEmpty(column) : isNull(column);
     }
@@ -422,14 +398,10 @@ export function filterColumns<T extends Table>({
 
   const conditions: SQL[] = [];
   for (const filter of filters) {
-    // `Object.hasOwn`, not `specs[id]`: the column id is attacker-controlled,
-    // and a plain object resolves inherited members. `constructor`,
-    // `toString`, `hasOwnProperty` and `__proto__` all return a truthy value,
-    // slip past the unknown-column check, and then blow up further down as a
-    // 500 — the exact defect this validator exists to remove.
-    // The `Object.hasOwn` guard is what makes the computed read safe, and the
-    // note above explains why a bare `in` would not be.
-    // eslint-disable-next-line unicorn/no-unsafe-property-key -- guarded above
+    // `Object.hasOwn`, not `specs[id]` or `in`: the id is attacker-controlled,
+    // and inherited members (`constructor`, `toString`, `__proto__`) would slip
+    // past the unknown-column check and fail further down as a 500.
+    // eslint-disable-next-line unicorn/no-unsafe-property-key -- guarded by Object.hasOwn
     const spec = Object.hasOwn(specs, filter.id) ? specs[filter.id] : undefined;
     if (!spec) invalidFilter();
 
@@ -457,19 +429,13 @@ export function filterColumns<T extends Table>({
 }
 
 /**
- * The column named by a CLIENT-SUPPLIED key, or `null`.
- *
- * `string`, not `keyof T`: the key arrives from a query string, so every caller
- * had to widen it back with an assertion that claimed knowledge nobody had.
+ * The column named by a CLIENT-SUPPLIED key, or `null`. `string`, not
+ * `keyof T`: the key arrives from a query string.
  *
  * Reads `getTableColumns(table)` rather than the table object, so a key naming
  * one of Drizzle's own table members cannot resolve to something that is not a
- * column; `Object.hasOwn` is still required because that record carries
- * `Object.prototype`, and `constructor` / `toString` would otherwise resolve.
- * `is(value, Column)` is Drizzle's own guard — it proves the shape instead of
- * probing for a `dataType` property and asserting through `unknown`, which a
- * plain `{ dataType: 'x' }` from a future non-column table member would have
- * satisfied.
+ * column; `Object.hasOwn` because that record still carries `Object.prototype`;
+ * `is(value, Column)` because it proves the shape rather than probing for one.
  */
 export function getColumn(table: Table, columnKey: string): Column | null {
   const columns: Record<string, unknown> = getTableColumns(table);

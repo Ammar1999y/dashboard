@@ -13,12 +13,13 @@
  * later test in the process means.
  */
 import type { Tx } from '@/db';
-import type { UsageSource } from '@/lib/media/usages';
+import type { UsageSource } from '@/lib/media/usage-sources';
 
 import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
-import { USAGE_SOURCES } from '@/lib/media/usages';
+
+import { USAGE_SOURCES } from '@/lib/media/usage-sources';
 
 /** The referrer shape every owner table in a project must use. */
 const REFERRER_TABLE = '_media_test_refs';

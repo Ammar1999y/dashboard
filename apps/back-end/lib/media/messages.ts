@@ -1,17 +1,25 @@
 import type { DetectResult } from './detect-result';
 
 import {
+  MSG_DELETE_ERROR,
+  MSG_DELETED,
+  MSG_FETCH_ERROR,
+  MSG_FETCHED,
+  MSG_UPDATE_ERROR,
+  MSG_UPDATED,
+} from '@app/shared/api-messages';
+import {
   FOLDER_MAX_CHILDREN,
   FOLDER_MAX_DEPTH,
   FOLDER_RECURSIVE_DELETE_MAX,
-} from '@/utils/validation/constants';
+} from '@app/shared/validation/constants';
 
 export const mediaMsg = {
-  fetched: 'تم جلب البيانات بنجاح',
+  fetched: MSG_FETCHED,
   uploaded: 'تم رفع الملف بنجاح',
   folderCreated: 'تم إنشاء المجلد بنجاح',
-  updated: 'تم التحديث بنجاح',
-  deleted: 'تم الحذف بنجاح',
+  updated: MSG_UPDATED,
+  deleted: MSG_DELETED,
   published: 'تم نشر الملف',
   unpublished: 'تم إلغاء نشر الملف',
 
@@ -60,7 +68,39 @@ export const mediaMsg = {
 
   uploadFailed: 'حدث خطأ أثناء رفع الملف',
   storeFailed: 'حدث خطأ في التخزين، حاول مرة أخرى بعد قليل',
-  fetchError: 'حدث خطأ في جلب البيانات',
-  updateError: 'حدث خطأ في التحديث',
-  deleteError: 'حدث خطأ في الحذف',
+  fetchError: MSG_FETCH_ERROR,
+  updateError: MSG_UPDATE_ERROR,
+  deleteError: MSG_DELETE_ERROR,
+};
+
+/** The multipart form and the image pipeline. */
+export const uploadMsg = {
+  noFiles: 'لم يتم إرسال ملفات',
+  noValidFiles: 'لم يتم إرسال ملفات صالحة',
+  maxFiles: (max: number) => `الحد الأقصى ${max} ملفات في الطلب الواحد`,
+  unexpectedFormField: (name: string) => `حقل غير متوقع في الطلب: ${name}`,
+  fileTooLarge: (name: string, maxMB: number) =>
+    `حجم الملف ${name} كبير جداً. الحد الأقصى: ${maxMB}MB`,
+  contentMismatch: (name: string) =>
+    `محتوى الملف ${name} لا يتطابق مع نوعه المعلن`,
+  animatedNotAllowed: (name: string) =>
+    `الملف ${name} صورة متحركة، والصور المتحركة غير مدعومة`,
+  uploadFailed: 'حدث خطأ في رفع الملفات',
+  invalidMimeType: (type: string) =>
+    `نوع الملف غير مسموح: ${type}. الأنواع المسموحة: PNG, WebP, SVG`,
+  invalidSvg: 'ملف SVG غير صالح',
+  svgOptimizeFailed:
+    'حدثت مشكله اثناء ضغط الايقونه، اعد المحاولة او قم برفع الايقونه مره اخرى',
+  invalidInlineRaster:
+    'الصورة المضمّنة داخل ملف SVG غير صالحة. الأنواع المسموحة داخل SVG: PNG, WebP',
+  tooManyPixels: (maxMegapixels: number) =>
+    `أبعاد الصورة كبيرة جداً. الحد الأقصى ${maxMegapixels} ميجابكسل`,
+  edgeTooLong: (maxEdge: number) =>
+    `أحد أبعاد الصورة كبير جداً. الحد الأقصى لكل بُعد ${maxEdge} بكسل`,
+  undecodable: 'تعذّرت قراءة الصورة. الملف تالف أو غير مكتمل',
+  targetUnreachable: 'تعذّر ضغط الصورة إلى الحجم المطلوب',
+  iccProfileTooLarge: (maxKib: number) =>
+    `ملف تعريف الألوان (ICC) المرفق بالصورة كبير جداً. الحد الأقصى ${maxKib}KB`,
+  processingBusy: 'خدمة معالجة الصور مشغولة حالياً. حاول لاحقاً',
+  invalidResource: 'المورد المطلوب رفع الصورة له غير صالح',
 };

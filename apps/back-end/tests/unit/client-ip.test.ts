@@ -1,7 +1,7 @@
 /**
  * How a request's client IP is resolved, and how it is turned into a rate-limit
- * key: `getClientIp`/`TRUSTED_IP_HEADERS` in `lib/audit.ts`, and `ipBucket` via
- * `ipIdentifier` in `lib/rate-limit/api.ts`.
+ * key: `getClientIp`/`TRUSTED_IP_HEADERS` in `lib/audit/index.ts`, and `ipBucket` via
+ * `ipIdentifier` in `lib/rate-limit/index.ts`.
  *
  * Neither had an assertion anywhere under `tests/` before this file, and between
  * them they decide three things: whether a forged header can choose whose budget
@@ -16,7 +16,7 @@
  * Two behaviours below are PINNED DEFECTS, named as such at their tests: the
  * bucket keys the SPELLING of an address rather than the address, so one host
  * can hold several budgets. They are pinned rather than left failing because the
- * fix belongs to `lib/rate-limit/api.ts`, which this file does not own.
+ * fix belongs to `lib/rate-limit/index.ts`, which this file does not own.
  */
 import {
   afterAll,
@@ -28,11 +28,12 @@ import {
   test,
 } from 'bun:test';
 
-import { getClientIp, TRUSTED_IP_HEADERS } from '@/lib/audit';
-import { ipIdentifier, userIdentifier } from '@/lib/rate-limit/api';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
+import { getClientIp } from '@/lib/audit';
+import { TRUSTED_IP_HEADERS } from '@/lib/audit/constants';
+import { ipIdentifier, userIdentifier } from '@/lib/rate-limit';
 
 const TRUSTED_HEADER = TRUSTED_IP_HEADERS[0];
 
@@ -112,7 +113,7 @@ describe('only the edge header is trusted', () => {
 
   test('every header the trusted list names is actually read', () => {
     // `getClientIp` reads `TRUSTED_IP_HEADERS[0]` and nothing else, while
-    // `lib/auth.ts` hands Better Auth the WHOLE array as `ipAddressHeaders`. A
+    // `lib/auth/index.ts` hands Better Auth the WHOLE array as `ipAddressHeaders`. A
     // second entry would be honoured there and ignored here, so one request
     // would carry two different client IPs — this limiter's and the session
     // row's. One entry today; this fails the moment that stops being true.
@@ -439,7 +440,7 @@ describe('pinned defect: the bucket keys the SPELLING, not the address', () => {
   // Not exploitable while ingress is Cloudflare-only — Cloudflare emits the
   // canonical lowercase compressed form — so this shares its exposure with the
   // TODO(proxy-trust) already tracked on the header itself. Pinned, not fixed:
-  // `lib/rate-limit/api.ts` is not this file's to change.
+  // `lib/rate-limit/index.ts` is not this file's to change.
   const CANONICAL = '2001:db8:1:2::5';
 
   test('the canonical spelling buckets correctly', () => {

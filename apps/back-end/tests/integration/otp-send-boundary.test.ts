@@ -24,7 +24,7 @@
  *  - the undelivered code row is REMOVED, so nothing that was never sent stays
  *    verifiable
  *
- * `refundFailedDelivery` (`utils/otp.ts`) is what does it, and the property that
+ * `refundFailedDelivery` (`lib/otp/send.ts`) is what does it, and the property that
  * has to keep holding is narrower than "a refund happens": it is keyed on the
  * exact `(sessionId, hashedCode)` pair, so a failure arriving after the user has
  * already requested a NEWER code must refund nothing and delete nothing. Delivery
@@ -53,11 +53,12 @@ import {
   verificationCodes,
   verificationSessions,
 } from '@/db/schema';
-import { generateUuidV7 } from '@/lib/id';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
-import { processOtpSend } from '@/utils/otp';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+
+import { generateUuidV7 } from '@/lib/id';
+import { processOtpSend } from '@/lib/otp/send';
 
 import { resetTables } from '../helpers/database';
 import { failNextMail, sentMail, settleDelivery } from '../helpers/mailbox';

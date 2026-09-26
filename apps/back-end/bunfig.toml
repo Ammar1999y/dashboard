@@ -1,83 +1,37 @@
 # `bun test` configuration.
 #
-# `root` closes a SELECTION hole: `bun test <path>` treats its positional
-# arguments as filename FILTERS, not paths, so a test file outside the filter is
-# skipped silently and the run still exits 0 — a whole tier can sit unexecuted
-# while every script reports success. With `root`, a bare `bun test` walks every
-# tier and `tests/helpers/run.ts` selects one deliberately.
-#
-# Use `bun run test`, `test:integration` or `test:process`, not a bare
-# `bun test`: a bare invocation walks all three tiers without the provisioning
-# and safety guards the runner supplies. `assertHarnessDatabase()` still stops
-# the database tiers writing anywhere real, but the result is a refusal rather
-# than a test result.
+# `root` closes a SELECTION hole: `bun test <path>` treats its arguments as
+# filename FILTERS, so a file outside the filter is skipped silently and the run
+# still exits 0. Use `bun run test`, `test:integration` or `test:process`:
+# `tests/helpers/run.ts` selects one tier with its provisioning and guards,
+# while a bare `bun test` walks every tier without them.
 [test]
 root = "tests"
 
-# Every tier gets this one. The per-tier preload that provisions PostgreSQL is
-# added on the command line by `tests/helpers/run.ts`, because bunfig is resolved
-# once per working directory and cannot vary by tier — and a unit test must not
-# pay for a database connection.
+# Every tier gets this one. The PostgreSQL preload is added per tier on the
+# command line by `tests/helpers/run.ts`, because bunfig cannot vary by tier and
+# a unit test must not pay for a database connection.
 preload = ["./tests/helpers/preload-base.ts"]
 
 coverageSkipTestFiles = true
-# `lcov` as well as `text`, and it has to be declared HERE: measured on Bun,
-# this key WINS over `--coverage-reporter` on the command line, so
-# `["text"]` alone silently produced no lcov file however CI invoked the run.
-# `text` is for a human reading the log; `lcov` is what the aggregate gate reads.
+# `lcov` must be declared HERE: this key wins over `--coverage-reporter` on the
+# command line. `text` is for a human; `lcov` is what `scripts/check-coverage.ts`
+# reads.
 coverageReporter = ["text", "lcov"]
 
-# No `coverageThreshold` here, and that is measured rather than an omission: on
-# Bun it is applied PER FILE, so a repository with any legitimately
-# uncovered file (`utils/images/rgba.ts` is a unit-tier file, invisible to the
-# integration tier) cannot express an aggregate floor with it. The aggregate gate
-# is `scripts/check-coverage.ts`, which reads `coverage/lcov.info`.
+# No `coverageThreshold`: Bun applies it PER FILE, so it cannot express an
+# aggregate floor; `scripts/check-coverage.ts` is that gate.
 
-# Bun runs the tooling too, so nothing in this project needs a Node installation.
+# `tsc`, `eslint`, `prettier`, `drizzle-kit`, `knip` and `lefthook` ship a
+# `#!/usr/bin/env node` shebang, which `bun run` honours whenever `node` is on
+# `$PATH`. This makes the runtime Bun regardless of what else is installed, so
+# a Node-less container and a developer machine run the same thing. It relies on
+# the explicit `^bun$`/`^bun:` groups in the Prettier config's `importOrder`,
+# which keep import sorting identical under either runtime.
 #
-# `tsc`, `eslint`, `prettier`, `drizzle-kit`, `knip` and `lefthook` all ship a
-# `#!/usr/bin/env node` shebang and `bun run` RESPECTS it, substituting itself
-# only when `node` is absent from `$PATH`. Without this line, which runtime
-# compiled and linted the project depended on what else the developer happened
-# to have installed, and a Node-less container ran a different combination than
-# any developer machine. Verified: all six run correctly under Bun with Node
-# removed from `$PATH` (typescript 6.0.3, eslint 10.8.1, prettier 3.9.6,
-# drizzle-kit 0.31.10, knip 6.32.2, lefthook 2.1.10).
-#
-# This could not be switched on until `prettier.config.js` was fixed. The
-# import-sort plugin derived its builtin group from the RUNNING runtime's
-# `builtinModules`, so `bun:*` imports sorted differently under Bun than under
-# Node — 36 files. The explicit `^bun$` / `^bun:` groups there make the output
-# runtime-independent; see the comment on `importOrder`. Turning this on before
-# that fix would have made every developer fail `format:check` instead of only
-# the ones without Node.
-#
-# `bench/sqlite/better-sqlite3` is unaffected, and that matters: it is a
-# deliberate Node-vs-Bun comparison whose `node run.mjs` scripts would be
-# meaningless run under Bun. Bunfig is resolved from the working directory and is
-# NOT inherited by subdirectories (measured), so a benchmark run from its own
-# directory never sees this.
+# Bunfig is resolved from the working directory and not inherited.
 [run]
 bun = true
 
-# The install-side half of the repository's release-age policy.
-#
-# `renovate.json` extends `security:minimumReleaseAgeNpm`, which holds an npm
-# release back for three days so malware scanners and unpublishes have time to
-# land. Nothing applied that to a developer typing `bun add` or `bun update`, so
-# the one path a compromised release is most likely to arrive through — someone
-# pulling a fix the moment it ships — was the one path with no delay. 259 200
-# seconds is the same three days, in the units Bun takes (verified on 1.4.2: an
-# unreachable floor refuses the resolve outright rather than silently ignoring
-# the key).
-#
-# `vulnerabilityAlerts` in `renovate.json` sets `minimumReleaseAge: null` so a
-# SECURITY fix is never delayed. There is no per-advisory equivalent here, so an
-# urgent patch inside the window is installed with
-# `--minimum-release-age=0` on the command line, deliberately and once.
-[install]
-minimumReleaseAge = 259200
-# Bun's own runtime and its types move together and are pinned by
-# `packageManager`, so the window buys nothing for them and would block the
-# matching pair landing on the same day.
-minimumReleaseAgeExcludes = ["bun", "@types/bun", "bun-types"]
+# `[install]` lives in the root bunfig.toml: installs run from the workspace
+# root, and that is the file Bun reads for them.

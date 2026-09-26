@@ -1,209 +1,176 @@
 import type { VerifiedPasswordProof } from '@/lib/auth/login-guard';
-import type { Handler } from '@/lib/http/contract';
 
 import { and, eq, isNull } from 'drizzle-orm';
 
-import { otpMsg } from '@/app/api/auth/otp/messages';
 import { db, withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
+
+import { HTTP_STATUS, MSG_UPDATE_ERROR } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import { changePasswordSchema } from '@app/shared/validation/auth';
+
 import { auditLog, getAuditMeta } from '@/lib/audit';
-import { requireReauthWindow } from '@/lib/auth/admin-reauth';
-import { checkPasswordCompromise } from '@/lib/auth/check-password';
-import { LoginRejected, verifyLoginAttempt } from '@/lib/auth/login-guard';
-import { hashPassword, verifyPassword } from '@/lib/auth/password';
-import { revokeOtherSessions, revokePendingProofs } from '@/lib/auth/rotation';
+import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth/credential';
+import { verifyLoginAttempt } from '@/lib/auth/login-guard';
+import { otpMsg } from '@/lib/auth/messages';
+import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
+import { hashPassword, verifyPassword } from '@/lib/auth/password/hash';
+import { requireReauthWindow } from '@/lib/auth/reauth/window';
+import {
+  revokeOtherSessions,
+  revokePendingProofs,
+} from '@/lib/auth/session/rotation';
 import { verifyTurnstileRequest } from '@/lib/captcha';
+import { readJsonBody } from '@/lib/http/input';
+import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
+import { insufficientPermissions } from '@/lib/permissions/checker';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
+import { asCurrentPasswordIncorrect } from '@/lib/users/current-password';
+import { userMsg } from '@/lib/users/messages';
 
-import {
-  CREDENTIAL_PROVIDER_ID,
-  HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-  MSG_UPDATE_ERROR,
-} from '@/utils/api-messages';
-import {
-  apiSuccess,
-  handleApiError,
-  requireJsonBody,
-} from '@/utils/api-response';
-import { CustomError } from '@/utils/error-class';
-import { changePasswordSchema } from '@/utils/validation/auth';
-import { zodIssueMessage } from '@/utils/validation/rules';
+export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
+  const { session, userId, sessionId } = await requireSession(ctx);
 
-import { userMsg } from '../../messages';
+  await enforceRateLimit({
+    scope: 'users.me.change-password.post',
+    identifier: userIdentifier(userId),
+    limit: 5,
+    failClosed: true,
+  });
 
-export const POST: Handler = async (ctx) => {
+  const captchaOk = await verifyTurnstileRequest(ctx.headers);
+  if (!captchaOk)
+    throw new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
+
+  const input = await readJsonBody(ctx, changePasswordSchema);
+
+  // The `currentPassword` branch only: that value is verified against the
+  // stored hash below, so plaintext equality with it IS equality with the
+  // stored password, at no Argon2 cost. The window branch has no plaintext and
+  // is checked against the hash instead.
+  if (input.currentPassword === input.newPassword)
+    throw new CustomError(
+      userMsg.newPasswordSameAsCurrent,
+      HTTP_STATUS.BAD_REQUEST
+    );
+
+  await checkPasswordCompromise(input.newPassword);
+
+  const auditMeta = getAuditMeta(ctx);
+
+  // Argon2 stays outside the mutation transaction; the proof is consumed with
+  // a compare-and-swap condition under the account row lock.
+  let passwordProof: VerifiedPasswordProof;
   try {
-    const { session, userId, sessionId } = await requireSession(ctx);
-
-    await enforceRateLimit({
-      scope: 'users.me.change-password.post',
-      identifier: userIdentifier(userId),
-      limit: 5,
-      failClosed: true,
-    });
-
-    const captchaOk = await verifyTurnstileRequest(ctx.headers);
-    if (!captchaOk)
-      throw new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
-
-    const body = requireJsonBody(await ctx.readJson());
-    const parsed = changePasswordSchema.safeParse(body);
-    if (!parsed.success)
-      throw new CustomError(
-        zodIssueMessage(parsed.error),
-        HTTP_STATUS.UNPROCESSABLE
-      );
-
-    // Covers the `currentPassword` branch only — that value is verified against
-    // the stored hash below, so plaintext equality with it IS equality with the
-    // stored password, at no Argon2 cost. The re-authentication branch supplies
-    // no plaintext to compare against and is checked against the hash instead;
-    // see below.
-    if (parsed.data.currentPassword === parsed.data.newPassword)
-      throw new CustomError(
-        userMsg.newPasswordSameAsCurrent,
-        HTTP_STATUS.BAD_REQUEST
-      );
-
-    await checkPasswordCompromise(parsed.data.newPassword);
-
-    const auditMeta = getAuditMeta(ctx);
-
-    // Keep Argon2 outside the mutation transaction. The returned proof is
-    // consumed with a compare-and-swap condition under the account row lock.
-    let passwordProof: VerifiedPasswordProof;
-    try {
-      if (parsed.data.currentPassword === undefined) {
-        await requireReauthWindow(userId, sessionId);
-        const [credential] = await db
-          .select({ accountId: accounts.id, expectedHash: accounts.password })
-          .from(accounts)
-          .where(
-            and(
-              eq(accounts.userId, userId),
-              eq(accounts.providerId, CREDENTIAL_PROVIDER_ID)
-            )
-          );
-        if (!credential?.expectedHash)
-          throw new CustomError(
-            userMsg.passwordUpdateFailed,
-            HTTP_STATUS.BAD_REQUEST
-          );
-
-        // The same rule the branch above enforces on plaintext, against the
-        // only thing this branch has: the stored hash. Without it an open
-        // re-authentication window let a caller submit their EXISTING password
-        // as `newPassword`, and the route rehashed it, revoked every other
-        // session and every pending proof, and audited `passwordChanged: true`
-        // for a change that did not happen. `change-email` and `change-phone`
-        // both compare the new value against the STORED one for this reason;
-        // this route compared against the supplied one, which is absent here.
-        //
-        // One Argon2 verify, which is what the other branch already spends
-        // inside `verifyLoginAttempt` — so both branches cost the same.
-        if (
-          await verifyPassword({
-            hash: credential.expectedHash,
-            password: parsed.data.newPassword,
-          })
-        )
-          throw new CustomError(
-            userMsg.newPasswordSameAsCurrent,
-            HTTP_STATUS.BAD_REQUEST
-          );
-
-        passwordProof = {
-          accountId: credential.accountId,
-          expectedHash: credential.expectedHash,
-        };
-      } else
-        passwordProof = await verifyLoginAttempt({
-          userId,
-          password: parsed.data.currentPassword,
-          skipTimingGuard: true,
-          returnPasswordProof: true,
-          auditMeta,
-          purpose: 'reauth_change_password',
-        });
-    } catch (e) {
-      if (e instanceof LoginRejected)
-        throw new CustomError(
-          userMsg.currentPasswordIncorrect,
-          HTTP_STATUS.BAD_REQUEST
-        );
-      throw e;
-    }
-
-    const hashedPassword = await hashPassword(parsed.data.newPassword);
-
-    await withTransaction(async (tx) => {
-      // Recheck liveness after hashing; a concurrent suspension must not commit a credential change.
-      // Rotation writes the user after the credential, so acquire the user lock first to avoid lock inversion.
-      const [freshUser] = await tx
-        .select({ roleId: users.roleId, isActive: users.isActive })
-        .from(users)
-        .where(and(eq(users.id, userId), isNull(users.deletedAt)))
-        .for('update');
-
-      if (!freshUser || !freshUser.isActive || !freshUser.roleId)
-        throw new CustomError(
-          MSG_INSUFFICIENT_PERMISSIONS,
-          HTTP_STATUS.FORBIDDEN
-        );
-
-      const [account] = await tx
-        .select({ id: accounts.id })
+    if (input.currentPassword === undefined) {
+      await requireReauthWindow(userId, sessionId);
+      const [credential] = await db
+        .select({ accountId: accounts.id, expectedHash: accounts.password })
         .from(accounts)
         .where(
           and(
-            eq(accounts.id, passwordProof.accountId),
             eq(accounts.userId, userId),
-            eq(accounts.providerId, CREDENTIAL_PROVIDER_ID),
-            eq(accounts.password, passwordProof.expectedHash)
+            eq(accounts.providerId, CREDENTIAL_PROVIDER_ID)
           )
-        )
-        .for('update');
-
-      if (!account)
+        );
+      if (!credential?.expectedHash)
         throw new CustomError(
           userMsg.passwordUpdateFailed,
           HTTP_STATUS.BAD_REQUEST
         );
 
-      await tx
-        .update(accounts)
-        .set({ password: hashedPassword })
-        .where(eq(accounts.id, account.id));
+      // The same-password rule against the only thing this branch has, the
+      // stored hash; otherwise an open window lets a caller "change" to the
+      // existing password, revoking every session and proof and auditing a
+      // change that did not happen. One Argon2 verify, the cost of the other
+      // branch.
+      if (
+        await verifyPassword({
+          hash: credential.expectedHash,
+          password: input.newPassword,
+        })
+      )
+        throw new CustomError(
+          userMsg.newPasswordSameAsCurrent,
+          HTTP_STATUS.BAD_REQUEST
+        );
 
-      if (sessionId) await revokeOtherSessions(tx, userId, sessionId);
-
-      // Revoking sessions alone is not enough: an unconsumed forgot-password
-      // or passwordless proof issued before this change would still reset the
-      // NEW password. Rotation invalidates every pending proof.
-      //
-      // Trusted devices are KEPT. This caller proved the old password on a live
-      // session — they are the owner, and a routine password change that also
-      // un-remembered every device they had deliberately remembered is a
-      // surprise, not a control. Recovery, where the person may NOT be the
-      // owner, revokes them.
-      await revokePendingProofs(tx, userId, null, 'keep');
-
-      await auditLog(tx, {
+      passwordProof = {
+        accountId: credential.accountId,
+        expectedHash: credential.expectedHash,
+      };
+    } else
+      passwordProof = await verifyLoginAttempt({
         userId,
-        userEmail: session.user.email,
-        action: 'UPDATE',
-        tableName: 'accounts',
-        recordId: account.id,
-        oldData: {},
-        newData: { passwordChanged: true },
-        meta: auditMeta,
+        password: input.currentPassword,
+        skipTimingGuard: true,
+        returnPasswordProof: true,
+        auditMeta,
+        purpose: 'reauth_change_password',
       });
-    });
-
-    return apiSuccess({ message: userMsg.passwordChanged });
   } catch (error) {
-    return handleApiError(error, MSG_UPDATE_ERROR);
+    throw asCurrentPasswordIncorrect(error);
   }
-};
+
+  const hashedPassword = await hashPassword(input.newPassword);
+
+  await withTransaction(async (tx) => {
+    // Liveness rechecked after hashing, so a concurrent suspension cannot
+    // commit a credential change. The user lock comes first because rotation
+    // writes the user after the credential.
+    const [freshUser] = await tx
+      .select({ roleId: users.roleId, isActive: users.isActive })
+      .from(users)
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .for('update');
+
+    if (!freshUser || !freshUser.isActive || !freshUser.roleId)
+      throw insufficientPermissions();
+
+    const [account] = await tx
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(
+        and(
+          eq(accounts.id, passwordProof.accountId),
+          eq(accounts.userId, userId),
+          eq(accounts.providerId, CREDENTIAL_PROVIDER_ID),
+          eq(accounts.password, passwordProof.expectedHash)
+        )
+      )
+      .for('update');
+
+    if (!account)
+      throw new CustomError(
+        userMsg.passwordUpdateFailed,
+        HTTP_STATUS.BAD_REQUEST
+      );
+
+    await tx
+      .update(accounts)
+      .set({ password: hashedPassword })
+      .where(eq(accounts.id, account.id));
+
+    if (sessionId) await revokeOtherSessions(tx, userId, sessionId);
+
+    // Every pending proof goes too: an unconsumed forgot-password or
+    // passwordless proof would otherwise reset the NEW password. Trusted
+    // devices are KEPT — this caller proved the old password on a live session,
+    // so they are the owner; recovery, where they may not be, revokes them.
+    await revokePendingProofs(tx, userId, null, 'keep');
+
+    await auditLog(tx, {
+      userId,
+      userEmail: session.user.email,
+      action: 'UPDATE',
+      tableName: 'accounts',
+      recordId: account.id,
+      oldData: {},
+      newData: { passwordChanged: true },
+      meta: auditMeta,
+    });
+  });
+
+  return apiSuccess({ message: userMsg.passwordChanged });
+});

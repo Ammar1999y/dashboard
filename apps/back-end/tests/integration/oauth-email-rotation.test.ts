@@ -19,13 +19,13 @@ import {
 } from '@/db/schema';
 import { symmetricEncrypt } from 'better-auth/crypto';
 import * as z from 'zod';
+
 import { auth } from '@/lib/auth';
-import { hasAdminReauth } from '@/lib/auth/admin-reauth';
-import * as challenges from '@/lib/auth/two-factor-challenge';
+import { hasAdminReauth } from '@/lib/auth/reauth/window';
+import * as challenges from '@/lib/auth/two-factor/challenge';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { generateUuidV7 } from '@/lib/id';
-
-import { hashOtpCode } from '@/utils/otp';
+import { hashOtpCode } from '@/lib/otp/hash';
 
 import { resetTables, waitForUserLock } from '../helpers/database';
 import { startGoogle } from '../helpers/google';

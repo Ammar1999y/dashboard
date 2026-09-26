@@ -2,7 +2,7 @@
  * The SMTP sink.
  *
  * SMTP is the one egress path the `fetch` router in `./egress.ts` cannot see —
- * it is not HTTP — and `utils/otp.ts` builds its transport with
+ * it is not HTTP — and `lib/otp/delivery.ts` builds its transport with
  * `nodemailer.createTransport({ service: 'gmail', … })`, a hardcoded service with
  * no env seam, memoised in a module-private variable. So the boundary has to be
  * the module.
@@ -58,7 +58,7 @@ export function delayMail(ms: number): void {
 /**
  * Makes the next and every subsequent `sendMail` reject until `resetMailbox`.
  *
- * An `Error` carrying a `responseCode`, since `utils/otp.ts` reads that field to
+ * An `Error` carrying a `responseCode`, since `lib/otp/delivery.ts` reads that field to
  * decide whether an SMTP rejection is one of the known constants it is allowed
  * to surface.
  */
@@ -67,7 +67,7 @@ export function failNextMail(error: Error): void {
 }
 
 /**
- * `utils/otp.ts` imports `createTransport` from `'nodemailer'`.
+ * `lib/smtp.ts` imports `createTransport` from `'nodemailer'`.
  * `createTransport` returns a fresh recorder each call rather than a shared
  * one, because the production code memoises its transport and a shared object
  * would hide a second `createTransport` call if one were ever added.

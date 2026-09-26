@@ -6,10 +6,11 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { accounts, passkeys, sessions, users } from '@/db/schema';
 import * as z from 'zod';
+
 import { auth } from '@/lib/auth';
-import { hasAdminReauth } from '@/lib/auth/admin-reauth';
-import * as passwords from '@/lib/auth/password';
-import * as rotation from '@/lib/auth/rotation';
+import * as passwords from '@/lib/auth/password/hash';
+import { hasAdminReauth } from '@/lib/auth/reauth/window';
+import * as rotation from '@/lib/auth/session/rotation';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables, waitForUserLock } from '../helpers/database';

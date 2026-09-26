@@ -8,7 +8,7 @@
  * refuse. That makes the guard a fail-closed control on the primitive every auth
  * and OTP limit shares — and nothing exercised it: the only `cost` assertions in
  * the suite were in `tests/fixtures/_sqlite-semantics-child.cjs`, which drives
- * the SQL directly and never loads `lib/rate-limit/index.ts`. Changing
+ * the SQL directly and never loads `lib/rate-limit/fixed-window.ts`. Changing
  * `cost < 1` to `cost < 0`, or deleting the guard, left the suite green while a
  * `cost = 0` request became free forever.
  *
@@ -18,7 +18,7 @@
  */
 import { beforeEach, describe, expect, test } from 'bun:test';
 
-import { rateLimit } from '@/lib/rate-limit';
+import { rateLimit } from '@/lib/rate-limit/fixed-window';
 import { getRateLimitStore } from '@/lib/rate-limit/store';
 
 import { resetSqliteStores } from '../helpers/sqlite';

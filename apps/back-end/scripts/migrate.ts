@@ -1,90 +1,62 @@
+/* eslint-disable unicorn/no-process-exit -- CLI entry point: the exit code IS
+   this tool's result contract, which is the case the rule excepts */
 /**
- * Apply every pending migration to the database in `DATABASE_URL`, in three
- * phases, with one command: `bun run db:migrate`.
+ * `bun run db:migrate`: applies every pending migration to `DATABASE_URL`, in
+ * three phases under one advisory lock.
  *
- * **Phase 1 — `db/drizzle/`, the generated migrations.** This replaces
- * `drizzle-kit migrate`, which cannot run here at all: drizzle-kit 0.31.10 only
- * connects through `pg`, `postgres`, `@neondatabase/serverless` or
- * `@vercel/postgres`, and this project has none of them — the client is
- * `bun:sql`. Adding one of those four back purely for the CLI would reintroduce
- * a second PostgreSQL driver for a task the ORM already does. So the ORM's own
- * migrator runs it, over the same driver the application uses.
+ * **Phase 1: `db/drizzle/`, through `drizzle-orm`'s own migrator.** Not
+ * `drizzle-kit migrate`, which connects only through `pg`, `postgres`,
+ * `@neondatabase/serverless` or `@vercel/postgres`, none of which this project
+ * has. It writes the same `drizzle.__drizzle_migrations` ledger with the same
+ * hashes, so an environment migrated by the CLI continues where it was.
  *
- * It is the same ledger either way: `drizzle-orm`'s pg dialect writes
- * `drizzle.__drizzle_migrations` with the same hashes and `folderMillis` values
- * drizzle-kit does (verified in `node_modules/drizzle-orm/pg-core/dialect.js`),
- * so an environment previously migrated by the CLI continues from where it was
- * rather than replaying.
+ * **Phase 2: `db/migrations/`, hand-written SQL** (extensions, trigram
+ * indexes) that Drizzle Kit cannot express. There is no ledger, so every file
+ * must be idempotent; they run after phase 1 because they index its tables.
+ * Each file is ONE multi-statement query in an implicit transaction, so
+ * `CREATE INDEX CONCURRENTLY` needs a file of its own.
  *
- * `bun run db:generate` still uses drizzle-kit — `generate` reads `db/schema.ts`
- * and never connects, so it is unaffected.
+ * **Phase 3: the referrer contract.** Every table referencing `files` must use
+ * the composite `(file_id, file_status)` key; a plain `file_id` key is
+ * invisible to `unreferenced()` and blocks only the final row delete, after the
+ * object is already destroyed. A new referrer can only arrive through a
+ * migration, so this is where it is caught.
  *
- * **Phase 2 — `db/migrations/`, the hand-written SQL.** Extensions and GIN
- * trigram indexes, which Drizzle Kit cannot express. Every file must be
- * idempotent (`IF NOT EXISTS`): there is no ledger for these, so re-running is
- * the supported way to bring an environment up to date. That is also why they
- * run after phase 1 rather than before — they index tables phase 1 creates.
- *
- * Each file is sent as ONE multi-statement query, which PostgreSQL runs in an
- * implicit transaction, so a file either applies whole or not at all. That also
- * means `CREATE INDEX CONCURRENTLY` cannot go in a shared file: it is rejected
- * inside a transaction block, so it needs a file of its own containing that
- * single statement.
- *
- * **Phase 3 — the referrer contract.** Every table that references `files` must
- * use the composite `(file_id, file_status)` key. A plain `file_id -> files(id)`
- * key is invisible to `unreferenced()` and blocks only the FINAL row delete,
- * which `finishDeleting` reaches after the object is already destroyed. A new
- * referrer can only arrive through a migration, so this is where it is caught:
- * the integration tier asserts the same rule, but a deployment that never ran
- * the suite would otherwise install the schema that loses bytes.
- *
- * **One advisory lock around all three.** Both migration phases read what is
- * pending before either transaction begins, so two processes starting together
- * both see the same set: the second waits on the DDL, replays it, fails, and
- * rolls back. Harmless with one maintenance shell, a crash loop from a
- * multi-replica entrypoint.
+ * **The lock:** both phases read what is pending before their transaction, so
+ * two concurrent migrators would replay the same DDL.
  *
  * Reads `process.env.DATABASE_URL` directly rather than importing
- * `@/lib/env.server`: migrating a database must not require a password pepper
- * keyring, a Turnstile secret or a session signing key to be configured. The
- * two modules phase 3 imports are leaves for the same reason — a registry
- * literal and a pure catalog check, neither of which opens a connection.
+ * `@/lib/env.server`: migrating must not require the pepper keyring, the
+ * Turnstile secret or the session key. Everything imported here is a leaf that
+ * opens no connection.
  */
 import { SQL } from 'bun';
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { drizzle } from 'drizzle-orm/bun-sql';
 import { migrate } from 'drizzle-orm/bun-sql/migrator';
 
 import { referrerContractViolations } from '../lib/media/referrer-contract';
 import { registeredFileColumns } from '../lib/media/usage-sources';
+import { compareCodeUnits } from '../utils/text';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DRIZZLE_DIR = path.join(HERE, '..', 'db', 'drizzle');
-const SQL_DIR = path.join(HERE, '..', 'db', 'migrations');
+const WORKSPACE_ROOT = path.resolve(import.meta.dirname, '..');
+
+const DRIZZLE_DIR = path.join(WORKSPACE_ROOT, 'db', 'drizzle');
+const SQL_DIR = path.join(WORKSPACE_ROOT, 'db', 'migrations');
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   console.error('DATABASE_URL is not set');
-  // eslint-disable-next-line unicorn/no-process-exit -- CLI entry point: the exit code IS this tool's result contract, which is the case the rule excepts
   process.exit(1);
 }
 
-/**
- * Explicit code-unit comparator, not the default and not `localeCompare`:
- * migration order must not depend on the host locale, where a locale collation
- * could order `0010_` before `0009_`. Order is the one thing this runner has to
- * get right.
- */
+/** Code-unit order: a locale collation could order `0010_` before `0009_`. */
 async function sqlFilesInOrder(): Promise<string[]> {
   const entries = await readdir(SQL_DIR);
-  return entries
-    .filter((f) => f.endsWith('.sql'))
-    .toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+  return entries.filter((f) => f.endsWith('.sql')).toSorted(compareCodeUnits);
 }
 
 // One connection: these phases are strictly sequential and nothing else is using
@@ -118,7 +90,7 @@ async function journalWithHashes(): Promise<
   );
   const entries =
     typeof raw === 'object' && raw !== null && 'entries' in raw
-      ? (raw as { entries: unknown }).entries
+      ? raw.entries
       : undefined;
   if (!Array.isArray(entries))
     throw new Error('meta/_journal.json has no entries');

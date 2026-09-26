@@ -4,10 +4,10 @@ import * as z from 'zod';
 
 import { installEgressGuard } from '../helpers/egress';
 
-const defaults = await import('@/utils/config');
+const defaults = await import('@app/shared/config');
 if (defaults.REQUIRE_EMAIL_VERIFICATION !== false)
   throw new Error('Shipped email verification default changed.');
-await mock.module('@/utils/config', () => ({
+await mock.module('@app/shared/config', () => ({
   ...defaults,
   REQUIRE_EMAIL_VERIFICATION: true,
 }));

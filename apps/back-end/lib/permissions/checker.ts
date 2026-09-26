@@ -3,26 +3,32 @@ import type {
   AllScopedAction,
   DashboardPage,
   PermissionAction,
-} from './constants';
-import type { EntityID } from '@/types';
+} from '@app/shared/permissions/constants';
+import type { EntityID } from '@app/shared/types';
 
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { rolePermissions, roles, sessions, users } from '@/db/schema';
-import { validID } from '@/utils';
-import { auth } from '@/lib/auth';
-import { assertLiveSession } from '@/lib/auth/live-session';
 
 import {
   HTTP_STATUS,
   MSG_INSUFFICIENT_PERMISSIONS,
   MSG_LOGIN_REQUIRED,
-} from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
+} from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import {
+  OWN_ACTION_MAP,
+  SUPERSEDING_ACTION,
+} from '@app/shared/permissions/constants';
+import { validID } from '@app/shared/utils';
 
-import { OWN_ACTION_MAP, SUPERSEDING_ACTION } from './constants';
+import { auth } from '@/lib/auth';
+import { assertLiveSession } from '@/lib/auth/session/live';
+
 import { getUserPermissions, sanitizePermissions } from './utils';
+
+type AuthSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
 
 const SCOPED_ACTIONS = new Set<PermissionAction>(
   Object.keys(OWN_ACTION_MAP) as PermissionAction[]
@@ -33,6 +39,30 @@ function hasSessionCookieCache(headers: Headers): boolean {
   return /(?:^|;\s*)better-auth\.session_data=/.test(
     headers.get('cookie') ?? ''
   );
+}
+
+function loginRequired(): CustomError {
+  return new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
+}
+
+export function insufficientPermissions(): CustomError {
+  return new CustomError(MSG_INSUFFICIENT_PERMISSIONS, HTTP_STATUS.FORBIDDEN);
+}
+
+/** Better Auth's view of the caller, possibly from the cookie cache. */
+export async function authenticatedSession(
+  headers: Headers
+): Promise<{ session: AuthSession; userId: EntityID }> {
+  const session = await auth.api.getSession({ headers });
+  const userId = validID(session?.user.id);
+  if (!session || !userId) throw loginRequired();
+  return { session, userId };
+}
+
+function sessionIdOf(session: AuthSession): EntityID {
+  const sessionId = validID(session.session.id);
+  if (!sessionId) throw loginRequired();
+  return sessionId;
 }
 
 /**
@@ -58,13 +88,10 @@ export function resolveActionScope(
 ): { allowed: boolean; scope: AccessScope | null } {
   const pagePerms = permissions?.[resource];
 
-  // An own-scoped action asked for DIRECTLY. Handled first because the generic
-  // path below would answer both of its cases wrongly: holding `edit` while
-  // requesting `editOwn` was denied outright, and holding only `editOwn` while
-  // requesting `editOwn` was answered `scope: 'all'` — an own-scoped grant
-  // reported as unrestricted access. No route asks for an own variant today, so
-  // neither is currently reachable; the function is exported to every future
-  // call site, which is exactly how a latent trap becomes a live one.
+  // An own-scoped action asked for DIRECTLY, handled first because the generic
+  // path below answers both of its cases wrongly: holding `edit` must satisfy
+  // `editOwn`, and holding only `editOwn` must answer `scope: 'own'`, never
+  // `'all'`.
   const superseding = SUPERSEDING_ACTION[action];
   if (superseding) {
     if (pagePerms?.[superseding] === true)
@@ -96,29 +123,18 @@ export async function checkUserPermission(params: {
     throwError = true,
   } = params;
 
-  const session = await auth.api.getSession({ headers });
-  const userId = validID(session?.user.id);
-  if (!session || !userId)
-    throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
+  const { session, userId } = await authenticatedSession(headers);
 
   // Write/mutation actions always verify from DB; read actions use cache
   const shouldForceDB =
     forceDB || !READ_ACTIONS.has(action) || !hasSessionCookieCache(headers);
 
   if (shouldForceDB) {
-    // The session ROW is verified here, not just the user and role.
-    //
-    // `getSession` is served from Better Auth's cookie cache for up to
-    // `cookieCache.maxAge`, and that cached copy stays valid after the row
-    // behind it is deleted. Credential rotation (password/email/phone change,
-    // admin edit) revokes sessions by deleting rows — so without this join a
-    // revoked session kept performing writes for the rest of the cache window,
-    // which is precisely what revocation is supposed to prevent. Reloading the
-    // user and permissions was not enough: an active user with an active role
-    // passed every other check.
-    const sessionId = validID(session.session.id);
-    if (!sessionId)
-      throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
+    // The session ROW is verified here, not just the user and role:
+    // `getSession` may answer from Better Auth's cookie cache, which stays
+    // valid after the row behind it is deleted, and every revocation deletes
+    // rows. An active user with an active role passes every other check.
+    const sessionId = sessionIdOf(session);
 
     // Single query: session + user + role + permissions in one round-trip.
     const rows = await db
@@ -146,21 +162,12 @@ export async function checkUserPermission(params: {
 
     // Covers both "user is gone/inactive" and "this session was revoked".
     const [sessionRow] = rows;
-    if (!sessionRow)
-      throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
+    if (!sessionRow) throw loginRequired();
 
     const roleId = sessionRow.roleId;
-    if (!roleId)
-      throw new CustomError(
-        MSG_INSUFFICIENT_PERMISSIONS,
-        HTTP_STATUS.FORBIDDEN
-      );
+    if (!roleId) throw insufficientPermissions();
 
-    if (sessionRow.roleIsActive === false)
-      throw new CustomError(
-        MSG_INSUFFICIENT_PERMISSIONS,
-        HTTP_STATUS.FORBIDDEN
-      );
+    if (sessionRow.roleIsActive === false) throw insufficientPermissions();
 
     const rolePerms = rows.flatMap((r) =>
       r.pageName == null
@@ -175,11 +182,7 @@ export async function checkUserPermission(params: {
       resource,
       action
     );
-    if (!allowed && throwError)
-      throw new CustomError(
-        MSG_INSUFFICIENT_PERMISSIONS,
-        HTTP_STATUS.FORBIDDEN
-      );
+    if (!allowed && throwError) throw insufficientPermissions();
 
     return {
       allowed,
@@ -187,7 +190,7 @@ export async function checkUserPermission(params: {
       source: 'database' as const,
       session,
       userId,
-      sessionId: validID(session.session.id),
+      sessionId,
       roleId,
       permissions,
     };
@@ -195,24 +198,20 @@ export async function checkUserPermission(params: {
 
   // Read routes accept Better Auth's configured cookie-cache revocation window.
   // Sensitive mutations take the forceDB branch above.
-  const sessionId = validID(session.session.id);
-  if (!sessionId)
-    throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
+  const sessionId = sessionIdOf(session);
 
-  const roleId = validID(session?.user.roleId) ?? null;
+  const roleId = validID(session.user.roleId) ?? null;
 
-  if (!roleId)
-    throw new CustomError(MSG_INSUFFICIENT_PERMISSIONS, HTTP_STATUS.FORBIDDEN);
+  if (!roleId) throw insufficientPermissions();
 
   const permissions = await getUserPermissions({
-    session: session?.session ?? null,
+    session: session.session,
     roleId,
     forceDB: false,
   });
 
   const { allowed, scope } = resolveActionScope(permissions, resource, action);
-  if (!allowed && throwError)
-    throw new CustomError(MSG_INSUFFICIENT_PERMISSIONS, HTTP_STATUS.FORBIDDEN);
+  if (!allowed && throwError) throw insufficientPermissions();
 
   return {
     allowed,
@@ -235,26 +234,21 @@ export async function checkMultiplePermissions(params: {
   forceDB?: boolean;
 }): Promise<{
   permissions: Record<string, boolean>;
-  session: NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
+  session: AuthSession;
   userId: EntityID;
   sessionId: EntityID;
 }> {
   const { headers, checks, forceDB = false } = params;
 
-  const session = await auth.api.getSession({ headers });
-  const userId = validID(session?.user.id);
-  if (!session || !userId)
-    throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
+  const { session, userId } = await authenticatedSession(headers);
 
   const hasWriteAction = checks.some((c) => !READ_ACTIONS.has(c.action));
   const shouldForceDB =
     forceDB || hasWriteAction || !hasSessionCookieCache(headers);
 
-  let roleId: EntityID | null = validID(session?.user.roleId) ?? null;
+  let roleId: EntityID | null = validID(session.user.roleId) ?? null;
 
-  const cachedSessionId = validID(session.session.id);
-  if (!cachedSessionId)
-    throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
+  const cachedSessionId = sessionIdOf(session);
   const sessionId = shouldForceDB
     ? await assertLiveSession(cachedSessionId, userId)
     : cachedSessionId;
@@ -277,29 +271,19 @@ export async function checkMultiplePermissions(params: {
         )
       );
 
-    if (!userData)
-      throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
+    if (!userData) throw loginRequired();
     roleId = userData.roleId;
 
-    if (!roleId)
-      throw new CustomError(
-        MSG_INSUFFICIENT_PERMISSIONS,
-        HTTP_STATUS.FORBIDDEN
-      );
+    if (!roleId) throw insufficientPermissions();
 
-    if (!userData.roleIsActive)
-      throw new CustomError(
-        MSG_INSUFFICIENT_PERMISSIONS,
-        HTTP_STATUS.FORBIDDEN
-      );
+    if (!userData.roleIsActive) throw insufficientPermissions();
   }
 
-  if (!roleId)
-    throw new CustomError(MSG_INSUFFICIENT_PERMISSIONS, HTTP_STATUS.FORBIDDEN);
+  if (!roleId) throw insufficientPermissions();
 
   const allPermissions = await getUserPermissions({
     roleId,
-    session: shouldForceDB ? null : (session?.session ?? null),
+    session: shouldForceDB ? null : session.session,
     forceDB: shouldForceDB,
   });
 

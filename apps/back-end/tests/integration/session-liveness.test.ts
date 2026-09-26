@@ -5,9 +5,10 @@ import { eq, inArray } from 'drizzle-orm';
 import { app } from '@/app';
 import { db } from '@/db';
 import { sessions, users, verifications } from '@/db/schema';
-import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
 import { baseHeaders, signedInUser } from '../helpers/session';
@@ -97,7 +98,7 @@ describe('signing out takes the session artifacts with it', () => {
    * by the SESSION id — the two-factor proof and both re-authentication windows —
    * store no user id, so a session deleted without them leaves rows nothing can
    * find again until they expire. The `session.delete.after` database hook in
-   * `lib/auth.ts` is what makes the invariant true for the library's deletes.
+   * `lib/auth/index.ts` is what makes the invariant true for the library's deletes.
    */
   test('the re-authentication window opened on it is gone', async () => {
     // `signedInUser` opens the window, which is what writes the rows: a fixture

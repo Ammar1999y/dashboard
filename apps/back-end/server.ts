@@ -4,20 +4,18 @@
 /**
  * Entry point: validate the runtime, then start the app.
  *
- * This file deliberately imports NOTHING from the application at module scope.
- * Static imports are hoisted and evaluated before any entry-point code runs, so
- * a `NODE_ENV` check written at the top of a file that imports `@/lib/auth`
- * would run AFTER `lib/env.server.ts` had already decided whether this was
- * production. The application is loaded by dynamic import, below the checks.
- *
- * `bun server.ts` is still the whole command — the split is internal, so no
- * deployment start command changes.
+ * ⚠️ Static imports here are leaves only (`utils/log`, `utils/startup`,
+ * `package.json`): imports are evaluated before this file's code, so importing
+ * the application statically would let `lib/env.server.ts` decide whether this
+ * is production before `NODE_ENV` is validated. The application is loaded by
+ * dynamic import, below the checks.
  */
 import { version as bunVersion } from 'bun';
 import { Database } from 'bun:sqlite';
 
+import { errorClassOf } from '@/utils/log';
+
 import packageManifest from './package.json';
-import { errorClassOf } from './utils';
 import {
   bunVersionVerdict,
   portVerdict,
@@ -25,17 +23,10 @@ import {
 } from './utils/startup';
 
 /**
- * The three modes this application recognises.
- *
- * Nothing sets this for us — `bun server.ts` is the whole command. Every
- * production-only guard in this codebase is an exact string comparison against
- * `'production'`: the Better Auth secret floor, the Turnstile secret
- * requirement, the absolute-SQLITE_DIR rule, HSTS. So `NODE_ENV=prodution`
- * disables all four at once while the server boots and serves traffic
- * (reproduced), and an unset value selects the same posture.
- *
- * An unrecognised value is therefore fatal, and fatal HERE, before the modules
- * that read it exist. Asserted in `tests/process/startup-gates.test.ts`.
+ * Every production-only guard is an exact comparison against `'production'`,
+ * so a typo such as `NODE_ENV=prodution`, or an unset value, would silently
+ * disable all of them. Anything else is therefore fatal, HERE, before the
+ * modules that read it exist.
  */
 const VALID_NODE_ENV = new Set(['development', 'test', 'production']);
 
@@ -62,21 +53,6 @@ function requireNodeEnv(): string {
   return value;
 }
 
-/**
- * The gate DECISIONS live in `utils/startup.ts`, as pure functions.
- *
- * What is left here is the wiring: read the value, ask for a verdict, `fail` on
- * a refusal. `assertBunVersion` and `assertSqliteVersion` read the running Bun
- * and the SQLite compiled into it, so a spawned child cannot vary either input
- * and neither had a single assertion; the verdicts are asserted in
- * `tests/unit/startup-gates-logic.test.ts` and the exit codes in
- * `tests/process/startup-gates.test.ts`.
- *
- * Importing `./utils/startup` does not breach the no-application-imports rule at
- * the top of this file, for the same reason importing `./package.json` does
- * not: it is a leaf with no environment reads and no module of its own to
- * evaluate.
- */
 function requirePort(): number {
   const verdict = portVerdict(process.env.PORT);
   if (!verdict.ok) fail(verdict.reason);
@@ -119,7 +95,7 @@ const { drainAfterResponse, pendingAfterResponse } =
 const { closeRateLimitStore } = await import('./lib/rate-limit/store');
 const { closeCacheStore } = await import('./lib/cache');
 const { closeDatabase } = await import('./db');
-const { startSchedule } = await import('./lib/schedule');
+const { startSchedule } = await import('./lib/maintenance/schedule');
 const { acquireWriterLock } = await import('./lib/sqlite/writer-lock');
 const { SQLITE_DIR } = await import('./lib/env.server');
 const {
@@ -129,10 +105,8 @@ const {
   stopServerGracefully,
 } = await import('./lib/shutdown');
 
-// One instance per SQLITE_DIR, and it has to be claimed BEFORE `startSchedule`
-// below: the two scheduled sweeps are registered per process and neither is safe
-// to run twice against the same rows, so this lock is what elects their single
-// owner. See both functions' own notes.
+// Claimed BEFORE `startSchedule`: this lock is what elects the single owner of
+// the per-process scheduled sweeps.
 const writerLock = acquireWriterLock(SQLITE_DIR);
 
 /** Keeps the global request ceiling explicit for route and shutdown coordination. */
@@ -173,10 +147,6 @@ app.listen({ port, idleTimeout: IDLE_TIMEOUT_SECONDS }, (server) => {
 
 const schedule = startSchedule();
 
-/**
- * The sequence itself lives in `lib/shutdown.ts`, where a unit test drives it;
- * this is only the wiring to the real stop, sweeps, queue and stores.
- */
 const shutdown = createShutdown(
   {
     stopServer,

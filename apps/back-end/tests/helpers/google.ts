@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 import { app } from '@/app';
 import * as z from 'zod';
+
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { scriptEgress } from './egress';

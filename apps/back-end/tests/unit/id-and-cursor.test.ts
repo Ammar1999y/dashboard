@@ -21,13 +21,14 @@ import {
   formatCursor,
   parseCursor,
   parseLimit,
-  SESSIONS_PAGE_SIZE,
 } from '@/app/api/dash/users/[id]/sessions/pagination';
-import { validID } from '@/utils';
-import { generateUuidV7 } from '@/lib/id';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import { validID } from '@app/shared/utils';
+import { SESSIONS_PAGE_SIZE } from '@app/shared/validation/sessions';
+
+import { generateUuidV7 } from '@/lib/id';
 
 /**
  * Fixtures come from the generator the application actually uses and from the

@@ -1,15 +1,20 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { AuthContext } from './two-factor-challenge';
+import type { AuthContext } from './context';
 import type { Tx } from '@/db';
+import type { DrizzleAdapterConfig } from 'better-auth/adapters/drizzle';
 
 import { db, withTransaction } from '@/db';
+import * as schema from '@/db/schema';
 import {
   getCurrentAdapter,
   runWithTransaction,
 } from '@better-auth/core/context';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 
-import { authAdapterOptions } from './adapter-options';
+export const authAdapterOptions = {
+  provider: 'pg',
+  schema,
+} satisfies DrizzleAdapterConfig;
 
 const transactions = new AsyncLocalStorage<Tx>();
 
@@ -22,19 +27,15 @@ export const authDatabase = () => transactions.getStore() ?? db;
  * ⚠️ Not a convenience. `internalAdapter` resolves every statement through
  * `getCurrentAdapter`, so it already runs on the transaction — but a plugin
  * reaching for `ctx.context.adapter` DIRECTLY gets the pool, and Better Auth's
- * two-factor plugin does exactly that for its credential read and for the
- * lockout counters (`plugins/two-factor/totp/index.mjs`,
- * `plugins/two-factor/verify-two-factor.mjs`). A statement issued against the
- * pool from inside a transaction asks for a second connection while holding the
- * first, so `MAX_POOL_CONNECTIONS` concurrent verifications wait on each other
- * for a connection none of them will release — measured, with ten wrong codes
- * against one account. The same call also writes the credential row the caller
- * may be holding a lock on, which is the other half of the same deadlock.
+ * two-factor plugin does exactly that for its credential read and its lockout
+ * counters. A pool statement issued from inside a transaction asks for a second
+ * connection while holding the first, so `MAX_POOL_CONNECTIONS` concurrent
+ * verifications deadlock on the pool; the same call also writes the credential
+ * row the caller may hold a lock on.
  *
  * A Proxy rather than a spread: the library SETS `newSession` on this object and
  * our own after-hooks read it back off the original, so a copy would silently
- * lose every completion event. Only the one property is intercepted; writes,
- * deletes and everything else pass through to the real context.
+ * lose every completion event.
  */
 export async function transactionBoundContext(
   context: AuthContext['context']
@@ -43,9 +44,7 @@ export async function transactionBoundContext(
   if (adapter === context.adapter) return context;
   return new Proxy(context, {
     get: (target, property) =>
-      property === 'adapter'
-        ? adapter
-        : (target as unknown as Record<PropertyKey, unknown>)[property],
+      property === 'adapter' ? adapter : Reflect.get(target, property),
   });
 }
 

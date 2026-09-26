@@ -1,7 +1,7 @@
 /**
  * No Better Auth error may reach a client as English.
  *
- * `lib/auth/code-errors.ts` is a hand-maintained map and `app.ts`'s
+ * `lib/auth/errors.ts` is a hand-maintained map and `app.ts`'s
  * `localiseAuthError` applies it by `code`. An unmapped code passes through
  * UNTOUCHED, which puts the dependency's own internal text on the wire in an
  * Arabic-locale API: measured before this file,
@@ -22,9 +22,9 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
-import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
 
-import { CUSTOM_AUTH_CODE } from '@/utils/api-messages';
+import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
+import { CUSTOM_AUTH_CODE } from '@/lib/auth/errors';
 
 import { baseHeaders } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';

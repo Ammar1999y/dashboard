@@ -14,7 +14,6 @@ import type { SeededUser } from '../helpers/session';
 import { and, eq, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { twoFactorMsg } from '@/app/api/auth/otp/messages';
 import { db, withTransaction } from '@/db';
 import {
   auditLogs,
@@ -26,12 +25,14 @@ import {
   users,
 } from '@/db/schema';
 import { symmetricEncrypt } from 'better-auth/crypto';
+
+import { HTTP_STATUS, MSG_INVALID_INPUT } from '@app/shared/api-messages';
+import { NAME_MAX } from '@app/shared/validation/constants';
+
+import { twoFactorMsg } from '@/lib/auth/messages';
 import { advancePasskeyCounter } from '@/lib/auth/passkey-assertion';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { generateUuidV7 } from '@/lib/id';
-
-import { HTTP_STATUS, MSG_INVALID_INPUT } from '@/utils/api-messages';
-import { NAME_MAX } from '@/utils/validation/constants';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';

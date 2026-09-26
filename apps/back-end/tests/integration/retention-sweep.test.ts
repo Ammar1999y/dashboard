@@ -1,5 +1,5 @@
 /**
- * `db/maintenance.ts` — the retention sweep, run by `lib/schedule.ts`.
+ * `lib/maintenance/database.ts` — the retention sweep, run by `lib/maintenance/schedule.ts`.
  *
  * Ported from `scripts/probe/dev-live/database/retention-sweep.dev-probe.ts`,
  * which could not be a test while it ran against the developer's own database:
@@ -24,7 +24,7 @@
  *   `failObjectStore('DeleteObjects')` states that condition outright, which
  *   also buys the pass the probe could never make: one where the delete
  *   SUCCEEDS, so the object goes first and the row second.
- * - The clock. Every cutoff in `db/maintenance.ts` is computed in SQL
+ * - The clock. Every cutoff in `lib/maintenance/database.ts` is computed in SQL
  *   (`now() - $1::interval`), so `setSystemTime` would move this process's clock
  *   and not PostgreSQL's. Ages are written into the rows instead, and the rows
  *   that must stay sit an hour or a day inside each window, so an interval
@@ -32,12 +32,11 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { StoreOp } from '../helpers/object-store';
-import type { DatabaseSweepResult } from '@/db/maintenance';
+import type { DatabaseSweepResult } from '@/lib/maintenance/database';
 
 import { eq, sql } from 'drizzle-orm';
 
 import { db } from '@/db';
-import { runDatabaseSweep } from '@/db/maintenance';
 import {
   auditLogs,
   files,
@@ -50,11 +49,13 @@ import {
   verifications,
   verificationSessions,
 } from '@/db/schema';
+
+import { runDatabaseSweep } from '@/lib/maintenance/database';
+import { startSchedule } from '@/lib/maintenance/schedule';
 import {
   ORPHAN_DRAIN_BATCH,
   TRANSITION_RETRY_BATCH,
 } from '@/lib/media/visibility';
-import { startSchedule } from '@/lib/schedule';
 
 import { resetTables } from '../helpers/database';
 import {
@@ -470,7 +471,7 @@ describe('a pass with a healthy object store', () => {
       },
     ]);
 
-    // `db/maintenance.ts` names two tables it deliberately skips. Ancient, so
+    // `lib/maintenance/database.ts` names two tables it deliberately skips. Ancient, so
     // "nothing qualified" cannot be the reason it survives.
     await db.insert(auditLogs).values({
       userId,

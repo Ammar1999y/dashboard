@@ -12,7 +12,7 @@ import {
   FOLDER_NAME_MAX,
   IDS_ARRAY_MAX,
   MEDIA_DISPLAY_NAME_MAX,
-} from '@/utils/validation/constants';
+} from '@app/shared/validation/constants';
 import {
   createFolderSchema,
   deleteFilesSchema,
@@ -21,7 +21,7 @@ import {
   mediaValidationMsg,
   updateFileSchema,
   updateFolderSchema,
-} from '@/utils/validation/media';
+} from '@app/shared/validation/media';
 
 const ID = '0192b4b6-6f1a-7c3e-9a1f-2b3c4d5e6f70';
 

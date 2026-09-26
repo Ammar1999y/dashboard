@@ -3,25 +3,25 @@ import type {
   DashboardPage,
   PermissionAction,
   PermissionObject,
-} from '@/lib/permissions/constants';
-
-import { resolveActionScope } from '@/lib/permissions/checker';
-import {
-  DASHBOARD_PAGE_NAMES,
-  OWN_ACTION_MAP,
-  PERMISSION_ACTIONS,
-} from '@/lib/permissions/constants';
-import {
-  collapseToNotFound,
-  validatePermissionScope,
-} from '@/lib/permissions/utils';
+} from '@app/shared/permissions/constants';
 
 import {
   HTTP_STATUS,
   MSG_CANNOT_GRANT_UNOWNED_PERMISSIONS,
   MSG_NOT_FOUND,
-} from '@/utils/api-messages';
-import { CustomError } from '@/utils/error-class';
+} from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+import {
+  DASHBOARD_PAGE_NAMES,
+  OWN_ACTION_MAP,
+  PERMISSION_ACTIONS,
+} from '@app/shared/permissions/constants';
+
+import { resolveActionScope } from '@/lib/permissions/checker';
+import {
+  collapseToNotFound,
+  validatePermissionScope,
+} from '@/lib/permissions/utils';
 
 /**
  * `resolveActionScope` — the two cases its own comment records as previously

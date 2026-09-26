@@ -11,7 +11,10 @@ import { describe, expect, test } from 'bun:test';
 
 import { PgDialect } from 'drizzle-orm/pg-core';
 
-import { fileKindEnum, files } from '@/db/schema';
+import { files } from '@/db/schema';
+
+import { FILE_KINDS as fileKindEnum } from '@app/shared/validation/enums';
+
 import {
   filterColumns,
   MSG_INVALID_FILTER,

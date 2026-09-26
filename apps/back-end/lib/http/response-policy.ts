@@ -1,34 +1,23 @@
 /**
  * The last thing that touches a response.
  *
- * Why this exists as a separate step from the `onRequest` hook that also writes
- * the security headers: the hook writes into the FRAMEWORK's mutable header bag
- * (`set.headers` on Elysia), and every application handler returns a native
- * `Response`. Measured on the pinned `elysia@1.4.29`: when both carry the same
- * header key, the native response's value wins and the global policy is
- * silently dropped for that route. A route that sets its own
- * `Content-Security-Policy` — or a dependency that sets one — therefore
- * overrides the application-wide policy with no error and no log.
+ * Separate from the `onRequest` hook that also writes the security headers:
+ * that hook writes into the framework's mutable header bag, and on Elysia a
+ * header on a native `Response` wins over the same key in `set.headers` — so a
+ * route, or a dependency, setting its own `Content-Security-Policy` would
+ * silently replace the global one. This OVERWRITES instead.
  *
- * So the policy is applied twice, and the two placements cover different paths:
- *
- * - the `onRequest` hook covers what never reaches a route: the CORS preflight
- *   short-circuit and the unmatched-path 404, neither of which runs
- *   `mapResponse` (measured).
- * - this function covers everything that does produce a native `Response`,
- *   including thrown errors, and it OVERWRITES rather than fills in.
- *
- * Framework-independent by construction: it takes a `Response` and returns a
- * `Response`. A Hono move rewires one line in the server file.
+ * The two placements cover different paths: the hook covers what never reaches
+ * `mapResponse` (the CORS preflight short-circuit, the unmatched path), this
+ * covers every native `Response` produced, thrown errors included.
  */
 import { DEFAULT_CACHE_CONTROL } from './response';
 import { SECURITY_HEADERS } from './security-headers';
 
-export interface ResponsePolicyOptions {
+interface ResponsePolicyOptions {
   /**
-   * Wall-clock milliseconds from request admission to response, emitted as
-   * `Server-Timing`. Omitted when the caller has no measurement, rather than
-   * reported as zero.
+   * Milliseconds from request admission to response, emitted as
+   * `Server-Timing`. Omitted rather than reported as zero when unmeasured.
    */
   durationMs?: number;
 }

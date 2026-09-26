@@ -3,34 +3,18 @@
 /**
  * The coverage ratchet, over the AGGREGATE.
  *
- * `bunfig.toml`'s `coverageThreshold` cannot do this job, and that is measured
- * rather than assumed. On Bun 1.4.0 it is applied PER FILE: a project whose
- * aggregate function coverage is 50% fails `{ functions = 0.3 }` because ONE
- * file in it sits at 0%. This repository has files that legitimately sit at 0%
- * for a given tier — `utils/images/rgba.ts` is covered by the unit tier and not
- * by the integration one — so no per-file number can express "the suite must not
- * collapse". Two more traps in the same option, both measured on 1.4.0 against a
- * two-file project at 33% and 50% of lines with 100% of functions: the SINGULAR
- * key spelling (`{ line, function }`) is silently IGNORED — `{ line = 0.99 }`
- * exits 0 — and the plural object form's verdict does not follow from the values
- * it is given, which is worse than either. `{ lines = 0 }` exits 1 on that
- * project; `{ lines = 0.1, functions = 0.1 }` exits 0 while
- * `{ lines = 0.1, statements = 0.1 }` exits 1. Do not reach for it on the
- * strength of a single passing spelling.
+ * Not `bunfig.toml`'s `coverageThreshold`: Bun applies it PER FILE, and some
+ * files legitimately sit at 0% for a given tier, so it cannot express "the
+ * suite must not collapse". Its singular key spellings are also silently
+ * ignored, and the plural form's verdicts do not follow from its values; do not
+ * reach for it on the strength of one passing spelling.
  *
- * So the gate reads `coverage/lcov.info`, which is a stable machine-readable
- * format rather than a reporter's prose, and compares the summed totals —
- * against the rates in `FLOORS` AND the denominators in `MINIMUMS`, because a
- * ratio alone moves the wrong way when a test file is deleted. Before this, CI
- * computed coverage on the integration step, printed it to the job log and
- * asserted nothing — which is worse than having no gate, because a reader who
- * sees `--coverage` in a workflow stops looking for one.
+ * Reads `coverage/lcov.info` and compares the summed totals against the rates
+ * in `FLOORS` AND the denominators in `MINIMUMS`. The report must come from
+ * the tier the floors describe and from the run that just finished;
+ * `coverage/provenance.json`, written by `tests/helpers/run.ts`, says so.
  *
  * Usage: `bun scripts/check-coverage.ts [path/to/lcov.info]`
- *
- * The report has to come from the tier the floors were measured on and from the
- * run that just finished; `coverage/provenance.json`, written by
- * `tests/helpers/run.ts`, is what says so.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -38,40 +22,20 @@ import path from 'node:path';
 import { reportDigest } from '../tests/helpers/coverage';
 
 /**
- * Floors, a few points under the measured rate so ordinary variation between
- * runs does not flap while a real collapse fails.
+ * A few points under the WORST measured integration-tier run, from this gate's
+ * own summed lcov counters: the `text` reporter's `All files` row is computed
+ * differently, so do not copy a number from the job log. The tier does not load
+ * an identical file set every run, so a floor set from a good run flaps.
  *
- * Measured on the integration tier — from THIS gate's own numbers, over three
- * runs: 71.65%–80.70% of lines and 75.76%–82.92% of functions across 181 files,
- * 25.2k–25.7k lines and 1.6k–1.7k functions. They do not match the `text`
- * reporter's `All files` row on the same run: that row and these totals are
- * computed differently, and the summed lcov counters are what this file
- * asserts, so they are what the floors are set from. Do not copy a number out
- * of the job log into here.
- *
- * Set under the WORST of those runs, not the best. The tier does not load an
- * identical set of files every time under `--coverage` — the three runs
- * executed 525, 554 and 579 tests — so a floor set against a good run flaps.
- *
- * RAISE these as the rate rises; never lower one to make a red run green — that
- * is the move this file exists to make visible.
+ * RAISE these as the rate rises; never lower one to make a red run green.
  */
 const FLOORS = { lines: 0.66, functions: 0.72 } as const;
 
 /**
- * Floors on the DENOMINATOR, and they are what make the ratios above mean
- * anything.
- *
- * lcov records only the files a tier actually LOADED, so deleting a test file
- * removes its subject modules from the report entirely — numerator and
- * denominator together — and the ratio goes UP. Measured against this script:
- * two files at 50% of lines fail the line floor, and deleting the test that
- * exercised the uncovered one leaves one file at 100% and passes. A gate whose
- * stated purpose is "the suite must not collapse" was rewarding the collapse.
- *
- * `files === 0` alone is no guard at all: a suite cut to a single test clears
- * it. These are the same measurement as the rates above, with the same margin —
- * a real deletion moves them by far more than run-to-run variation does.
+ * Floors on the DENOMINATOR, which make the ratios mean anything: lcov records
+ * only the files a tier LOADED, so deleting a test removes its subjects from
+ * numerator and denominator together and the ratio goes UP. Same measurement
+ * and margin as `FLOORS`.
  */
 const MINIMUMS = {
   files: 150,
@@ -82,24 +46,13 @@ const MINIMUMS = {
 const DEFAULT_REPORT = path.join('coverage', 'lcov.info');
 
 /**
- * The tier whose loaded files `FLOORS` and `MINIMUMS` were measured against.
- *
- * lcov records neither a tier nor a time, so this gate has no way to tell one
- * report from another: it accepted a five-day-old file from a DIFFERENT tier,
- * containing files the thresholds here do not describe, and reported `coverage
- * ok`. CI happens to order the steps so the right report is on disk; a local
- * run, a reordered job or a cached `coverage/` directory does not.
- * `tests/helpers/run.ts` writes the sidecar this reads.
+ * The tier `FLOORS` and `MINIMUMS` describe. lcov records neither a tier nor a
+ * time, so without the sidecar a stale report from another tier, left by a
+ * local run or a cached `coverage/` directory, would pass.
  */
 const EXPECTED_TIER = 'integration';
 
-/**
- * How old a report may be and still describe THIS run.
- *
- * Generous on purpose — the integration tier plus the process tier run between
- * the stamp and this gate — and still far short of the five days that went
- * unnoticed.
- */
+/** Generous: the integration and process tiers run between the stamp and this gate. */
 const MAX_REPORT_AGE_MS = 60 * 60 * 1000;
 
 interface Provenance {
@@ -169,10 +122,9 @@ function assertProvenance(report: string): void {
       finishedAt: stamp.finishedAt,
     });
 
-  // The REPORT's own timestamp, not only the sidecar's. A run that produced no
-  // lcov — the tier invoked without `--coverage`, or the reporter list edited —
-  // leaves a fresh stamp beside a stale file, which is the same hole one layer
-  // in: a single-file integration run stamps but does not rewrite the report.
+  // The REPORT's own timestamp too: a run that produced no lcov (no
+  // `--coverage`, or the reporter list edited) leaves a fresh stamp beside a
+  // stale file.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from argv of a developer/CI-invoked script, not from a request
   const writtenAt = statSync(report).mtimeMs;
   if (writtenAt < started)
@@ -182,10 +134,9 @@ function assertProvenance(report: string): void {
       hint: 'the tier ran without --coverage, or bunfig stopped declaring the lcov reporter',
     });
 
-  // And the report's CONTENTS, which is the only thing a timestamp cannot fake.
-  // A later `bun test --coverage`, or a restored `coverage/` directory, replaces
-  // the report in place while the sidecar stays valid for its whole age window;
-  // the counters then read from one run are attributed to another tier's floors.
+  // And the CONTENTS, which a timestamp cannot vouch for: a later
+  // `bun test --coverage` or a restored `coverage/` replaces the report while the
+  // sidecar is still inside its age window.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- same
   const actual = reportDigest(readFileSync(report));
   if (stamp.digest !== actual)

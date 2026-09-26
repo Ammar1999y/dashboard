@@ -1,8 +1,9 @@
 {
-  "name": "app",
+  "name": "@app/back-end",
   "version": "0.1.0",
+  "private": true,
   "scripts": {
-    "preinstall": "bun scripts/require-bun.mjs",
+    "preinstall": "bun ../../scripts/require-bun.mjs",
     "dev": "NODE_ENV=development bun --watch --bun server.ts",
     "start": "NODE_ENV=production bun --bun server.ts",
     "build": "bun scripts/build-openapi.ts && tsc --noEmit",
@@ -22,26 +23,23 @@
     "fix": "lefthook run fix",
     "scan:secrets": "mise exec -- gitleaks git . --redact --verbose --no-banner",
     "scan:sast": "mise exec -- semgrep scan --config=p/typescript --config=p/secrets --error --metrics=off",
-    "prepare": "lefthook install",
     "db:generate": "drizzle-kit generate",
     "check:schema-drift": "bun scripts/check-schema-drift.ts",
     "db:migrate": "bun scripts/migrate.ts",
     "smoke": "bun scripts/smoke.ts",
-    "check:runtime": "bun scripts/require-bun.mjs",
+    "check:runtime": "bun ../../scripts/require-bun.mjs",
     "preflight:credentials": "bun scripts/check-password-peppers.ts",
     "preflight:two-factor": "bun scripts/check-two-factor-rollout.ts",
     "test:matrix": "bun tests/helpers/run.ts matrix"
   },
   "packageManager": "bun@1.4.2",
   "engines": {
-    "npm": "use bun (run: node scripts/require-bun.mjs)",
-    "yarn": "use bun (run: node scripts/require-bun.mjs)",
-    "pnpm": "use bun (run: node scripts/require-bun.mjs)"
-  },
-  "overrides": {
-    "esbuild": "^0.28"
+    "npm": "use bun (run: node ../../scripts/require-bun.mjs)",
+    "yarn": "use bun (run: node ../../scripts/require-bun.mjs)",
+    "pnpm": "use bun (run: node ../../scripts/require-bun.mjs)"
   },
   "dependencies": {
+    "@app/shared": "workspace:*",
     "@aws-sdk/client-s3": "^3",
     "@aws-sdk/s3-request-presigner": "^3",
     "@better-auth/passkey": "1.7.3",
@@ -51,7 +49,6 @@
     "blurhash": "^2",
     "drizzle-orm": "^0.45",
     "elysia": "^1.4",
-    "isomorphic-dompurify": "^4",
     "jsdom": "^30",
     "nodemailer": "^10",
     "svgo": "^4",
@@ -60,7 +57,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@ianvs/prettier-plugin-sort-imports": "^4",
-    "@types/bun": "^1.4.1",
+    "@types/bun": "^1.4.2",
     "@types/jsdom": "^30",
     "@types/node": "^26",
     "drizzle-kit": "^0.31",
@@ -72,15 +69,12 @@
     "eslint-plugin-no-unsanitized": "^4",
     "eslint-plugin-prettier": "^5",
     "eslint-plugin-security": "^4",
-    "eslint-plugin-unicorn": "^74",
+    "eslint-plugin-unicorn": "^75",
     "globals": "^17",
     "knip": "^6",
     "lefthook": "^2",
     "prettier": "^3",
     "typescript": "^6",
     "typescript-eslint": "^8"
-  },
-  "trustedDependencies": [
-    "argon2"
-  ]
+  }
 }

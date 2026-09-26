@@ -12,7 +12,6 @@ import type { SeededUser } from '../helpers/session';
 import { and, eq } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { otpMsg } from '@/app/api/auth/otp/messages';
 import { db } from '@/db';
 import {
   auditLogs,
@@ -24,11 +23,13 @@ import {
   verificationSessions,
 } from '@/db/schema';
 import { symmetricEncrypt } from 'better-auth/crypto';
-import { auth } from '@/lib/auth';
-import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { HTTP_STATUS } from '@/utils/api-messages';
-import { hashOtpCode } from '@/utils/otp';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { auth } from '@/lib/auth';
+import { otpMsg } from '@/lib/auth/messages';
+import { PUBLIC_ORIGIN } from '@/lib/env';
+import { hashOtpCode } from '@/lib/otp/hash';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
