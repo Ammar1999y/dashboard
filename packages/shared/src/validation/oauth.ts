@@ -1,5 +1,8 @@
 import * as z from 'zod';
 
+/** Every provider this server can sign in with; which are enabled is server configuration. */
+export const OAUTH_PROVIDERS = ['google'] as const;
+
 /** `POST /api/auth/oauth/google/start`. */
 export const googleStartSchema = z
   .object({

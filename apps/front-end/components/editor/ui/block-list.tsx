@@ -1,54 +1,47 @@
-/* eslint-disable react/display-name */
 'use client';
 
 import type { TListElement } from 'platejs';
 import type { PlateElementProps, RenderNodeWrapper } from 'platejs/react';
-import type React from 'react';
 
 import { isOrderedList } from '@platejs/list';
 import {
   useTodoListElement,
   useTodoListElementState,
 } from '@platejs/list/react';
+import { KEYS } from 'platejs';
 import { useReadOnly } from 'platejs/react';
 import { cn } from '@/lib/utils';
 
 import { Checkbox } from '@/components/ui/checkbox';
-import styles from '@/components/editor/ui/editor-elements.module.css';
-
-const config: Record<
-  string,
-  {
-    Li: React.FC<PlateElementProps>;
-    Marker: React.FC<PlateElementProps>;
-  }
-> = {
-  todo: {
-    Li: TodoLi,
-    Marker: TodoMarker,
-  },
-};
+import {
+  LIST_CLASS,
+  TODO_CHECK_ICON,
+  TODO_MARKER_CLASS,
+  todoItemClass,
+} from '@/components/editor/styles';
 
 export const BlockList: RenderNodeWrapper = (props) => {
   if (!props.element.listStyleType) return;
 
-  return (props) => <List {...props} />;
+  return List;
 };
 
 function List(props: PlateElementProps) {
   const { listStart, listStyleType } = props.element as TListElement;
-  const { Li, Marker } = config[listStyleType] ?? {};
-  const List = isOrderedList(props.element) ? 'ol' : 'ul';
+  const Tag = isOrderedList(props.element) ? 'ol' : 'ul';
+  const isTodo = listStyleType === KEYS.listTodo;
 
   return (
-    <List
-      className='relative m-0 p-0'
-      start={listStart}
-      style={{ listStyleType }}
-    >
-      {Marker && <Marker {...props} />}
-      {Li ? <Li {...props} /> : <li>{props.children}</li>}
-    </List>
+    <Tag className={LIST_CLASS} start={listStart} style={{ listStyleType }}>
+      {isTodo && <TodoMarker {...props} />}
+      <li
+        className={
+          isTodo ? todoItemClass(props.element.checked === true) : undefined
+        }
+      >
+        {props.children}
+      </li>
+    </Tag>
   );
 }
 
@@ -60,27 +53,10 @@ function TodoMarker(props: PlateElementProps) {
   return (
     <div contentEditable={false}>
       <Checkbox
-        className={cn(
-          styles.todoCheckbox,
-          'xxxx absolute top-1',
-          readOnly && 'pointer-events-none'
-        )}
+        className={cn(TODO_MARKER_CLASS, readOnly && 'pointer-events-none')}
+        icon={TODO_CHECK_ICON}
         {...checkboxProps}
       />
     </div>
-  );
-}
-
-function TodoLi(props: PlateElementProps) {
-  return (
-    <li
-      className={cn(
-        'list-none',
-        (props.element.checked as boolean) &&
-          'text-muted-foreground line-through'
-      )}
-    >
-      {props.children}
-    </li>
   );
 }

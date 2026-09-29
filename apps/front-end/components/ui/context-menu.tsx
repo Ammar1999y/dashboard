@@ -1,10 +1,15 @@
 import type * as React from 'react';
 
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
-import { ChevronRightIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-import { popoverMotion, popoverSurface } from './popover-surface';
+import { Icon } from '@/components/ui/icon';
+import {
+  menuContent,
+  menuItem,
+  menuSubContent,
+  menuSubTrigger,
+} from '@/components/ui/menu-surface';
 
 function ContextMenu({
   ...props
@@ -44,16 +49,16 @@ function ContextMenuSubTrigger({
 }) {
   return (
     <ContextMenuPrimitive.SubTrigger
-      className={cn(
-        "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[inset]:ps-8 data-[state=open]:text-accent-foreground [&_svg:not([class*='size-'])]:size-4",
-        className
-      )}
+      className={cn(menuItem, menuSubTrigger, className)}
       data-inset={inset}
       data-slot='context-menu-sub-trigger'
       {...props}
     >
       {children}
-      <ChevronRightIcon className='ms-auto text-muted-foreground rtl:rotate-180' />
+      <Icon
+        icon='solar:alt-arrow-right-linear'
+        className='ms-auto text-muted-foreground rtl:rotate-180'
+      />
     </ContextMenuPrimitive.SubTrigger>
   );
 }
@@ -65,9 +70,9 @@ function ContextMenuSubContent({
   return (
     <ContextMenuPrimitive.SubContent
       className={cn(
-        popoverSurface,
-        popoverMotion,
-        'min-w-32 origin-[--radix-context-menu-content-transform-origin] overflow-hidden p-1 shadow-lg',
+        menuContent,
+        menuSubContent,
+        'origin-[--radix-context-menu-content-transform-origin]',
         className
       )}
       data-slot='context-menu-sub-content'
@@ -84,9 +89,8 @@ function ContextMenuContent({
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
         className={cn(
-          popoverSurface,
-          popoverMotion,
-          'max-h-[--radix-context-menu-content-available-height] min-w-32 origin-[--radix-context-menu-content-transform-origin] overflow-y-auto overflow-x-hidden p-1',
+          menuContent,
+          'max-h-[--radix-context-menu-content-available-height] origin-[--radix-context-menu-content-transform-origin] overflow-y-auto',
           className
         )}
         data-slot='context-menu-content'
@@ -107,10 +111,7 @@ function ContextMenuItem({
 }) {
   return (
     <ContextMenuPrimitive.Item
-      className={cn(
-        "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[inset]:ps-8 data-[variant=destructive]:text-destructive data-[disabled]:opacity-50 data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 [&_svg:not([class*='size-'])]:size-4",
-        className
-      )}
+      className={cn(menuItem, className)}
       data-inset={inset}
       data-slot='context-menu-item'
       data-variant={variant}

@@ -21,36 +21,27 @@ import {
   OTP_CHANNELS,
   TWO_FACTOR_METHODS,
 } from './enums';
-import { parseEnumList } from './env-list';
 import { MSG_CHANNEL_DISABLED, otpCodeSchema } from './otp';
 import { idSchema, reauthPasswordSchema } from './rules';
-
-export const TWO_FACTOR_METHODS_VAR = 'NEXT_PUBLIC_ENABLED_2FA_METHODS';
-export const TWO_FACTOR_OTP_CHANNELS_VAR =
-  'NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS';
+import {
+  parseTwoFactorMethods,
+  parseTwoFactorOtpChannels,
+  TWO_FACTOR_METHODS_VAR,
+  TWO_FACTOR_OTP_CHANNELS_VAR,
+} from './two-factor-lists';
 
 /**
  * Deliberately a SEPARATE variable from `NEXT_PUBLIC_ENABLED_OTP_CHANNELS`: a
  * second factor delivered to the contact that can reset the password is not a
  * second factor against anyone holding that contact.
  */
-const ENABLED_TWO_FACTOR_OTP_CHANNELS: readonly OtpChannel[] = parseEnumList(
-  process.env.NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS,
-  {
-    name: TWO_FACTOR_OTP_CHANNELS_VAR,
-    allowed: OTP_CHANNELS,
-    noun: 'channel',
-    unsetMeans: 'disable the OTP second factor',
-  }
-).filter((channel) => PHONE_ENABLED || !isPhoneChannel(channel));
+const ENABLED_TWO_FACTOR_OTP_CHANNELS: readonly OtpChannel[] =
+  parseTwoFactorOtpChannels(
+    process.env.NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS
+  ).filter((channel) => PHONE_ENABLED || !isPhoneChannel(channel));
 
 export const ENABLED_TWO_FACTOR_METHODS: readonly TwoFactorMethod[] =
-  parseEnumList(process.env.NEXT_PUBLIC_ENABLED_2FA_METHODS, {
-    name: TWO_FACTOR_METHODS_VAR,
-    allowed: TWO_FACTOR_METHODS,
-    noun: 'method',
-    unsetMeans: 'disable two-factor authentication entirely',
-  });
+  parseTwoFactorMethods(process.env.NEXT_PUBLIC_ENABLED_2FA_METHODS);
 
 const METHOD_SET = new Set<string>(ENABLED_TWO_FACTOR_METHODS);
 const CHANNEL_SET = new Set<string>(ENABLED_TWO_FACTOR_OTP_CHANNELS);

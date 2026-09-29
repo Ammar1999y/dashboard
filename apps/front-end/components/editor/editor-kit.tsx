@@ -1,10 +1,6 @@
 'use client';
 
-import type { Value } from 'platejs';
-import type { TPlateEditor } from 'platejs/react';
-
 import { TrailingBlockPlugin } from 'platejs';
-import { useEditorRef } from 'platejs/react';
 
 import { AlignKit } from './plugins/align-kit';
 import { AutoformatKit } from './plugins/autoformat-kit';
@@ -38,116 +34,41 @@ import { TableKit } from './plugins/table-kit';
 import { TocKit } from './plugins/toc-kit';
 import { ToggleKit } from './plugins/toggle-kit';
 
-export const EditorKit = [
-  // Elements
-
-  // عناصر أساسية: فقرة، 6 عناوين، اقتباس، خط أفقي
+const EDITOR_KIT = [
   ...BasicBlocksKit,
-
-  // بلوكات كود برمجي مع syntax highlighting
   ...CodeBlockKit,
-
-  // جداول قابلة للتعديل (إضافة/حذف صفوف وأعمدة)
   ...TableKit,
-
-  // عناصر قابلة للطي/فتح (collapse/expand)
   ...ToggleKit,
-
-  // جدول محتويات تلقائي من العناوين + تنقل سريع
   ...TocKit,
-
-  // صور، فيديو، ملفات + رفع drag & drop
   ...MediaKit,
-
-  // مربعات تنبيه/ملاحظات ملونة (info, warning, error...)
   ...CalloutKit,
-
-  // تقسيم المحتوى لأعمدة متعددة
   ...ColumnKit,
-
-  // معادلات رياضية (LaTeX/KaTeX)
   ...MathKit,
-
-  // إدراج تواريخ مع date picker
   ...DateKit,
-
-  // روابط تشعبية مع معاينة
   ...LinkKit,
-
-  // Marks
-
-  // تنسيق نص: Bold, Italic, Underline, Code, Strike, Sub/Sup, Highlight, Kbd
   ...BasicMarksKit,
-
-  // حجم ونوع الخط + لون النص/الخلفية
   ...FontKit,
-
-  // Block Style
-
-  // قوائم: مرقمة، نقطية، todo checkboxes
   ...ListKit,
-
-  // محاذاة: يمين، يسار، وسط، justify
   ...AlignKit,
-
-  // اتجاه النص: RTL, LTR, Auto
   ...DirKit,
-
-  // تحكم بارتفاع السطر (line-height)
   ...LineHeightKit,
-
-  // Collaboration
-
-  // نظام نقاشات متعدد المستخدمين (threads)
   ...DiscussionKit,
-
-  // تعليقات على النص المحدد
   ...CommentKit,
-
-  // اقتراحات تعديل (track changes)
   ...SuggestionKit,
-
-  // Editing
-
-  // قائمة أوامر سريعة بـ / (slash commands)
   ...SlashKit,
-
-  // تنسيق تلقائي Markdown (## عنوان، **bold**، - قائمة...)
   ...AutoformatKit,
-
-  // قائمة سياق عند تحديد عنصر (copy, delete, turn into...)
   ...BlockMenuKit,
-
-  // سحب وإفلات العناصر لإعادة ترتيبها
   ...DndKit,
-
-  // إيموجي picker
   ...EmojiKit,
-
-  // كسر خروج من عناصر (Shift+Enter في quote/code...)
   ...ExitBreakKit,
-
-  // يضمن وجود فقرة فارغة نهائية دائماً
   TrailingBlockPlugin,
-
-  // Parsers
-
-  // استيراد/تصدير ملفات Word (.docx)
   ...DocxKit,
-
-  // استيراد/تصدير Markdown
   ...MarkdownKit,
-
-  // نص placeholder للعناصر الفارغة
   ...BlockPlaceholderKit,
-
-  // شريط أدوات ثابت في الأعلى
   ...FixedToolbarKit,
-
-  // شريط أدوات عائم عند تحديد نص
   ...FloatingToolbarKit,
 ];
 
-type MyEditor = TPlateEditor<Value, (typeof EditorKit)[number]>;
-
-export const useEditor = () => useEditorRef<MyEditor>();
+// Plate splices a plugin that overrides a core one (the paragraph) out of the
+// array an editor is created with, so each editor needs its own copy.
+export const createEditorKit = () => [...EDITOR_KIT];

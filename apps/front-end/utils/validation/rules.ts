@@ -3,7 +3,6 @@ import type { EntityID } from '@/types';
 import * as z from 'zod';
 
 import { normalizeArabicDigits, positiveInt, validID } from '..';
-import { sanitizeSvg } from '../images/svg-optimizer';
 import { safeDate } from '../time';
 import {
   EMAIL_MAX,
@@ -86,19 +85,6 @@ export const datePreprocess = (val: unknown) => {
   const date = safeDate(val as string);
   return date ? date.toISOString() : null;
 };
-
-export const fileUploadSchema = ({
-  max,
-  withPdf = false,
-}: {
-  max: number;
-  withPdf?: boolean;
-}) =>
-  z
-    .file(`قم برفع صور ${withPdf ? 'أو ملف PDF' : ''} صحيحة`)
-    .min(1000, `حجم الصورة  ${withPdf ? 'أو ملف PDF' : ''} صغير للغايه`)
-    .max(max, `حجم الصورة  ${withPdf ? 'أو ملف PDF' : ''} كبير للغايه`) // في الواجهه نسمح للمستخدم انه يرفع ملف اكبر عادي لاكن سوف نقوم بتصغيره قبل ارساله الى السيرفر
-    .mime(['image/png', 'image/webp', ...(withPdf ? ['application/pdf'] : [])]);
 
 // eslint-disable-next-line security/detect-unsafe-regex
 const colorRegex = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
@@ -220,14 +206,6 @@ export const orderedListSchema = <T extends z.ZodType<{ order: number }>>(
         .nullish()
     )
     .nullish();
-
-export const SVGIconSchema = z
-  .string()
-  .min(1, 'الأيقونه مطلوبه')
-  .refine((val) => sanitizeSvg(val).isValid, {
-    message: 'أيقونة SVG غير صحيحة أو تحتوي على محتوى غير آمن',
-  })
-  .transform((val) => sanitizeSvg(val).cleanedSvg);
 
 // Saudi phone: strips non-digits, accepts 966XXXXXXXXX / 05XXXXXXXX / 5XXXXXXXX
 const phoneCleanupRegex = /[^\d]/g;

@@ -3,11 +3,12 @@ import type { AuditMeta } from '@/lib/audit';
 import type { EntityID } from '@app/shared/types';
 import type { OtpChannel } from '@app/shared/validation/enums';
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { users } from '@/db/schema';
 
 import { auditLog } from '@/lib/audit';
+import { activeUser } from '@/lib/users/filters';
 
 /**
  * Idempotently flip a contact's verified flag and audit the transition, under a
@@ -35,13 +36,7 @@ export async function markContactVerified(
       phoneNumberVerified: users.phoneNumberVerified,
     })
     .from(users)
-    .where(
-      and(
-        eq(users.id, opts.userId),
-        isNull(users.deletedAt),
-        eq(users.isActive, true)
-      )
-    )
+    .where(activeUser(eq(users.id, opts.userId)))
     .for('update');
 
   if (!currentUser) opts.onMissing();

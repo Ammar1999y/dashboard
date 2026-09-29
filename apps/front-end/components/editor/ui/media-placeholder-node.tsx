@@ -1,6 +1,5 @@
 'use client';
 
-import type { MediaType } from '@/components/editor/media-config';
 import type { TPlaceholderElement } from 'platejs';
 import type { PlateElementProps } from 'platejs/react';
 
@@ -11,43 +10,19 @@ import {
   PlaceholderProvider,
   updateUploadHistory,
 } from '@platejs/media/react';
-import { AudioLines, FileUp, Film, ImageIcon, Loader2Icon } from 'lucide-react';
-import { KEYS } from 'platejs';
 import { PlateElement, useEditorPlugin, withHOC } from 'platejs/react';
 import { useFilePicker } from 'use-file-picker';
 import { cn } from '@/lib/utils';
 
-import { useUploadFile } from '@/hooks/use-upload-file';
+import { formatBytes } from '@/utils/format-bytes';
 
-const CONTENT: Record<
-  string,
-  {
-    accept: string[];
-    content: React.ReactNode;
-    icon: React.ReactNode;
-  }
-> = {
-  [KEYS.audio]: {
-    accept: ['audio/*'],
-    content: 'Add an audio file',
-    icon: <AudioLines />,
-  },
-  [KEYS.file]: {
-    accept: ['*'],
-    content: 'Add a file',
-    icon: <FileUp />,
-  },
-  [KEYS.img]: {
-    accept: ['image/*'],
-    content: 'Add an image',
-    icon: <ImageIcon />,
-  },
-  [KEYS.video]: {
-    accept: ['video/*'],
-    content: 'Add a video',
-    icon: <Film />,
-  },
-};
+import { Icon } from '@/components/ui/icon';
+import { useUploadFile } from '@/components/editor/hooks/use-upload-file';
+import {
+  MEDIA_TYPE_BY_NODE,
+  mediaConfig,
+  toAcceptList,
+} from '@/components/editor/media-config';
 
 export const PlaceholderElement = withHOC(
   PlaceholderProvider,
@@ -61,14 +36,16 @@ export const PlaceholderElement = withHOC(
 
     const loading = isUploading && uploadingFile;
 
-    const currentContent = CONTENT[element.mediaType];
+    const mediaType = MEDIA_TYPE_BY_NODE[element.mediaType] ?? 'file';
+    const config = mediaConfig[mediaType];
+    const accept = React.useMemo(() => toAcceptList(config.accept), [config]);
 
-    const isImage = element.mediaType === KEYS.img;
+    const isImage = mediaType === 'image';
 
     const imageRef = React.useRef<HTMLImageElement>(null);
 
     const { openFilePicker } = useFilePicker({
-      accept: currentContent.accept,
+      accept,
       multiple: true,
       onFilesSelected: (data: { plainFiles?: File[] }) => {
         if (!data.plainFiles || data.plainFiles.length === 0) return;
@@ -79,10 +56,7 @@ export const PlaceholderElement = withHOC(
         replaceCurrentPlaceholder(firstFile);
 
         if (restFiles.length > 0) {
-          // `insert.media` is declared as taking a `FileList`, but it only ever
-          // iterates the argument (`for…of` / `Array.from`), so the `File[]`
-          // that `useFilePicker` hands us is fine. The typing of `data` used to
-          // be `any`, which hid this mismatch.
+          // Typed as a `FileList`, but `insert.media` only iterates it.
           editor
             .getTransforms(PlaceholderPlugin)
             .insert.media(restFiles as unknown as FileList);
@@ -92,15 +66,10 @@ export const PlaceholderElement = withHOC(
 
     const replaceCurrentPlaceholder = React.useCallback(
       (file: File) => {
-        let type: MediaType = 'file';
-        if (element.mediaType === KEYS.img) type = 'image';
-        else if (element.mediaType === KEYS.video) type = 'video';
-        else if (element.mediaType === KEYS.audio) type = 'audio';
-
-        void uploadFile(file, type);
+        void uploadFile(file, mediaType);
         api.placeholder.addUploadingFile(element.id as string, file);
       },
-      [api.placeholder, element.id, element.mediaType, uploadFile]
+      [api.placeholder, element.id, mediaType, uploadFile]
     );
 
     React.useEffect(() => {
@@ -116,7 +85,7 @@ export const PlaceholderElement = withHOC(
           initialHeight: imageRef.current?.height,
           initialWidth: imageRef.current?.width,
           isUpload: true,
-          name: element.mediaType === KEYS.file ? uploadedFile.name : '',
+          name: mediaType === 'file' ? uploadedFile.name : '',
           placeholderId: element.id as string,
           type: element.mediaType ?? '',
           url: uploadedFile.url,
@@ -128,7 +97,7 @@ export const PlaceholderElement = withHOC(
       });
 
       api.placeholder.removeUploadingFile(element.id as string);
-    }, [uploadedFile, element.id, api.placeholder, editor, element]);
+    }, [uploadedFile, element.id, api.placeholder, editor, element, mediaType]);
 
     // React dev mode will call React.useEffect twice
     const isReplaced = React.useRef(false);
@@ -148,14 +117,7 @@ export const PlaceholderElement = withHOC(
     }, [api.placeholder, element.id, replaceCurrentPlaceholder]);
 
     return (
-      <PlateElement
-        className='my-1'
-        {...props}
-        attributes={{
-          ...props.attributes,
-          'data-ltr-element': true,
-        }}
-      >
+      <PlateElement className='my-1' {...props}>
         {(!loading || !isImage) && (
           <div
             className={cn(
@@ -165,20 +127,23 @@ export const PlaceholderElement = withHOC(
             onClick={() => !loading && openFilePicker()}
           >
             <div className='relative me-3 flex text-muted-foreground/80 [&_svg]:size-6'>
-              {currentContent.icon}
+              <Icon icon={config.icon} />
             </div>
             <div className='whitespace-nowrap text-sm text-muted-foreground'>
               <div>
-                {loading ? uploadingFile?.name : currentContent.content}
+                {loading ? uploadingFile?.name : `إضافة ${config.label}`}
               </div>
 
               {loading && !isImage && (
                 <div className='mt-1 flex items-center gap-1.5'>
-                  <div>{formatBytes(uploadingFile?.size ?? 0)}</div>
+                  <div>{formatBytes(uploadingFile?.size ?? 0, 0)}</div>
                   <div>–</div>
                   <div className='flex items-center'>
-                    <Loader2Icon className='me-1 size-3.5 animate-spin text-muted-foreground' />
-                    {progress ?? 0}%
+                    <Icon
+                      icon='lucide:loader-circle'
+                      className='me-1 size-3.5 animate-spin text-muted-foreground'
+                    />
+                    {progress}%
                   </div>
                 </div>
               )}
@@ -236,7 +201,10 @@ function ImageProgress({
       />
       {progress < 100 && (
         <div className='absolute bottom-1 flex items-center rounded-full bg-black/50 px-1 py-0.5 space-x-2 ltr:left-1 rtl:right-1'>
-          <Loader2Icon className='size-3.5 animate-spin text-muted-foreground' />
+          <Icon
+            icon='lucide:loader-circle'
+            className='size-3.5 animate-spin text-muted-foreground'
+          />
           <span className='text-xs font-medium text-white'>
             {Math.round(progress)}%
           </span>
@@ -244,27 +212,4 @@ function ImageProgress({
       )}
     </div>
   );
-}
-
-function formatBytes(
-  bytes: number,
-  opts: {
-    decimals?: number;
-    sizeType?: 'accurate' | 'normal';
-  } = {}
-) {
-  const { decimals = 0, sizeType = 'normal' } = opts;
-
-  if (bytes === 0) return '0 Byte';
-
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-  const accurateSizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB'];
-
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-
-  return `${(bytes / 1024 ** i).toFixed(decimals)} ${
-    sizeType === 'accurate'
-      ? (accurateSizes[i] ?? 'Bytest')
-      : (sizes[i] ?? 'Bytes')
-  }`;
 }

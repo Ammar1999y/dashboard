@@ -7,6 +7,8 @@ import { useMediaState } from '@platejs/media/react';
 import { ResizableProvider } from '@platejs/resizable';
 import { PlateElement, withHOC } from 'platejs/react';
 
+import { CAPTION_PLACEHOLDER } from '@/components/editor/labels';
+
 import { Caption, CaptionTextarea } from './caption';
 
 export const AudioElement = withHOC(
@@ -15,14 +17,7 @@ export const AudioElement = withHOC(
     const { align = 'center', readOnly, unsafeUrl } = useMediaState();
 
     return (
-      <PlateElement
-        {...props}
-        attributes={{
-          ...props.attributes,
-          'data-ltr-element': true,
-        }}
-        className='mb-1'
-      >
+      <PlateElement {...props} className='mb-1'>
         <figure
           className='group relative cursor-default'
           contentEditable={false}
@@ -34,7 +29,7 @@ export const AudioElement = withHOC(
           <Caption align={align} style={{ width: '100%' }}>
             <CaptionTextarea
               className='h-20'
-              placeholder='Write a caption...'
+              placeholder={CAPTION_PLACEHOLDER}
               readOnly={readOnly}
             />
           </Caption>

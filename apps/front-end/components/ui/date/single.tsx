@@ -9,8 +9,8 @@ import { DateActions } from './components/date-actions';
 import { DateTrigger } from './components/date-trigger';
 import { DATE_PLACEHOLDER, DEFAULT_DATE_LOCALE } from './constants';
 import { DateInput } from './date-input';
-import { useSingleDateState } from './hooks/use-single-date-state';
-import { formatDate } from './utils';
+import { useDatePopoverState } from './hooks/use-date-popover-state';
+import { formatDate, parseInitialDate } from './utils';
 
 export interface SingleDatePickerProps {
   initialDate?: Date | string;
@@ -23,6 +23,9 @@ export interface SingleDatePickerProps {
   placeholder?: string;
   showIcon?: boolean;
 }
+
+const dateAnchor = (date: Date | undefined) => date;
+const today = () => new Date();
 
 export const SingleDatePicker = memo(
   ({
@@ -38,14 +41,19 @@ export const SingleDatePicker = memo(
   }: SingleDatePickerProps) => {
     const {
       isOpen,
-      date,
-      setDate,
+      value: date,
+      setDraft: setDate,
       month,
       setMonth,
       handleOpenChange,
       handleSave,
       handleCancel,
-    } = useSingleDateState({ initialDate, onChange });
+    } = useDatePopoverState<Date | undefined>({
+      initialValue: () => parseInitialDate(initialDate),
+      anchorOf: dateAnchor,
+      fallbackMonth: today,
+      onChange,
+    });
 
     const label = date
       ? formatDate(date, locale)

@@ -117,6 +117,9 @@ export const createSectionSchema = z.object({
 // Update section schema (extends create schema with id)
 export const updateSectionSchema = createSectionSchema.extend({
   id: idSchema,
+  // Read-only after creation: its disabled input submits nothing, and an
+  // absent slug must stay absent rather than be sent as `''`.
+  slug: slugSchema.optional(),
 });
 
 // Type inference

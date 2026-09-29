@@ -23,6 +23,13 @@ interface EnvListSpec<T extends string> {
   unsetMeans: string;
 }
 
+function isAllowed<T extends string>(
+  allowed: readonly T[],
+  value: string
+): value is T {
+  return (allowed as readonly string[]).includes(value);
+}
+
 /**
  * The listed values in order, or `[]` when `value` is unset or blank.
  *
@@ -48,7 +55,7 @@ export function parseEnumList<T extends string>(
         `${spec.name} contains an empty entry; write it as a comma-separated ` +
           `list of ${valid}.`
       );
-    if (!(spec.allowed as readonly string[]).includes(value))
+    if (!isAllowed(spec.allowed, value))
       throw new Error(
         `${spec.name} names an unknown ${spec.noun} "${value}". ` +
           `Valid values: ${valid}. Leave the variable unset to ${spec.unsetMeans}.`
@@ -56,7 +63,7 @@ export function parseEnumList<T extends string>(
     if (seen.has(value))
       throw new Error(`${spec.name} lists "${value}" more than once.`);
     seen.add(value);
-    parsed.push(value as T);
+    parsed.push(value);
   }
 
   return parsed;

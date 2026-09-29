@@ -1,52 +1,27 @@
-import { eq } from 'drizzle-orm';
-
-import { db, withTransaction } from '@/db';
-import { users } from '@/db/schema';
+import { db } from '@/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { APIError, createAuthMiddleware, isAPIError } from 'better-auth/api';
+import { createAuthMiddleware } from 'better-auth/api';
 import { captcha, openAPI } from 'better-auth/plugins';
 
-import {
-  EMAIL_NOT_VERIFIED_CODE,
-  HTTP_STATUS,
-  MSG_EMAIL_NOT_VERIFIED,
-  MSG_INVALID_CREDENTIALS,
-  MSG_PHONE_NOT_VERIFIED,
-  PHONE_NOT_VERIFIED_CODE,
-} from '@app/shared/api-messages';
 import {
   SESSION_ADDITIONAL_FIELDS,
   USER_ADDITIONAL_FIELDS,
 } from '@app/shared/auth-fields';
-import {
-  REQUIRE_EMAIL_VERIFICATION,
-  REQUIRE_PHONE_VERIFICATION,
-} from '@app/shared/config';
-import { validID } from '@app/shared/utils';
-import {
-  EMAIL_OTP_AVAILABLE,
-  PHONE_OTP_AVAILABLE,
-} from '@app/shared/validation/otp';
 
-import { auditLog, boundedAuditMeta } from '@/lib/audit';
-import { TRUSTED_IP_HEADERS } from '@/lib/audit/constants';
 import { PUBLIC_ORIGIN } from '@/lib/env';
-import { sanitizePermissions } from '@/lib/permissions/utils';
+import { TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
 
-import { sanitizeForLog } from '@/utils/log';
-
-import { authError, BASE_ERROR_CODES, CUSTOM_AUTH_CODE } from './errors';
+import { localiseAuthErrors } from './errors';
 import { oauth } from './oauth/plugin';
 import { hashPassword } from './password/hash';
 import { consumePasswordProof } from './password/proof';
 import { passwordless } from './passwordless';
-import { enforcePathPolicy, SESSION_METHOD_BY_PATH } from './path-policy';
+import { enforcePathPolicy } from './path-policy';
 import { reauthentication } from './reauth/plugin';
-import { revokeSessionArtifacts } from './session/rotation';
-import { authAdapterOptions, authDatabase } from './transaction';
+import { sessionDatabaseHooks } from './session/hooks';
+import { authAdapterOptions } from './transaction';
 import { twoFactorPlugins } from './two-factor/plugin';
-import { roleAllowsLogin } from './user-eligibility';
 
 export const auth = betterAuth({
   // The parsed value, not the environment variable: the CORS allow-list entry
@@ -69,37 +44,7 @@ export const auth = betterAuth({
 
   hooks: {
     before: createAuthMiddleware(enforcePathPolicy),
-    after: createAuthMiddleware(async (ctx) => {
-      // Better Auth's own predicate, not `instanceof`: it also accepts an
-      // APIError that crossed a module-instance boundary, which is the same
-      // value the dispatcher itself treats as the failure.
-      const returned = ctx.context?.returned;
-      const failure = isAPIError(returned) ? returned : undefined;
-      const errorCode = failure?.body?.code;
-
-      // An own-property read, not `BASE_ERROR_CODES[code]`: the code is
-      // framework-supplied text, and `constructor` or `toString` would resolve
-      // to an inherited function where the message belongs.
-      const mappedMessage =
-        typeof errorCode === 'string' &&
-        Object.hasOwn(BASE_ERROR_CODES, errorCode)
-          ? BASE_ERROR_CODES[errorCode]
-          : undefined;
-
-      if (errorCode && errorCode !== CUSTOM_AUTH_CODE && mappedMessage) {
-        throw authError(
-          failure?.status || failure?.statusCode || HTTP_STATUS.BAD_REQUEST,
-          mappedMessage
-        );
-      }
-      if (
-        errorCode &&
-        errorCode !== CUSTOM_AUTH_CODE &&
-        errorCode !== EMAIL_NOT_VERIFIED_CODE &&
-        errorCode !== PHONE_NOT_VERIFIED_CODE
-      )
-        console.error(sanitizeForLog(ctx.context?.returned));
-    }),
+    after: createAuthMiddleware(localiseAuthErrors),
   },
 
   advanced: {
@@ -116,7 +61,7 @@ export const auth = betterAuth({
     // Better Auth reads the headers itself, so it resolves no IP locally.
     //
     // TODO(proxy-trust): the header is trusted on syntax alone — see
-    // `TRUSTED_IP_HEADERS` in `lib/audit`.
+    // `TRUSTED_IP_HEADERS` in `lib/http/client-ip.ts`.
     ipAddress: {
       ipAddressHeaders: [...TRUSTED_IP_HEADERS],
       ipv6Subnet: 64,
@@ -139,183 +84,7 @@ export const auth = betterAuth({
     modelName: 'sessions',
   },
   databaseHooks: {
-    session: {
-      create: {
-        // Fail-closed: any error here must block session creation.
-        before: async (session) => {
-          const userId = validID(session.userId);
-          if (!userId)
-            throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
-
-          const userData = await authDatabase().query.users.findFirst({
-            where: (users, { eq, and, isNull }) =>
-              and(eq(users.id, userId), isNull(users.deletedAt)),
-            columns: {
-              isActive: true,
-              roleId: true,
-              emailVerified: true,
-              phoneNumberVerified: true,
-            },
-            with: {
-              role: {
-                columns: {
-                  id: true,
-                  roleName: true,
-                  scope: true,
-                  isActive: true,
-                },
-                with: {
-                  rolePermissions: {
-                    columns: { pageName: true, permissions: true },
-                  },
-                },
-              },
-            },
-          });
-
-          if (
-            !userData ||
-            !userData.isActive ||
-            !roleAllowsLogin(userData.role)
-          ) {
-            throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
-          }
-
-          // Verification gates. They run after the password was verified, so
-          // the distinct code leaks nothing to someone who does not know it;
-          // every other failure above is the generic 401. The front-end keys on
-          // the code to start the OTP flow.
-          //
-          // Enforced only while an OTP channel can verify the contact: the flag
-          // always reflects reality and is never auto-flipped, so with OTP off
-          // the gate is inert, and turning OTP on makes unverified users verify
-          // at their next login.
-          if (
-            REQUIRE_EMAIL_VERIFICATION &&
-            EMAIL_OTP_AVAILABLE &&
-            !userData.emailVerified
-          ) {
-            throw new APIError(HTTP_STATUS.FORBIDDEN, {
-              message: MSG_EMAIL_NOT_VERIFIED,
-              code: EMAIL_NOT_VERIFIED_CODE,
-            });
-          }
-
-          if (
-            REQUIRE_PHONE_VERIFICATION &&
-            PHONE_OTP_AVAILABLE &&
-            !userData.phoneNumberVerified
-          ) {
-            throw new APIError(HTTP_STATUS.FORBIDDEN, {
-              message: MSG_PHONE_NOT_VERIFIED,
-              code: PHONE_NOT_VERIFIED_CODE,
-            });
-          }
-
-          if (!userData.roleId || !userData.role) {
-            return {
-              data: {
-                ...session,
-                metadata: {},
-              },
-            };
-          }
-
-          return {
-            data: {
-              ...session,
-              metadata: {
-                roleId: userData.roleId,
-                roleName: userData.role.roleName,
-                roleScope: userData.role.scope,
-                permissions: sanitizePermissions(userData.role.rolePermissions),
-              },
-            },
-          };
-        },
-        /**
-         * The ONE place `loginSuccess` is written, for every method that issues
-         * a session: it runs only after the session row exists. Password proofs
-         * are a different event (`passwordVerified`), written by
-         * `verifyLoginAttempt`.
-         *
-         * Best-effort: the session is already created and the cookie on its
-         * way, so failing the request now would log the user in and tell them
-         * it did not work.
-         *
-         * `SESSION_METHOD_BY_PATH` is best-effort labelling, not the factor
-         * chain: a first-factor session is logged before a challenge withdraws
-         * it, and a trusted-device skip is not represented. The authoritative
-         * records are the in-transaction proof events and the completion event
-         * `completeTwoFactorChallenge` writes.
-         */
-        after: async (session, context) => {
-          try {
-            const userId = validID(session.userId);
-            if (!userId) return;
-
-            const [user] = await db
-              .select({ email: users.email })
-              .from(users)
-              .where(eq(users.id, userId))
-              .limit(1);
-            // `audit_logs.user_email` is NOT NULL, so there is nothing to write
-            // without it.
-            if (!user) return;
-
-            const path = context?.path ?? null;
-            await withTransaction((tx) =>
-              auditLog(tx, {
-                userId,
-                userEmail: user.email,
-                action: 'INSERT',
-                tableName: 'sessions',
-                recordId: session.id,
-                oldData: null,
-                newData: {
-                  loginSuccess: true,
-                  method: SESSION_METHOD_BY_PATH[path ?? ''] ?? 'unknown',
-                  authPath: path,
-                },
-                // The values Better Auth resolved for the session row itself,
-                // so the audit row and the session agree by construction.
-                meta: boundedAuditMeta(
-                  session.ipAddress ?? null,
-                  session.userAgent,
-                  path ?? 'session.create'
-                ),
-              })
-            );
-          } catch (error) {
-            console.error(
-              sanitizeForLog({ msg: 'session.loginAudit.failed', error })
-            );
-          }
-        },
-      },
-      delete: {
-        /**
-         * The library side of `revokeSessionArtifacts`'s invariant. Every
-         * library-side delete — `/sign-out`, a revoked session, a user
-         * deletion, a reaped row — goes through `deleteWithHooks` /
-         * `deleteManyWithHooks`, which fire this once PER row, so this is the
-         * one boundary that covers them all.
-         *
-         * Best-effort: it runs after the library's transaction committed, so
-         * failing would report a sign-out that happened as an error. The rows
-         * expire on their own, and a session id is never reused.
-         */
-        after: async (session) => {
-          try {
-            await revokeSessionArtifacts(authDatabase(), [session.id]);
-          } catch (error) {
-            console.error(
-              sanitizeForLog({ msg: 'session.artifactRevoke.failed', error })
-            );
-          }
-        },
-      },
-    },
+    session: sessionDatabaseHooks,
   },
 
   rateLimit: {

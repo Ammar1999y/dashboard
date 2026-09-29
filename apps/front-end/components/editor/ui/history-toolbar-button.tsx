@@ -2,9 +2,9 @@
 
 import type * as React from 'react';
 
-import { Redo2Icon, Undo2Icon } from 'lucide-react';
 import { useEditorRef, useEditorSelector } from 'platejs/react';
 
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 
 export function RedoToolbarButton(
@@ -24,7 +24,7 @@ export function RedoToolbarButton(
       onMouseDown={(e) => e.preventDefault()}
       tooltip='إعادة'
     >
-      <Redo2Icon className='rtl:scale-x-[-1]' />
+      <Icon icon='solar:undo-right-round-linear' className='rtl:scale-x-[-1]' />
     </ToolbarButton>
   );
 }
@@ -46,7 +46,7 @@ export function UndoToolbarButton(
       onMouseDown={(e) => e.preventDefault()}
       tooltip='تراجع'
     >
-      <Undo2Icon className='rtl:scale-x-[-1]' />
+      <Icon icon='solar:undo-left-round-linear' className='rtl:scale-x-[-1]' />
     </ToolbarButton>
   );
 }

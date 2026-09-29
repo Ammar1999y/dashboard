@@ -28,20 +28,23 @@ import { expireCookie } from 'better-auth/cookies';
 import {
   HTTP_STATUS,
   MSG_INVALID_INPUT,
-  MSG_LOGIN_REQUIRED,
   MSG_NOT_FOUND,
 } from '@app/shared/api-messages';
 import { validID } from '@app/shared/utils';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta, bodyRecord } from '../context';
-import { authError } from '../errors';
+import { authError, sessionRequired } from '../errors';
 import { twoFactorMsg } from '../messages';
 import { envelopeResponse } from '../plugin-openapi';
-import { expiresIn, randomToken, trustDeviceKey } from '../verifications';
-import { consumeTwoFactorProof } from './challenge';
-import { sessionPostOptions } from './session-endpoint';
+import {
+  expiresIn,
+  randomToken,
+  trustDeviceKey,
+  twoFactorProofKey,
+} from '../verifications';
+import { sessionGetOptions, sessionPostOptions } from './session-endpoint';
 
 const TRUST_COOKIE_NAME = 'trust_device';
 
@@ -49,6 +52,44 @@ const TRUST_COOKIE_NAME = 'trust_device';
 const TRUST_DEVICE_MAX_AGE_S = 30 * 24 * 60 * 60;
 
 const IDENTIFIER_BYTES = 24;
+
+/**
+ * How long a completed second factor stays redeemable for a device-trust grant:
+ * long enough for a "remember this device" click on the page that follows the
+ * verification, short enough that a session cannot cash it in days later.
+ */
+const TWO_FACTOR_PROOF_MAX_AGE_S = 600;
+
+/**
+ * Records that THIS session was created by completing a second factor.
+ *
+ * `/two-factor/trust-device` consumes it, which is what binds a 30-day challenge
+ * skip to a proof rather than to the mere possession of a session — including
+ * one planted before the user enabled 2FA at all.
+ */
+export async function markTwoFactorProven(
+  ctx: AuthContext,
+  sessionId: string
+): Promise<void> {
+  await ctx.context.internalAdapter
+    .createVerificationValue({
+      value: sessionId,
+      identifier: twoFactorProofKey(sessionId),
+      expiresAt: expiresIn(TWO_FACTOR_PROOF_MAX_AGE_S),
+    })
+    .catch(() => {});
+}
+
+/** Single-use: a second "remember this device" needs a second verification. */
+async function consumeTwoFactorProof(
+  ctx: AuthContext,
+  sessionId: string
+): Promise<boolean> {
+  const consumed = await ctx.context.internalAdapter
+    .consumeVerificationValue(twoFactorProofKey(sessionId))
+    .catch(() => null);
+  return consumed?.value === sessionId;
+}
 
 /**
  * `node:crypto` rather than `@better-auth/utils/hmac`, a transitive dependency
@@ -147,9 +188,11 @@ async function grantDeviceTrust(
     // Raised, not swallowed. The caller keeps its session either way, but
     // answering `{ trusted: true }` with no row and no cookie tells the user
     // this device is remembered when nothing recorded it.
-    console.error(
-      sanitizeForLog({ msg: 'twoFactor.trustDevice.failed', userId, error })
-    );
+    logSanitized('error', {
+      msg: 'twoFactor.trustDevice.failed',
+      userId,
+      error,
+    });
     throw authError(HTTP_STATUS.INTERNAL_ERROR, twoFactorMsg.sendError);
   }
 
@@ -207,7 +250,7 @@ function requireSessionUserId(ctx: {
   context: { session?: { user: { id: string } } | null };
 }): EntityID {
   const userId = validID(ctx.context.session?.user.id);
-  if (!userId) throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
+  if (!userId) throw sessionRequired();
   return userId;
 }
 
@@ -238,8 +281,7 @@ export const trustedDevice = () =>
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
           const sessionId = validID(ctx.context.session?.session.id);
-          if (!sessionId)
-            throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
+          if (!sessionId) throw sessionRequired();
 
           // A session alone is not enough. This grants a 30-day skip of the
           // second factor, so it is redeemable only against a single-use proof
@@ -258,19 +300,13 @@ export const trustedDevice = () =>
 
       listTrustedDevices: createAuthEndpoint(
         '/two-factor/trusted-devices',
-        {
-          method: 'GET',
-          use: [sessionMiddleware],
-          metadata: {
-            openapi: envelopeResponse('The caller’s trusted devices.', {
-              type: 'object',
-              properties: {
-                devices: { type: 'array', items: { type: 'object' } },
-              },
-              required: ['devices'],
-            }),
+        sessionGetOptions('The caller’s trusted devices.', {
+          type: 'object',
+          properties: {
+            devices: { type: 'array', items: { type: 'object' } },
           },
-        },
+          required: ['devices'],
+        }),
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
           return ctx.json({

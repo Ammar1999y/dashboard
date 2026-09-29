@@ -35,9 +35,11 @@ const ADMIN_REAUTH_MAX_AGE_S = 900;
 export async function mintAdminReauth(
   actorUserId: EntityID,
   sessionId: string,
-  method: ReauthMethod = 'password',
-  executor?: Tx,
-  startedAt?: number
+  {
+    method = 'password',
+    executor,
+    startedAt,
+  }: { method?: ReauthMethod; executor?: Tx; startedAt?: number } = {}
 ): Promise<{ expiresIn: number }> {
   const proofStartedAt = startedAt ?? (await authenticationStartedAt(executor));
   const write = async (tx: Tx) => {

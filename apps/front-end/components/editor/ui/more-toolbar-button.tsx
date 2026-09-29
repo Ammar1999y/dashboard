@@ -4,12 +4,6 @@ import type { DropdownMenuProps } from '@radix-ui/react-dropdown-menu';
 
 import * as React from 'react';
 
-import {
-  KeyboardIcon,
-  MoreHorizontalIcon,
-  SubscriptIcon,
-  SuperscriptIcon,
-} from 'lucide-react';
 import { KEYS } from 'platejs';
 import { useEditorRef } from 'platejs/react';
 
@@ -20,6 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 
 export function MoreToolbarButton(props: DropdownMenuProps) {
@@ -30,7 +25,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
     <DropdownMenu modal={false} onOpenChange={setOpen} open={open} {...props}>
       <DropdownMenuTrigger asChild>
         <ToolbarButton pressed={open} tooltip='المزيد'>
-          <MoreHorizontalIcon />
+          <Icon icon='solar:menu-dots-bold' />
         </ToolbarButton>
       </DropdownMenuTrigger>
 
@@ -46,7 +41,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
               editor.tf.focus();
             }}
           >
-            <KeyboardIcon />
+            <Icon icon='solar:keyboard-linear' />
             إدخال لوحة المفاتيح
           </DropdownMenuItem>
 
@@ -58,7 +53,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
               editor.tf.focus();
             }}
           >
-            <SuperscriptIcon />
+            <Icon icon='lucide:superscript' />
             نص علوي
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -69,7 +64,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
               editor.tf.focus();
             }}
           >
-            <SubscriptIcon />
+            <Icon icon='lucide:subscript' />
             نص سفلي
           </DropdownMenuItem>
         </DropdownMenuGroup>

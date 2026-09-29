@@ -36,13 +36,9 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
   if (!(await verifyReauthPassword(userId, input.password, getAuditMeta(ctx))))
     throw new CustomError(MSG_INVALID_CREDENTIALS, HTTP_STATUS.UNAUTHORIZED);
 
-  const { expiresIn } = await mintAdminReauth(
-    userId,
-    sessionId,
-    'password',
-    undefined,
-    startedAt
-  );
+  const { expiresIn } = await mintAdminReauth(userId, sessionId, {
+    startedAt,
+  });
   // No token in the body: the window is bound to THIS session, and a bearer
   // token would add a secret to leak and no security.
   return apiSuccess({

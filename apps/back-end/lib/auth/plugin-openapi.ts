@@ -6,7 +6,8 @@ type JsonSchema = Record<string, unknown>;
  */
 export function envelopeResponse(
   description: string,
-  data: JsonSchema | null = null
+  data: JsonSchema | null = null,
+  required: string[] = ['success']
 ) {
   // Return type inferred, not annotated: Better Call's `metadata.openapi` is a
   // precise structural type that `Record<string, unknown>` is too wide for.
@@ -25,7 +26,7 @@ export function envelopeResponse(
                 message: { type: 'string' },
                 data: data ?? { type: 'object' },
               },
-              required: ['success'],
+              required,
             },
           },
         },

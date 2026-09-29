@@ -1,13 +1,3 @@
-// Anonymous OTP handlers use this floor to reduce lookup/proof timing signals.
-// Provider delivery is deferred on anonymous send paths and is not part of it.
-// TODO: Measure the real `processOtpSend` latency distribution and tune this value if needed.
-const MINIMUM_RESPONSE_MS = 1500;
-
-export async function ensureMinDelay(elapsed: number): Promise<void> {
-  if (elapsed < MINIMUM_RESPONSE_MS)
-    await new Promise((r) => setTimeout(r, MINIMUM_RESPONSE_MS - elapsed));
-}
-
 export const otpMsg = {
   sendSuccess: 'تم إرسال رمز التحقق بنجاح',
   sendError: 'حدث خطأ أثناء إرسال رمز التحقق',

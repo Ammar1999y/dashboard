@@ -1,8 +1,8 @@
 import { memo } from 'react';
 
-import ErrorMessage from '@/components/error-message';
+import { ErrorState } from '@/components/ui/error-state';
 
-import { TableCell, TableRow } from './data-table';
+import { TableCell, TableRow } from './table-elements';
 
 interface DataTableErrorStateProps {
   error: Error | null;
@@ -13,8 +13,8 @@ const DataTableErrorState = memo(
   ({ error, refetch }: DataTableErrorStateProps) => {
     return (
       <TableRow className='min-h-52'>
-        <TableCell className='flex-1 text-center text-red-600'>
-          <ErrorMessage error={error} refetch={refetch} />
+        <TableCell className='flex-1 text-center text-destructive'>
+          <ErrorState error={error} refetch={refetch} />
         </TableCell>
       </TableRow>
     );

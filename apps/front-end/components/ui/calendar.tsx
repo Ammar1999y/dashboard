@@ -1,3 +1,4 @@
+import type { IconName } from '@/components/ui/icon';
 import type {
   ChevronProps,
   DayButton,
@@ -9,14 +10,10 @@ import * as React from 'react';
 
 import { DayPicker, getDefaultClassNames } from '@daypicker/react';
 import { arSA as ar } from '@daypicker/react/locale';
-import {
-  ChevronDownIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-} from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 
 const defaultClassNames = getDefaultClassNames();
 
@@ -40,26 +37,26 @@ function CalendarRoot({ className, rootRef, ...props }: RootProps) {
   );
 }
 
-function CalendarChevron({ className, orientation, ...props }: ChevronProps) {
-  if (orientation === 'left') {
-    return (
-      <ChevronLeftIcon
-        className={cn('size-4 rtl:rotate-180', className)}
-        {...props}
-      />
-    );
-  }
+const CHEVRONS = {
+  left: 'solar:alt-arrow-left-linear',
+  right: 'solar:alt-arrow-right-linear',
+  up: 'solar:alt-arrow-up-linear',
+  down: 'solar:alt-arrow-down-linear',
+} as const satisfies Record<NonNullable<ChevronProps['orientation']>, IconName>;
 
-  if (orientation === 'right') {
-    return (
-      <ChevronRightIcon
-        className={cn('size-4 rtl:rotate-180', className)}
-        {...props}
-      />
-    );
-  }
-
-  return <ChevronDownIcon className={cn('size-4', className)} {...props} />;
+function CalendarChevron({
+  className,
+  orientation = 'down',
+  ...props
+}: ChevronProps) {
+  const isHorizontal = orientation === 'left' || orientation === 'right';
+  return (
+    <Icon
+      icon={CHEVRONS[orientation]}
+      className={cn('size-4', isHorizontal && 'rtl:rotate-180', className)}
+      {...props}
+    />
+  );
 }
 
 function CalendarWeekNumber({
@@ -134,7 +131,7 @@ function Calendar({
         defaultClassNames.dropdowns
       ),
       dropdown_root: cn(
-        'has-focus:border-ring border-input shadow-xs has-focus:ring-ring/50 has-focus:ring-[3px] relative rounded-md border',
+        'relative rounded-md border border-input shadow-xs has-[:focus]:border-ring has-[:focus]:ring-[3px] has-[:focus]:ring-ring/50',
         defaultClassNames.dropdown_root
       ),
       dropdown: cn('absolute inset-0 opacity-0', defaultClassNames.dropdown),

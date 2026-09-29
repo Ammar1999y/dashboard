@@ -5,6 +5,7 @@ import { validatePasswordPepperConfiguration } from '@/lib/auth/password/pepper'
 import { validateOtpKeyConfiguration } from '@/lib/otp/key';
 import { R2_PRIVATE_BUCKET, R2_PUBLIC_BUCKET } from '@/lib/r2/buckets';
 
+import { logLine } from '@/utils/log';
 import { missingServerEnvMessage } from '@/utils/missing-env';
 
 /**
@@ -94,13 +95,11 @@ function r2ConfigurationErrors(production: boolean): string[] {
       // A warning, not a refusal: the URL works, Cloudflare only documents it as
       // rate-limited and for development. Refusing would block a deploy over a
       // capacity concern; saying nothing would hide it.
-      console.warn(
-        JSON.stringify({
-          msg: 'r2.public-url is an r2.dev development URL',
-          detail:
-            'Cloudflare rate-limits r2.dev and documents it as non-production. Attach a custom domain to the public bucket.',
-        })
-      );
+      logLine('warn', {
+        msg: 'r2.public-url is an r2.dev development URL',
+        detail:
+          'Cloudflare rate-limits r2.dev and documents it as non-production. Attach a custom domain to the public bucket.',
+      });
   }
 
   const zoneId = process.env.CLOUDFLARE_ZONE_ID;
@@ -115,13 +114,11 @@ function r2ConfigurationErrors(production: boolean): string[] {
     // unpublish answers 200 while the edge keeps serving the immutable bytes for
     // up to a year. Production only, because several tests assert the exact set
     // of diagnostics a boot produces.
-    console.warn(
-      JSON.stringify({
-        msg: 'media.cache-purge is not configured',
-        detail:
-          'R2_PUBLIC_URL is set without CLOUDFLARE_ZONE_ID and CLOUDFLARE_CACHE_PURGE_TOKEN. Unpublishing or deleting a public file removes the origin object only; a cached edge copy stays readable for its full max-age (one year). Set the purge pair, or confirm this origin is uncached.',
-      })
-    );
+    logLine('warn', {
+      msg: 'media.cache-purge is not configured',
+      detail:
+        'R2_PUBLIC_URL is set without CLOUDFLARE_ZONE_ID and CLOUDFLARE_CACHE_PURGE_TOKEN. Unpublishing or deleting a public file removes the origin object only; a cached edge copy stays readable for its full max-age (one year). Set the purge pair, or confirm this origin is uncached.',
+    });
 
   if (publicBucket && privateBucket && publicBucket === privateBucket)
     errors.push(

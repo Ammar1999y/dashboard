@@ -1,13 +1,16 @@
+import type { IconName } from '@/components/ui/icon';
 import type * as React from 'react';
 
 import * as CheckboxPrimitive from '@radix-ui/react-checkbox';
-import { CheckIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+import { Icon } from '@/components/ui/icon';
 
 function Checkbox({
   className,
+  icon = 'solar:check-read-linear',
   ...props
-}: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
+}: React.ComponentProps<typeof CheckboxPrimitive.Root> & { icon?: IconName }) {
   return (
     <CheckboxPrimitive.Root
       className={cn(
@@ -21,7 +24,7 @@ function Checkbox({
         className='grid place-content-center text-current transition-none'
         data-slot='checkbox-indicator'
       >
-        <CheckIcon className='size-3.5' />
+        <Icon icon={icon} className='size-3.5' />
       </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>
   );

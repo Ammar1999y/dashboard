@@ -20,9 +20,9 @@ import {
   hasPublicUrl,
 } from '@/lib/r2/client';
 
-import { auditAs } from './actor';
+import { auditAs, withinScope } from './actor';
 import { fileTypeFor } from './allowlist';
-import { getFolder } from './folders';
+import { requireFolder } from './folders';
 import { getContentDisposition } from './headers';
 import { mediaMsg } from './messages';
 import { unreferenced } from './usages';
@@ -127,7 +127,7 @@ async function lockFilesForEdit(
     (row) =>
       row.status === 'active' &&
       governed.has(row.id) &&
-      (actor.scope !== 'own' || row.uploadedBy === actor.userId)
+      withinScope(actor, row.uploadedBy)
   );
   if (editable.length !== wanted.length)
     throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
@@ -164,8 +164,7 @@ export async function updateFile(params: {
     const [current] = await lockFilesForEdit(tx, [id], actor);
     if (!current)
       throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
-    if (folderId !== undefined && !(await getFolder(folderId, tx)))
-      throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
+    if (folderId !== undefined) await requireFolder(folderId, tx);
 
     const [row] = await tx
       .update(files)
@@ -207,8 +206,7 @@ export async function moveFiles(params: {
   const ids = distinctIds(params.ids);
   return withTransaction(async (tx) => {
     const current = await lockFilesForEdit(tx, ids, actor);
-    if (!(await getFolder(folderId, tx)))
-      throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
+    await requireFolder(folderId, tx);
 
     // One statement, so every moved row carries the same `now()`.
     const [moved] = await tx

@@ -7,7 +7,6 @@ import type { SeededUser, SignedInSession } from '../helpers/session';
 import { eq, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { parseCursor } from '@/app/api/dash/users/[id]/sessions/pagination';
 import { db } from '@/db';
 import {
   sessions,
@@ -25,6 +24,7 @@ import { hashOtpCode } from '@/lib/otp/hash';
 import { OTP_MAX_ATTEMPTS, OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
 import { processOtpSend } from '@/lib/otp/send';
 import { processOtpVerify } from '@/lib/otp/verify';
+import { parseCursor } from '@/lib/users/session-page';
 
 import { resetTables } from '../helpers/database';
 import { sentMail, settleDelivery } from '../helpers/mailbox';

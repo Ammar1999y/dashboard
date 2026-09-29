@@ -13,7 +13,6 @@ import * as React from 'react';
 import { DndPlugin, useDraggable, useDropLine } from '@platejs/dnd';
 import { expandListItemsWithChildren } from '@platejs/list';
 import { BlockSelectionPlugin } from '@platejs/selection/react';
-import { GripVertical } from 'lucide-react';
 import { getPluginByType, isType, KEYS } from 'platejs';
 import {
   MemoizedChildren,
@@ -26,6 +25,7 @@ import {
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import {
   Tooltip,
   TooltipContent,
@@ -33,6 +33,8 @@ import {
 } from '@/components/ui/tooltip';
 
 const UNDRAGGABLE_KEYS = [KEYS.column, KEYS.tr, KEYS.td];
+const TAP_MAX_MS = 200;
+const TAP_MAX_PX = 5;
 
 export const BlockDraggable: RenderNodeWrapper = (props) => {
   const { editor, element, path } = props;
@@ -160,39 +162,30 @@ function Draggable(props: PlateElementProps) {
                 data-plate-prevent-deselect
                 onClick={(e) => {
                   e.preventDefault();
-
-                  const now = Date.now();
-                  const timeSinceMouseDown = now - mouseDownTime.current;
-
-                  // إذا كان نقرة سريعة (أقل من 200ms) والماوس لم يتحرك كثيراً
-                  if (
+                  const down = mouseDownPos.current;
+                  const isTap =
                     !readOnly &&
-                    mouseDownPos.current &&
-                    timeSinceMouseDown < 200
-                  ) {
-                    const dx = Math.abs(e.clientX - mouseDownPos.current.x);
-                    const dy = Math.abs(e.clientY - mouseDownPos.current.y);
+                    down !== null &&
+                    Date.now() - mouseDownTime.current < TAP_MAX_MS &&
+                    Math.abs(e.clientX - down.x) < TAP_MAX_PX &&
+                    Math.abs(e.clientY - down.y) < TAP_MAX_PX;
 
-                    // إذا لم يتحرك أكثر من 5 بكسل، فتح القائمة
-                    if (dx < 5 && dy < 5) {
-                      e.stopPropagation();
-
-                      // إطلاق contextmenu event على الـ blockWrapper
-                      const blockWrapper = nodeRef.current;
-                      if (blockWrapper) {
-                        const contextMenuEvent = new MouseEvent('contextmenu', {
-                          bubbles: true,
-                          cancelable: true,
-                          view: globalThis as unknown as Window,
-                          clientX: e.clientX,
-                          clientY: e.clientY,
-                          screenX: e.screenX,
-                          screenY: e.screenY,
-                        });
-                        blockWrapper.dispatchEvent(contextMenuEvent);
-                      }
-                      return;
-                    }
+                  // A tap on the handle opens the block menu, which listens
+                  // for `contextmenu` on the block.
+                  if (isTap && nodeRef.current) {
+                    e.stopPropagation();
+                    nodeRef.current.dispatchEvent(
+                      new MouseEvent('contextmenu', {
+                        bubbles: true,
+                        cancelable: true,
+                        view: document.defaultView,
+                        clientX: e.clientX,
+                        clientY: e.clientY,
+                        screenX: e.screenX,
+                        screenY: e.screenY,
+                      })
+                    );
+                    return;
                   }
 
                   editor.getApi(BlockSelectionPlugin).blockSelection.focus();
@@ -218,7 +211,7 @@ function Draggable(props: PlateElementProps) {
       )}
 
       <div
-        className={cn('absolute hidden w-full ltr:right-0 rtl:left-0')}
+        className='absolute hidden w-full ltr:right-0 rtl:left-0'
         contentEditable={false}
         ref={previewRef}
         style={{ top: `${-previewTop}px` }}
@@ -258,7 +251,10 @@ function Gutter({
       {...props}
       className={cn(
         'slate-gutterLeft',
-        'absolute top-0 z-50 flex h-full cursor-text hover:opacity-100 sm:opacity-0 ltr:left-0 ltr:-translate-x-full rtl:right-0 rtl:translate-x-full',
+        // Left at its static position, the block's start edge in the content's
+        // direction, then moved out by its own width: the content can be ltr
+        // inside the rtl page, where `ltr:`/`rtl:` would follow the page.
+        'absolute top-0 z-10 flex h-full cursor-text [transform:translateX(calc(-100%*var(--inline-sign,1)))] hover:opacity-100 sm:opacity-0',
         getPluginByType(editor, element.type)?.node.isContainer
           ? 'group-hover/container:opacity-100'
           : 'group-hover:opacity-100',
@@ -373,7 +369,10 @@ const DragHandle = React.memo(function DragHandle({
           }}
           role='button'
         >
-          <GripVertical className='size-5 text-muted-foreground' />
+          <Icon
+            icon='solar:grip-vertical-linear'
+            className='size-5 text-muted-foreground'
+          />
         </div>
       </TooltipTrigger>
       <TooltipContent>اسحب للتحريك أو اضغط لفتح القائمة</TooltipContent>

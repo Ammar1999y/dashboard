@@ -5,8 +5,10 @@ import type { PlateElementProps } from 'platejs/react';
 
 import { useMediaState } from '@platejs/media/react';
 import { ResizableProvider } from '@platejs/resizable';
-import { FileUp } from 'lucide-react';
 import { PlateElement, useReadOnly, withHOC } from 'platejs/react';
+
+import { Icon } from '@/components/ui/icon';
+import { CAPTION_PLACEHOLDER } from '@/components/editor/labels';
 
 import { Caption, CaptionTextarea } from './caption';
 
@@ -17,14 +19,7 @@ export const FileElement = withHOC(
     const { name, unsafeUrl } = useMediaState();
 
     return (
-      <PlateElement
-        className='my-px rounded-sm'
-        {...props}
-        attributes={{
-          ...props.attributes,
-          'data-ltr-element': true,
-        }}
-      >
+      <PlateElement className='my-px rounded-sm' {...props}>
         <a
           className='group relative m-0 flex cursor-pointer items-center rounded px-0.5 py-1 hover:bg-muted'
           contentEditable={false}
@@ -35,14 +30,14 @@ export const FileElement = withHOC(
           target='_blank'
         >
           <div className='flex items-center gap-1 p-1'>
-            <FileUp className='size-5' />
+            <Icon icon='solar:file-bold-duotone' className='size-5' />
             <div>{name}</div>
           </div>
 
           <Caption align='left'>
             <CaptionTextarea
               className='text-end'
-              placeholder='Write a caption...'
+              placeholder={CAPTION_PLACEHOLDER}
               readOnly={readOnly}
             />
           </Caption>

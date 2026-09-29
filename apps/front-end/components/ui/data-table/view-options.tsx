@@ -1,11 +1,11 @@
-/* eslint-disable unicorn/no-useless-collection-argument */
-import type { Table } from '@tanstack/react-table';
+import type { DragEndEvent, UniqueIdentifier } from '@dnd-kit/core';
+import type { Column } from '@tanstack/react-table';
 
 import { memo, useCallback, useMemo, useState } from 'react';
 
-import { Check, GripVertical } from 'lucide-react';
-import { useShallow } from 'zustand/shallow';
 import { cn } from '@/lib/utils';
+
+import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -17,179 +17,167 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import Setting from '@/components/icons/adjustment';
 import {
-  arrayMove,
-  restrictToParentElement,
-  restrictToVerticalAxis,
-  SimpleSortableItem,
-  SortableHandle,
-  SortableList,
-  useSortableList,
-  verticalListSortingStrategy,
-} from '@/components/sortable';
+  Sortable,
+  SortableContent,
+  SortableItem,
+  SortableItemHandle,
+  SortableOverlay,
+} from '@/components/ui/sortable';
 
-import {
-  useColumnOrder,
-  useColumnPinning,
-  useColumnSizing,
-  useColumnVisibility,
-} from './store';
+import { useColumnActions, useColumnStore } from './store/context';
+import { genericMemo } from './utils/generic-memo';
 
-// ─── Types ───────────────────────────────────────────────────────────
-
-interface ColumnItem {
+interface ColumnEntry {
   id: string;
   label: string;
   canHide: boolean;
 }
 
-type DataTableViewOptionsProps<TData = unknown> = {
-  table: Table<TData>;
-  storageKey?: string;
-};
+const DragHandle = memo(() => (
+  <SortableItemHandle
+    asChild
+    className='flex shrink-0 items-center text-muted-foreground hover:text-foreground'
+  >
+    <div>
+      <Icon icon='solar:grip-vertical-linear' className='size-4' />
+    </div>
+  </SortableItemHandle>
+));
 
-// ─── Modifiers ───────────────────────────────────────────────────────
+DragHandle.displayName = 'DragHandle';
 
-const modifiers = [restrictToVerticalAxis, restrictToParentElement];
+const ColumnItem = memo(
+  ({ column, showHandle }: { column: ColumnEntry; showHandle?: boolean }) => {
+    const actions = useColumnActions();
+    const isVisible = useColumnStore(
+      (s) => s.columnVisibility[column.id] !== false
+    );
 
-// ─── Main Component ──────────────────────────────────────────────────
+    const handleSelect = useCallback(() => {
+      if (column.canHide) actions.setVisible(column.id, !isVisible);
+    }, [actions, column.id, column.canHide, isVisible]);
+
+    return (
+      <CommandItem
+        onSelect={handleSelect}
+        className={cn('w-full gap-2', !column.canHide && 'opacity-60')}
+      >
+        <div
+          className={cn(
+            'flex size-4 shrink-0 items-center justify-center rounded-sm border border-primary',
+            isVisible
+              ? 'bg-primary text-primary-foreground'
+              : 'opacity-50 [&_svg]:invisible'
+          )}
+        >
+          <Icon
+            icon='solar:check-read-linear'
+            className='size-3.5 text-background'
+          />
+        </div>
+        <span className='flex-1 truncate'>{column.label}</span>
+        {showHandle && <DragHandle />}
+      </CommandItem>
+    );
+  }
+);
+
+ColumnItem.displayName = 'ColumnItem';
+
+const ShowAllItem = memo(() => {
+  const actions = useColumnActions();
+  const hasHidden = useColumnStore((s) =>
+    Object.values(s.columnVisibility).includes(false)
+  );
+  if (!hasHidden) return null;
+  return (
+    <CommandGroup>
+      <CommandItem
+        onSelect={actions.showAll}
+        className='justify-center text-center'
+      >
+        اظهار الكل
+      </CommandItem>
+    </CommandGroup>
+  );
+});
+
+ShowAllItem.displayName = 'ShowAllItem';
+
+interface ViewOptionsProps<TData> {
+  columns: Column<TData>[];
+}
 
 const DataTableViewOptionsInner = <TData,>({
-  table,
-  storageKey,
-}: DataTableViewOptionsProps<TData>) => {
+  columns,
+}: ViewOptionsProps<TData>) => {
+  const actions = useColumnActions();
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
+  const columnOrder = useColumnStore((s) => s.columnOrder);
 
-  const columns: ColumnItem[] = useMemo(
+  const entries = useMemo(
     () =>
-      table.getAllLeafColumns().map((col) => ({
-        id: col.id,
-        label:
-          (col.columnDef.meta as { title?: string } | undefined)?.title ??
-          col.id,
-        canHide: col.getCanHide(),
+      columns.map<ColumnEntry>((column) => ({
+        id: column.id,
+        label: column.columnDef.meta?.label ?? column.id,
+        canHide: column.getCanHide(),
       })),
-    [table]
+    [columns]
   );
 
-  // Hidden count for "show all" button
-  const hiddenCount = useColumnVisibility(
-    useShallow(
-      (s) => Object.values(s.columnVisibility).filter((v) => v === false).length
-    )
+  const orderedEntries = useMemo(() => {
+    const rank = new Map(columnOrder.map((id, index) => [id, index]));
+    return [...entries].sort(
+      (a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity)
+    );
+  }, [entries, columnOrder]);
+
+  const term = search.trim().toLowerCase();
+  const visibleEntries = useMemo(
+    () =>
+      term
+        ? orderedEntries.filter((entry) =>
+            entry.label.toLowerCase().includes(term)
+          )
+        : orderedEntries,
+    [orderedEntries, term]
+  );
+  const entryIds = useMemo(
+    () => visibleEntries.map((entry) => entry.id),
+    [visibleEntries]
   );
 
-  // Column order from store
-  const columnOrder = useColumnOrder(useShallow((s) => s.columnOrder));
-
-  // Ordered columns list
-  const orderedColumns = useMemo(() => {
-    if (columnOrder.length === 0) return columns;
-    const orderMap = new Map(columnOrder.map((id, i) => [id, i]));
-    return [...columns].sort((a, b) => {
-      const aIdx = orderMap.get(a.id) ?? Infinity;
-      const bIdx = orderMap.get(b.id) ?? Infinity;
-      return aIdx - bIdx;
-    });
-  }, [columns, columnOrder]);
-
-  // Filtered columns when searching
-  const filteredColumns = useMemo(() => {
-    if (!search.trim()) return orderedColumns;
-    const s = search.trim().toLowerCase();
-    return orderedColumns.filter((c) => c.label.toLowerCase().includes(s));
-  }, [orderedColumns, search]);
-
-  const isSearching = search.trim().length > 0;
-
-  // Column IDs for sortable context
-  const columnIds = useMemo(
-    () => filteredColumns.map((c) => c.id),
-    [filteredColumns]
-  );
-
-  // Drag state & handlers — mirrors data-table-content.tsx pinning logic
-  const { activeId, sensors, handleDragStart, handleDragCancel } =
-    useSortableList<string>({
-      items: columnIds,
-      onItemsChange: () => {}, // handled in custom handleDragEnd
-    });
-
-  const handleDragEnd = useCallback(
-    (event: import('@dnd-kit/core').DragEndEvent) => {
-      const { over } = event;
-      if (!over || activeId == null) return;
-
-      const activeColumnId = activeId as string;
-      const overColumnId = over.id as string;
-      if (activeColumnId === overColumnId) return;
-
-      const { columnOrder: currentOrder, setColumnOrder } =
-        useColumnOrder.getState();
-      const { columnPinning, setColumnPinning } = useColumnPinning.getState();
-
-      const leftPinned = new Set(columnPinning.left ?? []);
-      const rightPinned = new Set(columnPinning.right ?? []);
-
-      // Determine target zone based on the "over" column
-      const isOverLeftPinned = leftPinned.has(overColumnId);
-      const isOverRightPinned = rightPinned.has(overColumnId);
-
-      // Reorder using arrayMove on the full column order
-      const activeIdx = currentOrder.indexOf(activeColumnId);
-      const overIdx = currentOrder.indexOf(overColumnId);
-      const newColumnOrder = arrayMove(currentOrder, activeIdx, overIdx);
-
-      // Build new pinning sets
-      const newLeftSet = new Set(leftPinned);
-      const newRightSet = new Set(rightPinned);
-
-      // Remove active from its current pinning zone
-      newLeftSet.delete(activeColumnId);
-      newRightSet.delete(activeColumnId);
-
-      // Add to the target zone if dropping on a pinned column
-      if (isOverLeftPinned) {
-        newLeftSet.add(activeColumnId);
-      } else if (isOverRightPinned) {
-        newRightSet.add(activeColumnId);
-      }
-
-      // Maintain columnOrder ordering for pinning arrays
-      const newLeft = newColumnOrder.filter((id) => newLeftSet.has(id));
-      const newRight = newColumnOrder.filter((id) => newRightSet.has(id));
-
-      setColumnPinning({ left: newLeft, right: newRight });
-      setColumnOrder(newColumnOrder);
+  // `onMove` replaces the list's own reorder: the drop goes to the store,
+  // which also moves the column in or out of a pin zone.
+  const handleMove = useCallback(
+    ({ active, over }: DragEndEvent) => {
+      if (over) actions.drop(String(active.id), String(over.id));
     },
-    [activeId]
+    [actions]
   );
 
-  // Active item for overlay
-  const activeColumn = useMemo(
-    () => (activeId ? columns.find((c) => c.id === activeId) : null),
-    [activeId, columns]
+  // The dragged copy has no handle: a `SortableItemHandle` outside its item
+  // throws, and the overlay is not inside one.
+  const renderOverlay = useCallback(
+    ({ value }: { value: UniqueIdentifier }) => {
+      const entry = entries.find((e) => e.id === value);
+      return entry ? <ColumnItem column={entry} /> : null;
+    },
+    [entries]
   );
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearch(value);
-  }, []);
-
-  const handleShowAll = useCallback(() => {
-    const { setColumnVisibility } = useColumnVisibility.getState();
-    const newVisibility: Record<string, boolean> = {};
-    for (const col of columns) {
-      if (col.canHide) newVisibility[col.id] = true;
-    }
-    setColumnVisibility(newVisibility);
-  }, [columns]);
+  const handleReset = useCallback(() => {
+    actions.reset();
+    setOpen(false);
+  }, [actions]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -198,7 +186,7 @@ const DataTableViewOptionsInner = <TData,>({
           variant='outline'
           className='border-dashed border-border px-3 py-1 text-sm font-medium max-lg:self-end'
         >
-          <Setting className='size-4 opacity-70' />
+          <Icon icon='solar:tuning-2-linear' className='size-4 opacity-70' />
           <span className='py-0.5'>العرض</span>
         </Button>
       </PopoverTrigger>
@@ -207,82 +195,37 @@ const DataTableViewOptionsInner = <TData,>({
           <CommandInput
             placeholder='بحث عن عمود...'
             value={search}
-            onValueChange={handleSearchChange}
+            onValueChange={setSearch}
           />
           <CommandList>
-            <CommandEmpty>لا توجد نتائج.</CommandEmpty>
+            <CommandEmpty>{NO_RESULTS_MESSAGE}</CommandEmpty>
             <CommandGroup>
-              {isSearching ? (
-                // When searching: no drag, just list
-                filteredColumns.map((col) => (
-                  <ColumnItem key={col.id} column={col} />
+              {term ? (
+                visibleEntries.map((entry) => (
+                  <ColumnItem key={entry.id} column={entry} />
                 ))
               ) : (
-                // Normal mode: sortable list
-                <SortableList
-                  sensors={sensors}
-                  items={columnIds}
-                  strategy={verticalListSortingStrategy}
-                  modifiers={modifiers}
-                  onDragStart={handleDragStart}
-                  onDragEnd={handleDragEnd}
-                  onDragCancel={handleDragCancel}
-                  useDragOverlay
-                  overlay={
-                    activeColumn ? (
-                      <ColumnItem column={activeColumn} showHandle />
-                    ) : null
-                  }
-                >
-                  {filteredColumns.map((col) => (
-                    <SimpleSortableItem
-                      key={col.id}
-                      id={col.id}
-                      useHandle
-                      className='flex items-center'
-                    >
-                      <ColumnItem column={col} showHandle />
-                    </SimpleSortableItem>
-                  ))}
-                </SortableList>
+                <Sortable value={entryIds} onMove={handleMove}>
+                  <SortableContent withoutSlot>
+                    {visibleEntries.map((entry) => (
+                      <SortableItem
+                        key={entry.id}
+                        value={entry.id}
+                        className='flex items-center'
+                      >
+                        <ColumnItem column={entry} showHandle />
+                      </SortableItem>
+                    ))}
+                  </SortableContent>
+                  <SortableOverlay>{renderOverlay}</SortableOverlay>
+                </Sortable>
               )}
             </CommandGroup>
             <CommandSeparator />
-            {hiddenCount > 0 && (
-              <>
-                <CommandGroup>
-                  <CommandItem
-                    onSelect={handleShowAll}
-                    className='justify-center text-center'
-                  >
-                    اظهار الكل
-                  </CommandItem>
-                </CommandGroup>
-              </>
-            )}
+            <ShowAllItem />
             <CommandGroup>
               <CommandItem
-                onSelect={() => {
-                  useColumnSizing.setState({ columnSizing: {} });
-                  useColumnOrder.setState({
-                    columnOrder: table.initialState?.columnOrder || [],
-                  });
-                  useColumnVisibility.setState({
-                    columnVisibility:
-                      table.initialState?.columnVisibility || {},
-                  });
-                  useColumnPinning.setState({
-                    columnPinning: table.initialState?.columnPinning || {
-                      left: [],
-                      right: [],
-                    },
-                  });
-                  table.setColumnSizing({});
-                  if (storageKey) {
-                    localStorage.removeItem(storageKey);
-                  }
-                  setOpen(false);
-                }}
+                onSelect={handleReset}
                 className='justify-center text-center'
               >
                 إعادة ضبط الاعمدة
@@ -295,60 +238,9 @@ const DataTableViewOptionsInner = <TData,>({
   );
 };
 
-const DataTableViewOptions = memo(DataTableViewOptionsInner) as <TData>(
-  props: DataTableViewOptionsProps<TData>
-) => React.ReactElement | null;
-
-// ─── Column Item ─────────────────────────────────────────────────────
-
-interface ColumnItemProps {
-  column: ColumnItem;
-  showHandle?: boolean;
-}
-
-const ColumnItem = memo(({ column, showHandle }: ColumnItemProps) => {
-  const isVisible = useColumnVisibility(
-    useShallow((s) => s.columnVisibility[column.id] !== false)
-  );
-
-  const handleSelect = useCallback(() => {
-    if (!column.canHide) return;
-    const { columnVisibility, setColumnVisibility } =
-      useColumnVisibility.getState();
-    setColumnVisibility({
-      ...columnVisibility,
-      [column.id]: !isVisible,
-    });
-  }, [column.id, column.canHide, isVisible]);
-
-  return (
-    <CommandItem
-      onSelect={handleSelect}
-      className={cn('w-full gap-2', !column.canHide && 'opacity-60')}
-    >
-      <div
-        className={cn(
-          'flex size-4 shrink-0 items-center justify-center rounded-sm border border-primary',
-          isVisible
-            ? 'bg-primary text-primary-foreground'
-            : 'opacity-50 [&_svg]:invisible'
-        )}
-      >
-        <Check className='size-3.5 text-background' />
-      </div>
-      <span className='flex-1 truncate'>{column.label}</span>
-      {showHandle && (
-        <SortableHandle
-          as='div'
-          className='flex shrink-0 cursor-grab items-center text-muted-foreground hover:text-foreground'
-        >
-          <GripVertical className='size-4' />
-        </SortableHandle>
-      )}
-    </CommandItem>
-  );
-});
-
-ColumnItem.displayName = 'ColumnItem';
+const DataTableViewOptions = genericMemo(
+  DataTableViewOptionsInner,
+  'DataTableViewOptions'
+);
 
 export { DataTableViewOptions };

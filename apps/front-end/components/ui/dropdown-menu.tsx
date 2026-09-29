@@ -1,10 +1,20 @@
 import type * as React from 'react';
 
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
-import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-import { popoverMotion, popoverSurface } from './popover-surface';
+import { Icon } from '@/components/ui/icon';
+import {
+  menuContent,
+  menuItem,
+  menuSubContent,
+  menuSubTrigger,
+} from '@/components/ui/menu-surface';
+
+const itemIndicator =
+  'pointer-events-none absolute flex size-3.5 items-center justify-center ltr:left-2 rtl:right-2';
+const endItemIndicator =
+  'pointer-events-none absolute flex size-3.5 items-center justify-center ltr:right-2 rtl:left-2';
 
 function DropdownMenu({
   ...props
@@ -42,9 +52,8 @@ function DropdownMenuContent({
         data-slot='dropdown-menu-content'
         sideOffset={sideOffset}
         className={cn(
-          popoverSurface,
-          popoverMotion,
-          'max-h-[--radix-dropdown-menu-content-available-height] min-w-32 origin-[--radix-dropdown-menu-content-transform-origin] overflow-y-auto overflow-x-hidden p-1 focus-visible:ring-0 focus-visible:ring-transparent',
+          menuContent,
+          'max-h-[--radix-dropdown-menu-content-available-height] origin-[--radix-dropdown-menu-content-transform-origin] overflow-y-auto',
           className
         )}
         {...props}
@@ -75,10 +84,7 @@ function DropdownMenuItem({
       data-slot='dropdown-menu-item'
       data-inset={inset}
       data-variant={variant}
-      className={cn(
-        "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground outline-none transition-all hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:ring-0 focus-visible:ring-transparent data-[disabled]:pointer-events-none data-[inset]:ps-8 data-[variant=destructive]:text-destructive data-[disabled]:opacity-50 data-[variant=destructive]:focus-visible:bg-destructive/10 data-[variant=destructive]:focus-visible:text-destructive dark:data-[variant=destructive]:focus-visible:bg-destructive/20 [&_svg:not([class*='size-'])]:size-4",
-        className
-      )}
+      className={cn(menuItem, className)}
       {...props}
     />
   );
@@ -87,22 +93,20 @@ function DropdownMenuItem({
 function DropdownMenuCheckboxItem({
   className,
   children,
-  checked,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>) {
   return (
     <DropdownMenuPrimitive.CheckboxItem
       data-slot='dropdown-menu-checkbox-item'
-      className={cn(
-        "relative flex cursor-default select-none items-center rounded-sm py-1.5 pe-2 ps-8 text-sm outline-none space-x-2 focus-visible:bg-accent focus-visible:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg:not([class*='size-'])]:size-4",
-        className
-      )}
-      checked={checked}
+      className={cn(menuItem, 'pe-2 ps-8', className)}
       {...props}
     >
-      <span className='pointer-events-none absolute flex size-3.5 items-center justify-center ltr:left-2 rtl:right-2'>
+      <span className={itemIndicator}>
         <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon className='size-4 text-muted-foreground' />
+          <Icon
+            icon='solar:check-read-linear'
+            className='size-4 text-muted-foreground'
+          />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
       {children}
@@ -124,28 +128,40 @@ function DropdownMenuRadioGroup({
 function DropdownMenuRadioItem({
   className,
   children,
-  showIcon = false,
+  indicator,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem> & {
-  showIcon?: boolean;
+  /** `dot` marks the checked item at the start, `check` at the end. */
+  indicator?: 'dot' | 'check';
 }) {
   return (
     <DropdownMenuPrimitive.RadioItem
       data-slot='dropdown-menu-radio-item'
       className={cn(
-        "relative flex cursor-default select-none items-center gap-2 rounded-sm py-1.5 pe-2 ps-8 text-sm text-muted-foreground transition-all hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:ring-0 focus-visible:ring-transparent data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg:not([class*='size-'])]:size-4",
+        menuItem,
+        indicator === 'check' ? 'pe-8 ps-2' : 'pe-2 ps-8',
         className
       )}
       {...props}
     >
-      {showIcon && (
-        <span className='pointer-events-none absolute flex size-3.5 items-center justify-center ltr:left-0.5 rtl:right-0.5'>
+      {indicator === 'dot' && (
+        <span className={itemIndicator}>
           <DropdownMenuPrimitive.ItemIndicator>
-            <CircleIcon className='size-2 fill-current text-muted-foreground' />
+            <Icon
+              icon='lucide:circle'
+              className='size-2 text-muted-foreground [&_*]:fill-current'
+            />
           </DropdownMenuPrimitive.ItemIndicator>
         </span>
       )}
       {children}
+      {indicator === 'check' && (
+        <span className={endItemIndicator}>
+          <DropdownMenuPrimitive.ItemIndicator>
+            <Icon icon='solar:check-read-linear' className='size-4' />
+          </DropdownMenuPrimitive.ItemIndicator>
+        </span>
+      )}
     </DropdownMenuPrimitive.RadioItem>
   );
 }
@@ -201,14 +217,14 @@ function DropdownMenuSubTrigger({
     <DropdownMenuPrimitive.SubTrigger
       data-slot='dropdown-menu-sub-trigger'
       data-inset={inset}
-      className={cn(
-        `flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm text-muted-foreground outline-none focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:ring-0 focus-visible:ring-transparent data-[state=open]:bg-accent data-[inset]:ps-8 data-[state=open]:text-accent-foreground [&_svg:not([class*='size-'])]:size-4`,
-        className
-      )}
+      className={cn(menuItem, menuSubTrigger, className)}
       {...props}
     >
       {children}
-      <ChevronRightIcon className='ms-auto size-4 text-muted-foreground rtl:rotate-180' />
+      <Icon
+        icon='solar:alt-arrow-right-linear'
+        className='ms-auto size-4 text-muted-foreground rtl:rotate-180'
+      />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }
@@ -221,9 +237,9 @@ function DropdownMenuSubContent({
     <DropdownMenuPrimitive.SubContent
       data-slot='dropdown-menu-sub-content'
       className={cn(
-        popoverSurface,
-        popoverMotion,
-        'min-w-32 origin-[--radix-dropdown-menu-content-transform-origin] overflow-hidden p-1 shadow-lg focus-visible:ring-0 focus-visible:ring-transparent',
+        menuContent,
+        menuSubContent,
+        'origin-[--radix-dropdown-menu-content-transform-origin]',
         className
       )}
       {...props}

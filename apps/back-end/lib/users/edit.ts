@@ -1,24 +1,23 @@
 import type { Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
-import type { checkUserPermission } from '@/lib/permissions/checker';
-import type { PermissionRows } from '@/lib/permissions/utils';
+import type { ActorPermissions } from '@/lib/permissions/checker';
+import type { PermissionRows } from '@/lib/permissions/matrix';
 import type { EntityID } from '@app/shared/types';
 import type { adminUpdateUserBodySchema } from '@app/shared/validation/auth';
 import type { z } from 'zod';
 
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { accounts, rolePermissions, roles, users } from '@/db/schema';
 
-import { HTTP_STATUS, MSG_NOT_FOUND } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
 import { PHONE_ENABLED } from '@app/shared/config';
 import { CustomError } from '@app/shared/error-class';
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
 
 import { auditLog } from '@/lib/audit';
-import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth/credential';
-import { twoFactorMsg } from '@/lib/auth/messages';
+import { credentialAccountOf } from '@/lib/auth/credential-account';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword } from '@/lib/auth/password/hash';
 import { requireReauthWindow } from '@/lib/auth/reauth/window';
@@ -27,28 +26,33 @@ import {
   revokePendingProofs,
   unlinkGoogle,
 } from '@/lib/auth/session/rotation';
+import { removeMethodIntent } from '@/lib/auth/two-factor/methods';
+import { notFoundError } from '@/lib/http/response';
+import { auditCustomRolePermissions } from '@/lib/permissions/audit';
 import {
-  contactChangeStrandsTwoFactor,
-  removeMethodIntent,
-} from '@/lib/auth/two-factor/methods';
-import { insufficientPermissions } from '@/lib/permissions/checker';
+  holdsActionOn,
+  insufficientPermissions,
+  resolveActionScope,
+} from '@/lib/permissions/checker';
+import { permissionsEqual, toPermissionRows } from '@/lib/permissions/matrix';
 import {
-  auditCustomRolePermissions,
   createCustomRole,
-  isProtectedSystemRole,
-  PERMISSION_AUDIT_VERSION,
-  permissionsEqual,
-  refreshUserSessions,
+  destroyCustomRole,
   validateAssignableRole,
+} from '@/lib/permissions/roles';
+import {
   validatePermissionScope,
   validateRolePermissionScope,
-} from '@/lib/permissions/utils';
+} from '@/lib/permissions/scope';
+import { refreshUserSessions } from '@/lib/permissions/session-refresh';
 
+import { assertContactChangeKeepsFactor } from './contact-change';
+import { liveUser } from './filters';
 import { userMsg } from './messages';
-
-type ActorPermissions = Awaited<
-  ReturnType<typeof checkUserPermission>
->['permissions'];
+import {
+  assertTargetUserReachable,
+  assertTargetUserVisible,
+} from './target-user';
 
 interface EditActor {
   userId: EntityID;
@@ -86,7 +90,7 @@ export async function renameSelf(
     `);
 
     const row = updated[0];
-    if (!row) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    if (!row) throw notFoundError();
 
     await auditLog(tx, {
       userId: actor.userId,
@@ -126,26 +130,20 @@ async function assertTargetEditable(opts: {
     })
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
-    .where(and(eq(users.id, opts.targetId), isNull(users.deletedAt)))
+    .where(liveUser(eq(users.id, opts.targetId)))
     .limit(1);
 
-  const unreachable =
-    !target ||
-    isProtectedSystemRole({
-      roleName: target.roleName,
-      scope: target.roleScope,
-    }) ||
-    (opts.editScope === 'own' && target.createdBy !== opts.actorUserId);
+  if (!target) throw notFoundError();
 
-  if (unreachable) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-
-  if (opts.actorPermissions && target.roleId)
-    await validateRolePermissionScope(
-      opts.actorPermissions,
-      target.roleId,
-      db,
-      'reachability'
-    );
+  await assertTargetUserReachable(db, {
+    isSelf: false,
+    roleId: target.roleId,
+    createdBy: target.createdBy,
+    role: { roleName: target.roleName, scope: target.roleScope },
+    actorUserId: opts.actorUserId,
+    scope: opts.editScope,
+    actorPermissions: opts.actorPermissions,
+  });
 }
 
 /**
@@ -213,22 +211,21 @@ export async function editUserAsAdmin(opts: {
       })
       .from(users)
       .innerJoin(roles, eq(users.roleId, roles.id))
-      .where(and(eq(users.id, targetId), isNull(users.deletedAt)))
+      .where(liveUser(eq(users.id, targetId)))
       .for('update', { of: users });
 
-    if (!lockedUser?.roleId)
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    if (!lockedUser?.roleId) throw notFoundError();
 
-    if (
-      isProtectedSystemRole({
-        roleName: lockedUser.roleName,
-        scope: lockedUser.roleScope,
-      })
-    )
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-
-    if (editScope === 'own' && lockedUser.createdBy !== actor.userId)
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    // Not `assertTargetUserReachable`: that would take the `role_permissions`
+    // share lock ahead of `validateAssignableRole`'s role lock.
+    assertTargetUserVisible({
+      isSelf: false,
+      roleId: lockedUser.roleId,
+      createdBy: lockedUser.createdBy,
+      role: { roleName: lockedUser.roleName, scope: lockedUser.roleScope },
+      actorUserId: actor.userId,
+      scope: editScope,
+    });
 
     const isCurrentlyCustom = lockedUser.roleScope === CUSTOM_ROLE_VALUE;
 
@@ -263,29 +260,19 @@ export async function editUserAsAdmin(opts: {
     // so renaming a custom-role user needs no `permissions.edit`.
     const suppliedMatrix = input.permissions?.length ? input.permissions : null;
     const newPermsForAudit: PermissionRows | null =
-      isCustomRole && suppliedMatrix
-        ? suppliedMatrix.map((p) => ({
-            pageName: p.name,
-            permissions: p.permissions,
-          }))
-        : null;
+      isCustomRole && suppliedMatrix ? toPermissionRows(suppliedMatrix) : null;
 
     let oldPermsForAudit: PermissionRows | null = null;
     let customPermsChanged = false;
 
     if (newPermsForAudit && isCurrentlyCustom) {
-      const oldPerms = await tx
+      oldPermsForAudit = await tx
         .select({
           pageName: rolePermissions.pageName,
           permissions: rolePermissions.permissions,
         })
         .from(rolePermissions)
         .where(eq(rolePermissions.roleId, lockedUser.roleId));
-
-      oldPermsForAudit = oldPerms.map((p) => ({
-        pageName: p.pageName,
-        permissions: p.permissions,
-      }));
 
       customPermsChanged = !permissionsEqual(
         oldPermsForAudit,
@@ -296,14 +283,21 @@ export async function editUserAsAdmin(opts: {
     if (isCustomRole) {
       if (!isCurrentlyCustom) {
         // Switching TO custom mints a role.
-        if (actorPermissions?.['permissions']?.['create'] !== true)
+        if (
+          !resolveActionScope(actorPermissions, 'permissions', 'create').allowed
+        )
           throw insufficientPermissions();
-      } else if (customPermsChanged) {
-        const hasEditAll = actorPermissions?.['permissions']?.['edit'] === true;
-        const hasEditOwn =
-          actorPermissions?.['permissions']?.['editOwn'] === true &&
-          lockedUser.roleCreatedBy === actor.userId;
-        if (!hasEditAll && !hasEditOwn) throw insufficientPermissions();
+      } else if (
+        customPermsChanged &&
+        !holdsActionOn(
+          actorPermissions,
+          'permissions',
+          'edit',
+          lockedUser.roleCreatedBy,
+          actor.userId
+        )
+      ) {
+        throw insufficientPermissions();
       }
     }
 
@@ -401,11 +395,7 @@ export async function editUserAsAdmin(opts: {
       ...(emailChanged ? (['email'] as const) : []),
       ...(phoneChanged ? (['phone'] as const) : []),
     ];
-    if (await contactChangeStrandsTwoFactor(targetId, changedContactKinds, tx))
-      throw new CustomError(
-        twoFactorMsg.contactChangeStrands,
-        HTTP_STATUS.CONFLICT
-      );
+    await assertContactChangeKeepsFactor(tx, targetId, changedContactKinds);
 
     const [userUpdated] = await tx
       .update(users)
@@ -425,11 +415,10 @@ export async function editUserAsAdmin(opts: {
         // brute-force counters clear with the password.
         ...(password && { failedLoginAttempts: 0, lockedUntil: null }),
       })
-      .where(and(eq(users.id, targetId), isNull(users.deletedAt)))
+      .where(liveUser(eq(users.id, targetId)))
       .returning({ id: users.id, updatedAt: users.updatedAt });
 
-    if (!userUpdated)
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    if (!userUpdated) throw notFoundError();
 
     // ⚠️ The OTP enrolment does NOT follow a contact to its new address, and
     // `two_factor_enabled` is left alone: clearing it would make `users.edit` a
@@ -437,34 +426,14 @@ export async function editUserAsAdmin(opts: {
     for (const kind of changedContactKinds)
       await removeMethodIntent(tx, targetId, 'otp', kind);
 
-    if (isCurrentlyCustom && lockedUser.roleId !== assignedRoleId) {
-      const oldCustomPerms = await tx
-        .select({
-          pageName: rolePermissions.pageName,
-          permissions: rolePermissions.permissions,
-        })
-        .from(rolePermissions)
-        .where(eq(rolePermissions.roleId, lockedUser.roleId));
-
-      await tx.delete(roles).where(eq(roles.id, lockedUser.roleId));
-
-      await auditLog(tx, {
-        userId: actor.userId,
-        userEmail: actor.userEmail,
-        action: 'DELETE',
-        tableName: 'roles',
-        recordId: lockedUser.roleId,
-        oldData: {
-          auditVersion: PERMISSION_AUDIT_VERSION,
-          scope: CUSTOM_ROLE_VALUE,
-          // Ties the destroyed role back to the user it existed for.
-          forUserId: targetId,
-          permissions: oldCustomPerms,
-        },
-        metadataFields: ['auditVersion', 'scope', 'forUserId'],
+    if (isCurrentlyCustom && lockedUser.roleId !== assignedRoleId)
+      await destroyCustomRole(tx, {
+        actorUserId: actor.userId,
+        actorEmail: actor.userEmail,
+        roleId: lockedUser.roleId,
+        forUserId: targetId,
         meta: auditMeta,
       });
-    }
 
     // Any credential or identity change ends existing sessions. Phone counts:
     // it is a passwordless login factor, as in the self-service flow.
@@ -482,12 +451,7 @@ export async function editUserAsAdmin(opts: {
         .set({
           password: hashedPassword,
         })
-        .where(
-          and(
-            eq(accounts.userId, targetId),
-            eq(accounts.providerId, CREDENTIAL_PROVIDER_ID)
-          )
-        )
+        .where(credentialAccountOf(targetId))
         .returning({ id: accounts.id });
 
       if (!updated?.id)

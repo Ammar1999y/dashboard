@@ -1,11 +1,15 @@
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
 import {
   CAPTCHA_HEADER,
   CAPTCHA_TOKEN_MAX_LENGTH,
 } from '@app/shared/validation/auth';
 
-import { sanitizeForLog } from '@/utils/log';
+import { otpMsg } from '@/lib/auth/messages';
 
-import { getClientIp } from './audit';
+import { logLine, logSanitized } from '@/utils/log';
+
+import { getClientIp } from './http/client-ip';
 
 // Cloudflare's always-pass secret:
 // https://developers.cloudflare.com/turnstile/troubleshooting/testing/
@@ -29,12 +33,10 @@ async function verifyTurnstileToken(
       : process.env.TURNSTILE_SECRET_KEY;
 
   if (!secretKey) {
-    console.error(
-      JSON.stringify({
-        msg: 'captcha.secret missing',
-        nodeEnv: process.env.NODE_ENV ?? null,
-      })
-    );
+    logLine('error', {
+      msg: 'captcha.secret missing',
+      nodeEnv: process.env.NODE_ENV ?? null,
+    });
     return false;
   }
 
@@ -55,7 +57,7 @@ async function verifyTurnstileToken(
     if (typeof data !== 'object' || data === null) return false;
     return 'success' in data && data.success === true;
   } catch (error) {
-    console.error(sanitizeForLog(error));
+    logSanitized('error', error);
     return false;
   } finally {
     clearTimeout(timeout);
@@ -73,4 +75,13 @@ export async function verifyTurnstileRequest(
   const token = headers.get(CAPTCHA_HEADER);
   if (!token) return false;
   return verifyTurnstileToken(token, getClientIp(headers));
+}
+
+/**
+ * A failed `verifyTurnstileRequest`. It reveals nothing about an account, so
+ * the anonymous OTP handlers RETURN it through `handleApiError` rather than
+ * throw it: their timing floor and status collapse never apply to it.
+ */
+export function captchaRefused(): CustomError {
+  return new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
 }

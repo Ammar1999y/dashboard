@@ -3,17 +3,20 @@ import type { BetterAuthPlugin } from 'better-auth';
 import { and, eq } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
-import { passkeys, users, verifications } from '@/db/schema';
+import { passkeys, verifications } from '@/db/schema';
 import { createAuthEndpoint } from 'better-auth/api';
 import * as z from 'zod';
 
 import { CustomError } from '@app/shared/error-class';
-import { reauthPasskeySchema } from '@app/shared/validation/reauth';
+import {
+  REAUTH_METHODS,
+  reauthPasskeySchema,
+} from '@app/shared/validation/reauth';
 import { isTwoFactorMethodEnabled } from '@app/shared/validation/two-factor';
 
 import { auditLog } from '@/lib/audit';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta } from '../context';
 import { asAuthError, authenticationDenied, toAuthApiError } from '../errors';
@@ -25,6 +28,7 @@ import {
 import { envelopeResponse } from '../plugin-openapi';
 import { authenticationStartedAt } from '../session/authentication-time';
 import { lockSessionOwner } from '../session/live';
+import { lockUser } from '../user-eligibility';
 import { expiresIn, reauthPasskeyKey } from '../verifications';
 import { availableReauthMethods } from './methods';
 import { enforceReauthAttemptLimit, requireReauthSession } from './session';
@@ -57,7 +61,7 @@ export const reauthentication = () =>
                     type: 'array',
                     items: {
                       type: 'string',
-                      enum: ['password', 'passkey'],
+                      enum: [...REAUTH_METHODS],
                     },
                   },
                 },
@@ -144,11 +148,7 @@ export const reauthentication = () =>
                 ceremony.challenge
               );
               const grant = await withTransaction(async (tx) => {
-                await tx
-                  .select({ id: users.id })
-                  .from(users)
-                  .where(eq(users.id, userId))
-                  .for('update');
+                await lockUser(tx, userId);
                 const [credential] = await tx
                   .select()
                   .from(passkeys)
@@ -171,12 +171,10 @@ export const reauthentication = () =>
                     tx
                   ))
                 )
-                  console.error(
-                    sanitizeForLog({
-                      msg: 'reauth.passkey.counterReconciled',
-                      passkeyId: credential.id,
-                    })
-                  );
+                  logSanitized('error', {
+                    msg: 'reauth.passkey.counterReconciled',
+                    passkeyId: credential.id,
+                  });
                 await auditLog(tx, {
                   userId,
                   userEmail,
@@ -187,13 +185,11 @@ export const reauthentication = () =>
                   newData: { reauthenticated: true, method: 'passkey' },
                   meta: authAuditMeta(ctx),
                 });
-                return mintAdminReauth(
-                  userId,
-                  sessionId,
-                  'passkey',
-                  tx,
-                  ceremony.startedAt
-                );
+                return mintAdminReauth(userId, sessionId, {
+                  method: 'passkey',
+                  executor: tx,
+                  startedAt: ceremony.startedAt,
+                });
               });
               return ctx.json({ success: true, data: grant });
             } catch (error) {

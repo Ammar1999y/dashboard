@@ -23,9 +23,9 @@ import {
   hasPublicUrl,
 } from '@/lib/r2/client';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
-import { auditAs } from './actor';
+import { auditAs, withinScope } from './actor';
 import { distinctIds, governedIds } from './files';
 import { lockFolderFor, lockTree, rowCount, subtreeFolders } from './folders';
 import { mediaMsg } from './messages';
@@ -132,10 +132,10 @@ interface DoomedRow {
  * again; the other buckets are still cleaned meanwhile.
  *
  * The purge follows the same rule, for the reason `removeObject` in
- * `lib/media/visibility.ts` purges every public delete: a stale public copy is
- * reachable at a URL derived from the key, whatever `bucket_type` says. It is
- * decided on the PUBLIC delete alone; another bucket's outage retains the row
- * anyway.
+ * `lib/media/orphaned-objects.ts` purges every public delete: a stale public
+ * copy is reachable at a URL derived from the key, whatever `bucket_type` says.
+ * It is decided on the PUBLIC delete alone; another bucket's outage retains the
+ * row anyway.
  */
 async function finishDeleting(
   rows: readonly DoomedRow[]
@@ -150,13 +150,11 @@ async function finishDeleting(
       goneFrom.set(bucketType, new Set(outcome.deleted));
     } catch {
       // Count only. A key is a row id, but the error text is provider-controlled.
-      console.error(
-        sanitizeForLog({
-          msg: 'media.delete objects failed',
-          bucketType,
-          count: keys.length,
-        })
-      );
+      logSanitized('error', {
+        msg: 'media.delete objects failed',
+        bucketType,
+        count: keys.length,
+      });
       goneFrom.set(bucketType, new Set());
     }
   }
@@ -176,13 +174,11 @@ async function finishDeleting(
     ENABLED_VISIBILITIES.has(row.bucketType);
   const stranded = rows.filter((row) => !addressable(row));
   if (stranded.length > 0)
-    console.error(
-      sanitizeForLog({
-        msg: 'media.delete row names a bucket this deployment cannot address',
-        buckets: [...new Set(stranded.map((row) => row.bucketType))],
-        count: stranded.length,
-      })
-    );
+    logSanitized('error', {
+      msg: 'media.delete row names a bucket this deployment cannot address',
+      buckets: [...new Set(stranded.map((row) => row.bucketType))],
+      count: stranded.length,
+    });
 
   const done = rows.filter(
     (row) =>
@@ -262,7 +258,7 @@ export async function deleteFiles(params: {
 
       const visible = rows.filter(
         (row) =>
-          (actor.scope !== 'own' || row.uploadedBy === actor.userId) &&
+          withinScope(actor, row.uploadedBy) &&
           (params.authorizedByOwner === true || governed.has(row.id))
       );
       if (visible.length !== ids.length)
@@ -358,10 +354,7 @@ export async function deleteFolderTree(params: {
     const tree = await subtreeFolders(tx, folderId);
     // `own` narrows the whole subtree, not only its root: a folder someone else
     // created is not this caller's to remove because its parent is.
-    if (
-      actor.scope === 'own' &&
-      tree.some((folder) => folder.createdBy !== actor.userId)
-    )
+    if (tree.some((folder) => !withinScope(actor, folder.createdBy)))
       throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
 
     const contents = await tx
@@ -389,10 +382,7 @@ export async function deleteFolderTree(params: {
     // `own` reaches the files too, decided HERE so the refusal names the file
     // while the tree is still intact — `deleteFiles` would refuse the same set
     // one step later, after the caller has been told the delete began.
-    if (
-      actor.scope === 'own' &&
-      contents.some((row) => row.uploadedBy !== actor.userId)
-    )
+    if (contents.some((row) => !withinScope(actor, row.uploadedBy)))
       throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
 
     return { tree, fileIds: contents.map((row) => row.id) };
@@ -513,12 +503,10 @@ async function reapUnfiled(): Promise<{
     }
   }
   if (refused > 0)
-    console.error(
-      sanitizeForLog({
-        msg: 'media.unfiled reap refused by an unregistered referrer',
-        count: refused,
-      })
-    );
+    logSanitized('error', {
+      msg: 'media.unfiled reap refused by an unregistered referrer',
+      count: refused,
+    });
   return { reaped, refused, hasMore: due.length === UNFILED_REAP_BATCH };
 }
 

@@ -14,9 +14,10 @@ import {
 import { CustomError } from '@app/shared/error-class';
 
 import { mediaMsg } from '@/lib/media/messages';
+import { permissionMsg } from '@/lib/permissions/messages';
 import { userMsg } from '@/lib/users/messages';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { handleApiError } from './response';
 
@@ -38,13 +39,11 @@ function getErrorHeaders(error: unknown): Record<string, string> | undefined {
  */
 function reportUnknownUniqueViolation(scope: string, error: unknown): null {
   // Constraint and scope only: `handleApiError` logs the full error next.
-  console.error(
-    sanitizeForLog({
-      msg: 'db.unknownUniqueViolation',
-      scope,
-      constraint: getConstraintName(error) || '(none)',
-    })
-  );
+  logSanitized('error', {
+    msg: 'db.unknownUniqueViolation',
+    scope,
+    constraint: getConstraintName(error) || '(none)',
+  });
   return null;
 }
 
@@ -56,28 +55,25 @@ const USER_UNIQUE_CONSTRAINTS = new Map<string, string>([
   ['ux_users_phone_number', MSG_PHONE_EXISTS],
 ]);
 
-function resolveUserUniqueViolation(error: unknown): string | null {
-  const constraintName = getConstraintName(error);
-  return (
-    USER_UNIQUE_CONSTRAINTS.get(constraintName) ??
-    reportUnknownUniqueViolation('users', error)
-  );
-}
+const PERMISSION_UNIQUE_CONSTRAINTS = new Map<string, string>([
+  ['ux_roles_role_name', permissionMsg.nameExists],
+  ['ux_role_permissions_role_page', permissionMsg.duplicatePagePermission],
+]);
 
-function resolvePermissionUniqueViolation(
+function uniqueViolationConflict(
   error: unknown,
-  messages: {
-    nameExists: string;
-    duplicatePagePermission: string;
-  }
-): string | null {
-  const byConstraint = new Map<string, string>([
-    ['ux_roles_role_name', messages.nameExists],
-    ['ux_role_permissions_role_page', messages.duplicatePagePermission],
-  ]);
-  return (
-    byConstraint.get(getConstraintName(error)) ??
-    reportUnknownUniqueViolation('roles', error)
+  constraints: ReadonlyMap<string, string>,
+  scope: string
+): HandlerOutput<null> | undefined {
+  if (!isUniqueViolation(error)) return undefined;
+  const message =
+    constraints.get(getConstraintName(error)) ??
+    reportUnknownUniqueViolation(scope, error);
+  if (!message) return undefined;
+  return handleApiError(
+    new CustomError(message, HTTP_STATUS.CONFLICT),
+    undefined,
+    getErrorHeaders(error)
   );
 }
 
@@ -88,14 +84,7 @@ function resolvePermissionUniqueViolation(
 export function handleUserUniqueViolation(
   error: unknown
 ): HandlerOutput<null> | undefined {
-  if (!isUniqueViolation(error)) return undefined;
-  const message = resolveUserUniqueViolation(error);
-  if (!message) return undefined;
-  return handleApiError(
-    new CustomError(message, HTTP_STATUS.CONFLICT),
-    undefined,
-    getErrorHeaders(error)
-  );
+  return uniqueViolationConflict(error, USER_UNIQUE_CONSTRAINTS, 'users');
 }
 
 /**
@@ -115,13 +104,11 @@ export function handleUserForeignKeyViolation(
     // Deliberately unmapped: `role_permissions_role_id_roles_id_fk` can only
     // fail on a role this transaction created or locked, a server invariant
     // break rather than a client mistake.
-    console.error(
-      sanitizeForLog({
-        msg: 'db.unknownForeignKeyViolation',
-        scope: 'users',
-        constraint: constraint || '(none)',
-      })
-    );
+    logSanitized('error', {
+      msg: 'db.unknownForeignKeyViolation',
+      scope: 'users',
+      constraint: constraint || '(none)',
+    });
     return undefined;
   }
   return handleApiError(
@@ -143,17 +130,9 @@ export function handleUserConstraintViolation(
 
 /** Same contract as `handleUserUniqueViolation`, for permission/role endpoints. */
 export function handlePermissionUniqueViolation(
-  error: unknown,
-  messages: { nameExists: string; duplicatePagePermission: string }
+  error: unknown
 ): HandlerOutput<null> | undefined {
-  if (!isUniqueViolation(error)) return undefined;
-  const message = resolvePermissionUniqueViolation(error, messages);
-  if (!message) return undefined;
-  return handleApiError(
-    new CustomError(message, HTTP_STATUS.CONFLICT),
-    undefined,
-    getErrorHeaders(error)
-  );
+  return uniqueViolationConflict(error, PERMISSION_UNIQUE_CONSTRAINTS, 'roles');
 }
 
 /** A file write whose destination folder was deleted after it was checked. */

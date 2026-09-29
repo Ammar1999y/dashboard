@@ -1,18 +1,12 @@
 import type { ReactNode } from 'react';
 
-import { memo, useCallback } from 'react';
+import { useCallback } from 'react';
 
-import { GripVertical as _GripVertical, Trash2 as _Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
-import { SortableHandle } from '@/components/sortable';
-
-const GripVertical = memo(_GripVertical);
-GripVertical.displayName = 'GripVertical';
-
-const Trash2 = memo(_Trash2);
-Trash2.displayName = 'Trash2';
+import { Icon } from '@/components/ui/icon';
+import { SortableListHandle } from '@/components/ui/sortable-list';
 
 interface FieldArrayItemActionsProps {
   index: number;
@@ -42,19 +36,18 @@ const FieldArrayItemActions = ({
           aria-label='حذف'
           onClick={handleRemove}
         >
-          <Trash2 className='size-5' />
+          <Icon icon='solar:trash-bin-trash-linear' className='size-5' />
         </Button>
       </div>
       {showDragHandle && (
-        <SortableHandle
-          as={Button}
-          variant='ghost'
-          size='icon'
-          aria-label='سحب لإعادة الترتيب'
-          className='cursor-grab active:cursor-grabbing'
-        >
-          <GripVertical className='h-5 w-5 text-muted-foreground' />
-        </SortableHandle>
+        <SortableListHandle asChild>
+          <Button variant='ghost' size='icon' aria-label='سحب لإعادة الترتيب'>
+            <Icon
+              icon='solar:grip-vertical-linear'
+              className='size-5 text-muted-foreground'
+            />
+          </Button>
+        </SortableListHandle>
       )}
     </div>
   );

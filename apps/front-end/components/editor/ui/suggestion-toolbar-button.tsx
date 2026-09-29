@@ -1,10 +1,10 @@
 'use client';
 
 import { SuggestionPlugin } from '@platejs/suggestion/react';
-import { PencilLineIcon } from 'lucide-react';
 import { useEditorPlugin, usePluginOption } from 'platejs/react';
 import { cn } from '@/lib/utils';
 
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 
 export function SuggestionToolbarButton() {
@@ -18,7 +18,7 @@ export function SuggestionToolbarButton() {
       onMouseDown={(e) => e.preventDefault()}
       tooltip={isSuggesting ? 'إيقاف الاقتراحات' : 'اقتراح التعديلات'}
     >
-      <PencilLineIcon />
+      <Icon icon='lucide:pencil-line' />
     </ToolbarButton>
   );
 }

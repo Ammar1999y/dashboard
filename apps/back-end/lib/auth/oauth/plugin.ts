@@ -1,26 +1,24 @@
-import crypto from 'node:crypto';
 import type { AuthContext } from '../context';
 import type { BetterAuthPlugin } from 'better-auth';
 
 import { createAuthEndpoint, isAPIError } from 'better-auth/api';
-import {
-  deleteSessionCookie,
-  expireCookie,
-  setSessionCookie,
-} from 'better-auth/cookies';
+import { deleteSessionCookie, expireCookie } from 'better-auth/cookies';
 import { generateState, parseState } from 'better-auth/oauth2';
 import { google, verifyGoogleIdToken } from 'better-auth/social-providers';
 import * as z from 'zod';
 
 import { HTTP_STATUS, MSG_INVALID_INPUT } from '@app/shared/api-messages';
-import { googleStartSchema } from '@app/shared/validation/oauth';
+import {
+  googleStartSchema,
+  OAUTH_PROVIDERS,
+} from '@app/shared/validation/oauth';
 import { TWO_FACTOR_ENABLED } from '@app/shared/validation/two-factor';
 
 import { auditLog } from '@/lib/audit';
 import { verifyTurnstileRequest } from '@/lib/captcha';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta, requestHeaders } from '../context';
 import { authenticationDenied, authErrorCodeFirst } from '../errors';
@@ -28,16 +26,18 @@ import { BASE64URL_32_BYTES_PATTERN } from '../keyring';
 import { envelopeResponse } from '../plugin-openapi';
 import { recordAbandonedSession } from '../session/audit';
 import { authenticationStartedAt } from '../session/authentication-time';
+import { deliverSessionCookie } from '../session/cookie';
 import { assertLiveSession } from '../session/live';
 import { submittedRememberMe } from '../session/remember-me';
 import { withAuthTransaction } from '../transaction';
-import { issueTwoFactorChallenge } from '../two-factor/challenge';
+import { issueTwoFactorChallenge } from '../two-factor/issue';
 import { readEnrolmentState as readEnrollmentState } from '../two-factor/methods';
 import {
   expiresIn,
   oauthOnceKey,
   oauthResultKey,
   oauthResultOwnerKey,
+  randomToken,
 } from '../verifications';
 import {
   ENABLED_OAUTH_PROVIDERS,
@@ -119,7 +119,7 @@ async function completeResponse(
   userId: string
 ) {
   if (!destination) return ctx.json(body);
-  const token = crypto.randomBytes(32).toString('base64url');
+  const token = randomToken(32);
   await ctx.context.internalAdapter.createVerificationValue({
     identifier: oauthResultKey(token),
     value: JSON.stringify(body),
@@ -157,7 +157,7 @@ export const oauth = () =>
               properties: {
                 oauthProviders: {
                   type: 'array',
-                  items: { type: 'string', enum: ['google'] },
+                  items: { type: 'string', enum: [...OAUTH_PROVIDERS] },
                 },
               },
               required: ['oauthProviders'],
@@ -196,7 +196,7 @@ export const oauth = () =>
                 MSG_INVALID_INPUT
               );
             const destination = returnURL(ctx.body.callbackURL);
-            const nonce = crypto.randomBytes(32).toString('base64url');
+            const nonce = randomToken(32);
             const { state, codeVerifier } = await generateState(ctx, {
               idTokenNonce: nonce,
               additionalData: {
@@ -361,13 +361,11 @@ export const oauth = () =>
                 if (!user || user.email !== identity.email)
                   throw authenticationDenied();
                 stage = 'cookie_delivery';
-                await setSessionCookie(
+                await deliverSessionCookie(
                   ctx,
                   { session, user },
-                  !flow.rememberMe
+                  flow.rememberMe
                 );
-                if (flow.rememberMe)
-                  expireCookie(ctx, ctx.context.authCookies.dontRememberToken);
                 stage = 'result_delivery';
                 return await completeResponse(
                   ctx,
@@ -399,7 +397,7 @@ export const oauth = () =>
               }
             } catch (error) {
               const denial = error instanceof GoogleIdentityDenied;
-              const diagnostic = sanitizeForLog({
+              logSanitized(denial ? 'warn' : 'error', {
                 msg: 'oauth.signIn.failed',
                 provider: 'google',
                 stage,
@@ -409,8 +407,6 @@ export const oauth = () =>
                     ? 'authentication_denied'
                     : 'unexpected_failure',
               });
-              if (denial) console.warn(diagnostic);
-              else console.error(diagnostic);
               if (destination)
                 return completeResponse(
                   ctx,

@@ -13,22 +13,12 @@ import * as React from 'react';
 import { EmojiSettings } from '@platejs/emoji';
 import { useEmojiDropdownMenuState } from '@platejs/emoji/react';
 import * as Popover from '@radix-ui/react-popover';
-import {
-  AppleIcon,
-  ClockIcon,
-  CompassIcon,
-  FlagIcon,
-  LeafIcon,
-  LightbulbIcon,
-  MusicIcon,
-  SearchIcon,
-  SmileIcon,
-  StarIcon,
-  XIcon,
-} from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
+
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 import {
   Tooltip,
@@ -49,7 +39,7 @@ export function EmojiToolbarButton({
     <EmojiPopover
       control={
         <ToolbarButton isDropdown pressed={isOpen} tooltip='إيموجي' {...props}>
-          <SmileIcon />
+          <Icon icon='solar:smile-circle-linear' />
         </ToolbarButton>
       }
       isOpen={isOpen}
@@ -87,13 +77,43 @@ export function EmojiPopover({
   );
 }
 
+// Plate's picker state carries English labels and takes no locale option.
+const i18n: UseEmojiPickerType['i18n'] = {
+  categories: {
+    activity: 'نشاطات',
+    custom: 'مخصص',
+    flags: 'أعلام',
+    foods: 'طعام وشراب',
+    frequent: 'الأكثر استخداماً',
+    nature: 'حيوانات وطبيعة',
+    objects: 'أشياء',
+    people: 'وجوه وأشخاص',
+    places: 'سفر وأماكن',
+    symbols: 'رموز',
+  },
+  clear: 'مسح',
+  pick: 'اختر رمزاً تعبيرياً...',
+  search: 'ابحث في الرموز التعبيرية',
+  searchNoResultsSubtitle: 'لم يُعثر على هذا الرمز',
+  searchNoResultsTitle: NO_RESULTS_MESSAGE,
+  searchResult: 'نتائج البحث',
+  skins: {
+    '1': 'افتراضي',
+    '2': 'فاتح',
+    '3': 'متوسط الفتوح',
+    '4': 'متوسط',
+    '5': 'متوسط الغمق',
+    '6': 'غامق',
+    choose: 'اختر لون البشرة الافتراضي',
+  },
+};
+
 export function EmojiPicker({
   clearSearch,
   emoji,
   emojiLibrary,
   focusedCategory,
   hasFound,
-  i18n,
   icons = {
     categories: emojiCategoryIcons,
     search: emojiSearchIcons,
@@ -108,7 +128,7 @@ export function EmojiPicker({
   handleCategoryClick,
   onMouseOver,
   onSelectEmoji,
-}: Omit<UseEmojiPickerType, 'icons'> & {
+}: Omit<UseEmojiPickerType, 'icons' | 'i18n'> & {
   icons?: EmojiIconList<React.ReactElement>;
 }) {
   return (
@@ -365,7 +385,7 @@ function EmojiPickerSearchBar({
     <div className='flex items-center px-2'>
       <div className='relative flex grow items-center'>
         <input
-          aria-label='بحث'
+          aria-label={i18n.search}
           autoComplete='off'
           autoFocus
           className='block w-full appearance-none rounded-full border-0 bg-muted px-10 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:outline-none'
@@ -396,7 +416,7 @@ function EmojiPickerSearchAndClear({
       </div>
       {searchValue && (
         <Button
-          aria-label='Clear'
+          aria-label={i18n.clear}
           className={cn(
             'absolute top-1/2 flex size-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-popover-foreground hover:bg-transparent ltr:right-0.5 rtl:left-0.5'
           )}
@@ -570,52 +590,52 @@ const emojiCategoryIcons: Record<
   },
 
   custom: {
-    outline: <StarIcon className='size-full' />,
-    solid: <StarIcon className='size-full' />,
+    outline: <Icon icon='solar:star-linear' className='size-full' />,
+    solid: <Icon icon='solar:star-linear' className='size-full' />,
   },
 
   flags: {
-    outline: <FlagIcon className='size-full' />,
-    solid: <FlagIcon className='size-full' />,
+    outline: <Icon icon='lucide:flag' className='size-full' />,
+    solid: <Icon icon='lucide:flag' className='size-full' />,
   },
 
   foods: {
-    outline: <AppleIcon className='size-full' />,
-    solid: <AppleIcon className='size-full' />,
+    outline: <Icon icon='lucide:apple' className='size-full' />,
+    solid: <Icon icon='lucide:apple' className='size-full' />,
   },
 
   frequent: {
-    outline: <ClockIcon className='size-full' />,
-    solid: <ClockIcon className='size-full' />,
+    outline: <Icon icon='solar:clock-circle-linear' className='size-full' />,
+    solid: <Icon icon='solar:clock-circle-linear' className='size-full' />,
   },
 
   nature: {
-    outline: <LeafIcon className='size-full' />,
-    solid: <LeafIcon className='size-full' />,
+    outline: <Icon icon='lucide:leaf' className='size-full' />,
+    solid: <Icon icon='lucide:leaf' className='size-full' />,
   },
 
   objects: {
-    outline: <LightbulbIcon className='size-full' />,
-    solid: <LightbulbIcon className='size-full' />,
+    outline: <Icon icon='solar:lightbulb-linear' className='size-full' />,
+    solid: <Icon icon='solar:lightbulb-linear' className='size-full' />,
   },
 
   people: {
-    outline: <SmileIcon className='size-full' />,
-    solid: <SmileIcon className='size-full' />,
+    outline: <Icon icon='solar:smile-circle-linear' className='size-full' />,
+    solid: <Icon icon='solar:smile-circle-linear' className='size-full' />,
   },
 
   places: {
-    outline: <CompassIcon className='size-full' />,
-    solid: <CompassIcon className='size-full' />,
+    outline: <Icon icon='solar:compass-linear' className='size-full' />,
+    solid: <Icon icon='solar:compass-linear' className='size-full' />,
   },
 
   symbols: {
-    outline: <MusicIcon className='size-full' />,
-    solid: <MusicIcon className='size-full' />,
+    outline: <Icon icon='solar:music-note-linear' className='size-full' />,
+    solid: <Icon icon='solar:music-note-linear' className='size-full' />,
   },
 };
 
 const emojiSearchIcons = {
-  delete: <XIcon className='size-4 text-current' />,
-  loupe: <SearchIcon className='size-4 text-current' />,
+  delete: <Icon icon='solar:close-linear' className='size-4 text-current' />,
+  loupe: <Icon icon='solar:magnifer-linear' className='size-4 text-current' />,
 };

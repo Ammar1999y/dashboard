@@ -35,3 +35,15 @@ export async function lockEligibleAuthUser(tx: Tx, where: SQL) {
   if (!user?.isActive || user.deletedAt) return null;
   return (await roleAllowsLoginFor(tx, user.roleId)) ? user : null;
 }
+
+/**
+ * Locks the user row first, as every mutation of a user's dependent rows does,
+ * so the canonical lock order (users → everything else) holds.
+ */
+export async function lockUser(tx: Tx, userId: EntityID): Promise<void> {
+  await tx
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.id, userId))
+    .for('update');
+}

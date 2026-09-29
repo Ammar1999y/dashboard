@@ -1,17 +1,14 @@
 import { memo } from 'react';
 
-import { HelpCircle as _HelpCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+import { Icon } from '@/components/ui/icon';
 import { Label } from '@/components/ui/label';
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-
-const HelpCircle = memo(_HelpCircle);
-HelpCircle.displayName = 'HelpCircle';
 
 interface FieldLabelProps {
   title: string;
@@ -50,7 +47,10 @@ const FieldLabel = memo(
               htmlFor={htmlFor}
               className={cn('mb-0', className)}
             />
-            <HelpCircle className='h-4 w-4 cursor-help text-muted-foreground' />
+            <Icon
+              icon='solar:question-circle-linear'
+              className='size-4 cursor-help text-muted-foreground'
+            />
           </div>
         </TooltipTrigger>
         <TooltipContent>

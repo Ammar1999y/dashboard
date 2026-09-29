@@ -1,18 +1,24 @@
-'use client';
+import { createSlatePlugin, KEYS } from 'platejs';
 
-import { KEYS } from 'platejs';
-import { createPlatePlugin } from 'platejs/react';
+export const DIR_VALUES = ['auto', 'ltr', 'rtl'] as const;
+export type DirValue = (typeof DIR_VALUES)[number];
 
-// Custom plugin for text direction (dir) attribute on block elements
-// Uses inject.nodeProps to apply direction style based on 'dir' property
-const DirPlugin = createPlatePlugin({
+/**
+ * A block's `dir`, rendered as the attribute rather than inline `direction`:
+ * `auto` is the unset default and inherits the document's direction (the
+ * editor root's `dir`).
+ */
+const DirPlugin = createSlatePlugin({
   key: 'dir',
   inject: {
     nodeProps: {
       defaultNodeValue: 'auto',
       nodeKey: 'dir',
-      styleKey: 'direction',
-      validNodeValues: ['auto', 'ltr', 'rtl'],
+      validNodeValues: [...DIR_VALUES],
+      transformProps: ({ nodeValue, props }) => ({
+        className: props.className,
+        dir: nodeValue,
+      }),
     },
     targetPlugins: [
       ...KEYS.heading,

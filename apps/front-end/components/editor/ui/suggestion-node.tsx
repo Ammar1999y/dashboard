@@ -9,39 +9,12 @@ import type { PlateLeafProps, RenderNodeWrapper } from 'platejs/react';
 
 import * as React from 'react';
 
-import { cva } from 'class-variance-authority';
-import { CornerDownLeftIcon } from 'lucide-react';
 import { PlateLeaf, useEditorPlugin, usePluginOption } from 'platejs/react';
 import { cn } from '@/lib/utils';
 
+import { Icon } from '@/components/ui/icon';
 import { suggestionPlugin } from '@/components/editor/plugins/suggestion-kit';
-
-const suggestionVariants = cva(
-  cn(
-    'bg-emerald-100 text-emerald-700 no-underline transition-colors duration-200'
-  ),
-  {
-    defaultVariants: {
-      insertActive: false,
-      remove: false,
-      removeActive: false,
-    },
-    variants: {
-      insertActive: {
-        false: '',
-        true: 'bg-emerald-200/80',
-      },
-      remove: {
-        false: '',
-        true: 'bg-red-100 text-red-700',
-      },
-      removeActive: {
-        false: '',
-        true: 'bg-red-200/80 no-underline',
-      },
-    },
-  }
-);
+import { suggestionVariants } from '@/components/editor/styles';
 
 export function SuggestionLeaf(props: PlateLeafProps<TSuggestionText>) {
   const { api, setOption } = useEditorPlugin(suggestionPlugin);
@@ -52,15 +25,9 @@ export function SuggestionLeaf(props: PlateLeafProps<TSuggestionText>) {
   const hoverSuggestionId = usePluginOption(suggestionPlugin, 'hoverId');
   const dataList = api.suggestion.dataList(leaf);
 
-  const hasRemove = dataList.some(
-    (data: { id?: string; type?: string }) => data.type === 'remove'
-  );
-  const hasActive = dataList.some(
-    (data: { id?: string; type?: string }) => data.id === activeSuggestionId
-  );
-  const hasHover = dataList.some(
-    (data: { id?: string; type?: string }) => data.id === hoverSuggestionId
-  );
+  const hasRemove = dataList.some((data) => data.type === 'remove');
+  const hasActive = dataList.some((data) => data.id === activeSuggestionId);
+  const hasHover = dataList.some((data) => data.id === hoverSuggestionId);
 
   const diffOperation = { type: hasRemove ? 'delete' : 'insert' } as const;
 
@@ -79,9 +46,8 @@ export function SuggestionLeaf(props: PlateLeafProps<TSuggestionText>) {
       }}
       className={cn(
         suggestionVariants({
-          insertActive: hasActive || hasHover,
+          active: hasActive || hasHover,
           remove: hasRemove,
-          removeActive: (hasActive || hasHover) && hasRemove,
         }),
         props.className
       )}
@@ -108,6 +74,8 @@ export const SuggestionLineBreak: RenderNodeWrapper<AnyPluginConfig> = ({
   };
 };
 
+const LINE_BREAK_MARK_STYLE = { bottom: 3.5, height: 21 };
+
 function SuggestionLineBreakContent({
   children,
   suggestionData,
@@ -115,59 +83,40 @@ function SuggestionLineBreakContent({
   children: React.ReactNode;
   suggestionData: TSuggestionData;
 }) {
-  const { isLineBreak, type } = suggestionData;
-  const isRemove = type === 'remove';
-  const isInsert = type === 'insert';
-
   const activeSuggestionId = usePluginOption(suggestionPlugin, 'activeId');
   const hoverSuggestionId = usePluginOption(suggestionPlugin, 'hoverId');
-
-  const isActive = activeSuggestionId === suggestionData.id;
-  const isHover = hoverSuggestionId === suggestionData.id;
-
-  const spanRef = React.useRef<HTMLSpanElement>(null);
   const { setOption } = useEditorPlugin(suggestionPlugin);
 
-  return (
-    <>
-      {isLineBreak ? (
-        <>
-          {children}
-          <span
-            className={cn(
-              'absolute text-justify',
-              suggestionVariants({
-                insertActive: isInsert && (isActive || isHover),
-                remove: isRemove,
-                removeActive: (isActive || isHover) && isRemove,
-              })
-            )}
-            contentEditable={false}
-            ref={spanRef}
-            style={{
-              bottom: 3.5,
-              height: 21,
-            }}
-          >
-            <CornerDownLeftIcon className='mt-0.5 size-4' />
-          </span>
-        </>
-      ) : (
-        <div
-          className={cn(
-            suggestionVariants({
-              insertActive: isInsert && (isActive || isHover),
-              remove: isRemove,
-              removeActive: (isActive || isHover) && isRemove,
-            })
-          )}
-          data-block-suggestion='true'
-          onMouseEnter={() => setOption('hoverId', suggestionData.id)}
-          onMouseLeave={() => setOption('hoverId', null)}
+  const variant = suggestionVariants({
+    active:
+      activeSuggestionId === suggestionData.id ||
+      hoverSuggestionId === suggestionData.id,
+    remove: suggestionData.type === 'remove',
+  });
+
+  if (suggestionData.isLineBreak) {
+    return (
+      <>
+        {children}
+        <span
+          className={cn('absolute text-justify', variant)}
+          contentEditable={false}
+          style={LINE_BREAK_MARK_STYLE}
         >
-          {children}
-        </div>
-      )}
-    </>
+          <Icon icon='lucide:corner-down-left' className='mt-0.5 size-4' />
+        </span>
+      </>
+    );
+  }
+
+  return (
+    <div
+      className={variant}
+      data-block-suggestion='true'
+      onMouseEnter={() => setOption('hoverId', suggestionData.id)}
+      onMouseLeave={() => setOption('hoverId', null)}
+    >
+      {children}
+    </div>
   );
 }

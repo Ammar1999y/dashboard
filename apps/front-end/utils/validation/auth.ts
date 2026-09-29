@@ -3,7 +3,7 @@ import type { UserClient } from '@/types/user';
 import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
-import { CUSTOM_ROLE_VALUE } from '@/lib/permissions/constants';
+import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
 
 import { PHONE_ENABLED, PHONE_REQUIRED } from '@/utils/config';
 

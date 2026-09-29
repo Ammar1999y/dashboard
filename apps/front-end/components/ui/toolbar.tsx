@@ -1,17 +1,20 @@
 import type { VariantProps } from 'class-variance-authority';
+import type * as React from 'react';
 
-import * as React from 'react';
+import { Children } from 'react';
 
+import { composeEventHandlers } from '@radix-ui/primitive';
 import * as ToolbarPrimitive from '@radix-ui/react-toolbar';
 import { cva } from 'class-variance-authority';
-import { ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+import { useIsClient } from '@/hooks/use-is-client';
 import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
+import { Icon } from '@/components/ui/icon';
 import { Separator } from '@/components/ui/separator';
 import {
   Tooltip,
@@ -19,7 +22,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-export function Toolbar({
+function Toolbar({
   className,
   ...props
 }: React.ComponentProps<typeof ToolbarPrimitive.Root>) {
@@ -91,13 +94,10 @@ const dropdownArrowVariants = cva(
 type ToolbarButtonProps = {
   isDropdown?: boolean;
   pressed?: boolean;
-} & Omit<
-  React.ComponentPropsWithoutRef<typeof ToolbarToggleItem>,
-  'asChild' | 'value'
-> &
+} & Omit<React.ComponentProps<typeof ToolbarToggleItem>, 'asChild' | 'value'> &
   VariantProps<typeof toolbarButtonVariants>;
 
-export const ToolbarButton = withTooltip(function ToolbarButton({
+const ToolbarButton = withTooltip(function ToolbarButton({
   children,
   className,
   isDropdown,
@@ -109,14 +109,9 @@ export const ToolbarButton = withTooltip(function ToolbarButton({
   return typeof pressed === 'boolean' ? (
     <ToolbarToggleGroup disabled={props.disabled} type='single' value='single'>
       <ToolbarToggleItem
-        className={cn(
-          toolbarButtonVariants({
-            size,
-            variant,
-          }),
-          isDropdown && 'justify-between gap-1 pe-1',
-          className
-        )}
+        size={size}
+        variant={variant}
+        className={cn(isDropdown && 'justify-between gap-1 pe-1', className)}
         value={pressed ? 'single' : ''}
         {...props}
       >
@@ -126,7 +121,8 @@ export const ToolbarButton = withTooltip(function ToolbarButton({
               {children}
             </div>
             <div>
-              <ChevronDown
+              <Icon
+                icon='solar:alt-arrow-down-linear'
                 className='size-3.5 text-muted-foreground'
                 data-icon
               />
@@ -154,10 +150,10 @@ export const ToolbarButton = withTooltip(function ToolbarButton({
   );
 });
 
-export function ToolbarSplitButton({
+function ToolbarSplitButton({
   className,
   ...props
-}: React.ComponentPropsWithoutRef<typeof ToolbarButton>) {
+}: React.ComponentProps<typeof ToolbarButton>) {
   return (
     <ToolbarButton
       className={cn('group flex gap-0 px-0 hover:bg-transparent', className)}
@@ -166,13 +162,10 @@ export function ToolbarSplitButton({
   );
 }
 
-type ToolbarSplitButtonPrimaryProps = Omit<
-  React.ComponentPropsWithoutRef<typeof ToolbarToggleItem>,
-  'value'
-> &
+type ToolbarSplitButtonPrimaryProps = React.ComponentProps<'span'> &
   VariantProps<typeof toolbarButtonVariants>;
 
-export function ToolbarSplitButtonPrimary({
+function ToolbarSplitButtonPrimary({
   children,
   className,
   size = 'sm',
@@ -199,13 +192,16 @@ export function ToolbarSplitButtonPrimary({
 
 const stopPropagation = (e: React.MouseEvent) => e.stopPropagation();
 
-export function ToolbarSplitButtonSecondary({
+// The arrow sits inside the split button, whose own press must not fire.
+function ToolbarSplitButtonSecondary({
   className,
   size,
   variant,
+  onClick,
   ...props
-}: React.ComponentPropsWithoutRef<'span'> &
-  VariantProps<typeof dropdownArrowVariants>) {
+}: React.ComponentProps<'span'> & VariantProps<typeof dropdownArrowVariants>) {
+  const handleClick = composeEventHandlers(onClick, stopPropagation);
+
   return (
     <span
       className={cn(
@@ -216,11 +212,15 @@ export function ToolbarSplitButtonSecondary({
         'group-data-[pressed=true]:bg-accent group-data-[pressed=true]:text-accent-foreground',
         className
       )}
-      onClick={stopPropagation}
+      onClick={handleClick}
       role='button'
       {...props}
     >
-      <ChevronDown className='size-3.5 text-muted-foreground' data-icon />
+      <Icon
+        icon='solar:alt-arrow-down-linear'
+        className='size-3.5 text-muted-foreground'
+        data-icon
+      />
     </span>
   );
 }
@@ -240,20 +240,24 @@ function ToolbarToggleItem({
   );
 }
 
-export function ToolbarGroup({
+// Children that render nothing (a read-only editor) leave the row `:empty`,
+// which hides it and its separator; `:has(button)` did it but is past the
+// browserslist.
+function ToolbarGroup({
   children,
   className,
+  ...props
 }: React.ComponentProps<'div'>) {
   return (
     <div
-      className={cn(
-        'group/toolbar-group relative hidden has-[button]:flex',
-        className
-      )}
+      className={cn('group/toolbar-group relative flex', className)}
+      {...props}
     >
-      <div className='flex items-center'>{children}</div>
+      <div className='peer/toolbar-row flex items-center empty:hidden'>
+        {children}
+      </div>
 
-      <div className='mx-1.5 py-0.5 group-last/toolbar-group:!hidden'>
+      <div className='mx-1.5 py-0.5 group-last/toolbar-group:!hidden peer-empty/toolbar-row:hidden'>
         <Separator orientation='vertical' />
       </div>
     </div>
@@ -263,14 +267,11 @@ export function ToolbarGroup({
 type TooltipProps<T extends React.ElementType> = {
   tooltip?: React.ReactNode;
   tooltipContentProps?: Omit<
-    React.ComponentPropsWithoutRef<typeof TooltipContent>,
+    React.ComponentProps<typeof TooltipContent>,
     'children'
   >;
-  tooltipProps?: Omit<
-    React.ComponentPropsWithoutRef<typeof Tooltip>,
-    'children'
-  >;
-  tooltipTriggerProps?: React.ComponentPropsWithoutRef<typeof TooltipTrigger>;
+  tooltipProps?: Omit<React.ComponentProps<typeof Tooltip>, 'children'>;
+  tooltipTriggerProps?: React.ComponentProps<typeof TooltipTrigger>;
 } & React.ComponentProps<T>;
 
 function withTooltip<T extends React.ElementType>(Component: T) {
@@ -281,15 +282,11 @@ function withTooltip<T extends React.ElementType>(Component: T) {
     tooltipTriggerProps,
     ...props
   }: TooltipProps<T>) {
-    const [mounted, setMounted] = React.useState(false);
-
-    React.useEffect(() => {
-      setMounted(true);
-    }, []);
+    const isClient = useIsClient();
 
     const component = <Component {...(props as React.ComponentProps<T>)} />;
 
-    if (tooltip && mounted) {
+    if (tooltip && isClient) {
       return (
         <Tooltip {...tooltipProps}>
           <TooltipTrigger asChild {...tooltipTriggerProps}>
@@ -305,22 +302,22 @@ function withTooltip<T extends React.ElementType>(Component: T) {
   };
 }
 
-export function ToolbarMenuGroup({
+/** A group whose items all render nothing is left out, separator and all. */
+function ToolbarMenuGroup({
   children,
   className,
   label,
   ...props
 }: React.ComponentProps<typeof DropdownMenuRadioGroup> & { label?: string }) {
+  if (Children.toArray(children).length === 0) return null;
+
   return (
     <>
-      <DropdownMenuSeparator className='mb-0 hidden shrink-0 peer-has-[[role=menuitem]]/menu-group:block peer-has-[[role=menuitemradio]]/menu-group:block peer-has-[[role=option]]/menu-group:block' />
+      <DropdownMenuSeparator className='mb-0 shrink-0 first:hidden' />
 
       <DropdownMenuRadioGroup
         {...props}
-        className={cn(
-          'peer/menu-group group/menu-group my-1.5 hidden has-[[role=menuitem]]:block has-[[role=menuitemradio]]:block has-[[role=option]]:block',
-          className
-        )}
+        className={cn('group/menu-group my-1.5', className)}
       >
         {label && (
           <DropdownMenuLabel className='select-none text-xs font-semibold text-muted-foreground'>
@@ -332,3 +329,14 @@ export function ToolbarMenuGroup({
     </>
   );
 }
+
+export {
+  Toolbar,
+  ToolbarButton,
+  toolbarButtonVariants,
+  ToolbarGroup,
+  ToolbarMenuGroup,
+  ToolbarSplitButton,
+  ToolbarSplitButtonPrimary,
+  ToolbarSplitButtonSecondary,
+};

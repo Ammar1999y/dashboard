@@ -8,9 +8,11 @@
  * its own second factor.
  */
 import type { AuthContext } from '../context';
-import type { RequestSession, ResolvedChallenge } from './challenge';
+import type { RequestSession } from '../session/request';
+import type { ResolvedChallenge } from './challenge';
+import type { OtpSendSurface } from '@/lib/rate-limit';
 import type { EntityID } from '@app/shared/types';
-import type { ContactKind, OtpChannel } from '@app/shared/validation/enums';
+import type { OtpChannel } from '@app/shared/validation/enums';
 import type { BetterAuthPlugin } from 'better-auth';
 
 import { and, eq, isNull } from 'drizzle-orm';
@@ -29,6 +31,7 @@ import {
   twoFactorOtpVerifySchema,
 } from '@app/shared/validation/two-factor';
 
+import { CONTACT_LABEL } from '@/lib/otp/content';
 import { processOtpSend } from '@/lib/otp/send';
 import { OTP_BASE_RESEND_DELAY_S } from '@/lib/otp/throttle';
 import { otpGuessWasEvaluated, processOtpVerify } from '@/lib/otp/verify';
@@ -36,28 +39,24 @@ import {
   enforceOtpSurfaceSendQuota,
   enforceOtpVerifyQuota,
 } from '@/lib/rate-limit';
+import { contactOf } from '@/lib/users/contact';
 
-import { authAuditMeta, bodyRecord } from '../context';
+import { authAuditMeta, bodyRecord, parseAuthBody } from '../context';
 import { asAuthError, authError } from '../errors';
 import { otpMsg, twoFactorMsg } from '../messages';
 import { envelopeResponse } from '../plugin-openapi';
 import { requireReauthPassword } from '../reauth/grant';
+import { resolveRequestSession } from '../session/request';
 import { revokeOtherSessions } from '../session/rotation';
 import {
   challengeMissingError,
   completeTwoFactorChallenge,
   otpTargetFor,
   requireTwoFactorChallenge,
-  resolveRequestSession,
   spendChallengeAttempt,
 } from './challenge';
-import { auditLifecycle } from './enrolment';
-import { optionId, recordMethodIntent } from './methods';
-
-const ENTITY_BY_KIND: Readonly<Record<ContactKind, string>> = {
-  email: 'البريد الإلكتروني',
-  phone: 'رقم الهاتف',
-};
+import { auditLifecycle } from './lifecycle';
+import { optionId, recordEnabledMethod } from './methods';
 
 interface OtpTarget {
   userId: EntityID;
@@ -98,7 +97,7 @@ async function enrolmentTarget(
   if (!user) throw challengeMissingError();
 
   const kind = contactKindOf(channel);
-  const destination = kind === 'email' ? user.email : user.phoneNumber;
+  const destination = contactOf(user, kind);
   const verified =
     kind === 'email' ? user.emailVerified : user.phoneNumberVerified;
 
@@ -106,6 +105,32 @@ async function enrolmentTarget(
     throw authError(HTTP_STATUS.BAD_REQUEST, twoFactorMsg.contactUnverified);
 
   return { userId, userEmail: user.email, channel, destination };
+}
+
+/**
+ * A second-factor code to a contact already resolved from the user row, under
+ * the per-destination budget of the surface asking for it.
+ */
+export async function sendTwoFactorCode(params: {
+  userId: EntityID;
+  channel: OtpChannel;
+  destination: string;
+  surface: OtpSendSurface;
+}) {
+  await enforceOtpSurfaceSendQuota({
+    channel: params.channel,
+    destination: params.destination,
+    surface: params.surface,
+  });
+
+  return processOtpSend({
+    userId: params.userId,
+    identifier: params.destination,
+    channel: params.channel,
+    purpose: 'two_factor',
+    sendTo: params.destination,
+    entityName: CONTACT_LABEL[contactKindOf(params.channel)],
+  });
 }
 
 /** 404, not 400: an unserved path answers like every other unserved path. */
@@ -179,19 +204,11 @@ export const twoFactorOtp = () =>
                 twoFactorMsg.methodUnavailable
               );
 
-            await enforceOtpSurfaceSendQuota({
+            const { nextAllowedIn } = await sendTwoFactorCode({
+              userId: target.userId,
               channel: target.channel,
               destination: target.destination,
               surface: 'two_factor',
-            });
-
-            const { nextAllowedIn } = await processOtpSend({
-              userId: target.userId,
-              identifier: target.destination,
-              channel: target.channel,
-              purpose: 'two_factor',
-              sendTo: target.destination,
-              entityName: ENTITY_BY_KIND[contactKindOf(target.channel)],
             });
 
             return ctx.json({
@@ -219,19 +236,17 @@ export const twoFactorOtp = () =>
         async (ctx) => {
           assertOtpAvailable();
 
-          const parsed = twoFactorOtpVerifySchema.safeParse(ctx.body);
-          if (!parsed.success)
-            throw authError(HTTP_STATUS.UNPROCESSABLE, otpMsg.invalidInput);
+          const { code } = parseAuthBody(
+            ctx,
+            twoFactorOtpVerifySchema,
+            otpMsg.invalidInput
+          );
 
           const requestSession = await resolveRequestSession(ctx);
 
           return requestSession
-            ? verifyForEnrolment(ctx, requestSession, parsed.data.code)
-            : verifyForSignIn(
-                ctx,
-                await requireTwoFactorChallenge(ctx),
-                parsed.data.code
-              );
+            ? verifyForEnrolment(ctx, requestSession, code)
+            : verifyForSignIn(ctx, await requireTwoFactorChallenge(ctx), code);
         }
       ),
     },
@@ -267,11 +282,13 @@ async function enrolmentTargetFromSession(
   ctx: AuthContext,
   requestSession: RequestSession
 ): Promise<OtpTarget> {
-  const parsed = twoFactorOtpEnrollSchema.safeParse(ctx.body);
-  if (!parsed.success)
-    throw authError(HTTP_STATUS.UNPROCESSABLE, twoFactorMsg.methodUnavailable);
+  const { channel } = parseAuthBody(
+    ctx,
+    twoFactorOtpEnrollSchema,
+    twoFactorMsg.methodUnavailable
+  );
 
-  return enrolmentTarget(requestSession.userId, parsed.data.channel);
+  return enrolmentTarget(requestSession.userId, channel);
 }
 
 async function verifyForSignIn(
@@ -357,19 +374,15 @@ async function verifyForEnrolment(
       identifier: target.destination,
       code,
       auditMeta,
-      // `enableMethod`'s transition (`./enrolment.ts`), inside the proof
+      // `enableMethod`'s transition (`./lifecycle.ts`), inside the proof
       // transaction so the enrolment and the eviction of every other session
       // commit together — the caller's own session kept.
       onVerified: async (tx) => {
-        await recordMethodIntent(tx, {
+        await recordEnabledMethod(tx, {
           userId: target.userId,
           method: 'otp',
           channel: target.channel,
         });
-        await tx
-          .update(users)
-          .set({ twoFactorEnabled: true })
-          .where(eq(users.id, target.userId));
         await auditLifecycle(tx, ctx, requestSession, {
           twoFactorMethodAdded: optionId('otp', contactKindOf(target.channel)),
           channel: target.channel,

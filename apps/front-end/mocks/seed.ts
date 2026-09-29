@@ -5,11 +5,12 @@ import type { ProjectClient } from '@/types/projects';
 import type { SectionClient } from '@/types/sections';
 import type { SettingsClient } from '@/types/settings';
 
+import { APP_NAME } from '@/constants';
 import {
   CUSTOM_ROLE_VALUE,
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,
-} from '@/lib/permissions/constants';
+} from '@app/shared/permissions/constants';
 
 const MOCK_PASSWORD = 'Admin@1234';
 const MOCK_ADMIN_EMAIL = 'admin@gmail.com';
@@ -262,7 +263,7 @@ export const seedSections = (): SectionClient[] => [
 
 export const seedSettings = (): SettingsClient => ({
   id: seedId(),
-  siteTitle: 'البيت التقني',
+  siteTitle: APP_NAME,
   siteDescription: 'حلول تقنية متكاملة للشركات',
   footerDescription: 'نبني منتجات رقمية تدوم',
   copyrightText: 'جميع الحقوق محفوظة',

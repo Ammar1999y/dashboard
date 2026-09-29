@@ -7,7 +7,7 @@ import { OTP_EXPIRY_MINUTES } from '@app/shared/validation/constants';
 
 import { sendMailWithDeadline } from '@/lib/smtp';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { OTP_DELIVERY_OUTBOX } from './config';
 import { otpSubjectFor, otpTextFor } from './content';
@@ -91,8 +91,8 @@ function readErrorField(
  * outage. If provider error codes are ever needed, add them as a hard-coded
  * allowlist of known constants, never a pattern over provider output.
  */
-function describeProviderFailure(channel: OtpChannel, response: Response) {
-  return sanitizeForLog({
+function logProviderFailure(channel: OtpChannel, response: Response) {
+  logSanitized('error', {
     msg: 'otp.provider.failed',
     channel,
     status: response.status,
@@ -117,7 +117,7 @@ async function sendOtpSms(phoneNumber: string, text: string) {
   });
 
   if (!response.ok) {
-    console.error(describeProviderFailure('sms', response));
+    logProviderFailure('sms', response);
     throw new CustomError(MSG_SMS_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
   }
 }
@@ -139,7 +139,7 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
   });
 
   if (!response.ok) {
-    console.error(describeProviderFailure('whatsapp', response));
+    logProviderFailure('whatsapp', response);
     throw new CustomError(MSG_WHATSAPP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
   }
 
@@ -149,13 +149,11 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
   try {
     data = await response.json();
   } catch {
-    console.error(
-      sanitizeForLog({
-        msg: 'otp.provider.unparsable',
-        channel: 'whatsapp',
-        status: response.status,
-      })
-    );
+    logSanitized('error', {
+      msg: 'otp.provider.unparsable',
+      channel: 'whatsapp',
+      status: response.status,
+    });
     throw new CustomError(MSG_WHATSAPP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
   }
 
@@ -166,7 +164,7 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
     !data.status
   ) {
     // Application-level rejection on a 2xx; nothing from `data` is logged.
-    console.error(describeProviderFailure('whatsapp', response));
+    logProviderFailure('whatsapp', response);
     throw new CustomError(MSG_WHATSAPP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
   }
 }
@@ -199,30 +197,24 @@ async function sendOtpEmail(
     // The transport error must not escape: an SMTP rejection quotes the
     // message it rejected, which contains the code.
     const rawCode = readErrorField(error, 'code');
-    console.error(
-      sanitizeForLog({
-        msg: 'otp.provider.failed',
-        channel: 'email',
-        smtpCode:
-          rawCode !== null && SMTP_ERROR_CODES.has(rawCode)
-            ? rawCode
-            : 'UNKNOWN',
-      })
-    );
+    logSanitized('error', {
+      msg: 'otp.provider.failed',
+      channel: 'email',
+      smtpCode:
+        rawCode !== null && SMTP_ERROR_CODES.has(rawCode) ? rawCode : 'UNKNOWN',
+    });
     throw new CustomError(MSG_EMAIL_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
   }
 
   // A per-recipient refusal resolves instead of throwing; with one recipient it
   // means nothing was sent.
   if (info.rejected && info.rejected.length > 0) {
-    console.error(
-      sanitizeForLog({
-        msg: 'otp.provider.rejected',
-        channel: 'email',
-        // A count, never the address: nothing payload-derived leaves here.
-        rejected: info.rejected.length,
-      })
-    );
+    logSanitized('error', {
+      msg: 'otp.provider.rejected',
+      channel: 'email',
+      // A count, never the address: nothing payload-derived leaves here.
+      rejected: info.rejected.length,
+    });
     throw new CustomError(MSG_EMAIL_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
   }
 }
@@ -270,13 +262,11 @@ export async function deliverOtp(
     }
 
     // The class name only; `message` and `response` can quote the provider.
-    console.error(
-      sanitizeForLog({
-        msg: 'otp.delivery.unexpectedError',
-        channel,
-        errorName: readErrorField(error, 'name') ?? 'Unknown',
-      })
-    );
+    logSanitized('error', {
+      msg: 'otp.delivery.unexpectedError',
+      channel,
+      errorName: readErrorField(error, 'name') ?? 'Unknown',
+    });
     throw new CustomError(MSG_OTP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
   }
 }

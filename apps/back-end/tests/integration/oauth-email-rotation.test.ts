@@ -22,7 +22,7 @@ import * as z from 'zod';
 
 import { auth } from '@/lib/auth';
 import { hasAdminReauth } from '@/lib/auth/reauth/window';
-import * as challenges from '@/lib/auth/two-factor/challenge';
+import * as challenges from '@/lib/auth/two-factor/issue';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { generateUuidV7 } from '@/lib/id';
 import { hashOtpCode } from '@/lib/otp/hash';

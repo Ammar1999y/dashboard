@@ -4,6 +4,7 @@ import type { FileTypeSpec } from './allowlist';
 import type { DetectResult } from './detect-result';
 import type { MediaFileRow } from './files';
 import type { ValidatedSvgUpload } from './image/process';
+import type { HandlerInput } from '@/lib/http/contract';
 import type { ObjectHead } from '@/lib/r2/client';
 import type { EntityID } from '@app/shared/types';
 import type { BucketType, FileKind } from '@app/shared/validation/enums';
@@ -19,7 +20,9 @@ import {
   MAX_DOCUMENT_SIZE_MB,
   MAX_IMAGE_PIXELS,
   MAX_IMAGE_SIZE,
+  MIB,
 } from '@app/shared/validation/constants';
+import { normalizeMimeType } from '@app/shared/validation/media-types';
 
 import { MAX_REQUEST_BODY_BYTES } from '@/lib/http/request';
 import { generateUuidV7 } from '@/lib/id';
@@ -30,13 +33,13 @@ import {
 } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-import { sanitizeForLog } from '@/utils/log';
+import { errorTypeOf, logSanitized } from '@/utils/log';
 
 import { auditAs } from './actor';
-import { fileTypeFor, normalizeMimeType } from './allowlist';
+import { fileTypeFor } from './allowlist';
 import { sanitizeFilename } from './filename';
 import { FILE_COLUMNS, matchesRow } from './files';
-import { getCacheControlHeader, getContentDisposition } from './headers';
+import { objectHeaders } from './headers';
 import { measureEncodeCost } from './image/optimize';
 import {
   processImage,
@@ -45,7 +48,6 @@ import {
 } from './image/process';
 import { objectKey } from './keys';
 import { mediaMsg, uploadMsg } from './messages';
-import { MIB } from './units';
 
 /**
  * Requests admitted per user per minute BEFORE the body is read, on both upload
@@ -160,7 +162,7 @@ if (unaffordable)
  * that is what the parser may go on to buffer, and a caller who omits the
  * header must not thereby pay less than one who states it.
  */
-export async function chargeUploadBodyBudget(
+async function chargeUploadBodyBudget(
   userId: EntityID,
   headers: Headers
 ): Promise<void> {
@@ -214,7 +216,7 @@ const MAX_FILES_PER_REQUEST = 1;
  * BUFFERED every part it was sent, so an extra part would ride along unpriced
  * beside a small admitted file.
  */
-export function takeSingleFile(formData: FormData | null, field: string): File {
+function takeSingleFile(formData: FormData | null, field: string): File {
   if (!formData)
     throw new CustomError(uploadMsg.noFiles, HTTP_STATUS.BAD_REQUEST);
   for (const [name] of formData)
@@ -252,13 +254,11 @@ function inspect(spec: FileTypeSpec, bytes: Buffer): DetectResult {
   try {
     return spec.detect(bytes);
   } catch (error) {
-    console.error(
-      sanitizeForLog({
-        msg: 'media.detect threw',
-        extension: spec.extension,
-        errorClass: error instanceof Error ? error.name : typeof error,
-      })
-    );
+    logSanitized('error', {
+      msg: 'media.detect threw',
+      extension: spec.extension,
+      errorClass: errorTypeOf(error),
+    });
     return { ok: false, reason: 'container' };
   }
 }
@@ -327,7 +327,7 @@ export async function admitUpload(
  * SVG is priced by the rasters it embeds), documents in mebibytes. Per USER and
  * shared by both upload routes: an account's allowance is one allowance.
  */
-export async function chargeUploadBudget(
+async function chargeUploadBudget(
   userId: EntityID,
   admitted: AdmittedUpload
 ): Promise<void> {
@@ -427,7 +427,7 @@ async function settleKeyCollision(params: {
   try {
     head = await headObjectInR2({ key, bucketType });
   } catch (error) {
-    console.error(sanitizeForLog(error));
+    logSanitized('error', error);
     throw new CustomError(mediaMsg.storeFailed, HTTP_STATUS.INTERNAL_ERROR);
   }
   // Our own put always sends the checksum, so an object without one at our key
@@ -438,14 +438,12 @@ async function settleKeyCollision(params: {
       .delete(files)
       .where(and(eq(files.id, id), eq(files.status, 'pending')))
       .catch(() => {});
-  console.error(
-    sanitizeForLog({
-      msg: head
-        ? 'media.upload key collision'
-        : 'media.upload precondition failed with nothing at the key',
-      id,
-    })
-  );
+  logSanitized('error', {
+    msg: head
+      ? 'media.upload key collision'
+      : 'media.upload precondition failed with nothing at the key',
+    id,
+  });
   throw new CustomError(mediaMsg.storeFailed, HTTP_STATUS.INTERNAL_ERROR);
 }
 
@@ -462,7 +460,7 @@ async function settleKeyCollision(params: {
  * after the TTL. An entity upload is audited with its row and again when it is
  * claimed; a library upload is audited once, when it becomes active.
  */
-export async function storeUpload(params: {
+async function storeUpload(params: {
   admitted: AdmittedUpload;
   target: UploadTarget;
   actor: AuditActor;
@@ -474,7 +472,7 @@ export async function storeUpload(params: {
     prepared = await prepare(admitted);
   } catch (error) {
     if (error instanceof CustomError) throw error;
-    console.error(sanitizeForLog(error));
+    logSanitized('error', error);
     throw new CustomError(mediaMsg.uploadFailed, HTTP_STATUS.INTERNAL_ERROR);
   }
 
@@ -482,7 +480,6 @@ export async function storeUpload(params: {
   const key = objectKey(id, prepared.extension);
   const displayName = `${sanitizeFilename(admitted.file.name)}.${prepared.extension}`;
   const sha256 = createHash('sha256').update(prepared.buffer).digest('hex');
-  const isPublic = target.visibility === 'public';
 
   const pendingRow = {
     id,
@@ -527,24 +524,21 @@ export async function storeUpload(params: {
       file: prepared.buffer,
       key,
       bucketType: target.visibility,
-      contentType: prepared.mimeType,
-      cacheControl: getCacheControlHeader({
-        mimeType: prepared.mimeType,
-        isPublic,
-      }),
-      // Documents are never rendered inline: a PDF on the public origin would
-      // otherwise run its scripting on that origin.
-      contentDisposition: getContentDisposition({
-        filename: displayName,
-        inline: admitted.spec.kind === 'image',
-      }),
+      ...objectHeaders(
+        {
+          mimeType: prepared.mimeType,
+          kind: admitted.spec.kind,
+          filename: displayName,
+        },
+        target.visibility
+      ),
       metadata: prepared.metadata,
       sha256,
       ifNoneMatch: true,
     });
   } catch (error) {
     if (!isPreconditionFailedError(error)) {
-      console.error(sanitizeForLog(error));
+      logSanitized('error', error);
       throw new CustomError(mediaMsg.storeFailed, HTTP_STATUS.INTERNAL_ERROR);
     }
     await settleKeyCollision({
@@ -583,4 +577,25 @@ export async function storeUpload(params: {
     });
     return row;
   });
+}
+
+/**
+ * One upload, from the unread body to the stored row. It reads the body, so
+ * whatever must be refused before parsing it — the target's visibility, the
+ * admission limit — is the route's to check before calling this.
+ */
+export async function acceptUpload(
+  ctx: HandlerInput,
+  actor: AuditActor,
+  target: UploadTarget & { field: string }
+): Promise<MediaFileRow> {
+  // While the body is still an unread stream: the kind budgets can only be
+  // charged once it has been buffered.
+  await chargeUploadBodyBudget(actor.userId, ctx.headers);
+
+  const entry = takeSingleFile(await ctx.readFormData(), target.field);
+  const admitted = await admitUpload(entry, target);
+  await chargeUploadBudget(actor.userId, admitted);
+
+  return storeUpload({ admitted, target, actor });
 }

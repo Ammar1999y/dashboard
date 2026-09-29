@@ -52,13 +52,6 @@
   isolation: isolate;
 }
 
-.richtext-flex .lucide-undo2 {
-  transform: scaleX(-1);
-}
-.richtext-flex .lucide-redo2 {
-  transform: scaleX(-1);
-}
-
 .richtext-flex [role='switch'] {
   direction: ltr;
 }

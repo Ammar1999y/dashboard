@@ -1,32 +1,21 @@
-import type { DragEndEvent } from '@dnd-kit/core';
 import type { ComponentType } from 'react';
 import type { FieldArray, FieldArrayPath, FieldValues } from 'react-hook-form';
 
-import { memo, useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect } from 'react';
 
-import { MeasuringStrategy } from '@dnd-kit/core';
-import { defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
-import { Plus as _Plus } from 'lucide-react';
 import { useFieldArray } from 'react-hook-form';
 
 import { Button } from '@/components/ui/button';
-import { useSmoothHeightStore } from '@/components/smooth-height-container';
+import { Icon } from '@/components/ui/icon';
 import {
   restrictToVerticalAxis,
-  SimpleSortableItem,
   SortableList,
-  useSortableList,
+  SortableListItem,
   verticalListSortingStrategy,
-} from '@/components/sortable';
+} from '@/components/ui/sortable-list';
+import { useSmoothHeightStore } from '@/components/form/tabs/smooth-height-container';
 
-const Plus = memo(_Plus);
-Plus.displayName = 'Plus';
-
-const measuring = { droppable: { strategy: MeasuringStrategy.Always } };
 const modifiers = [restrictToVerticalAxis];
-const animateLayoutChanges = (
-  args: Parameters<typeof defaultAnimateLayoutChanges>[0]
-) => defaultAnimateLayoutChanges({ ...args, wasDragging: true });
 
 export interface FieldArrayItemProps {
   index: number;
@@ -65,25 +54,9 @@ function SortableFieldArray<
     '$key'
   >({ name, keyName: '$key' });
 
-  const itemIds = useMemo(() => fields.map((f) => f.$key), [fields]);
-  const {
-    sensors,
-    activeItem,
-    activeIndex,
-    handleDragStart,
-    handleDragCancel,
-  } = useSortableList({ items: fields, onItemsChange: noop, getId });
-
-  const handleDragEnd = useCallback(
-    ({ active, over }: DragEndEvent) => {
-      handleDragCancel();
-      if (!over || active.id === over.id) return;
-      move(
-        fields.findIndex((f) => f.$key === active.id),
-        fields.findIndex((f) => f.$key === over.id)
-      );
-    },
-    [fields, move, handleDragCancel]
+  const renderOverlay = useCallback(
+    (_field: unknown, index: number) => <Item showDragHandle index={index} />,
+    [Item]
   );
 
   const handleAdd = useCallback(
@@ -107,7 +80,7 @@ function SortableFieldArray<
   return (
     <div className='relative space-y-4'>
       <Button onClick={handleAdd}>
-        <Plus className='h-4 w-4' />
+        <Icon icon='solar:add-linear' className='size-4' />
         <span>{addLabel}</span>
       </Button>
 
@@ -120,29 +93,22 @@ function SortableFieldArray<
         </div>
       ) : (
         <SortableList
-          items={itemIds}
-          sensors={sensors}
+          items={fields}
+          getId={getId}
+          onMove={move}
           modifiers={modifiers}
-          measuring={measuring}
           strategy={verticalListSortingStrategy}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          onDragCancel={handleDragCancel}
-          overlay={
-            activeItem ? <Item showDragHandle index={activeIndex} /> : null
-          }
+          renderOverlay={renderOverlay}
         >
           <div className='pb-6 space-y-5'>
             {fields.map((field, index) => (
-              <SimpleSortableItem
+              <SortableListItem
                 key={field.$key}
                 id={field.$key}
-                useHandle
                 className='rounded-md'
-                animateLayoutChanges={animateLayoutChanges}
               >
                 <Item showDragHandle index={index} onRemove={remove} />
-              </SimpleSortableItem>
+              </SortableListItem>
             ))}
           </div>
         </SortableList>
@@ -151,7 +117,6 @@ function SortableFieldArray<
   );
 }
 
-const noop = () => {};
 const getId = (field: { $key: string }) => field.$key;
 
 export default SortableFieldArray;

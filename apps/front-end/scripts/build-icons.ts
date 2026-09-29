@@ -1,174 +1,153 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
-/* eslint-disable security/detect-unsafe-regex */
-/* eslint-disable unicorn/import-style */
-// Scans source code for `prefix:name` icon strings and generates a bundle that
-// pre-registers every used icon via addCollection, so the app does not hit the
-// Iconify CDN at runtime. Required because the app ships in Capacitor where
-// runtime CDN fetches are unreliable / undesired.
+// Registers every Iconify icon the source names, so the app never reaches the
+// Iconify API: `<Icon icon='solar:…' />` (components/ui/icon.tsx) renders from
+// this bundle, on the server too. Only literal names in SCAN_DIRS are found;
+// `IconName`, the union of them, makes any other name a type error instead of
+// a blank icon.
 //
-// Run via package.json scripts (predev / prebuild). Outputs:
-//   lib/icons-bundle.generated.ts  (gitignored)
+// Writes lib/icons-bundle.generated.ts (loaded once by pages/_app.tsx) and
+// lib/icon-names.generated.ts. Both are committed, so a fresh clone
+// type-checks; `predev` and `prebuild` refresh them, and `--check` (run by
+// `lint` and the git hooks) fails when either is stale.
 
-import {
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, extname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { IconifyJSON } from '@iconify/types';
+import { extname, join } from 'node:path';
+import type { IconifyJSON } from '@iconify/react';
 
 import { getIcons } from '@iconify/utils';
+import { format, resolveConfig } from 'prettier';
 
 const require = createRequire(import.meta.url);
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = join(import.meta.dirname, '..');
+const BUNDLE_FILE = join(ROOT, 'lib', 'icons-bundle.generated.ts');
+const NAMES_FILE = join(ROOT, 'lib', 'icon-names.generated.ts');
+const GENERATED = new Set([BUNDLE_FILE, NAMES_FILE]);
 
-const SCAN_DIRS = ['components', 'pages', 'lib', 'hooks'];
+const SCAN_DIRS = ['components', 'pages', 'lib', 'hooks', 'utils', 'constants'];
 const FILE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs']);
-const SKIP_DIR_NAMES = new Set([
-  'node_modules',
-  '.next',
-  '.git',
-  'out',
-  'android',
-  'ios',
-]);
-const SUPPORTED_PREFIXES = ['solar', 'lucide'];
+// Each prefix is one `@iconify-json/<prefix>` devDependency.
+const PREFIXES = [
+  'solar',
+  'lucide',
+  'fluent',
+  'hugeicons',
+  'uim',
+  'icon-park-twotone',
+];
 
-// Match `prefix:name` only inside string quotes (' " `). This catches:
-//   <Icon icon="solar:home" />
-//   { icon: 'solar:home' }
-//   ['solar:home']
-//   `solar:home`
-// Names/prefixes are kebab-case lowercase per Iconify convention.
 const ICON_RE =
-  /['"`]([a-z][a-z0-9]*(?:-[a-z0-9]+)*):([a-z][a-z0-9]*(?:-[a-z0-9]+)*)['"`]/g;
+  /['"`]([a-z][a-z0-9]*(?:-[a-z0-9]+)*):([a-z0-9]+(?:-[a-z0-9]+)*)['"`]/g;
 
 function* walk(dir: string): Generator<string> {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (SKIP_DIR_NAMES.has(entry)) continue;
+  for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
-    const stat = statSync(path);
-    if (stat.isDirectory()) yield* walk(path);
-    else if (FILE_EXTS.has(extname(entry))) yield path;
+    if (statSync(path).isDirectory()) yield* walk(path);
+    else if (FILE_EXTS.has(extname(entry)) && !GENERATED.has(path)) yield path;
   }
 }
 
-function scanForIcons(): Map<string, Set<string>> {
-  const found = new Map<string, Set<string>>();
-  for (const prefix of SUPPORTED_PREFIXES) found.set(prefix, new Set());
-
+function scan() {
+  const found = new Map(PREFIXES.map((prefix) => [prefix, new Set<string>()]));
   for (const dir of SCAN_DIRS) {
     for (const file of walk(join(ROOT, dir))) {
-      // Skip the generated bundle itself to avoid feedback loop.
-      if (file.endsWith('icons-bundle.generated.ts')) continue;
-      const src = readFileSync(file, 'utf8');
-      ICON_RE.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = ICON_RE.exec(src)) !== null) {
-        const [, prefix, name] = m;
-        if (prefix && name) found.get(prefix)?.add(name);
+      for (const [, prefix, name] of readFileSync(file, 'utf8').matchAll(
+        ICON_RE
+      )) {
+        found.get(prefix!)?.add(name!);
       }
     }
   }
   return found;
 }
 
-function loadIconSet(prefix: string): IconifyJSON {
-  const jsonPath = require.resolve(`@iconify-json/${prefix}/icons.json`);
-  const parsed: unknown = JSON.parse(readFileSync(jsonPath, 'utf8'));
+function loadSet(prefix: string): IconifyJSON {
+  const path = require.resolve(`@iconify-json/${prefix}/icons.json`);
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
   if (
-    !parsed ||
     typeof parsed !== 'object' ||
-    typeof (parsed as { icons?: unknown }).icons !== 'object'
+    parsed === null ||
+    !('prefix' in parsed) ||
+    parsed.prefix !== prefix ||
+    !('icons' in parsed) ||
+    typeof parsed.icons !== 'object'
   ) {
-    throw new TypeError(`[icons] @iconify-json/${prefix} is not an icon set`);
+    throw new TypeError(`@iconify-json/${prefix} is not an icon set`);
   }
   return parsed as IconifyJSON;
 }
 
-function build() {
-  const found = scanForIcons();
-  const collections: IconifyJSON[] = [];
-  let totalIcons = 0;
-  let totalAliases = 0;
-  const missing: string[] = [];
-
-  for (const [prefix, names] of found) {
-    if (names.size === 0) continue;
-    const iconSet = loadIconSet(prefix);
-    const namesArr = [...names].sort();
-    const subset = getIcons(iconSet, namesArr);
-    if (!subset) {
-      console.warn(`[icons] getIcons returned null for prefix "${prefix}"`);
-      continue;
-    }
-
-    const resolvedIcons = new Set(Object.keys(subset.icons || {}));
-    const resolvedAliases = new Set(Object.keys(subset.aliases || {}));
-    for (const n of namesArr) {
-      if (!resolvedIcons.has(n) && !resolvedAliases.has(n)) {
-        missing.push(`${prefix}:${n}`);
-      }
-    }
-
-    collections.push(subset);
-    totalIcons += resolvedIcons.size;
-    totalAliases += resolvedAliases.size;
-  }
-
-  if (missing.length) {
-    console.warn(
-      `[icons] ${missing.length} referenced icon(s) not found in icon sets:`
-    );
-    for (const m of missing) console.warn(`  - ${m}`);
-  }
-
-  const header =
-    `/* eslint-disable @typescript-eslint/ban-ts-comment */\n` +
-    `// AUTO-GENERATED by scripts/build-icons.mjs — DO NOT EDIT.\n` +
-    `// Run \`bun run build:icons\` (or any predev/prebuild) to refresh.\n` +
-    `// @ts-nocheck\n\n`;
-
-  // IMPORTANT: import from the main package, not from `dist/offline`. The two
-  // entry points are separately-bundled files with their own copies of the
-  // icon storage, so addCollection() from `dist/offline` does NOT populate
-  // the storage that the main `<Icon>` reads from.
-  const body =
-    `import { addAPIProvider, addCollection } from '@iconify/react';\n\n` +
-    `// Make the default API provider unreachable so any icon name not in this\n` +
-    `// bundle fails immediately instead of trying to fetch from the CDN.\n` +
-    `addAPIProvider('', { resources: [] });\n\n` +
-    collections
-      .map((c) => `addCollection(${JSON.stringify(c)});`)
-      .join('\n\n') +
-    '\n';
-
-  const outDir = join(ROOT, 'lib');
-  mkdirSync(outDir, { recursive: true });
-  const outFile = join(outDir, 'icons-bundle.generated.ts');
-  writeFileSync(outFile, header + body);
-
-  const summary = collections
-    .map(
-      (c) =>
-        `${c.prefix}:${Object.keys(c.icons).length}${c.aliases ? `+${Object.keys(c.aliases).length}a` : ''}`
-    )
-    .join(', ');
-  console.log(
-    `[icons] bundled ${totalIcons} icons` +
-      (totalAliases ? ` + ${totalAliases} aliases` : '') +
-      ` (${summary}) → ${relative(ROOT, outFile).replace(/\\/g, '/')}`
-  );
+async function formatFor(file: string, lines: string[]) {
+  const config = await resolveConfig(file);
+  return format(lines.join('\n'), { ...config, filepath: file });
 }
 
-build();
+async function build() {
+  const collections: IconifyJSON[] = [];
+  const names: string[] = [];
+  const missing: string[] = [];
+
+  for (const [prefix, found] of scan()) {
+    if (found.size === 0) continue;
+    const sorted = [...found].sort();
+    const subset = getIcons(loadSet(prefix), sorted, true);
+    if (!subset) throw new Error(`[icons] no icons resolved for ${prefix}`);
+    for (const name of subset.not_found ?? [])
+      missing.push(`${prefix}:${name}`);
+    delete subset.not_found;
+    delete subset.lastModified;
+    collections.push(subset);
+    names.push(...sorted.map((name) => `${prefix}:${name}`));
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`[icons] not in the icon sets: ${missing.join(', ')}`);
+  }
+
+  const outputs = new Map([
+    [
+      BUNDLE_FILE,
+      await formatFor(BUNDLE_FILE, [
+        '// Generated by scripts/build-icons.ts. Do not edit.',
+        `import type { IconifyJSON } from '@iconify/react';`,
+        `import { addAPIProvider, addCollection } from '@iconify/react';`,
+        `const COLLECTIONS: IconifyJSON[] = ${JSON.stringify(collections)};`,
+        `addAPIProvider('', { resources: [] });`,
+        'for (const collection of COLLECTIONS) addCollection(collection);',
+      ]),
+    ],
+    [
+      NAMES_FILE,
+      await formatFor(NAMES_FILE, [
+        '// Generated by scripts/build-icons.ts. Do not edit.',
+        `export type IconName = ${names.map((name) => `'${name}'`).join(' | ')};`,
+      ]),
+    ],
+  ]);
+
+  const counts = collections
+    .map((c) => `${c.prefix} ${Object.keys(c.icons).length}`)
+    .join(', ');
+
+  if (process.argv.includes('--check')) {
+    const stale = [...outputs].filter(([file, content]) => {
+      try {
+        return readFileSync(file, 'utf8') !== content;
+      } catch {
+        return true;
+      }
+    });
+    if (stale.length > 0) {
+      console.error(
+        '[icons] stale generated icon files: run `bun scripts/build-icons.ts`'
+      );
+      process.exit(1);
+    }
+    console.log(`[icons] up to date (${counts})`);
+    return;
+  }
+
+  for (const [file, content] of outputs) writeFileSync(file, content);
+  console.log(`[icons] bundled ${counts}`);
+}
+
+await build();

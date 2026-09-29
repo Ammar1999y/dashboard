@@ -1,6 +1,6 @@
 import type { EntityID } from '.';
-import type { PagePermission } from './permission';
-import type { CUSTOM_ROLE_VALUE, RoleScope } from '@/lib/permissions/constants';
+import type { PagePermission, RoleScope } from './permission';
+import type { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
 
 interface UserRole {
   id: EntityID;

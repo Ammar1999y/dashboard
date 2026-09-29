@@ -1,11 +1,13 @@
-import type { DateRange, DateRangeUpdate } from '../types';
+import type { PresetName } from '../constants';
+import type { DateRange } from '../types';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { down, useMediaQuery } from '@/hooks/use-media-query';
 
 import { PRESETS } from '../constants';
-import { getDateAdjustedForTimezone, getPresetRange } from '../utils';
+import { getPresetRange, parseInitialDate } from '../utils';
+import { useDatePopoverState } from './use-date-popover-state';
 
 interface UseDateRangeStateProps {
   initialDateFrom?: Date | string;
@@ -26,47 +28,34 @@ const isSameDayRange = (a: DateRange, b: DateRange) =>
 // Whichever bound exists: an upper-only range must still open on its month.
 const rangeAnchor = (range: DateRange) => range.from ?? range.to;
 
+const previousMonth = () => {
+  const today = new Date();
+  return new Date(today.getFullYear(), today.getMonth() - 1, 1);
+};
+
 export const useDateRangeState = ({
   initialDateFrom,
   initialDateTo,
   onChange,
 }: UseDateRangeStateProps) => {
-  const [isOpen, setIsOpen] = useState(false);
-
-  const [committedRange, setCommittedRange] = useState<DateRange>(() => ({
-    from: initialDateFrom
-      ? getDateAdjustedForTimezone(initialDateFrom)
-      : undefined,
-    to: initialDateTo ? getDateAdjustedForTimezone(initialDateTo) : undefined,
-  }));
-
-  // Edited while the popover is open; committed only on save.
-  const [tempRange, setTempRange] = useState<DateRange>(committedRange);
-
-  const [month, setMonth] = useState<Date>(() => {
-    const anchor = rangeAnchor(committedRange);
-    if (anchor) return anchor;
-    const lastMonth = new Date();
-    lastMonth.setMonth(lastMonth.getMonth() - 1);
-    return lastMonth;
+  const {
+    value: range,
+    setDraft: setRange,
+    ...state
+  } = useDatePopoverState<DateRange>({
+    initialValue: () => ({
+      from: parseInitialDate(initialDateFrom),
+      to: parseInitialDate(initialDateTo),
+    }),
+    anchorOf: rangeAnchor,
+    fallbackMonth: previousMonth,
+    onChange,
   });
-
-  const range = isOpen ? tempRange : committedRange;
-
-  const setRange = useCallback((update: DateRangeUpdate) => {
-    setTempRange((prevRange) => {
-      const nextRange =
-        typeof update === 'function' ? update(prevRange) : update;
-      const anchor = rangeAnchor(nextRange);
-      if (anchor) setMonth(new Date(anchor));
-      return nextRange;
-    });
-  }, []);
 
   const isSmallScreen = useMediaQuery(SMALL_SCREEN);
 
   const setPreset = useCallback(
-    (preset: string) => setRange(getPresetRange(preset)),
+    (preset: PresetName) => setRange(getPresetRange(preset)),
     [setRange]
   );
 
@@ -78,40 +67,12 @@ export const useDateRangeState = ({
     [range]
   );
 
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (open) {
-        setTempRange(committedRange);
-        const anchor = rangeAnchor(committedRange);
-        if (anchor) setMonth(new Date(anchor));
-      }
-      setIsOpen(open);
-    },
-    [committedRange]
-  );
-
-  const handleSave = useCallback(() => {
-    setCommittedRange(tempRange);
-    onChange?.(tempRange);
-    setIsOpen(false);
-  }, [tempRange, onChange]);
-
-  const handleCancel = useCallback(() => {
-    setTempRange(committedRange);
-    setIsOpen(false);
-  }, [committedRange]);
-
   return {
-    isOpen,
+    ...state,
     range,
     setRange,
-    month,
-    setMonth,
     selectedPreset,
     setPreset,
     isSmallScreen,
-    handleOpenChange,
-    handleSave,
-    handleCancel,
   };
 };

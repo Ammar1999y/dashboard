@@ -1,8 +1,10 @@
-import Link from 'next/link';
-import * as React from 'react';
+import type * as React from 'react';
 
-import { ChevronRight, MoreHorizontal } from 'lucide-react';
+import Link from 'next/link';
+
 import { cn } from '@/lib/utils';
+
+import { Icon } from '@/components/ui/icon';
 
 function Breadcrumb({ ...props }: React.ComponentProps<'nav'>) {
   return <nav aria-label='breadcrumb' data-slot='breadcrumb' {...props} />;
@@ -70,7 +72,7 @@ function BreadcrumbSeparator({
       className={cn('rtl:rotate-180 [&>svg]:size-3.5', className)}
       {...props}
     >
-      {children ?? <ChevronRight />}
+      {children ?? <Icon icon='solar:alt-arrow-right-linear' />}
     </li>
   );
 }
@@ -87,7 +89,7 @@ function BreadcrumbEllipsis({
       className={cn('flex size-9 items-center justify-center', className)}
       {...props}
     >
-      <MoreHorizontal className='size-4' />
+      <Icon icon='solar:menu-dots-bold' className='size-4' />
       <span className='sr-only'>More</span>
     </span>
   );

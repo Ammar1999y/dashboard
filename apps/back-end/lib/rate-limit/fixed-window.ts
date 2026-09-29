@@ -1,9 +1,37 @@
-import type { ConsumeRow } from './store';
+import { errorClassOf, logSanitized } from '@/utils/log';
 
-import { sanitizeForLog } from '@/utils/log';
+import { admitWindow, getRateLimitStore } from './store';
 
-import { getRateLimitStore } from './store';
-import { describeStoreFailure } from './store-failure';
+interface StoreFailureLog {
+  msg: 'rate-limit store error';
+  scope: string;
+  errorClass: string;
+}
+
+/**
+ * A limiter failure without the raw store error or the key.
+ *
+ * Keys end in data worth withholding (an email address or phone number), and
+ * `sanitizeForLog` keeps free-text messages by policy, so a driver that ever
+ * interpolated a bound parameter into its message would otherwise reach the
+ * log. The operation and the error class are all an outage needs.
+ *
+ * `scope` is the identifier's prefix, safe because every scope is a
+ * compile-time constant or an interpolation of a closed union, and none
+ * contains a colon. `tests/unit/rate-limit-log-boundary.test.ts` derives the
+ * full set from `ROUTES` and asserts it; a scope built from request data would
+ * break that.
+ */
+export function describeStoreFailure(
+  error: unknown,
+  opts: { identifier: string }
+): StoreFailureLog {
+  return {
+    msg: 'rate-limit store error',
+    scope: opts.identifier.split(':', 1)[0] ?? '',
+    errorClass: errorClassOf(error),
+  };
+}
 
 interface RateLimitResult {
   success: boolean;
@@ -51,13 +79,13 @@ export async function rateLimit(opts: {
   try {
     const now = Date.now();
     const windowStart = now - (now % windowMs);
-    const admitted = getRateLimitStore().consume.get<ConsumeRow>(
-      opts.identifier,
+    const admitted = admitWindow(getRateLimitStore(), {
+      key: opts.identifier,
       windowStart,
       cost,
-      windowStart + windowMs,
-      opts.limit
-    );
+      expiresAt: windowStart + windowMs,
+      limit: opts.limit,
+    });
 
     // No row: refused without a write, and the statement's WHERE proves the
     // stored row is in the `windowStart` bound above. Do not read it back —
@@ -87,7 +115,7 @@ export async function rateLimit(opts: {
       degraded: false,
     };
   } catch (error) {
-    console.error(sanitizeForLog(describeStoreFailure(error, opts)));
+    logSanitized('error', describeStoreFailure(error, opts));
     return {
       success: true,
       limit: opts.limit,

@@ -1,68 +1,28 @@
-import type { VariantProps } from 'class-variance-authority';
 import type { SlateElementProps } from 'platejs/static';
-import type * as React from 'react';
 
-import { cva } from 'class-variance-authority';
 import { SlateElement } from 'platejs/static';
 
-const headingVariants = cva('relative mb-1', {
-  variants: {
-    variant: {
-      h1: 'mt-6 pb-1 font-bold font-heading text-4xl',
-      h2: 'mt-5 pb-px font-heading font-semibold text-2xl tracking-tight',
-      h3: 'mt-4 pb-px font-heading font-semibold text-xl tracking-tight',
-      h4: 'mt-3 font-heading font-semibold text-lg tracking-tight',
-      h5: 'mt-2 font-semibold text-lg tracking-tight',
-      h6: 'mt-2 font-semibold text-base tracking-tight',
-    },
-  },
-});
+import { headingVariants } from '@/components/editor/styles';
 
-export function HeadingElementStatic({
-  variant = 'h1',
-  ...props
-}: SlateElementProps & VariantProps<typeof headingVariants>) {
-  return (
-    <SlateElement
-      as={variant ?? 'h1'}
-      className={headingVariants({ variant })}
-      {...props}
-    >
-      {props.children}
-    </SlateElement>
-  );
-}
+type HeadingTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
 
-export function H1ElementStatic(props: SlateElementProps) {
-  return <HeadingElementStatic variant='h1' {...props} />;
-}
+const createHeading = (tag: HeadingTag) => {
+  function HeadingElementStatic(props: SlateElementProps) {
+    return (
+      <SlateElement
+        as={tag}
+        className={headingVariants({ variant: tag })}
+        {...props}
+      />
+    );
+  }
+  HeadingElementStatic.displayName = `${tag.toUpperCase()}ElementStatic`;
+  return HeadingElementStatic;
+};
 
-export function H2ElementStatic(
-  props: React.ComponentProps<typeof HeadingElementStatic>
-) {
-  return <HeadingElementStatic variant='h2' {...props} />;
-}
-
-export function H3ElementStatic(
-  props: React.ComponentProps<typeof HeadingElementStatic>
-) {
-  return <HeadingElementStatic variant='h3' {...props} />;
-}
-
-export function H4ElementStatic(
-  props: React.ComponentProps<typeof HeadingElementStatic>
-) {
-  return <HeadingElementStatic variant='h4' {...props} />;
-}
-
-export function H5ElementStatic(
-  props: React.ComponentProps<typeof HeadingElementStatic>
-) {
-  return <HeadingElementStatic variant='h5' {...props} />;
-}
-
-export function H6ElementStatic(
-  props: React.ComponentProps<typeof HeadingElementStatic>
-) {
-  return <HeadingElementStatic variant='h6' {...props} />;
-}
+export const H1ElementStatic = createHeading('h1');
+export const H2ElementStatic = createHeading('h2');
+export const H3ElementStatic = createHeading('h3');
+export const H4ElementStatic = createHeading('h4');
+export const H5ElementStatic = createHeading('h5');
+export const H6ElementStatic = createHeading('h6');

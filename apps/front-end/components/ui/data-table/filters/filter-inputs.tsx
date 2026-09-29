@@ -1,5 +1,8 @@
-import type { ExtendedColumnFilter } from '@/types/data-table';
+import type { FilterItemSchema } from '@app/shared/data-table/parsers';
 import type { Column, ColumnMeta } from '@tanstack/react-table';
+import type { ChangeEvent } from 'react';
+
+import { useCallback } from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -17,6 +20,7 @@ import {
 } from '@/components/ui/select';
 
 import { Button } from '../../button';
+import { genericMemo } from '../utils/generic-memo';
 import { DataTableRangeFilter } from './data-table-range-filter';
 import {
   Faceted,
@@ -31,19 +35,19 @@ import {
 } from './faceted';
 
 interface FilterInputProps<TData> {
-  filter: ExtendedColumnFilter<TData>;
+  filter: FilterItemSchema;
   inputId: string;
   column: Column<TData>;
   columnMeta?: ColumnMeta<TData, unknown>;
   onFilterUpdate: (
     filterId: string,
-    updates: Partial<Omit<ExtendedColumnFilter<TData>, 'filterId'>>
+    updates: Partial<Omit<FilterItemSchema, 'filterId'>>
   ) => void;
   showValueSelector?: boolean;
   setShowValueSelector?: (value: boolean) => void;
 }
 
-function FilterEmptyState<TData>({
+function FilterEmptyStateInner<TData>({
   inputId,
   columnMeta,
   filter,
@@ -60,14 +64,21 @@ function FilterEmptyState<TData>({
     />
   );
 }
+const FilterEmptyState = genericMemo(FilterEmptyStateInner, 'FilterEmptyState');
 
-function FilterTextInput<TData>({
+function FilterTextInputInner<TData>({
   filter,
   inputId,
   columnMeta,
   onFilterUpdate,
 }: FilterInputProps<TData>) {
   const isNumber = filter.variant === 'number' || filter.variant === 'range';
+
+  const onChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) =>
+      onFilterUpdate(filter.filterId, { value: event.target.value }),
+    [filter.filterId, onFilterUpdate]
+  );
 
   return (
     <Input
@@ -78,17 +89,16 @@ function FilterTextInput<TData>({
       inputMode={isNumber ? 'numeric' : undefined}
       placeholder={columnMeta?.placeholder ?? 'أدخل قيمة...'}
       className='!h-8 w-full rounded bg-transparent text-sm shadow-xs hover:shadow-sm'
-      defaultValue={typeof filter.value === 'string' ? filter.value : undefined}
-      onChange={(event) =>
-        onFilterUpdate(filter.filterId, {
-          value: event.target.value,
-        })
-      }
+      // Controlled: switching the row to another column resets the value to
+      // '', and an uncontrolled input kept showing — and re-applying — the old text.
+      value={typeof filter.value === 'string' ? filter.value : ''}
+      onChange={onChange}
     />
   );
 }
+const FilterTextInput = genericMemo(FilterTextInputInner, 'FilterTextInput');
 
-function FilterBooleanSelect<TData>({
+function FilterBooleanSelectInner<TData>({
   filter,
   inputId,
   columnMeta,
@@ -96,6 +106,11 @@ function FilterBooleanSelect<TData>({
   showValueSelector,
   setShowValueSelector,
 }: FilterInputProps<TData>) {
+  const onValueChange = useCallback(
+    (value: string) => onFilterUpdate(filter.filterId, { value }),
+    [filter.filterId, onFilterUpdate]
+  );
+
   if (Array.isArray(filter.value)) return null;
 
   const inputListboxId = `${inputId}-listbox`;
@@ -105,7 +120,7 @@ function FilterBooleanSelect<TData>({
       open={showValueSelector}
       onOpenChange={setShowValueSelector}
       value={filter.value}
-      onValueChange={(value) => onFilterUpdate(filter.filterId, { value })}
+      onValueChange={onValueChange}
     >
       <SelectTrigger
         id={inputId}
@@ -123,8 +138,12 @@ function FilterBooleanSelect<TData>({
     </Select>
   );
 }
+const FilterBooleanSelect = genericMemo(
+  FilterBooleanSelectInner,
+  'FilterBooleanSelect'
+);
 
-function FilterFacetedSelect<TData>({
+function FilterFacetedSelectInner<TData>({
   filter,
   inputId,
   columnMeta,
@@ -143,12 +162,18 @@ function FilterFacetedSelect<TData>({
       ? filter.value
       : undefined;
 
+  const onValueChange = useCallback(
+    (value: string | string[] | undefined) =>
+      onFilterUpdate(filter.filterId, { value }),
+    [filter.filterId, onFilterUpdate]
+  );
+
   return (
     <Faceted
       open={showValueSelector}
       onOpenChange={setShowValueSelector}
       value={selectedValues}
-      onValueChange={(value) => onFilterUpdate(filter.filterId, { value })}
+      onValueChange={onValueChange}
       multiple={multiple}
     >
       <FacetedTrigger asChild>
@@ -193,6 +218,10 @@ function FilterFacetedSelect<TData>({
     </Faceted>
   );
 }
+const FilterFacetedSelect = genericMemo(
+  FilterFacetedSelectInner,
+  'FilterFacetedSelect'
+);
 
 /**
  * Date filters travel as a plain `YYYY-MM-DD` calendar day, not as an instant.
@@ -207,7 +236,6 @@ function toCalendarDateValue(date: Date | undefined): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-/** Parse a calendar day back into a local Date for the picker's display. */
 function fromCalendarDateValue(value: string | undefined): Date | undefined {
   if (!value) return undefined;
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -238,7 +266,7 @@ function fromCalendarDateValue(value: string | undefined): Date | undefined {
   return new Date(year, month - 1, day);
 }
 
-function FilterDateInput<TData>({
+function FilterDateInputInner<TData>({
   filter,
   onFilterUpdate,
 }: FilterInputProps<TData>) {
@@ -248,6 +276,28 @@ function FilterDateInput<TData>({
   const dateValue = Array.isArray(filter.value)
     ? filter.value
     : [filter.value, filter.value];
+
+  const onRangeChange = useCallback(
+    (range: { from: Date | undefined; to: Date | undefined }) => {
+      onFilterUpdate(filter.filterId, {
+        // Gated on EITHER bound. Checking only `range.from` discarded an
+        // upper-only range entirely on save, so reading the tuple
+        // correctly wasn't enough — it was thrown away on the way out.
+        value:
+          range.from || range.to
+            ? [toCalendarDateValue(range.from), toCalendarDateValue(range.to)]
+            : [],
+      });
+    },
+    [filter.filterId, onFilterUpdate]
+  );
+
+  const onDateChange = useCallback(
+    (date: Date | undefined) => {
+      onFilterUpdate(filter.filterId, { value: toCalendarDateValue(date) });
+    },
+    [filter.filterId, onFilterUpdate]
+  );
 
   if (filter.operator === 'isBetween') {
     const startDate = fromCalendarDateValue(dateValue[0]);
@@ -271,20 +321,7 @@ function FilterDateInput<TData>({
           'h-8 w-full min-w-0 justify-start rounded border bg-transparent px-3 py-1 text-sm font-normal shadow-xs hover:shadow-sm dark:bg-input/30 hover:dark:bg-input/45',
           !filter.value && 'text-muted-foreground'
         )}
-        onChange={(range) => {
-          onFilterUpdate(filter.filterId, {
-            // Gated on EITHER bound. Checking only `range.from` discarded an
-            // upper-only range entirely on save, so reading the tuple
-            // correctly wasn't enough — it was thrown away on the way out.
-            value:
-              range.from || range.to
-                ? [
-                    toCalendarDateValue(range.from),
-                    toCalendarDateValue(range.to),
-                  ]
-                : [],
-          });
-        }}
+        onChange={onRangeChange}
       />
     );
   }
@@ -302,16 +339,13 @@ function FilterDateInput<TData>({
         'h-8 w-full min-w-0 justify-start rounded border bg-transparent px-3 py-1 text-sm font-normal shadow-xs hover:shadow-sm dark:bg-input/30 hover:dark:bg-input/45',
         !filter.value && 'text-muted-foreground'
       )}
-      onChange={(date) => {
-        onFilterUpdate(filter.filterId, {
-          value: toCalendarDateValue(date),
-        });
-      }}
+      onChange={onDateChange}
     />
   );
 }
+const FilterDateInput = genericMemo(FilterDateInputInner, 'FilterDateInput');
 
-function FilterInput<TData>(props: FilterInputProps<TData>) {
+function FilterInputInner<TData>(props: FilterInputProps<TData>) {
   const { filter, inputId, column, onFilterUpdate } = props;
 
   if (filter.operator === 'isEmpty' || filter.operator === 'isNotEmpty') {
@@ -328,6 +362,10 @@ function FilterInput<TData>(props: FilterInputProps<TData>) {
       ) {
         return (
           <DataTableRangeFilter
+            // Its inputs stay uncontrolled (they reject out-of-range values
+            // while typing), so a column switch remounts them, as the date
+            // pickers below do.
+            key={filter.id}
             filter={filter}
             column={column}
             inputId={inputId}
@@ -352,5 +390,6 @@ function FilterInput<TData>(props: FilterInputProps<TData>) {
     }
   }
 }
+const FilterInput = genericMemo(FilterInputInner, 'FilterInput');
 
 export { FilterInput };

@@ -26,6 +26,10 @@ pre-commit:
       root: 'apps/front-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml,css}'
       run: bun --bun prettier --check {staged_files}
+    - name: front-end icons
+      root: 'apps/front-end/'
+      glob: '*.{ts,tsx,js,jsx,mjs}'
+      run: bun scripts/build-icons.ts --check
     - name: back-end typecheck
       root: 'apps/back-end/'
       glob: '*.{ts,tsx,mts,cts}'
@@ -89,6 +93,12 @@ pre-push: &full_verify
           - name: front-end format
             root: 'apps/front-end/'
             run: bun --bun prettier --check .
+          - name: front-end icons
+            root: 'apps/front-end/'
+            run: bun scripts/build-icons.ts --check
+            fail_text:
+              'lib/icons-bundle.generated.ts does not match the icon names in
+              the source (run `bun scripts/build-icons.ts` inside apps/front-end)'
           - name: back-end typecheck
             root: 'apps/back-end/'
             run: bunx tsc --noEmit

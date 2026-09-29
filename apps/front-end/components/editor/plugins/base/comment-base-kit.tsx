@@ -1,7 +1,4 @@
 import { BaseCommentPlugin } from '@platejs/comment';
 
-import { CommentLeafStatic } from '@/components/editor/ui/static/comment-node-static';
-
-export const BaseCommentKit = [
-  BaseCommentPlugin.withComponent(CommentLeafStatic),
-];
+/** For its API only: published.ts removes every comment before a render. */
+export const BaseCommentKit = [BaseCommentPlugin];

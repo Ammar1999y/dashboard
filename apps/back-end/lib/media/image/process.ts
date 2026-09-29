@@ -12,7 +12,7 @@ import {
   MAX_IMAGE_PIXELS,
 } from '@app/shared/validation/constants';
 
-import { sanitizeForLog } from '@/utils/log';
+import { errorTypeOf, logSanitized, sanitizeForLog } from '@/utils/log';
 
 import { FILE_TYPE_TABLE } from '../allowlist';
 import { sanitizeFilename } from '../filename';
@@ -76,13 +76,11 @@ async function generateBlurhash(
   try {
     return await encodeBlurhash(imageBuffer);
   } catch (error) {
-    console.error(
-      sanitizeForLog({
-        msg: 'image.blurhash skipped',
-        effect: 'the file is stored without a placeholder',
-        errorClass: error instanceof Error ? error.name : typeof error,
-      })
-    );
+    logSanitized('error', {
+      msg: 'image.blurhash skipped',
+      effect: 'the file is stored without a placeholder',
+      errorClass: errorTypeOf(error),
+    });
     return undefined;
   }
 }

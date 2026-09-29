@@ -4,165 +4,150 @@ import type { TElement } from 'platejs';
 
 import * as React from 'react';
 
-import { toUnitLess } from '@platejs/basic-styles';
 import { FontSizePlugin } from '@platejs/basic-styles/react';
-import { Minus, Plus } from 'lucide-react';
 import { KEYS } from 'platejs';
 import { useEditorPlugin, useEditorSelector } from 'platejs/react';
 import { cn } from '@/lib/utils';
 
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
+  PopoverAnchor,
   PopoverContent,
-  PopoverTrigger,
 } from '@/components/ui/popover';
 import { ToolbarButton } from '@/components/ui/toolbar';
+import {
+  FONT_SIZE_PRESETS,
+  HEADING_FONT_SIZES,
+  parseFontSize,
+  stepFontSize,
+} from '@/components/editor/font-size';
 
-const DEFAULT_FONT_SIZE = 'unset';
-const UNSET_VALUE = 'unset';
 const DEFAULT_LABEL = 'الافتراضي';
 
-const isUnset = (value: string) => value === UNSET_VALUE;
-const getDisplayLabel = (value: string) =>
-  isUnset(value) ? DEFAULT_LABEL : value;
-
-const FONT_SIZE_MAP = {
-  h1: '36',
-  h2: '24',
-  h3: '20',
-} as const;
-
-const FONT_SIZES = [
-  UNSET_VALUE,
-  '8',
-  '9',
-  '10',
-  '12',
-  '14',
-  '16',
-  '18',
-  '24',
-  '30',
-  '36',
-  '48',
-  '60',
-  '72',
-  '96',
-] as const;
-
 export function FontSizeToolbarButton() {
-  const [inputValue, setInputValue] = React.useState(DEFAULT_FONT_SIZE);
-  const [isFocused, setIsFocused] = React.useState(false);
   const { editor, tf } = useEditorPlugin(FontSizePlugin);
+  const [draft, setDraft] = React.useState('');
+  const [isFocused, setIsFocused] = React.useState(false);
+  const dirty = React.useRef(false);
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const menuId = React.useId();
 
-  const cursorFontSize = useEditorSelector((editor) => {
-    const fontSize = editor.api.marks()?.[KEYS.fontSize];
-
-    if (fontSize)
-      return isUnset(fontSize as string)
-        ? UNSET_VALUE
-        : toUnitLess(fontSize as string);
-
-    const [block] = editor.api.block<TElement>() || [];
-
-    if (!block?.type) return DEFAULT_FONT_SIZE;
-
-    return block.type in FONT_SIZE_MAP
-      ? FONT_SIZE_MAP[block.type as keyof typeof FONT_SIZE_MAP]
-      : DEFAULT_FONT_SIZE;
+  /** The size at the cursor; `null` is the unmarked default. */
+  const current = useEditorSelector((editor) => {
+    const marked = parseFontSize(editor.api.marks()?.[KEYS.fontSize]);
+    if (marked !== null) return marked;
+    const [block] = editor.api.block<TElement>() ?? [];
+    return (block && HEADING_FONT_SIZES[block.type]) ?? null;
   }, []);
 
-  const handleInputChange = () => {
-    const newSize = toUnitLess(inputValue);
-
-    const parsedSize = Math.trunc(Number(newSize));
-    if (parsedSize < 1 || parsedSize > 100) {
-      editor.tf.focus();
-
-      return;
-    }
-    if (newSize !== toUnitLess(cursorFontSize)) {
-      tf.fontSize.addMark(`${newSize}px`);
-    }
-
+  const apply = (size: number | null) => {
+    dirty.current = false;
+    if (size === null) editor.tf.removeMarks(KEYS.fontSize);
+    else tf.fontSize.addMark(`${size}px`);
+    setIsFocused(false);
     editor.tf.focus();
   };
 
-  const handleFontSizeChange = (delta: number) => {
-    const newSize = Number(displayValue) + delta;
-    tf.fontSize.addMark(`${newSize}px`);
-    editor.tf.focus();
+  const commitDraft = () => {
+    if (!dirty.current) return;
+    dirty.current = false;
+    const size = parseFontSize(draft);
+    if (size === null) editor.tf.focus();
+    else apply(size);
   };
-
-  const displayValue = isFocused ? inputValue : getDisplayLabel(cursorFontSize);
 
   return (
     <div className='flex items-center gap-1 rounded-md border p-0'>
       <ToolbarButton
-        onClick={() => handleFontSizeChange(-1)}
+        onClick={() => apply(stepFontSize(current, -1))}
         tooltip='تصغير الخط'
       >
-        <Minus />
+        <Icon icon='solar:minus-linear' />
       </ToolbarButton>
 
-      <Popover modal={false} open={isFocused}>
-        <PopoverTrigger asChild>
+      <Popover modal={false} open={isFocused} onOpenChange={setIsFocused}>
+        <PopoverAnchor asChild>
           <input
+            ref={inputRef}
+            aria-label='حجم الخط'
+            aria-controls={menuId}
+            aria-expanded={isFocused}
+            aria-haspopup='dialog'
+            role='combobox'
             className={cn(
               'h-full w-14 shrink-0 bg-transparent px-1 text-center text-sm hover:bg-muted',
-              isUnset(cursorFontSize) && 'text-xs'
+              current === null && !isFocused && 'text-xs'
             )}
             data-plate-focus='true'
-            onBlur={() => {
+            onClick={() => setIsFocused(true)}
+            onBlur={(event) => {
+              if (contentRef.current?.contains(event.relatedTarget)) return;
               setIsFocused(false);
-              handleInputChange();
+              commitDraft();
             }}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={(event) => {
+              dirty.current = true;
+              setDraft(event.target.value);
+            }}
             onFocus={() => {
               setIsFocused(true);
-              setInputValue(toUnitLess(cursorFontSize));
+              setDraft(current === null ? '' : String(current));
             }}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter') {
-                return;
-              }
-
-              e.preventDefault();
-              handleInputChange();
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              commitDraft();
+              setIsFocused(false);
+              editor.tf.focus();
             }}
             type='text'
-            value={displayValue}
+            inputMode='numeric'
+            value={isFocused ? draft : (current ?? DEFAULT_LABEL)}
           />
-        </PopoverTrigger>
+        </PopoverAnchor>
         <PopoverContent
+          id={menuId}
+          ref={contentRef}
           className='w-16 px-px py-1'
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+          onPointerDown={(event) => event.preventDefault()}
+          onInteractOutside={(event) => {
+            if (event.target === inputRef.current) event.preventDefault();
+          }}
+          onEscapeKeyDown={() => {
+            dirty.current = false;
+            setIsFocused(false);
+            editor.tf.focus();
+          }}
         >
-          {FONT_SIZES.map((size) => (
+          {[null, ...FONT_SIZE_PRESETS].map((size) => (
             <button
               className={cn(
                 'flex h-8 w-full items-center justify-center text-sm hover:bg-accent data-[highlighted=true]:bg-accent',
-                isUnset(size) && 'text-xs'
+                size === null && 'text-xs'
               )}
-              data-highlighted={size === cursorFontSize}
-              key={size}
+              data-highlighted={size === current}
+              key={size ?? 'default'}
               onClick={() => {
-                tf.fontSize.addMark(isUnset(size) ? size : `${size}px`);
+                apply(size);
                 setIsFocused(false);
               }}
               type='button'
             >
-              {getDisplayLabel(size)}
+              {size ?? DEFAULT_LABEL}
             </button>
           ))}
         </PopoverContent>
       </Popover>
 
       <ToolbarButton
-        onClick={() => handleFontSizeChange(1)}
+        onClick={() => apply(stepFontSize(current, 1))}
         tooltip='تكبير الخط'
       >
-        <Plus />
+        <Icon icon='solar:add-linear' />
       </ToolbarButton>
     </div>
   );

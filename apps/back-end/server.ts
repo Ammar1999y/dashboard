@@ -4,7 +4,7 @@
 /**
  * Entry point: validate the runtime, then start the app.
  *
- * ⚠️ Static imports here are leaves only (`utils/log`, `utils/startup`,
+ * ⚠️ Static imports here are leaves only (`utils/log`, `lib/startup`,
  * `package.json`): imports are evaluated before this file's code, so importing
  * the application statically would let `lib/env.server.ts` decide whether this
  * is production before `NODE_ENV` is validated. The application is loaded by
@@ -13,44 +13,26 @@
 import { version as bunVersion } from 'bun';
 import { Database } from 'bun:sqlite';
 
-import { errorClassOf } from '@/utils/log';
+import { errorClassOf, logLine } from '@/utils/log';
 
-import packageManifest from './package.json';
 import {
   bunVersionVerdict,
+  MIN_SQLITE_VERSION,
+  nodeEnvVerdict,
   portVerdict,
   sqliteVersionVerdict,
-} from './utils/startup';
-
-/**
- * Every production-only guard is an exact comparison against `'production'`,
- * so a typo such as `NODE_ENV=prodution`, or an unset value, would silently
- * disable all of them. Anything else is therefore fatal, HERE, before the
- * modules that read it exist.
- */
-const VALID_NODE_ENV = new Set(['development', 'test', 'production']);
-
-/** The WAL-reset floor; the reason travels with `sqliteVersionVerdict`. */
-const MIN_SQLITE_VERSION = [3, 51, 3] as const;
+} from './lib/startup';
+import packageManifest from './package.json';
 
 function fail(message: string): never {
-  console.error(JSON.stringify({ msg: 'startup rejected', reason: message }));
+  logLine('error', { msg: 'startup rejected', reason: message });
   process.exit(1);
 }
 
 function requireNodeEnv(): string {
-  const value = process.env.NODE_ENV;
-  if (value === undefined || value === '')
-    fail(
-      'NODE_ENV is not set. Set it to exactly one of development, test, production ' +
-        '— the production security guards are exact string comparisons and an unset ' +
-        'value silently selects the development posture.'
-    );
-  if (!VALID_NODE_ENV.has(value))
-    fail(
-      `NODE_ENV must be exactly one of development, test, production. Received: "${value}".`
-    );
-  return value;
+  const verdict = nodeEnvVerdict(process.env.NODE_ENV);
+  if (!verdict.ok) fail(verdict.reason);
+  return verdict.nodeEnv;
 }
 
 function requirePort(): number {
@@ -109,7 +91,6 @@ const {
 // the per-process scheduled sweeps.
 const writerLock = acquireWriterLock(SQLITE_DIR);
 
-/** Keeps the global request ceiling explicit for route and shutdown coordination. */
 const IDLE_TIMEOUT_SECONDS = 60;
 
 /** The orchestrator's stop grace period must exceed this value. */
@@ -123,26 +104,24 @@ const stopServer = (budgetMs: number) =>
     budgetMs,
     stop: (closeActiveConnections) => app.stop(closeActiveConnections),
     pendingRequests: () => app.server?.pendingRequests ?? 0,
-    error: (line) => console.error(JSON.stringify(line)),
+    error: (line) => logLine('error', line),
   });
 
 app.listen({ port, idleTimeout: IDLE_TIMEOUT_SECONDS }, (server) => {
-  console.log(
-    JSON.stringify({
-      msg: 'server started',
-      // Report the bound port because the kernel may choose it.
-      port: server.port,
-      hostname: server.hostname,
-      env: nodeEnv,
-      bun: bunVersion,
-      idleTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
-      maxRouteTimeoutSeconds: MAX_ROUTE_TIMEOUT_SECONDS,
-      maxRequestBodyBytes: MAX_REQUEST_BODY_BYTES,
-      // The effective shutdown timing, for the deployment's stop grace period.
-      shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
-      gracefulStopMs: SHUTDOWN_POLICY.gracefulStopMs,
-    })
-  );
+  logLine('log', {
+    msg: 'server started',
+    // Report the bound port because the kernel may choose it.
+    port: server.port,
+    hostname: server.hostname,
+    env: nodeEnv,
+    bun: bunVersion,
+    idleTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
+    maxRouteTimeoutSeconds: MAX_ROUTE_TIMEOUT_SECONDS,
+    maxRequestBodyBytes: MAX_REQUEST_BODY_BYTES,
+    // The effective shutdown timing, for the deployment's stop grace period.
+    shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
+    gracefulStopMs: SHUTDOWN_POLICY.gracefulStopMs,
+  });
 });
 
 const schedule = startSchedule();
@@ -155,8 +134,8 @@ const shutdown = createShutdown(
     pendingAfterResponse,
     closeStores,
     exit: (code) => process.exit(code),
-    log: (line) => console.log(JSON.stringify(line)),
-    error: (line) => console.error(JSON.stringify(line)),
+    log: (line) => logLine('log', line),
+    error: (line) => logLine('error', line),
   },
   { shutdownMs: SHUTDOWN_TIMEOUT_MS }
 );
@@ -191,13 +170,11 @@ async function closeStore(
     await close();
     return null;
   } catch (error) {
-    console.error(
-      JSON.stringify({
-        msg: 'store close failed',
-        store: name,
-        errorClass: errorClassOf(error),
-      })
-    );
+    logLine('error', {
+      msg: 'store close failed',
+      store: name,
+      errorClass: errorClassOf(error),
+    });
     return { store: name, error };
   }
 }
@@ -210,12 +187,10 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const)
 // Both sync and async escaped faults must use the store-draining shutdown path.
 for (const event of ['unhandledRejection', 'uncaughtException'] as const)
   process.on(event, (error: unknown) => {
-    console.error(
-      JSON.stringify({
-        msg: 'unhandled fault',
-        event,
-        errorClass: errorClassOf(error),
-      })
-    );
+    logLine('error', {
+      msg: 'unhandled fault',
+      event,
+      errorClass: errorClassOf(error),
+    });
     void shutdown(event, 1);
   });

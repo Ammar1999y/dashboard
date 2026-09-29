@@ -86,18 +86,13 @@ function SortableRoot<T>(props: SortableRootProps<T>) {
     useSensor(KeyboardSensor, keyboardSensorOptions)
   );
 
-  const config = React.useMemo(
-    () => orientationConfig[orientation],
-    [orientation]
-  );
+  const config = orientationConfig[orientation];
 
   const getItemValue = React.useCallback(
     (item: T): UniqueIdentifier => {
-      if (typeof item === 'object' && !getItemValueProp)
-        throw new Error(SORTABLE_ERRORS.getItemValueRequired);
-      return getItemValueProp
-        ? getItemValueProp(item)
-        : (item as UniqueIdentifier);
+      if (getItemValueProp) return getItemValueProp(item);
+      if (typeof item === 'string' || typeof item === 'number') return item;
+      throw new Error(SORTABLE_ERRORS.getItemValueRequired);
     },
     [getItemValueProp]
   );
@@ -211,48 +206,36 @@ function SortableRoot<T>(props: SortableRootProps<T>) {
     [orientation]
   );
 
-  const contextValue = React.useMemo(
+  const resolvedModifiers = modifiers ?? config.modifiers;
+
+  const contextValue = React.useMemo<SortableRootContextValue>(
     () => ({
-      id,
       items,
-      modifiers: modifiers ?? config.modifiers,
+      modifiers: resolvedModifiers,
       strategy: strategy ?? config.strategy,
       activeId,
-      setActiveId,
-      getItemValue,
       flatCursor,
     }),
-    [
-      id,
-      items,
-      modifiers,
-      strategy,
-      config.modifiers,
-      config.strategy,
-      activeId,
-      getItemValue,
-      flatCursor,
-    ]
+    [items, resolvedModifiers, strategy, config.strategy, activeId, flatCursor]
+  );
+
+  const resolvedAccessibility = React.useMemo(
+    () => ({ announcements, screenReaderInstructions, ...accessibility }),
+    [announcements, screenReaderInstructions, accessibility]
   );
 
   return (
-    <SortableRootContext.Provider
-      value={contextValue as SortableRootContextValue<unknown>}
-    >
+    <SortableRootContext.Provider value={contextValue}>
       <DndContext
         collisionDetection={collisionDetection ?? config.collisionDetection}
-        modifiers={modifiers ?? config.modifiers}
+        modifiers={resolvedModifiers}
         sensors={sensors}
         {...sortableProps}
         id={id}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onDragCancel={onDragCancel}
-        accessibility={{
-          announcements,
-          screenReaderInstructions,
-          ...accessibility,
-        }}
+        accessibility={resolvedAccessibility}
       />
     </SortableRootContext.Provider>
   );

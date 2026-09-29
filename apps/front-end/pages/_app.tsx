@@ -1,39 +1,41 @@
-import 'lenis/dist/lenis.css';
+// import 'lenis/dist/lenis.css';
+import '@/styles/theme-tokens.css';
+import '@/styles/base.css';
 import '@/styles/globals.css';
 import '@/components/theme-customizer/circular-transition.css';
 import '@/styles/app-style.css';
 import '@/styles/icons.css';
 import '@/styles/table.css';
+import '@/styles/editor-content.css';
 import '@/utils/validation/locale';
+import '@/lib/icons-bundle.generated';
 
+import type { Page } from '@/types/page';
 import type { AppProps } from 'next/app';
 
 import dynamic from 'next/dynamic';
 import { Cairo } from 'next/font/google';
-import { useEffect, useMemo } from 'react';
+import { useLayoutEffect } from 'react';
 
 import { withApiMocking } from '@/mocks/with-api-mocking';
 import { DirectionProvider } from '@radix-ui/react-direction';
+import { shouldRoutePop } from '@/lib/dialogs';
 
-import { useModules } from '@/utils/store/modules';
-
-import useIsomorphicLayoutEffect from '@/hooks/use-layout-effect';
-import ErrorPage from '@/components/error-page';
-import HeadComponent, { StaticHead } from '@/components/head';
-import DashboardLayout from '@/components/layouts/dashboard';
-import ProgressProvider from '@/components/providers/progress';
-import ReactQueryProvider from '@/components/providers/react-query';
+import { AppHead, StaticHead } from '@/components/app/head';
+import ProgressProvider from '@/components/app/progress-provider';
+import ReactQueryProvider from '@/components/app/react-query-provider';
+import DashboardLayout from '@/components/dash/layout';
 import { ThemeProvider } from '@/components/theme-customizer/theme-provider';
 
-// const SmoothScroll = dynamic(() => import('@/components/smoth-scroll'), {
+// const SmoothScroll = dynamic(() => import('@/components/app/smooth-scroll'), {
 //   ssr: false,
 // });
 
-const GlobalModules = dynamic(() => import('@/components/modules'), {
+const GlobalDialogs = dynamic(() => import('@/components/dialogs'), {
   ssr: false,
 });
 
-const Toaster = dynamic(() => import('@/components/toaster'), {
+const Toaster = dynamic(() => import('@/components/app/toaster'), {
   ssr: false,
 });
 
@@ -43,70 +45,38 @@ const myFont = Cairo({
   display: 'swap',
 });
 interface ComponentProps extends AppProps {
-  Component: AppProps['Component'] & {
-    hideSidebar?: boolean;
-  };
+  Component: Page;
 }
 
 const App = ({ Component, pageProps, router }: ComponentProps) => {
-  const {
-    pathname = '',
-    description = '',
-    serverError = false,
-    title: _title,
-  } = pageProps;
+  const pathname = router.asPath.split(/[?#]/, 1)[0];
 
-  const title = useMemo(
-    () => ({
-      default: _title?.default || 'البيت التقني',
-      template: _title?.template,
-    }),
-    [_title]
-  );
-
-  useIsomorphicLayoutEffect(() => {
+  useLayoutEffect(() => {
     if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
     router.beforePopState((state) => {
+      if (!shouldRoutePop(state)) return false;
       state.options.scroll = false;
       return true;
     });
   }, [router]);
 
-  useEffect(() => {
-    const mql = matchMedia('(max-width: 768px)');
-    const onChange = (e: MediaQueryListEvent | MediaQueryList) =>
-      useModules.getState().setShowDrawer(e.matches);
-    onChange(mql);
-    mql.addEventListener('change', onChange);
-    return () => {
-      mql.removeEventListener('change', onChange);
-    };
-  }, []);
-
-  if (serverError) return <ErrorPage />;
-  const hideSidebar = Component.hideSidebar;
   return (
     <ReactQueryProvider>
-      <DirectionProvider dir={'rtl'}>
+      <DirectionProvider dir='rtl'>
         <style jsx global>{`
           :root {
             --font-main: ${myFont.style.fontFamily};
           }
         `}</style>
         <StaticHead />
-        <HeadComponent
-          currentLocale={'ar'}
-          pathname={pathname}
-          title={title}
-          description={description}
-        />
+        <AppHead title={Component.title} pathname={pathname} />
 
         {/* <SmoothScroll /> */}
         <ThemeProvider>
           <Toaster />
-          <GlobalModules />
+          <GlobalDialogs />
           <ProgressProvider dir='rtl'>
-            <Layout hideSidebar={!!hideSidebar}>
+            <Layout standalone={!!Component.standalone}>
               <Component {...pageProps} />
             </Layout>
           </ProgressProvider>
@@ -120,9 +90,9 @@ export default withApiMocking(App);
 
 const Layout = ({
   children,
-  hideSidebar,
+  standalone,
 }: {
   children: React.ReactNode;
-  hideSidebar: boolean;
+  standalone: boolean;
 }) =>
-  hideSidebar ? <>{children}</> : <DashboardLayout>{children}</DashboardLayout>;
+  standalone ? <>{children}</> : <DashboardLayout>{children}</DashboardLayout>;

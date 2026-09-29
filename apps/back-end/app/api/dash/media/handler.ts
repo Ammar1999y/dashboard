@@ -10,17 +10,17 @@ import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 import { BUCKET_TYPES, FILE_KINDS } from '@app/shared/validation/enums';
 import { MEDIA_SCOPES } from '@app/shared/validation/media';
+import { KNOWN_MIME_TYPES } from '@app/shared/validation/media-types';
 
 import { parseDataTableParams } from '@/lib/data-table/params';
 import { requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { KNOWN_MIME_TYPES } from '@/lib/media/allowlist';
 import { FILE_COLUMNS, toMediaFiles } from '@/lib/media/files';
 import {
   breadcrumbs,
-  getFolder,
   listSubfolders,
+  requireFolder,
   searchFolders,
 } from '@/lib/media/folders';
 import { UNFILED_RETENTION_DAYS, unfiledNow } from '@/lib/media/lifecycle';
@@ -118,11 +118,7 @@ export const GET = withApiErrors(mediaMsg.fetchError, async (ctx) => {
           ? null
           : and(active, eq(files.folderId, folderId), where);
 
-  if (scope === 'folder' && folderId !== null) {
-    const folder = await getFolder(folderId);
-    if (!folder)
-      throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
-  }
+  if (scope === 'folder' && folderId !== null) await requireFolder(folderId);
 
   const [rows, [totalRow]] = filter
     ? await Promise.all([

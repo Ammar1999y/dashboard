@@ -1,15 +1,17 @@
+import type { PresetName } from '../constants';
+
 import { memo, useCallback } from 'react';
 
-import { CheckIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 
 interface PresetButtonProps {
-  preset: string;
+  preset: PresetName;
   label: string;
   isSelected: boolean;
-  onSelect: (preset: string) => void;
+  onSelect: (preset: PresetName) => void;
 }
 
 export const PresetButton = memo(
@@ -18,17 +20,14 @@ export const PresetButton = memo(
 
     return (
       <Button
-        className={cn(
-          'py-1.5 font-normal',
-          isSelected && 'pointer-events-none'
-        )}
+        className='py-1.5 font-normal'
         variant='ghost'
         disabled={isSelected}
         onClick={handleClick}
       >
         <span>{label}</span>
         <span className={cn('opacity-0', isSelected && 'opacity-70')}>
-          <CheckIcon size={18} />
+          <Icon icon='solar:check-read-linear' width={18} />
         </span>
       </Button>
     );

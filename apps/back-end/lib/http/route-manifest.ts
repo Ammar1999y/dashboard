@@ -242,19 +242,18 @@ export function createRouteLookup(
   return (pathname: string) => {
     const methods = new Set<AdvertisedMethod>();
     for (const entry of compiled)
-      if (entry.matcher.test(pathname)) {
-        methods.add(entry.method);
-        if (entry.method === 'GET') methods.add('HEAD');
-      }
+      if (entry.matcher.test(pathname)) addServed(methods, entry.method);
     for (const entry of prefixes)
       for (const sub of entry.paths)
         if (pathname === `${entry.prefix}${sub.path}`)
-          for (const method of sub.methods) {
-            methods.add(method);
-            if (method === 'GET') methods.add('HEAD');
-          }
+          for (const method of sub.methods) addServed(methods, method);
     return methods;
   };
+}
+
+function addServed(methods: Set<AdvertisedMethod>, method: HttpMethod): void {
+  methods.add(method);
+  if (method === 'GET') methods.add('HEAD');
 }
 
 /**

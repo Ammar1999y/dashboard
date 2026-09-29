@@ -1,13 +1,11 @@
-import { memo, useCallback, useEffect, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 
-import { type Table } from '@tanstack/react-table';
-import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
-import { useShallow } from 'zustand/shallow';
 import { cn, getPageNumbers } from '@/lib/utils';
 
 import { useDataTableStore } from '@/utils/store/data-table-store';
 
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import {
   Select,
   SelectContent,
@@ -16,137 +14,77 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import { useColumnFilters, useGlobalFilter, useUpdateRows } from './store';
+const PAGE_SIZE_OPTIONS = [5, 10, 25, 50];
 
-type DataTablePaginationProps<TData = unknown> = {
-  table: Table<TData>;
-  pageSizeOptions?: number[];
-  className?: string;
-};
+const goTo = (page: number) =>
+  useDataTableStore.getState().actions.setPage(page);
 
-const DataTablePaginationInner = <TData,>({
-  table,
-  pageSizeOptions = [5, 10, 25, 50],
-  className,
-}: DataTablePaginationProps<TData>) => {
-  const {
-    page: currentPage,
-    perPage,
-    sort,
-  } = useDataTableStore(
-    useShallow((s) => ({
-      page: s.page,
-      perPage: s.perPage,
-      sort: s.sort,
-    }))
-  );
+const PageButton = memo(
+  ({ page, isCurrent }: { page: number; isCurrent: boolean }) => {
+    const handleClick = useCallback(() => goTo(page), [page]);
+    return (
+      <Button
+        size='icon'
+        variant={isCurrent ? 'none' : 'ghost'}
+        className={cn(
+          'h-8 w-8',
+          isCurrent && 'border border-primary/70 bg-primary/30 font-medium'
+        )}
+        onClick={handleClick}
+        aria-current={isCurrent ? 'page' : undefined}
+      >
+        {page}
+      </Button>
+    );
+  }
+);
 
-  const reRender = useUpdateRows(useShallow((s) => s.reRender));
-  const globalFilter = useGlobalFilter(useShallow((s) => s.globalFilter));
-  const columnFilters = useColumnFilters(useShallow((s) => s.columnFilters));
+PageButton.displayName = 'PageButton';
 
-  const totalPages = useMemo(() => {
-    void reRender;
-    const pc = table.getPageCount();
-    return Number.isFinite(pc) && pc > 0 ? pc : 1;
-  }, [table, reRender]);
+const handlePageSizeChange = (value: string) =>
+  useDataTableStore.getState().actions.setPerPage(Number(value));
+
+const DataTablePagination = memo(({ pageCount }: { pageCount: number }) => {
+  const currentPage = useDataTableStore((s) => s.page);
+  const perPage = useDataTableStore((s) => s.perPage);
+  const totalPages = Math.max(1, pageCount);
 
   const pageNumbers = useMemo(
     () => getPageNumbers(currentPage, totalPages),
     [currentPage, totalPages]
   );
 
-  // Reset pagination to page 1 when filters change
-  useEffect(() => {
-    if (currentPage !== 1) {
-      useDataTableStore.getState().actions.setPage(1);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [globalFilter, columnFilters, sort]);
-
-  // Ensure current currentPage doesn't exceed total pages
-  useEffect(() => {
-    if (currentPage > totalPages)
-      useDataTableStore.getState().actions.setPage(totalPages);
-  }, [currentPage, perPage, totalPages, reRender]);
-
-  const handlePrev = useCallback(() => {
-    if (table.getCanPreviousPage()) {
-      useDataTableStore.getState().actions.setPage(currentPage - 1);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table, currentPage, reRender]);
-
-  const handleNext = useCallback(() => {
-    if (table.getCanNextPage()) {
-      useDataTableStore.getState().actions.setPage(currentPage + 1);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table, currentPage, reRender]);
-
-  const handleGoto = useCallback(
-    (pageNumber: number) => {
-      useDataTableStore
-        .getState()
-        .actions.setPage(Math.min(Math.max(1, pageNumber), totalPages));
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [totalPages, reRender]
-  );
-
-  const handlePageSizeChange = useCallback(
-    (value: string) => {
-      const size = Number(value);
-      const { setPage, setPerPage } = useDataTableStore.getState().actions;
-      setPage(1);
-      setPerPage(size);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reRender]
-  );
+  const handlePrev = useCallback(() => goTo(currentPage - 1), [currentPage]);
+  const handleNext = useCallback(() => goTo(currentPage + 1), [currentPage]);
 
   return (
-    <div
-      className={cn(
-        'flex items-center justify-between px-2 py-1 space-x-3',
-        className
-      )}
-    >
+    <div className='flex items-center justify-between px-2 py-1 space-x-3'>
       <div className='flex items-center space-x-2'>
         <Button
           size='icon'
           variant='ghost'
           className='size-8'
           onClick={handlePrev}
-          disabled={!table.getCanPreviousPage()}
+          disabled={currentPage <= 1}
           aria-label='الصفحة السابقة'
         >
-          <ChevronRightIcon size={16} aria-hidden='true' className='size-4' />
+          <Icon icon='solar:alt-arrow-right-linear' className='size-4' />
         </Button>
 
         {pageNumbers.map((pageNumber, i) =>
           pageNumber === '...' ? (
             <span
-              key={`${pageNumber}-${i}`}
+              key={`ellipsis-${i}`}
               className='px-1 text-sm text-muted-foreground'
             >
               ...
             </span>
           ) : (
-            <Button
-              key={`${pageNumber}-${i}`}
-              size='icon'
-              variant={currentPage === pageNumber ? 'none' : 'ghost'}
-              className={cn(
-                currentPage === pageNumber &&
-                  'border border-primary/70 bg-primary/30 font-medium',
-                'h-8 w-8'
-              )}
-              onClick={() => handleGoto(pageNumber as number)}
-              aria-current={currentPage === pageNumber ? 'page' : undefined}
-            >
-              {pageNumber}
-            </Button>
+            <PageButton
+              key={pageNumber}
+              page={pageNumber}
+              isCurrent={currentPage === pageNumber}
+            />
           )
         )}
 
@@ -155,10 +93,10 @@ const DataTablePaginationInner = <TData,>({
           variant='ghost'
           className='size-8'
           onClick={handleNext}
-          disabled={!table.getCanNextPage()}
+          disabled={currentPage >= totalPages}
           aria-label='الصفحة التالية'
         >
-          <ChevronLeftIcon size={16} aria-hidden='true' className='size-4' />
+          <Icon icon='solar:alt-arrow-left-linear' className='size-4' />
         </Button>
       </div>
 
@@ -167,19 +105,17 @@ const DataTablePaginationInner = <TData,>({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {pageSizeOptions.map((opt) => (
-            <SelectItem key={opt} value={String(opt)}>
-              {opt} / صفحة
+          {PAGE_SIZE_OPTIONS.map((option) => (
+            <SelectItem key={option} value={String(option)}>
+              {option} / صفحة
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
     </div>
   );
-};
+});
 
-const DataTablePagination = memo(DataTablePaginationInner) as <TData>(
-  props: DataTablePaginationProps<TData>
-) => React.ReactElement | null;
+DataTablePagination.displayName = 'DataTablePagination';
 
 export { DataTablePagination };

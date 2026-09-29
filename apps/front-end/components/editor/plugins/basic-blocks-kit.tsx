@@ -29,68 +29,25 @@ import {
 import { HrElement } from '@/components/editor/ui/hr-node';
 import { ParagraphElement } from '@/components/editor/ui/paragraph-node';
 
+const HEADINGS = [
+  [H1Plugin, H1Element],
+  [H2Plugin, H2Element],
+  [H3Plugin, H3Element],
+  [H4Plugin, H4Element],
+  [H5Plugin, H5Element],
+  [H6Plugin, H6Element],
+] as const;
+
 export const BasicBlocksKit = [
   ParagraphPlugin.withComponent(ParagraphElement),
-  H1Plugin.configure({
-    inputRules: [HeadingRules.markdown()],
-    node: {
-      component: H1Element,
-    },
-    rules: {
-      break: { empty: 'reset' },
-    },
-    shortcuts: { toggle: { keys: 'mod+alt+1' } },
-  }),
-  H2Plugin.configure({
-    inputRules: [HeadingRules.markdown()],
-    node: {
-      component: H2Element,
-    },
-    rules: {
-      break: { empty: 'reset' },
-    },
-    shortcuts: { toggle: { keys: 'mod+alt+2' } },
-  }),
-  H3Plugin.configure({
-    inputRules: [HeadingRules.markdown()],
-    node: {
-      component: H3Element,
-    },
-    rules: {
-      break: { empty: 'reset' },
-    },
-    shortcuts: { toggle: { keys: 'mod+alt+3' } },
-  }),
-  H4Plugin.configure({
-    inputRules: [HeadingRules.markdown()],
-    node: {
-      component: H4Element,
-    },
-    rules: {
-      break: { empty: 'reset' },
-    },
-    shortcuts: { toggle: { keys: 'mod+alt+4' } },
-  }),
-  H5Plugin.configure({
-    inputRules: [HeadingRules.markdown()],
-    node: {
-      component: H5Element,
-    },
-    rules: {
-      break: { empty: 'reset' },
-    },
-    shortcuts: { toggle: { keys: 'mod+alt+5' } },
-  }),
-  H6Plugin.configure({
-    inputRules: [HeadingRules.markdown()],
-    node: {
-      component: H6Element,
-    },
-    rules: {
-      break: { empty: 'reset' },
-    },
-    shortcuts: { toggle: { keys: 'mod+alt+6' } },
-  }),
+  ...HEADINGS.map(([plugin, component], index) =>
+    plugin.configure({
+      inputRules: [HeadingRules.markdown()],
+      node: { component },
+      rules: { break: { empty: 'reset' } },
+      shortcuts: { toggle: { keys: `mod+alt+${index + 1}` } },
+    })
+  ),
   BlockquotePlugin.configure({
     inputRules: [BlockquoteRules.markdown()],
     node: { component: BlockquoteElement },

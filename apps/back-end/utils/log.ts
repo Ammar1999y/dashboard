@@ -364,6 +364,25 @@ export function errorClassOf(error: unknown): string {
   return error instanceof Error ? error.name : 'Unknown';
 }
 
+/** `errorClassOf`, but a non-`Error` throw is named by its `typeof`. */
+export function errorTypeOf(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+type LogLevel = 'log' | 'warn' | 'error';
+
+/**
+ * One unredacted JSON line. For fields this codebase chose itself; anything
+ * carrying caller or driver data goes through `logSanitized`.
+ */
+export function logLine(level: LogLevel, line: Record<string, unknown>): void {
+  console[level](JSON.stringify(line));
+}
+
+export function logSanitized(level: LogLevel, payload: unknown): void {
+  console[level](sanitizeForLog(payload));
+}
+
 export function sanitizeForLog(input: unknown, maxLength = 1024) {
   // Development gets an expandable structure instead of a JSON string, still
   // redacted: redaction is not a production-only concern.

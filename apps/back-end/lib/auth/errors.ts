@@ -1,13 +1,20 @@
-import { APIError } from 'better-auth/api';
+import type { HookContext } from './context';
+
+import { APIError, isAPIError } from 'better-auth/api';
 
 import {
+  EMAIL_NOT_VERIFIED_CODE,
   HTTP_STATUS,
   MSG_INVALID_CREDENTIALS,
   MSG_INVALID_INPUT,
+  MSG_LOGIN_REQUIRED,
   MSG_REAUTH_REQUIRED,
+  PHONE_NOT_VERIFIED_CODE,
   REAUTH_REQUIRED_CODE,
 } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+
+import { logSanitized } from '@/utils/log';
 
 /**
  * The `code` on every error this codebase raises through Better Auth, so the
@@ -39,6 +46,10 @@ export function authErrorCodeFirst(
 
 export function authenticationDenied(): APIError {
   return authErrorCodeFirst(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
+}
+
+export function sessionRequired(): APIError {
+  return authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
 }
 
 export function reauthenticationRequired(): APIError {
@@ -173,3 +184,40 @@ export const BASE_ERROR_CODES: Record<string, string> = {
     'تعذر التحقق من أنك لست روبوتاً. أعد تحميل الصفحة وحاول مرة أخرى',
   UNKNOWN_ERROR: 'حاول مجددا، او اعد تحميل الصفحة',
 };
+
+/**
+ * An own-property read, not `BASE_ERROR_CODES[code]`: the code is
+ * framework-supplied text, and `constructor` or `toString` would resolve to an
+ * inherited function where the message belongs.
+ */
+export function localisedAuthMessage(code: unknown): string | undefined {
+  return typeof code === 'string' && Object.hasOwn(BASE_ERROR_CODES, code)
+    ? BASE_ERROR_CODES[code]
+    : undefined;
+}
+
+/** Better Auth's `after` hook. */
+export async function localiseAuthErrors(ctx: HookContext): Promise<void> {
+  // Better Auth's own predicate, not `instanceof`: it also accepts an
+  // APIError that crossed a module-instance boundary, which is the same
+  // value the dispatcher itself treats as the failure.
+  const returned = ctx.context?.returned;
+  const failure = isAPIError(returned) ? returned : undefined;
+  const errorCode = failure?.body?.code;
+
+  const mappedMessage = localisedAuthMessage(errorCode);
+
+  if (errorCode && errorCode !== CUSTOM_AUTH_CODE && mappedMessage) {
+    throw authError(
+      failure?.status || failure?.statusCode || HTTP_STATUS.BAD_REQUEST,
+      mappedMessage
+    );
+  }
+  if (
+    errorCode &&
+    errorCode !== CUSTOM_AUTH_CODE &&
+    errorCode !== EMAIL_NOT_VERIFIED_CODE &&
+    errorCode !== PHONE_NOT_VERIFIED_CODE
+  )
+    logSanitized('error', ctx.context?.returned);
+}

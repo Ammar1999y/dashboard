@@ -12,6 +12,8 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
+import { logLine } from '@/utils/log';
+
 import { R2_PRIVATE_BUCKET, R2_PUBLIC_BUCKET } from './buckets';
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
@@ -396,15 +398,13 @@ export async function getPresignedUrl(params: {
 
   if (validExpiry !== expiresIn) {
     // `warn`: the value was clamped and the request proceeds.
-    console.warn(
-      JSON.stringify({
-        msg: 'r2.presign expiry clamped',
-        requested: expiresIn,
-        used: validExpiry,
-        min: MIN_PRESIGNED_URL_EXPIRY,
-        max: MAX_PRESIGNED_URL_EXPIRY,
-      })
-    );
+    logLine('warn', {
+      msg: 'r2.presign expiry clamped',
+      requested: expiresIn,
+      used: validExpiry,
+      min: MIN_PRESIGNED_URL_EXPIRY,
+      max: MAX_PRESIGNED_URL_EXPIRY,
+    });
   }
 
   const bucket = getBucketName(bucketType);

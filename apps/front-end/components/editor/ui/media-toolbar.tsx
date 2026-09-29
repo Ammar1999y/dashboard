@@ -14,15 +14,6 @@ import {
 } from '@platejs/media/react';
 import { cva } from 'class-variance-authority';
 import {
-  AlignCenterIcon,
-  AlignLeftIcon,
-  AlignRightIcon,
-  FlipHorizontal2Icon,
-  FlipVertical2Icon,
-  Link,
-  Trash2Icon,
-} from 'lucide-react';
-import {
   useEditorPlugin,
   useEditorRef,
   useEditorSelector,
@@ -32,14 +23,17 @@ import {
   useRemoveNodeButton,
   useSelected,
 } from 'platejs/react';
+import { cn } from '@/lib/utils';
 
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverAnchor,
   PopoverContent,
 } from '@/components/ui/popover';
 import { Separator } from '@/components/ui/separator';
+import { toolbarButtonVariants } from '@/components/ui/toolbar';
 import {
   Tooltip,
   TooltipContent,
@@ -49,10 +43,12 @@ import {
 import { CaptionButton } from './caption';
 import { MediaResizePopover } from './media-resize-popover';
 
+const mediaButtonClass = toolbarButtonVariants({ size: 'sm' });
+
 const alignItems = [
-  { icon: AlignRightIcon, value: 'right', label: 'يمين' },
-  { icon: AlignCenterIcon, value: 'center', label: 'وسط' },
-  { icon: AlignLeftIcon, value: 'left', label: 'يسار' },
+  { icon: 'lucide:text-align-end', value: 'right', label: 'يمين' },
+  { icon: 'lucide:text-align-center', value: 'center', label: 'وسط' },
+  { icon: 'lucide:text-align-start', value: 'left', label: 'يسار' },
 ] as const;
 
 const inputVariants = cva(
@@ -106,7 +102,7 @@ export function MediaToolbar({
           <div className='flex w-80 flex-col'>
             <div className='flex items-center'>
               <div className='flex items-center pe-1 ps-2 text-muted-foreground'>
-                <Link className='size-4' />
+                <Icon icon='solar:link-linear' className='size-4' />
               </div>
 
               <FloatingMediaPrimitive.UrlInput
@@ -118,24 +114,27 @@ export function MediaToolbar({
           </div>
         ) : (
           <div className='box-content flex items-center'>
-            <FloatingMediaPrimitive.EditButton
-              className={buttonVariants({ size: 'sm', variant: 'ghost' })}
-            >
+            <FloatingMediaPrimitive.EditButton className={mediaButtonClass}>
               تعديل الرابط
             </FloatingMediaPrimitive.EditButton>
 
-            <CaptionButton size='sm' variant='ghost'>
+            <CaptionButton
+              className={mediaButtonClass}
+              size='none'
+              variant='none'
+            >
               تعليق
             </CaptionButton>
 
             <Separator className='mx-1 !h-6' orientation='vertical' />
-            {alignItems.map(({ icon: Icon, value, label }) => (
+            {alignItems.map(({ icon, value, label }) => (
               <Tooltip key={value}>
                 <TooltipTrigger asChild>
                   <Button
-                    className={
-                      element.align === value ? 'bg-accent' : undefined
-                    }
+                    className={cn(
+                      mediaButtonClass,
+                      element.align === value && 'bg-accent'
+                    )}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -143,10 +142,10 @@ export function MediaToolbar({
 
                       editor.tf.focus();
                     }}
-                    size='sm'
-                    variant='ghost'
+                    size='none'
+                    variant='none'
                   >
-                    <Icon />
+                    <Icon icon={icon} />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{label}</TooltipContent>
@@ -162,7 +161,10 @@ export function MediaToolbar({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  className={element.flipHorizontal ? 'bg-accent' : undefined}
+                  className={cn(
+                    mediaButtonClass,
+                    !!element.flipHorizontal && 'bg-accent'
+                  )}
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -172,10 +174,10 @@ export function MediaToolbar({
                     );
                     editor.tf.focus();
                   }}
-                  size='sm'
-                  variant='ghost'
+                  size='none'
+                  variant='none'
                 >
-                  <FlipHorizontal2Icon />
+                  <Icon icon='lucide:flip-horizontal-2' />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>قلب أفقي</TooltipContent>
@@ -184,7 +186,10 @@ export function MediaToolbar({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  className={element.flipVertical ? 'bg-accent' : undefined}
+                  className={cn(
+                    mediaButtonClass,
+                    !!element.flipVertical && 'bg-accent'
+                  )}
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -194,10 +199,10 @@ export function MediaToolbar({
                     );
                     editor.tf.focus();
                   }}
-                  size='sm'
-                  variant='ghost'
+                  size='none'
+                  variant='none'
                 >
-                  <FlipVertical2Icon />
+                  <Icon icon='lucide:flip-vertical-2' />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>قلب عمودي</TooltipContent>
@@ -205,8 +210,13 @@ export function MediaToolbar({
 
             <Separator className='mx-1 !h-6' orientation='vertical' />
 
-            <Button size='sm' variant='ghost' {...buttonProps}>
-              <Trash2Icon />
+            <Button
+              className={mediaButtonClass}
+              size='none'
+              variant='none'
+              {...buttonProps}
+            >
+              <Icon icon='solar:trash-bin-trash-linear' />
             </Button>
           </div>
         )}

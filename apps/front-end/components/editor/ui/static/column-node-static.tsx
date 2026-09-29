@@ -3,18 +3,22 @@ import type { SlateElementProps } from 'platejs/static';
 
 import { SlateElement } from 'platejs/static';
 
-export function ColumnElementStatic(props: SlateElementProps<TColumnElement>) {
-  const { width } = props.element;
+import {
+  COLUMN_CLASS,
+  COLUMN_CONTENT_CLASS,
+  COLUMN_GROUP_CLASS,
+  COLUMN_ROW_CLASS,
+  COLUMN_WRAPPER_CLASS,
+} from '@/components/editor/styles';
 
+export function ColumnElementStatic(props: SlateElementProps<TColumnElement>) {
   return (
-    <div className='group/column relative' style={{ width: width ?? '100%' }}>
-      <SlateElement
-        className='h-full px-2 pt-2 group-first/column:ps-0 group-last/column:pe-0'
-        {...props}
-      >
-        <div className='relative h-full border border-transparent p-1.5'>
-          {props.children}
-        </div>
+    <div
+      className={COLUMN_WRAPPER_CLASS}
+      style={{ width: props.element.width ?? '100%' }}
+    >
+      <SlateElement className={COLUMN_CLASS} {...props}>
+        <div className={COLUMN_CONTENT_CLASS}>{props.children}</div>
       </SlateElement>
     </div>
   );
@@ -22,8 +26,8 @@ export function ColumnElementStatic(props: SlateElementProps<TColumnElement>) {
 
 export function ColumnGroupElementStatic(props: SlateElementProps) {
   return (
-    <SlateElement className='mb-2' {...props}>
-      <div className='flex size-full rounded'>{props.children}</div>
+    <SlateElement className={COLUMN_GROUP_CLASS} {...props}>
+      <div className={COLUMN_ROW_CLASS}>{props.children}</div>
     </SlateElement>
   );
 }

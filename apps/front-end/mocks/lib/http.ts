@@ -1,4 +1,4 @@
-import type { PaginationMeta } from '@/types/data-table';
+import type { PaginationMeta } from '@app/shared/types/api';
 
 import { HttpResponse } from 'msw';
 import { API_URL } from '@/lib/env';

@@ -3,10 +3,6 @@ import type { ReactNode } from 'react';
 
 import { memo, useCallback, useId, useMemo, useState } from 'react';
 
-import {
-  CheckIcon as _CheckIcon,
-  ChevronDownIcon as _ChevronDownIcon,
-} from 'lucide-react';
 import { useController } from 'react-hook-form';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +17,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverContent,
@@ -28,12 +25,6 @@ import {
 } from '@/components/ui/popover';
 
 import FormField from './form-field';
-
-const CheckIcon = memo(_CheckIcon);
-CheckIcon.displayName = 'CheckIcon';
-
-const ChevronDownIcon = memo(_ChevronDownIcon);
-ChevronDownIcon.displayName = 'ChevronDownIcon';
 
 export interface ComboboxOption {
   id: EntityID;
@@ -140,9 +131,9 @@ function FormCombobox<T>({
             >
               {selectedLabel ?? placeholder}
             </span>
-            <ChevronDownIcon
+            <Icon
+              icon='solar:alt-arrow-down-linear'
               className='absolute top-1/2 size-4 shrink-0 -translate-y-1/2 text-muted-foreground/80 ltr:right-3 rtl:left-3'
-              aria-hidden='true'
             />
           </Button>
         </PopoverTrigger>
@@ -195,7 +186,8 @@ const OptionItem = memo(({ option, isSelected, onSelect }: OptionItemProps) => {
   return (
     <CommandItem value={option.label} onSelect={handleSelect}>
       <span className='truncate'>{option.label}</span>
-      <CheckIcon
+      <Icon
+        icon='solar:check-read-linear'
         className={cn(
           'ms-auto size-4',
           isSelected ? 'opacity-100' : 'opacity-0'

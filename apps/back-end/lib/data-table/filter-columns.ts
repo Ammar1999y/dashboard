@@ -64,7 +64,7 @@ function searchAnchorOf(operator: FilterOperator): SearchAnchor {
  * result set and narrows an `or` one, so the caller is shown data they did not
  * ask for while receiving a 200.
  */
-function invalidFilter(message = MSG_INVALID_FILTER): never {
+export function invalidFilter(message = MSG_INVALID_FILTER): never {
   throw new CustomError(message, HTTP_STATUS.UNPROCESSABLE);
 }
 
@@ -134,7 +134,6 @@ function parseBoolean(value: unknown): boolean | null {
   return null;
 }
 
-/** Escape SQL LIKE/ILIKE wildcards to prevent wildcard injection */
 export function escapeLike(value: string): string {
   return value.replaceAll(/[%_\\]/g, String.raw`\$&`);
 }

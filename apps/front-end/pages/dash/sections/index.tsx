@@ -1,16 +1,8 @@
-import { SectionsPage } from '@/components/sections/page';
+import type { Page } from '@/types/page';
 
-export default function Sections() {
-  return <SectionsPage />;
-}
+import SectionsList from '@/components/dash/sections/list';
 
-export async function getStaticProps() {
-  return {
-    props: {
-      pathname: '/dash/sections',
-      title: {
-        template: 'الأقسام',
-      },
-    },
-  };
-}
+const SectionsListPage: Page = () => <SectionsList />;
+SectionsListPage.title = 'الأقسام';
+
+export default SectionsListPage;

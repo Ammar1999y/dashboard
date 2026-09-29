@@ -19,7 +19,7 @@ import { BaseToggleKit } from './plugins/base/toggle-base-kit';
 import { DirKit } from './plugins/dir-kit';
 import { MarkdownKit } from './plugins/markdown-kit';
 
-export const BaseEditorKit = [
+const BASE_EDITOR_KIT = [
   ...BaseBasicBlocksKit,
   ...BaseCodeBlockKit,
   ...BaseTableKit,
@@ -41,3 +41,6 @@ export const BaseEditorKit = [
   ...MarkdownKit,
   ...DirKit,
 ];
+
+/** The static twin of `createEditorKit`, for the same reason a fresh copy. */
+export const createBaseEditorKit = () => [...BASE_EDITOR_KIT];

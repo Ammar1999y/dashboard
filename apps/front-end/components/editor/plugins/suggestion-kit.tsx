@@ -1,7 +1,7 @@
 'use client';
 
 import type { BaseSuggestionConfig } from '@platejs/suggestion';
-import type { ExtendConfig, Path } from 'platejs';
+import type { ExtendConfig } from 'platejs';
 
 import { BaseSuggestionPlugin } from '@platejs/suggestion';
 import { isSlateEditor, isSlateString } from 'platejs';
@@ -19,7 +19,6 @@ export type SuggestionConfig = ExtendConfig<
   {
     activeId: string | null;
     hoverId: string | null;
-    uniquePathMap: Map<string, Path>;
   }
 >;
 
@@ -30,7 +29,6 @@ export const suggestionPlugin = toTPlatePlugin<SuggestionConfig>(
       activeId: null,
       currentUserId: editor.getOption(discussionPlugin, 'currentUserId'),
       hoverId: null,
-      uniquePathMap: new Map(),
     },
   })
 ).configure({

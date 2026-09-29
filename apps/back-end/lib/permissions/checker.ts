@@ -3,6 +3,8 @@ import type {
   AllScopedAction,
   DashboardPage,
   PermissionAction,
+  PermissionObject,
+  SessionMetadata,
 } from '@app/shared/permissions/constants';
 import type { EntityID } from '@app/shared/types';
 
@@ -25,10 +27,13 @@ import { validID } from '@app/shared/utils';
 
 import { auth } from '@/lib/auth';
 import { assertLiveSession } from '@/lib/auth/session/live';
+import { activeUser } from '@/lib/users/filters';
 
-import { getUserPermissions, sanitizePermissions } from './utils';
+import { sanitizePermissions } from './matrix';
 
 type AuthSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
+
+export type ActorPermissions = Partial<PermissionObject>;
 
 const SCOPED_ACTIONS = new Set<PermissionAction>(
   Object.keys(OWN_ACTION_MAP) as PermissionAction[]
@@ -108,6 +113,64 @@ export function resolveActionScope(
   return { allowed: false, scope: null };
 }
 
+/**
+ * `action` on a record `createdBy` owns: the all-scoped grant, or the
+ * own-scoped one when the actor created it.
+ */
+export function holdsActionOn(
+  permissions: ActorPermissions,
+  resource: DashboardPage,
+  action: AllScopedAction,
+  createdBy: EntityID | null,
+  actorUserId: EntityID
+): boolean {
+  const { allowed, scope } = resolveActionScope(permissions, resource, action);
+  return allowed && (scope === 'all' || createdBy === actorUserId);
+}
+
+function sanitizeCachedPermissions(
+  cached: Partial<PermissionObject>
+): Partial<PermissionObject> {
+  const entries = Object.entries(cached).map(([pageName, perms]) => ({
+    pageName,
+    permissions: perms,
+  }));
+  return sanitizePermissions(entries);
+}
+
+async function getUserPermissions({
+  roleId,
+  session,
+  forceDB = false,
+}: {
+  roleId: EntityID | null;
+  session: { metadata?: SessionMetadata | unknown } | null;
+  forceDB?: boolean;
+}): Promise<Partial<PermissionObject>> {
+  if (!forceDB && (session?.metadata as SessionMetadata)?.permissions) {
+    return sanitizeCachedPermissions(
+      (session?.metadata as SessionMetadata).permissions as PermissionObject
+    );
+  }
+
+  if (!roleId) return {};
+
+  const roleData = await db.query.roles.findFirst({
+    where: (rolesTable, { eq, and }) =>
+      and(eq(rolesTable.id, roleId), eq(rolesTable.isActive, true)),
+    columns: {},
+    with: {
+      rolePermissions: {
+        columns: { pageName: true, permissions: true },
+      },
+    },
+  });
+
+  if (!roleData?.rolePermissions) return {};
+
+  return sanitizePermissions(roleData.rolePermissions);
+}
+
 export async function checkUserPermission(params: {
   headers: Headers;
   resource: DashboardPage;
@@ -125,7 +188,6 @@ export async function checkUserPermission(params: {
 
   const { session, userId } = await authenticatedSession(headers);
 
-  // Write/mutation actions always verify from DB; read actions use cache
   const shouldForceDB =
     forceDB || !READ_ACTIONS.has(action) || !hasSessionCookieCache(headers);
 
@@ -136,7 +198,6 @@ export async function checkUserPermission(params: {
     // rows. An active user with an active role passes every other check.
     const sessionId = sessionIdOf(session);
 
-    // Single query: session + user + role + permissions in one round-trip.
     const rows = await db
       .select({
         roleId: users.roleId,
@@ -225,9 +286,6 @@ export async function checkUserPermission(params: {
   };
 }
 
-/**
- * Checks several permissions in one call.
- */
 export async function checkMultiplePermissions(params: {
   headers: Headers;
   checks: Array<{ resource: DashboardPage; action: PermissionAction }>;
@@ -263,18 +321,10 @@ export async function checkMultiplePermissions(params: {
       })
       .from(users)
       .leftJoin(roles, eq(users.roleId, roles.id))
-      .where(
-        and(
-          eq(users.id, userId),
-          isNull(users.deletedAt),
-          eq(users.isActive, true)
-        )
-      );
+      .where(activeUser(eq(users.id, userId)));
 
     if (!userData) throw loginRequired();
     roleId = userData.roleId;
-
-    if (!roleId) throw insufficientPermissions();
 
     if (!userData.roleIsActive) throw insufficientPermissions();
   }

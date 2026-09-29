@@ -7,9 +7,10 @@ import {
   useScaleInput,
 } from '@platejs/media/react';
 import { cva } from 'class-variance-authority';
-import { ArrowLeft, ArrowRight, Download, Minus, Plus, X } from 'lucide-react';
 import { useEditorRef } from 'platejs/react';
 import { cn } from '@/lib/utils';
+
+import { Icon } from '@/components/ui/icon';
 
 const buttonVariants = cva('rounded bg-[rgba(0,0,0,0.5)] px-1', {
   defaultVariants: {
@@ -18,7 +19,7 @@ const buttonVariants = cva('rounded bg-[rgba(0,0,0,0.5)] px-1', {
   variants: {
     variant: {
       default: 'text-white',
-      disabled: 'cursor-not-allowed text-gray-400',
+      disabled: 'cursor-not-allowed text-muted-foreground',
     },
   },
 });
@@ -77,7 +78,7 @@ export function MediaPreviewDialog() {
                 )}
                 type='button'
               >
-                <ArrowLeft />
+                <Icon icon='solar:arrow-left-linear' />
               </button>
               {(currentUrlIndex ?? 0) + 1}
               <button
@@ -89,7 +90,7 @@ export function MediaPreviewDialog() {
                 )}
                 type='button'
               >
-                <ArrowRight />
+                <Icon icon='solar:arrow-right-linear' />
               </button>
             </div>
             <div className='flex'>
@@ -102,7 +103,7 @@ export function MediaPreviewDialog() {
                 {...zommOutProps}
                 type='button'
               >
-                <Minus className='size-4' />
+                <Icon icon='solar:minus-linear' className='size-4' />
               </button>
               <div className='mx-px'>
                 {isEditingScale ? (
@@ -123,18 +124,21 @@ export function MediaPreviewDialog() {
                 {...zoomInProps}
                 type='button'
               >
-                <Plus className='size-4' />
+                <Icon icon='solar:add-linear' className='size-4' />
               </button>
             </div>
             <button className={cn(buttonVariants())} type='button'>
-              <Download className='size-4' />
+              <Icon
+                icon='solar:download-minimalistic-linear'
+                className='size-4'
+              />
             </button>
             <button
               {...closeProps}
               className={cn(buttonVariants())}
               type='button'
             >
-              <X className='size-4' />
+              <Icon icon='solar:close-linear' className='size-4' />
             </button>
           </div>
         </div>

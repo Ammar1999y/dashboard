@@ -24,8 +24,7 @@ import { inflateRawSync } from 'node:zlib';
 import type { DetectResult, OfficeFamily } from '../detect-result';
 
 import { dataViewOf } from '@app/shared/images/raster-bytes';
-
-import { MIB } from '../units';
+import { MIB } from '@app/shared/validation/constants';
 
 const LOCAL_FILE_HEADER = 0x04_03_4b_50;
 const CENTRAL_DIRECTORY_HEADER = 0x02_01_4b_50;

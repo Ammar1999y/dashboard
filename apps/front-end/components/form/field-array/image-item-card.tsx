@@ -3,9 +3,7 @@ import type { ReactNode } from 'react';
 
 import { ACCEPT_IMAGES } from '@/lib/constants';
 
-import { MAX_IMAGE_SIZE } from '@/utils/images/config';
-
-import { FileUpload } from '@/components/file-upload';
+import { FileUpload } from '@/components/shared/file-upload';
 
 import FormSwitch from '../form-switch';
 import FieldArrayItemActions from './item-actions';
@@ -41,12 +39,9 @@ const ImageItemCard = ({
         </FieldArrayItemActions>
         <FileUpload
           maxFiles={1}
-          maxSizeMB={MAX_IMAGE_SIZE}
           accept={ACCEPT_IMAGES}
-          dropzoneText='اسحب وافلت الصورة هنا،'
           className='flex max-h-52 flex-1'
           dropzoneTextClassName='text-sm'
-          dropzoneHelperText={`اقصى حجم للصورة ${MAX_IMAGE_SIZE}MB`}
         />
       </div>
     </div>

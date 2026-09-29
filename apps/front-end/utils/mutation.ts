@@ -4,6 +4,11 @@ import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
 
 import { CustomError } from './error-class';
+import {
+  GENERIC_ERROR_MESSAGE,
+  OFFLINE_MESSAGE,
+  UNEXPECTED_ERROR_MESSAGE,
+} from './error-messages';
 
 type MutationMethod = 'POST' | 'PUT' | 'DELETE';
 
@@ -26,8 +31,6 @@ interface MutationOptions<TData = unknown, TVariables = unknown> {
   useFormData?: boolean; // Flag to use FormData instead of JSON
   signal?: AbortSignal;
 }
-
-const NETWORK_ERROR_MESSAGE = 'لايوجد اتصال بالانترنت، اعد المحاولة';
 
 /**
  * `code` on the thrown error, so a caller can tell "the write never happened"
@@ -105,10 +108,7 @@ export const mutate = async <TData = unknown, TVariables = unknown>({
     result = await response.json();
   } catch (error) {
     if (error instanceof TypeError) {
-      const networkError = new CustomError(
-        'لايوجد اتصال بالانترنت، اعد المحاولة',
-        503
-      );
+      const networkError = new CustomError(OFFLINE_MESSAGE, 503);
       onError?.(networkError);
       throw networkError;
     }
@@ -116,7 +116,7 @@ export const mutate = async <TData = unknown, TVariables = unknown>({
     // response itself reported a failure status, that status is the truth worth
     // surfacing; only an unreadable SUCCESS response is genuinely a 500.
     const unexpectedError = new CustomError(
-      'حدث خطأ غير متوقع',
+      UNEXPECTED_ERROR_MESSAGE,
       responseStatus && (responseStatus < 200 || responseStatus >= 300)
         ? responseStatus
         : 500
@@ -127,7 +127,7 @@ export const mutate = async <TData = unknown, TVariables = unknown>({
 
   if (status < 200 || status >= 300 || !result?.success) {
     const error = new CustomError(
-      result?.message || NETWORK_ERROR_MESSAGE,
+      result?.message || UNEXPECTED_ERROR_MESSAGE,
       status
     );
     onError?.(error);
@@ -156,8 +156,6 @@ export const mutate = async <TData = unknown, TVariables = unknown>({
     message: result.message,
   };
 };
-
-export const GENERIC_ERROR_MESSAGE = 'حدث خطأ، أعد المحاولة';
 
 /**
  * The message for a failed write. Only a `CustomError` carries text meant for a

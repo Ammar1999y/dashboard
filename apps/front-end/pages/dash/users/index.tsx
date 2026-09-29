@@ -1,16 +1,8 @@
-import UsersPage from '@/components/users/page';
+import type { Page } from '@/types/page';
 
-export default function Users() {
-  return <UsersPage />;
-}
+import UsersList from '@/components/dash/users/list';
 
-export async function getStaticProps() {
-  return {
-    props: {
-      pathname: '/dash/users',
-      title: {
-        template: 'المستخدمين',
-      },
-    },
-  };
-}
+const UsersListPage: Page = () => <UsersList />;
+UsersListPage.title = 'المستخدمين';
+
+export default UsersListPage;

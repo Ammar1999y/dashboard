@@ -1,3 +1,5 @@
+import type { DateRange } from './types';
+
 import { memo } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -19,7 +21,7 @@ export interface DateRangePickerProps {
   initialDateTo?: Date | string;
   align?: 'start' | 'center' | 'end';
   locale?: string;
-  onChange?: (range: { from: Date | undefined; to: Date | undefined }) => void;
+  onChange?: (range: DateRange) => void;
   title?: string;
   triggerClassName?: string;
   contentClassName?: string;

@@ -2,6 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { SQLITE_MAINTENANCE_TOKEN } from '@/lib/env.server';
 
+import { logLine } from '@/utils/log';
+
 /**
  * The bearer check for `GET /api/health/storage`. An unset configured token
  * never matches: treating it as "no auth required" would open the probe on a
@@ -11,13 +13,11 @@ export function maintenanceTokenMatches(provided: string | null): boolean {
   const matched = compare(provided);
 
   if (!matched)
-    console.error(
-      JSON.stringify({
-        msg: 'maintenance token rejected',
-        reason: provided ? 'mismatch' : 'absent',
-        configured: SQLITE_MAINTENANCE_TOKEN.length > 0,
-      })
-    );
+    logLine('error', {
+      msg: 'maintenance token rejected',
+      reason: provided ? 'mismatch' : 'absent',
+      configured: SQLITE_MAINTENANCE_TOKEN.length > 0,
+    });
   return matched;
 }
 

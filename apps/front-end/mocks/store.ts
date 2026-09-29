@@ -6,7 +6,10 @@ import type { SettingsClient } from '@/types/settings';
 import type { UserClient } from '@/types/user';
 
 import { generateUUIDv7 } from '@/utils';
-import { CUSTOM_ROLE_VALUE, ROLE_SCOPE } from '@/lib/permissions/constants';
+import {
+  CUSTOM_ROLE_VALUE,
+  ROLE_SCOPE,
+} from '@app/shared/permissions/constants';
 
 import { singleton, table } from './lib/db';
 import {

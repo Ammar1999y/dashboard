@@ -1,6 +1,5 @@
 'use client';
 
-import type { VariantProps } from 'class-variance-authority';
 import type * as React from 'react';
 
 import {
@@ -10,34 +9,27 @@ import {
   useCaptionButtonState,
 } from '@platejs/caption/react';
 import { createPrimitiveComponent } from '@udecode/cn';
-import { cva } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
-
-const captionVariants = cva('max-w-full', {
-  defaultVariants: {
-    align: 'center',
-  },
-  variants: {
-    align: {
-      center: 'mx-auto',
-      left: 'me-auto',
-      right: 'ms-auto',
-    },
-  },
-});
+import {
+  CAPTION_TEXT_CLASS,
+  mediaAlignVariants,
+  toMediaAlign,
+} from '@/components/editor/styles';
 
 export function Caption({
   align,
   className,
   ...props
-}: React.ComponentProps<typeof CaptionPrimitive> &
-  VariantProps<typeof captionVariants>) {
+}: React.ComponentProps<typeof CaptionPrimitive> & { align?: unknown }) {
   return (
     <CaptionPrimitive
       {...props}
-      className={cn(captionVariants({ align }), className)}
+      className={cn(
+        mediaAlignVariants({ align: toMediaAlign(align) }),
+        className
+      )}
     />
   );
 }
@@ -49,9 +41,10 @@ export function CaptionTextarea(
     <CaptionTextareaPrimitive
       {...props}
       className={cn(
-        'mt-2 w-full resize-none border-none bg-inherit p-0 font-[inherit] text-inherit',
+        CAPTION_TEXT_CLASS,
+        'resize-none border-none bg-inherit p-0 font-[inherit] text-inherit',
         'focus:outline-none focus:[&::placeholder]:opacity-0',
-        'text-center print:placeholder:text-transparent',
+        'print:placeholder:text-transparent',
         props.className
       )}
     />

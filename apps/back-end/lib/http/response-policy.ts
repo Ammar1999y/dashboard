@@ -11,8 +11,15 @@
  * `mapResponse` (the CORS preflight short-circuit, the unmatched path), this
  * covers every native `Response` produced, thrown errors included.
  */
-import { DEFAULT_CACHE_CONTROL } from './response';
 import { SECURITY_HEADERS } from './security-headers';
+
+/**
+ * Every API response is per-user, credentialed, or an error, and `no-store` is
+ * the one directive every intermediary, the back/forward cache included,
+ * honours. A handler serving a public cacheable body sets its own
+ * `Cache-Control`; this is a default, not an override.
+ */
+export const DEFAULT_CACHE_CONTROL = 'no-store';
 
 interface ResponsePolicyOptions {
   /**
@@ -45,7 +52,6 @@ function write(headers: Headers, options: ResponsePolicyOptions): void {
   for (const [key, value] of Object.entries(SECURITY_HEADERS))
     headers.set(key, value);
 
-  // Preserve an explicit cache policy from the handler.
   if (!headers.has('cache-control'))
     headers.set('cache-control', DEFAULT_CACHE_CONTROL);
 

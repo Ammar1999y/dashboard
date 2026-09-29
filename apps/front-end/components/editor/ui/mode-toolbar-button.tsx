@@ -1,14 +1,11 @@
 'use client';
 
-import type { DropdownMenuProps } from '@radix-ui/react-dropdown-menu';
+import type { IconName } from '@/components/ui/icon';
 
 import * as React from 'react';
 
 import { SuggestionPlugin } from '@platejs/suggestion/react';
-import { DropdownMenuItemIndicator } from '@radix-ui/react-dropdown-menu';
-import { CheckIcon, EyeIcon, PencilLineIcon, PenIcon } from 'lucide-react';
 import { useEditorRef, usePlateState, usePluginOption } from 'platejs/react';
-import { cn } from '@/lib/utils';
 
 import {
   DropdownMenu,
@@ -17,109 +14,60 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
-import styles from '@/components/editor/ui/editor-elements.module.css';
 
-export function ModeToolbarButton(props: DropdownMenuProps) {
+type Mode = 'editing' | 'viewing' | 'suggestion';
+
+const MODES: Record<Mode, { icon: IconName; label: string }> = {
+  editing: { icon: 'solar:pen-new-square-linear', label: 'تحرير' },
+  viewing: { icon: 'solar:eye-bold-duotone', label: 'عرض' },
+  suggestion: { icon: 'lucide:pencil-line', label: 'اقتراح' },
+};
+
+const MODE_KEYS: Mode[] = ['editing', 'viewing', 'suggestion'];
+
+const isMode = (value: string): value is Mode =>
+  (MODE_KEYS as readonly string[]).includes(value);
+
+export function ModeToolbarButton() {
   const editor = useEditorRef();
   const [readOnly, setReadOnly] = usePlateState('readOnly');
+  const isSuggesting = usePluginOption(SuggestionPlugin, 'isSuggesting');
   const [open, setOpen] = React.useState(false);
 
-  const isSuggesting = usePluginOption(SuggestionPlugin, 'isSuggesting');
+  const mode: Mode = isSuggesting
+    ? 'suggestion'
+    : readOnly
+      ? 'viewing'
+      : 'editing';
 
-  let value = 'editing';
-
-  if (readOnly) value = 'viewing';
-
-  if (isSuggesting) value = 'suggestion';
-
-  const item: Record<string, { icon: React.ReactNode; label: string }> = {
-    editing: {
-      icon: <PenIcon />,
-      label: 'تحرير',
-    },
-    suggestion: {
-      icon: <PencilLineIcon />,
-      label: 'اقتراح',
-    },
-    viewing: {
-      icon: <EyeIcon />,
-      label: 'عرض',
-    },
+  const handleChange = (next: string) => {
+    if (!isMode(next)) return;
+    setReadOnly(next === 'viewing');
+    editor.setOption(SuggestionPlugin, 'isSuggesting', next === 'suggestion');
+    if (next === 'editing') editor.tf.focus();
   };
 
   return (
-    <DropdownMenu modal={false} onOpenChange={setOpen} open={open} {...props}>
+    <DropdownMenu modal={false} onOpenChange={setOpen} open={open}>
       <DropdownMenuTrigger asChild>
         <ToolbarButton isDropdown pressed={open} tooltip='وضع التحرير'>
-          {item[value].icon}
-          <span className='hidden lg:inline'>{item[value].label}</span>
+          <Icon icon={MODES[mode].icon} />
+          <span className='hidden lg:inline'>{MODES[mode].label}</span>
         </ToolbarButton>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align='start' className='min-w-44'>
-        <DropdownMenuRadioGroup
-          onValueChange={(newValue) => {
-            if (newValue === 'viewing') {
-              setReadOnly(true);
-
-              return;
-            }
-            setReadOnly(false);
-
-            if (newValue === 'suggestion') {
-              editor.setOption(SuggestionPlugin, 'isSuggesting', true);
-
-              return;
-            }
-            editor.setOption(SuggestionPlugin, 'isSuggesting', false);
-
-            if (newValue === 'editing') {
-              editor.tf.focus();
-
-              return;
-            }
-          }}
-          value={value}
-        >
-          <DropdownMenuRadioItem
-            className={cn(styles.dropdownMenuRadioItem, 'ps-2')}
-            value='editing'
-          >
-            <Indicator />
-            {item.editing.icon}
-            {item.editing.label}
-          </DropdownMenuRadioItem>
-
-          <DropdownMenuRadioItem
-            className={cn(styles.dropdownMenuRadioItem, 'ps-2')}
-            value='viewing'
-          >
-            <Indicator />
-            {item.viewing.icon}
-            {item.viewing.label}
-          </DropdownMenuRadioItem>
-
-          <DropdownMenuRadioItem
-            className={cn(styles.dropdownMenuRadioItem, 'ps-2')}
-            value='suggestion'
-          >
-            <Indicator />
-            {item.suggestion.icon}
-            {item.suggestion.label}
-          </DropdownMenuRadioItem>
+        <DropdownMenuRadioGroup onValueChange={handleChange} value={mode}>
+          {MODE_KEYS.map((key) => (
+            <DropdownMenuRadioItem indicator='check' key={key} value={key}>
+              <Icon icon={MODES[key].icon} />
+              {MODES[key].label}
+            </DropdownMenuRadioItem>
+          ))}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-function Indicator() {
-  return (
-    <span className='pointer-events-none absolute flex size-3.5 items-center justify-center ltr:right-2 rtl:left-2'>
-      <DropdownMenuItemIndicator>
-        <CheckIcon />
-      </DropdownMenuItemIndicator>
-    </span>
   );
 }

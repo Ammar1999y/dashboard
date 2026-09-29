@@ -49,5 +49,5 @@ export function toElysiaHandler(route: RouteDefinition) {
   };
 }
 
-/** Route config every adapter-registered route must spread in. */
+/** The route options every adapter-registered route is registered with. */
 export const elysiaRouteConfig = { parse: 'none' } as const;

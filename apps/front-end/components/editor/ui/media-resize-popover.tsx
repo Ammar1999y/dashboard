@@ -3,16 +3,17 @@
 
 import * as React from 'react';
 
-import { ImageUpscale } from 'lucide-react';
 import { useEditorRef, useElement } from 'platejs/react';
 
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Separator } from '@/components/ui/separator';
+import { toolbarButtonVariants } from '@/components/ui/toolbar';
 import {
   Tooltip,
   TooltipContent,
@@ -112,15 +113,19 @@ export function MediaResizePopover() {
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <Button size='sm' variant='ghost'>
-              <ImageUpscale />
+            <Button
+              className={toolbarButtonVariants({ size: 'sm' })}
+              size='none'
+              variant='none'
+            >
+              <Icon icon='lucide:image-upscale' />
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent>تعديل الأبعاد</TooltipContent>
       </Tooltip>
 
-      <PopoverContent align='start' className='w-80'>
+      <PopoverContent align='start' className='w-80 text-sm'>
         <div className='space-y-4'>
           {/* Percentage Width */}
           <div className='space-y-2'>

@@ -218,7 +218,7 @@ describe('the runtime gates refuse a bad configuration', () => {
 
   // The empty-PORT case, the Bun floor and the SQLite floor are asserted in
   // `tests/unit/startup-gates-logic.test.ts` instead, against
-  // `utils/startup.ts`. Not a downgrade in either case, and the reasons differ:
+  // `lib/startup.ts`. Not a downgrade in either case, and the reasons differ:
   //
   // - A child cannot vary the running Bun or the SQLite compiled into it, so
   //   those two gates had NO assertion here — only a boot that happened to pass

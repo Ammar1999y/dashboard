@@ -35,6 +35,10 @@ export function operationKey(entry: RouteManifestEntry): string {
   return `${entry.method} ${entry.path}`;
 }
 
+export function operationSlug(path: string): string {
+  return path.replaceAll(/[^a-zA-Z0-9]/g, '_');
+}
+
 /** `/api/dash/users/:id` → `/api/dash/users/{id}`, and the parameter list. */
 export function toOpenApiPath(path: string): {
   path: string;
@@ -305,7 +309,7 @@ export function tableOperation(entry: RouteManifestEntry): {
   const docs = OPERATION_DOCS[key];
   if (!docs) throw new Error(`No operation documentation for ${key}`);
   const operation: JsonSchema = {
-    operationId: `${entry.method.toLowerCase()}${entry.path.replaceAll(/[^a-zA-Z0-9]/g, '_')}`,
+    operationId: `${entry.method.toLowerCase()}${operationSlug(entry.path)}`,
     summary: docs.summary,
     ...(docs.description && { description: docs.description }),
     tags: [docs.tag],

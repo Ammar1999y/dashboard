@@ -2,7 +2,6 @@
  * Single-use re-authentication grants bound to one user. Their rows are valued
  * by the user id, which is how credential rotation revokes them.
  */
-import crypto from 'node:crypto';
 import type { AuthContext } from '../context';
 import type { EntityID } from '@app/shared/types';
 
@@ -11,8 +10,8 @@ import { validID } from '@app/shared/utils';
 
 import { authAuditMeta, bodyRecord } from '../context';
 import { authError, reauthenticationRequired } from '../errors';
-import { resolveRequestSession } from '../two-factor/challenge';
-import { expiresIn, reauthGrantKey } from '../verifications';
+import { resolveRequestSession } from '../session/request';
+import { expiresIn, randomToken, reauthGrantKey } from '../verifications';
 import { verifyReauthPassword } from './password';
 import { hasAdminReauth } from './window';
 
@@ -27,7 +26,7 @@ export async function mintReauthGrant(
   ctx: AuthContext,
   params: { userId: EntityID; purpose: ReauthPurpose }
 ): Promise<string> {
-  const token = crypto.randomBytes(GRANT_BYTES).toString('base64url');
+  const token = randomToken(GRANT_BYTES);
   await ctx.context.internalAdapter.createVerificationValue({
     value: params.userId,
     identifier: reauthGrantKey(params.purpose, token),

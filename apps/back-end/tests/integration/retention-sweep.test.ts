@@ -52,10 +52,8 @@ import {
 
 import { runDatabaseSweep } from '@/lib/maintenance/database';
 import { startSchedule } from '@/lib/maintenance/schedule';
-import {
-  ORPHAN_DRAIN_BATCH,
-  TRANSITION_RETRY_BATCH,
-} from '@/lib/media/visibility';
+import { ORPHAN_DRAIN_BATCH } from '@/lib/media/orphaned-objects';
+import { TRANSITION_RETRY_BATCH } from '@/lib/media/visibility';
 
 import { resetTables } from '../helpers/database';
 import {

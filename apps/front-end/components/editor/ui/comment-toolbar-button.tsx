@@ -1,8 +1,8 @@
 'use client';
 
-import { MessageSquareTextIcon } from 'lucide-react';
 import { useEditorRef } from 'platejs/react';
 
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 import { commentPlugin } from '@/components/editor/plugins/comment-kit';
 
@@ -17,7 +17,7 @@ export function CommentToolbarButton() {
       }}
       tooltip='تعليق'
     >
-      <MessageSquareTextIcon />
+      <Icon icon='solar:chat-square-line-linear' />
     </ToolbarButton>
   );
 }

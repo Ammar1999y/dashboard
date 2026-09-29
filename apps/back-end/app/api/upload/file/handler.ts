@@ -11,11 +11,7 @@ import { toMediaFile } from '@/lib/media/files';
 import { mediaMsg, uploadMsg } from '@/lib/media/messages';
 import { resolveUploadPurpose } from '@/lib/media/policy';
 import {
-  admitUpload,
-  chargeUploadBodyBudget,
-  chargeUploadBudget,
-  storeUpload,
-  takeSingleFile,
+  acceptUpload,
   UPLOAD_ADMISSION_LIMIT,
   UPLOAD_ADMISSION_SCOPE,
 } from '@/lib/media/upload';
@@ -36,7 +32,7 @@ const UPLOAD_ACTIONS = ['create', 'edit'] as const;
  * route guards. `Object.hasOwn`, because a bare `in` accepts `__proto__`.
  *
  * ⚠️ Call it only after the session check: before it, an unauthenticated caller
- * got 400 for an unknown resource and 401 for a real page name.
+ * would get 400 for an unknown resource and 401 for a real page name.
  */
 function requireUploadResource(query: URLSearchParams): DashboardPage {
   const requested = query.get('resource');
@@ -75,23 +71,12 @@ export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
     failClosed: true,
   });
 
-  // Charged from `Content-Length` while the body is still an unread stream:
-  // the kind budgets below can only be charged once it has been buffered.
-  await chargeUploadBodyBudget(caller.userId, ctx.headers);
-
-  const entry = takeSingleFile(await ctx.readFormData(), 'files');
-  const admitted = await admitUpload(entry, purpose);
-  await chargeUploadBudget(caller.userId, admitted);
-
-  const row = await storeUpload({
-    admitted,
-    target: {
-      visibility: purpose.visibility,
-      kinds: purpose.kinds,
-      folderId: null,
-      activate: false,
-    },
-    actor: requestActor(ctx, caller),
+  const row = await acceptUpload(ctx, requestActor(ctx, caller), {
+    field: 'files',
+    visibility: purpose.visibility,
+    kinds: purpose.kinds,
+    folderId: null,
+    activate: false,
   });
 
   return apiSuccess({

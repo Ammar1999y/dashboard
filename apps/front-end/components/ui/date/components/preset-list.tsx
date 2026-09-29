@@ -1,11 +1,13 @@
+import type { PresetName } from '../constants';
+
 import { memo } from 'react';
 
 import { PRESETS } from '../constants';
 import { PresetButton } from './preset-button';
 
 interface PresetListProps {
-  selectedPreset: string | undefined;
-  onPresetSelect: (preset: string) => void;
+  selectedPreset: PresetName | undefined;
+  onPresetSelect: (preset: PresetName) => void;
 }
 
 export const PresetList = memo<PresetListProps>(

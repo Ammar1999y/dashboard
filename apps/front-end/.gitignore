@@ -54,3 +54,10 @@ CLAUDE.md
 
 /tests/**
 /prompt-*.md
+
+# Copied from node_modules by scripts/copy-compression-worker.ts
+/public/js/browser-image-compression.js
+
+# Built by scripts/build-editor-css.ts
+/public/css/editor-document.css
+/public/css/editor-katex.css

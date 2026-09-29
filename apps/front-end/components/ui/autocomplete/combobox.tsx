@@ -1,6 +1,5 @@
 import type { ChangeEvent, ComponentProps, ReactNode } from 'react';
 
-import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 import * as ComboboxPrimitive from '@/components/ui/autocomplete/combobox-primitive';
@@ -10,6 +9,7 @@ import {
   InputBaseControl,
   InputBaseInput,
 } from '@/components/ui/autocomplete/input-base';
+import { Icon } from '@/components/ui/icon';
 import { popoverMotion, popoverSurface } from '@/components/ui/popover-surface';
 
 export const Combobox = ComboboxPrimitive.Root;
@@ -36,7 +36,10 @@ export function ComboboxInput({ icon, ...props }: ComboboxInputProps) {
         </InputBaseControl>
         <ComboboxPrimitive.Trigger asChild>
           <InputBaseAdornmentButton className='transition-transform duration-300 data-[state=open]:rotate-180'>
-            <ChevronDown className='size-4 text-muted-foreground' />
+            <Icon
+              icon='solar:alt-arrow-down-linear'
+              className='size-4 text-muted-foreground'
+            />
           </InputBaseAdornmentButton>
         </ComboboxPrimitive.Trigger>
       </InputBase>
@@ -101,7 +104,7 @@ export function ComboboxItem({
     >
       <ComboboxPrimitive.ItemText>{children}</ComboboxPrimitive.ItemText>
       <ComboboxPrimitive.ItemIndicator className='absolute flex size-3.5 items-center justify-center ltr:right-2 rtl:left-2'>
-        <Check className='size-4' />
+        <Icon icon='solar:check-read-linear' className='size-4' />
       </ComboboxPrimitive.ItemIndicator>
     </ComboboxPrimitive.Item>
   );

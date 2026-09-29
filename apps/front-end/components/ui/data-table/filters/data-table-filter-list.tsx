@@ -1,23 +1,18 @@
+import type { FilterItemSchema } from '@app/shared/data-table/parsers';
 import type {
-  ExtendedColumnFilter,
   FilterOperator,
+  FilterVariant,
   JoinOperator,
-} from '@/types/data-table';
-import type { Column, Table } from '@tanstack/react-table';
+} from '@app/shared/types/data-table';
+import type { Column } from '@tanstack/react-table';
+import type { ComponentProps, KeyboardEvent } from 'react';
 
-import * as React from 'react';
+import { memo, useCallback, useId, useMemo, useRef, useState } from 'react';
 
-import {
-  Check,
-  ChevronDownIcon,
-  Filter,
-  GripVertical,
-  Plus,
-  Trash2,
-} from 'lucide-react';
-import { useShallow } from 'zustand/shallow';
+import { dataTableConfig } from '@app/shared/data-table/config';
 import { cn } from '@/lib/utils';
 
+import { generateId } from '@/utils/generate-id';
 import { useDataTableStore } from '@/utils/store/data-table-store';
 
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +25,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverContent,
@@ -51,24 +47,15 @@ import {
 } from '@/components/ui/sortable';
 
 import {
+  REMOVE_ITEM_SHORTCUTS,
+  usePopoverShortcut,
+} from '../hooks/use-popover-shortcut';
+import {
   getDefaultFilterOperator,
   getFilterOperators,
 } from '../utils/data-table';
-import { dataTableConfig } from './config';
+import { genericMemo } from '../utils/generic-memo';
 import { FilterInput } from './filter-inputs';
-
-const ALPHABET =
-  '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-
-function generateId({ length = 12 }: { length?: number } = {}) {
-  const bytes = crypto.getRandomValues(new Uint8Array(length));
-  let id = '';
-  for (let i = 0; i < length; i++) {
-    const byte = bytes[i] ?? 0;
-    id += ALPHABET[byte % ALPHABET.length];
-  }
-  return id;
-}
 
 const FILTER_SHORTCUT_KEY = 'f';
 
@@ -76,66 +63,56 @@ const joinOperatorLabels: Record<JoinOperator, string> = {
   and: 'و',
   or: 'أو',
 };
-// eslint-disable-next-line unicorn/prefer-set-has
-const REMOVE_FILTER_SHORTCUTS = ['backspace', 'delete'];
 
-interface DataTableFilterListProps<TData> extends React.ComponentProps<
+const getFilterItemValue = (item: FilterItemSchema) => item.filterId;
+
+interface DataTableFilterListProps<TData> extends ComponentProps<
   typeof PopoverContent
 > {
-  table: Table<TData>;
+  columns: Column<TData>[];
   disabled?: boolean;
 }
 
 export function DataTableFilterList<TData>({
-  table,
+  columns: allColumns,
   disabled,
   ...props
 }: DataTableFilterListProps<TData>) {
-  const id = React.useId();
-  const labelId = React.useId();
-  const descriptionId = React.useId();
-  const [open, setOpen] = React.useState(false);
-  const addButtonRef = React.useRef<HTMLButtonElement>(null);
+  const id = useId();
+  const labelId = useId();
+  const descriptionId = useId();
+  const [open, setOpen] = useState(false);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
 
-  const columns = React.useMemo(
-    () =>
-      table
-        .getAllColumns()
-        .filter((column) => column.columnDef.enableColumnFilter),
-    [table]
+  const columns = useMemo(
+    () => allColumns.filter((column) => column.columnDef.enableColumnFilter),
+    [allColumns]
   );
 
-  const filters = useDataTableStore(
-    useShallow((s) => s.filters as ExtendedColumnFilter<TData>[])
-  );
+  const filters = useDataTableStore((s) => s.filters);
 
-  // Draft state: local copy while popover is open
-  const [draftFilters, setDraftFilters] = React.useState<
-    ExtendedColumnFilter<TData>[]
-  >([]);
+  const [draftFilters, setDraftFilters] = useState<FilterItemSchema[]>([]);
   const [draftJoinOperator, setDraftJoinOperator] =
-    React.useState<JoinOperator>('and');
+    useState<JoinOperator>('and');
 
-  // Sync draft from store when popover opens
-  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+  const handleOpenChange = useCallback((nextOpen: boolean) => {
     if (nextOpen) {
       const state = useDataTableStore.getState();
-      setDraftFilters(state.filters as ExtendedColumnFilter<TData>[]);
+      setDraftFilters(state.filters);
       setDraftJoinOperator(state.joinOperator);
     }
     setOpen(nextOpen);
   }, []);
 
-  // Apply draft to store
-  const onApply = React.useCallback(() => {
+  const onApply = useCallback(() => {
     const { setFilters, setJoinOperator } =
       useDataTableStore.getState().actions;
-    setFilters((draftFilters.length > 0 ? draftFilters : null) as never);
+    setFilters(draftFilters.length > 0 ? draftFilters : null);
     setJoinOperator(draftJoinOperator);
     setOpen(false);
   }, [draftFilters, draftJoinOperator]);
 
-  const onFilterAdd = React.useCallback(() => {
+  const onFilterAdd = useCallback(() => {
     const column = columns[0];
 
     if (!column) return;
@@ -143,7 +120,7 @@ export function DataTableFilterList<TData>({
     setDraftFilters((prev) => [
       ...prev,
       {
-        id: column.id as Extract<keyof TData, string>,
+        id: column.id,
         value: '',
         variant: column.columnDef.meta?.variant ?? 'text',
         operator: getDefaultFilterOperator(
@@ -154,23 +131,21 @@ export function DataTableFilterList<TData>({
     ]);
   }, [columns]);
 
-  const onFilterUpdate = React.useCallback(
+  const onFilterUpdate = useCallback(
     (
       filterId: string,
-      updates: Partial<Omit<ExtendedColumnFilter<TData>, 'filterId'>>
+      updates: Partial<Omit<FilterItemSchema, 'filterId'>>
     ) => {
       setDraftFilters((prev) =>
         prev.map((filter) =>
-          filter.filterId === filterId
-            ? ({ ...filter, ...updates } as ExtendedColumnFilter<TData>)
-            : filter
+          filter.filterId === filterId ? { ...filter, ...updates } : filter
         )
       );
     },
     []
   );
 
-  const onFilterRemove = React.useCallback((filterId: string) => {
+  const onFilterRemove = useCallback((filterId: string) => {
     setDraftFilters((prev) =>
       prev.filter((filter) => filter.filterId !== filterId)
     );
@@ -179,40 +154,18 @@ export function DataTableFilterList<TData>({
     });
   }, []);
 
-  const onFiltersReset = React.useCallback(() => {
+  const onFiltersReset = useCallback(() => {
     setDraftFilters([]);
     setDraftJoinOperator('and');
   }, []);
 
-  React.useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement ||
-        (event.target instanceof HTMLElement &&
-          event.target.contentEditable === 'true')
-      ) {
-        return;
-      }
+  const toggleOpen = useCallback(() => setOpen((prev) => !prev), []);
+  usePopoverShortcut(FILTER_SHORTCUT_KEY, toggleOpen);
 
-      if (
-        event.key.toLowerCase() === FILTER_SHORTCUT_KEY &&
-        (event.ctrlKey || event.metaKey) &&
-        event.shiftKey
-      ) {
-        event.preventDefault();
-        setOpen((prev) => !prev);
-      }
-    }
-
-    addEventListener('keydown', onKeyDown);
-    return () => removeEventListener('keydown', onKeyDown);
-  }, []);
-
-  const onTriggerKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>) => {
+  const onTriggerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>) => {
       if (!(
-        REMOVE_FILTER_SHORTCUTS.includes(event.key.toLowerCase()) &&
+        REMOVE_ITEM_SHORTCUTS.has(event.key.toLowerCase()) &&
         draftFilters.length > 0
       )) {
         return;
@@ -227,10 +180,8 @@ export function DataTableFilterList<TData>({
   return (
     <Sortable
       value={draftFilters}
-      onValueChange={(value) =>
-        setDraftFilters(value as ExtendedColumnFilter<TData>[])
-      }
-      getItemValue={(item) => item.filterId}
+      onValueChange={setDraftFilters}
+      getItemValue={getFilterItemValue}
     >
       <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
@@ -241,7 +192,10 @@ export function DataTableFilterList<TData>({
             onKeyDown={onTriggerKeyDown}
             disabled={disabled}
           >
-            <Filter className='size-4 text-muted-foreground' />
+            <Icon
+              icon='solar:filter-linear'
+              className='size-4 text-muted-foreground'
+            />
             <span>تصفية</span>
             {filters.length > 0 && (
               <Badge
@@ -317,7 +271,7 @@ export function DataTableFilterList<TData>({
                 ref={addButtonRef}
                 onClick={onFilterAdd}
               >
-                <Plus className='size-4' />
+                <Icon icon='solar:add-linear' className='size-4' />
                 <span>إضافة تصفية</span>
               </Button>
               <Button size='sm' className='rounded text-sm' onClick={onApply}>
@@ -343,8 +297,58 @@ export function DataTableFilterList<TData>({
   );
 }
 
+interface FilterFieldItemProps {
+  columnId: string;
+  label: string;
+  variant: FilterVariant;
+  isSelected: boolean;
+  filterId: string;
+  onFilterUpdate: (
+    filterId: string,
+    updates: Partial<Omit<FilterItemSchema, 'filterId'>>
+  ) => void;
+  onSelected: () => void;
+}
+
+const FilterFieldItem = memo(
+  ({
+    columnId,
+    label,
+    variant,
+    isSelected,
+    filterId,
+    onFilterUpdate,
+    onSelected,
+  }: FilterFieldItemProps) => {
+    const onSelect = useCallback(() => {
+      onFilterUpdate(filterId, {
+        id: columnId,
+        variant,
+        operator: getDefaultFilterOperator(variant),
+        value: '',
+      });
+      onSelected();
+    }, [columnId, variant, filterId, onFilterUpdate, onSelected]);
+
+    return (
+      <CommandItem
+        value={columnId}
+        onSelect={onSelect}
+        className='justify-between'
+      >
+        <span className='truncate'>{label}</span>
+        <Icon
+          icon='solar:check-read-linear'
+          className={cn(isSelected ? 'opacity-100' : 'opacity-0')}
+        />
+      </CommandItem>
+    );
+  }
+);
+FilterFieldItem.displayName = 'FilterFieldItem';
+
 interface DataTableFilterItemProps<TData> {
-  filter: ExtendedColumnFilter<TData>;
+  filter: FilterItemSchema;
   index: number;
   filterItemId: string;
   joinOperator: JoinOperator;
@@ -352,12 +356,12 @@ interface DataTableFilterItemProps<TData> {
   columns: Column<TData>[];
   onFilterUpdate: (
     filterId: string,
-    updates: Partial<Omit<ExtendedColumnFilter<TData>, 'filterId'>>
+    updates: Partial<Omit<FilterItemSchema, 'filterId'>>
   ) => void;
   onFilterRemove: (filterId: string) => void;
 }
 
-function DataTableFilterItem<TData>({
+function DataTableFilterItemInner<TData>({
   filter,
   index,
   filterItemId,
@@ -367,9 +371,9 @@ function DataTableFilterItem<TData>({
   onFilterUpdate,
   onFilterRemove,
 }: DataTableFilterItemProps<TData>) {
-  const [showFieldSelector, setShowFieldSelector] = React.useState(false);
-  const [showOperatorSelector, setShowOperatorSelector] = React.useState(false);
-  const [showValueSelector, setShowValueSelector] = React.useState(false);
+  const [showFieldSelector, setShowFieldSelector] = useState(false);
+  const [showOperatorSelector, setShowOperatorSelector] = useState(false);
+  const [showValueSelector, setShowValueSelector] = useState(false);
 
   const column = columns.find((column) => column.id === filter.id);
 
@@ -381,8 +385,33 @@ function DataTableFilterItem<TData>({
   const columnMeta = column?.columnDef.meta;
   const filterOperators = getFilterOperators(filter.variant);
 
-  const onItemKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
+  const onJoinOperatorChange = useCallback(
+    (value: JoinOperator) => setJoinOperator(value),
+    [setJoinOperator]
+  );
+
+  const onOperatorChange = useCallback(
+    (value: FilterOperator) =>
+      onFilterUpdate(filter.filterId, {
+        operator: value,
+        value:
+          value === 'isEmpty' || value === 'isNotEmpty' ? '' : filter.value,
+      }),
+    [filter.filterId, filter.value, onFilterUpdate]
+  );
+
+  const onCloseFieldSelector = useCallback(
+    () => setShowFieldSelector(false),
+    []
+  );
+
+  const onRemove = useCallback(
+    () => onFilterRemove(filter.filterId),
+    [filter.filterId, onFilterRemove]
+  );
+
+  const onItemKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
       if (
         showFieldSelector ||
         showOperatorSelector ||
@@ -393,7 +422,7 @@ function DataTableFilterItem<TData>({
         return;
       }
 
-      if (REMOVE_FILTER_SHORTCUTS.includes(event.key.toLowerCase())) {
+      if (REMOVE_ITEM_SHORTCUTS.has(event.key.toLowerCase())) {
         event.preventDefault();
         onFilterRemove(filter.filterId);
       }
@@ -422,10 +451,7 @@ function DataTableFilterItem<TData>({
           {index === 0 ? (
             <span className='ps-3 text-sm text-muted-foreground'>حيث</span>
           ) : index === 1 ? (
-            <Select
-              value={joinOperator}
-              onValueChange={(value: JoinOperator) => setJoinOperator(value)}
-            >
+            <Select value={joinOperator} onValueChange={onJoinOperatorChange}>
               <SelectTrigger
                 aria-label='Select join operator'
                 aria-controls={joinOperatorListboxId}
@@ -464,10 +490,12 @@ function DataTableFilterItem<TData>({
                 className='h-8 min-w-0 justify-between rounded border bg-transparent px-3 py-1 text-sm font-normal shadow-xs hover:shadow-sm dark:bg-input/30 hover:dark:bg-input/45 md:w-32'
               >
                 <span className='truncate'>
-                  {columns.find((column) => column.id === filter.id)?.columnDef
-                    .meta?.label ?? 'اختر حقل'}
+                  {columnMeta?.label ?? 'اختر حقل'}
                 </span>
-                <ChevronDownIcon className='size-4 text-muted-foreground opacity-80' />
+                <Icon
+                  icon='solar:alt-arrow-down-linear'
+                  className='size-4 text-muted-foreground opacity-80'
+                />
               </Button>
             </PopoverTrigger>
             <PopoverContent
@@ -480,35 +508,17 @@ function DataTableFilterItem<TData>({
                 <CommandList>
                   <CommandEmpty>لا توجد حقول.</CommandEmpty>
                   <CommandGroup>
-                    {columns.map((column) => (
-                      <CommandItem
-                        key={column.id}
-                        value={column.id}
-                        onSelect={(value) => {
-                          onFilterUpdate(filter.filterId, {
-                            id: value as Extract<keyof TData, string>,
-                            variant: column.columnDef.meta?.variant ?? 'text',
-                            operator: getDefaultFilterOperator(
-                              column.columnDef.meta?.variant ?? 'text'
-                            ),
-                            value: '',
-                          });
-
-                          setShowFieldSelector(false);
-                        }}
-                        className='justify-between'
-                      >
-                        <span className='truncate'>
-                          {column.columnDef.meta?.label}
-                        </span>
-                        <Check
-                          className={cn(
-                            column.id === filter.id
-                              ? 'opacity-100'
-                              : 'opacity-0'
-                          )}
-                        />
-                      </CommandItem>
+                    {columns.map((option) => (
+                      <FilterFieldItem
+                        key={option.id}
+                        columnId={option.id}
+                        label={option.columnDef.meta?.label ?? option.id}
+                        variant={option.columnDef.meta?.variant ?? 'text'}
+                        isSelected={option.id === filter.id}
+                        filterId={filter.filterId}
+                        onFilterUpdate={onFilterUpdate}
+                        onSelected={onCloseFieldSelector}
+                      />
                     ))}
                   </CommandGroup>
                 </CommandList>
@@ -519,15 +529,7 @@ function DataTableFilterItem<TData>({
             open={showOperatorSelector}
             onOpenChange={setShowOperatorSelector}
             value={filter.operator}
-            onValueChange={(value: FilterOperator) =>
-              onFilterUpdate(filter.filterId, {
-                operator: value,
-                value:
-                  value === 'isEmpty' || value === 'isNotEmpty'
-                    ? ''
-                    : filter.value,
-              })
-            }
+            onValueChange={onOperatorChange}
           >
             <SelectTrigger
               aria-controls={operatorListboxId}
@@ -568,9 +570,9 @@ function DataTableFilterItem<TData>({
           variant='destructiveGhost'
           size='icon'
           className='size-8 rounded text-muted-foreground hover:text-destructive'
-          onClick={() => onFilterRemove(filter.filterId)}
+          onClick={onRemove}
         >
-          <Trash2 className='size-4' />
+          <Icon icon='solar:trash-bin-trash-linear' className='size-4' />
         </Button>
         <SortableItemHandle asChild>
           <Button
@@ -578,10 +580,15 @@ function DataTableFilterItem<TData>({
             size='icon'
             className='size-8 rounded text-muted-foreground'
           >
-            <GripVertical className='size-4' />
+            <Icon icon='solar:grip-vertical-linear' className='size-4' />
           </Button>
         </SortableItemHandle>
       </div>
     </SortableItem>
   );
 }
+
+const DataTableFilterItem = genericMemo(
+  DataTableFilterItemInner,
+  'DataTableFilterItem'
+);

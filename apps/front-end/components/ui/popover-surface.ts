@@ -1,5 +1,5 @@
 /**
- * The panel every floating layer is drawn in — popover, hover card, menus,
+ * The panel every floating layer is drawn in — popover, menus,
  * select and combobox content — and the enter/exit motion they share. The
  * transform origin stays with each control: its CSS variable is per-primitive.
  */

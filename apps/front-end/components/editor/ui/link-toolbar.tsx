@@ -16,7 +16,6 @@ import {
   useFloatingLinkInsertState,
 } from '@platejs/link/react';
 import { cva } from 'class-variance-authority';
-import { ExternalLink, Link, Text, Unlink } from 'lucide-react';
 import { KEYS } from 'platejs';
 import {
   useEditorRef,
@@ -25,8 +24,9 @@ import {
   usePluginOption,
 } from 'platejs/react';
 
-import { buttonVariants } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import { Separator } from '@/components/ui/separator';
+import { toolbarButtonVariants } from '@/components/ui/toolbar';
 
 const popoverVariants = cva(
   'z-50 w-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none'
@@ -99,7 +99,7 @@ export function LinkFloatingToolbar({
     <div className='flex w-80 flex-col' {...inputProps}>
       <div className='flex items-center'>
         <div className='flex items-center pe-1 ps-2 text-muted-foreground'>
-          <Link className='size-4' />
+          <Icon icon='solar:link-linear' className='size-4' />
         </div>
 
         <FloatingLinkUrlInput
@@ -112,7 +112,7 @@ export function LinkFloatingToolbar({
       <Separator className='my-1' />
       <div className='flex items-center'>
         <div className='flex items-center pe-1 ps-2 text-muted-foreground'>
-          <Text className='size-4' />
+          <Icon icon='lucide:text-align-start' className='size-4' />
         </div>
         <input
           className={inputVariants()}
@@ -130,7 +130,7 @@ export function LinkFloatingToolbar({
   ) : (
     <div className='box-content flex items-center'>
       <button
-        className={buttonVariants({ size: 'sm', variant: 'ghost' })}
+        className={toolbarButtonVariants({ size: 'sm', variant: 'default' })}
         type='button'
         {...editButtonProps}
       >
@@ -144,14 +144,14 @@ export function LinkFloatingToolbar({
       <Separator orientation='vertical' />
 
       <button
-        className={buttonVariants({
+        className={toolbarButtonVariants({
           size: 'sm',
-          variant: 'ghost',
+          variant: 'default',
         })}
         type='button'
         {...unlinkButtonProps}
       >
-        <Unlink width={18} />
+        <Icon icon='solar:unlink-linear' className='size-4' />
       </button>
     </div>
   );
@@ -188,17 +188,17 @@ function LinkOpenButton() {
   return (
     <a
       {...attributes}
-      aria-label='Open link in a new tab'
-      className={buttonVariants({
+      aria-label='فتح الرابط في تبويب جديد'
+      className={toolbarButtonVariants({
         size: 'sm',
-        variant: 'ghost',
+        variant: 'default',
       })}
       onMouseOver={(e) => {
         e.stopPropagation();
       }}
       target='_blank'
     >
-      <ExternalLink width={18} />
+      <Icon icon='solar:square-arrow-right-up-linear' className='size-4' />
     </a>
   );
 }

@@ -9,10 +9,13 @@ import { withTransaction } from '@/db';
 import { users, verificationCodes, verificationSessions } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/api-messages';
+import { OTP_AUTO_VERIFY } from '@app/shared/config';
 import { CustomError } from '@app/shared/error-class';
 import { contactKindOf } from '@app/shared/validation/enums';
 
 import { auditLog } from '@/lib/audit';
+
+import { logLine } from '@/utils/log';
 
 import { canEvaluateOtp, verifyOtpCode } from './hash';
 import {
@@ -201,14 +204,12 @@ export async function processOtpVerify({
     // user's budget. See `canEvaluateOtp` for why this is answered as expired.
     if (!canEvaluateOtp(activeCode.code)) {
       // No identifier: the retired key id is in the stored envelopes.
-      console.error(
-        JSON.stringify({
-          msg: 'otp.verify.keyUnavailable',
-          effect: 'live codes under a retired key cannot be verified',
-          purpose,
-          contactKind,
-        })
-      );
+      logLine('error', {
+        msg: 'otp.verify.keyUnavailable',
+        effect: 'live codes under a retired key cannot be verified',
+        purpose,
+        contactKind,
+      });
       return { kind: 'no-code' };
     }
 
@@ -413,4 +414,23 @@ export async function processOtpVerify({
   throw markEvaluatedGuess(
     new CustomError('رمز التحقق غير صحيح', HTTP_STATUS.BAD_REQUEST)
   );
+}
+
+type OtpMatch = Parameters<
+  NonNullable<ProcessOtpVerifyOptions['onVerified']>
+>[1];
+
+/**
+ * `processOtpVerify`, or under OTP_AUTO_VERIFY `onVerified` alone in a fresh
+ * transaction. `matched` is then `null`: no proof was consumed, so the request
+ * body is the only source for what to commit.
+ */
+export function verifyOtpOrAutoVerify(
+  opts: Omit<ProcessOtpVerifyOptions, 'onVerified'> & {
+    onVerified: (tx: Tx, matched: OtpMatch | null) => Promise<void>;
+  }
+): Promise<void> {
+  return OTP_AUTO_VERIFY
+    ? withTransaction((tx) => opts.onVerified(tx, null))
+    : processOtpVerify(opts);
 }

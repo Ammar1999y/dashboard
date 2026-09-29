@@ -3,6 +3,8 @@ import type { ColumnSort } from '@tanstack/react-table';
 import { memo, useEffect, useMemo, useRef } from 'react';
 
 import { useShallow } from 'zustand/shallow';
+import { DEFAULT_PER_PAGE } from '@app/shared/data-table/parsers';
+import { writeUrl } from '@/lib/history';
 
 import { URL_KEYS, useDataTableStore } from '@/utils/store/data-table-store';
 
@@ -43,10 +45,14 @@ const UrlSync = memo(({ defaultSort }: UrlSyncProps) => {
 
     clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      const params = new URLSearchParams();
+      // Other params, such as an open dialog's `module`, are not the table's.
+      const url = new URL(location.href);
+      const params = url.searchParams;
+      for (const key of Object.values(URL_KEYS)) params.delete(key);
 
       if (page !== 1) params.set(URL_KEYS.page, String(page));
-      if (perPage !== 10) params.set(URL_KEYS.perPage, String(perPage));
+      if (perPage !== DEFAULT_PER_PAGE)
+        params.set(URL_KEYS.perPage, String(perPage));
 
       const isDefaultSort =
         stableDefaultSort.length > 0 && isSortEqual(sort, stableDefaultSort);
@@ -59,12 +65,7 @@ const UrlSync = memo(({ defaultSort }: UrlSyncProps) => {
         params.set(URL_KEYS.joinOperator, joinOperator);
       if (search) params.set(URL_KEYS.search, search);
 
-      const searchStr = params.toString();
-      const newUrl = searchStr
-        ? `${location.pathname}?${searchStr}`
-        : location.pathname;
-
-      history.replaceState(null, '', newUrl);
+      writeUrl('replaceState', url);
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutRef.current);

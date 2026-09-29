@@ -8,6 +8,7 @@ import type {
   TTableRowElement,
 } from 'platejs';
 import type { PlateElementProps } from 'platejs/react';
+import type { StoreApi } from 'zustand';
 
 import * as React from 'react';
 
@@ -27,23 +28,6 @@ import {
   useTableMergeState,
 } from '@platejs/table/react';
 import { PopoverAnchor } from '@radix-ui/react-popover';
-import { cva } from 'class-variance-authority';
-import {
-  BetweenHorizontalEnd,
-  BetweenHorizontalStart,
-  BetweenVerticalEnd,
-  BetweenVerticalStart,
-  CombineIcon,
-  EraserIcon,
-  Grid2X2Icon,
-  GripVertical,
-  Maximize2Icon,
-  Minimize2Icon,
-  PaintBucketIcon,
-  PlusIcon,
-  SquareSplitHorizontalIcon,
-  Trash2Icon,
-} from 'lucide-react';
 import { KEYS, PathApi } from 'platejs';
 import {
   PlateElement,
@@ -60,6 +44,7 @@ import {
   useSelected,
   withHOC,
 } from 'platejs/react';
+import { createStore, useStore } from 'zustand';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
@@ -68,30 +53,22 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuPortal,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Icon } from '@/components/ui/icon';
 import { Popover, PopoverContent } from '@/components/ui/popover';
+import { Toolbar, ToolbarButton, ToolbarGroup } from '@/components/ui/toolbar';
 import {
-  Toolbar,
-  ToolbarButton,
-  ToolbarGroup,
-  ToolbarMenuGroup,
-} from '@/components/ui/toolbar';
-import {
-  DEFAULT_COLORS,
-  useCustomColors,
-} from '@/components/editor/hooks/use-custom-colors';
-import styles from '@/components/editor/ui/editor-elements.module.css';
-import ColumnDeleteIcon from '@/components/icons/column-delete';
+  TABLE_CELL_CONTENT_CLASS,
+  TABLE_CLASS,
+  tableCellClass,
+  tableCellStyle,
+  tableWrapperClass,
+} from '@/components/editor/styles';
 
 import { blockSelectionVariants } from './block-selection';
-import { ColorPickerContent } from './color-picker-content';
-import { ColorDropdownMenuItems } from './font-color-toolbar-button';
+import { ColorMenuContent } from './color-menu';
 import { ResizeHandle } from './resize-handle';
 import {
   BorderAllIcon,
@@ -101,6 +78,30 @@ import {
   BorderRightIcon,
   BorderTopIcon,
 } from './table-icons';
+
+/**
+ * The column edge whose resize handle is hovered or dragged: a column index,
+ * or the table's leading edge. Cells of that column draw the edge line, so the
+ * line spans every row, which a per-cell `:hover` cannot do.
+ */
+const LEADING_EDGE = 'leading';
+type ResizeEdge = number | typeof LEADING_EDGE | null;
+type ResizeEdgeStore = StoreApi<{ edge: ResizeEdge }>;
+
+const createResizeEdgeStore = (): ResizeEdgeStore =>
+  createStore(() => ({ edge: null as ResizeEdge }));
+const ResizeEdgeContext = React.createContext<ResizeEdgeStore>(
+  createResizeEdgeStore()
+);
+
+const setResizeEdge = (
+  store: ResizeEdgeStore,
+  edge: Exclude<ResizeEdge, null>,
+  active: boolean
+) =>
+  store.setState((s) =>
+    active ? { edge } : s.edge === edge ? { edge: null } : s
+  );
 
 export const TableElement = withHOC(
   TableProvider,
@@ -120,14 +121,11 @@ export const TableElement = withHOC(
     const { marginLeft, props: tableProps } = useTableElement();
 
     const isSelectingTable = useBlockSelected(props.element.id as string);
+    const [resizeEdge] = React.useState(createResizeEdgeStore);
 
     const content = (
       <PlateElement
         {...props}
-        attributes={{
-          ...props.attributes,
-          'data-ltr-element': true,
-        }}
         className={cn(
           'py-5',
           hasControls &&
@@ -136,15 +134,10 @@ export const TableElement = withHOC(
         )}
         style={{ paddingLeft: marginLeft }}
       >
-        <div
-          className={cn(
-            'group/table relative',
-            element.width === 'full' ? 'w-full' : 'w-fit'
-          )}
-        >
+        <div className={tableWrapperClass(element.width === 'full')}>
           <table
             className={cn(
-              'me-0 table h-px table-fixed border-collapse',
+              TABLE_CLASS,
               isSelectingCell && 'selection:bg-transparent',
               element.width === 'full' && 'w-full'
             )}
@@ -160,11 +153,15 @@ export const TableElement = withHOC(
       </PlateElement>
     );
 
-    if (readOnly) {
-      return content;
-    }
-
-    return <TableFloatingToolbar>{content}</TableFloatingToolbar>;
+    return (
+      <ResizeEdgeContext.Provider value={resizeEdge}>
+        {readOnly ? (
+          content
+        ) : (
+          <TableFloatingToolbar>{content}</TableFloatingToolbar>
+        )}
+      </ResizeEdgeContext.Provider>
+    );
   }
 );
 
@@ -205,27 +202,20 @@ function TableFloatingToolbar({
               <ToolbarButton
                 onClick={() => {
                   const newWidth = element.width === 'full' ? 'fit' : 'full';
-                  editor.tf.setNodes(
-                    { width: newWidth },
-                    {
-                      match: (n) =>
-                        'type' in n &&
-                        (n as { type?: unknown }).type === KEYS.table,
-                    }
-                  );
+                  editor.tf.setNodes({ width: newWidth }, { at: element });
                 }}
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip={element.width === 'full' ? 'عرض مخصص' : 'عرض كامل'}
               >
                 {element.width === 'full' ? (
-                  <Minimize2Icon />
+                  <Icon icon='solar:minimize-linear' />
                 ) : (
-                  <Maximize2Icon />
+                  <Icon icon='solar:maximize-linear' />
                 )}
               </ToolbarButton>
             )}
             <ColorDropdownMenu tooltip='لون الخلفية'>
-              <PaintBucketIcon />
+              <Icon icon='lucide:paint-bucket' />
             </ColorDropdownMenu>
             {canMerge && (
               <ToolbarButton
@@ -233,7 +223,7 @@ function TableFloatingToolbar({
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip='دمج الخلايا'
               >
-                <CombineIcon />
+                <Icon icon='lucide:combine' />
               </ToolbarButton>
             )}
             {canSplit && (
@@ -242,14 +232,14 @@ function TableFloatingToolbar({
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip='تقسيم الخلية'
               >
-                <SquareSplitHorizontalIcon />
+                <Icon icon='solar:table-columns-split-linear' />
               </ToolbarButton>
             )}
 
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <ToolbarButton tooltip='حدود الخلية'>
-                  <Grid2X2Icon />
+                  <Icon icon='solar:grid-2x2-linear' />
                 </ToolbarButton>
               </DropdownMenuTrigger>
 
@@ -261,7 +251,7 @@ function TableFloatingToolbar({
             {collapsedInside && (
               <ToolbarGroup>
                 <ToolbarButton tooltip='حذف الجدول' {...buttonProps}>
-                  <Trash2Icon />
+                  <Icon icon='solar:trash-bin-trash-linear' />
                 </ToolbarButton>
               </ToolbarGroup>
             )}
@@ -276,7 +266,7 @@ function TableFloatingToolbar({
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip='إدراج صف قبل'
               >
-                <BetweenVerticalEnd />
+                <Icon icon='lucide:between-vertical-end' />
               </ToolbarButton>
               <ToolbarButton
                 onClick={() => {
@@ -285,7 +275,7 @@ function TableFloatingToolbar({
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip='إدراج صف بعد'
               >
-                <BetweenVerticalStart />
+                <Icon icon='lucide:between-vertical-start' />
               </ToolbarButton>
               <ToolbarButton
                 onClick={() => {
@@ -294,7 +284,10 @@ function TableFloatingToolbar({
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip='حذف الصف'
               >
-                <ColumnDeleteIcon className='-rotate-90 scale-x-[-1]' />
+                <Icon
+                  icon='hugeicons:column-delete'
+                  className='-rotate-90 scale-x-[-1]'
+                />
               </ToolbarButton>
             </ToolbarGroup>
           )}
@@ -308,7 +301,7 @@ function TableFloatingToolbar({
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip='إدراج عمود قبل'
               >
-                <BetweenHorizontalEnd />
+                <Icon icon='lucide:between-horizontal-end' />
               </ToolbarButton>
               <ToolbarButton
                 onClick={() => {
@@ -317,7 +310,7 @@ function TableFloatingToolbar({
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip='إدراج عمود بعد'
               >
-                <BetweenHorizontalStart />
+                <Icon icon='lucide:between-horizontal-start' />
               </ToolbarButton>
               <ToolbarButton
                 onClick={() => {
@@ -326,7 +319,7 @@ function TableFloatingToolbar({
                 onMouseDown={(e) => e.preventDefault()}
                 tooltip='حذف العمود'
               >
-                <ColumnDeleteIcon />
+                <Icon icon='hugeicons:column-delete' />
               </ToolbarButton>
             </ToolbarGroup>
           )}
@@ -421,32 +414,20 @@ function ColorDropdownMenu({
   tooltip: string;
 }) {
   const [open, setOpen] = React.useState(false);
-  const [pickerColor, setPickerColor] = React.useState('#000000');
-
   const editor = useEditorRef();
   const selectedCells = usePluginOption(TablePlugin, 'selectedCells');
-  const { customColors, addCustomColor, clearCustomColors } = useCustomColors();
 
-  const onUpdateColor = React.useCallback(
-    (color: string) => {
+  const setBackground = React.useCallback(
+    (color: string | null) => {
       setOpen(false);
       setCellBackground(editor, { color, selectedCells: selectedCells ?? [] });
     },
     [selectedCells, editor]
   );
-
-  const handleSaveCustomColor = React.useCallback(() => {
-    addCustomColor(pickerColor);
-    onUpdateColor(pickerColor);
-  }, [pickerColor, addCustomColor, onUpdateColor]);
-
-  const onClearColor = React.useCallback(() => {
-    setOpen(false);
-    setCellBackground(editor, {
-      color: null,
-      selectedCells: selectedCells ?? [],
-    });
-  }, [selectedCells, editor]);
+  const clearBackground = React.useCallback(
+    () => setBackground(null),
+    [setBackground]
+  );
 
   return (
     <DropdownMenu modal={false} onOpenChange={setOpen} open={open}>
@@ -455,85 +436,7 @@ function ColorDropdownMenu({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align='start'>
-        {/* Action Buttons - First */}
-        <ToolbarMenuGroup>
-          <div className='flex flex-col gap-1 px-2'>
-            {/* Add Custom Color Button with Nested Dropdown */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger className='w-full justify-start gap-2'>
-                <PlusIcon className='size-4' />
-                <span>إضافة لون مخصص</span>
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className='w-auto p-3' sideOffset={8}>
-                <div className='flex flex-col gap-3'>
-                  <ColorPickerContent
-                    value={pickerColor}
-                    onChange={setPickerColor}
-                  />
-                  <div className='flex w-full gap-2'>
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      className='flex-1'
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setPickerColor('#000000');
-                      }}
-                    >
-                      إلغاء
-                    </Button>
-                    <Button
-                      size='sm'
-                      className='flex-1'
-                      onClick={handleSaveCustomColor}
-                    >
-                      حفظ واختيار
-                    </Button>
-                  </div>
-                </div>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* Clear Color Button */}
-            <DropdownMenuItem
-              className='w-full justify-start gap-2'
-              onClick={onClearColor}
-            >
-              <EraserIcon className='size-4' />
-              <span>مسح اللون</span>
-            </DropdownMenuItem>
-          </div>
-        </ToolbarMenuGroup>
-
-        {/* Custom Colors */}
-        {customColors.length > 0 && (
-          <ToolbarMenuGroup label='ألوان مخصصة'>
-            <div className='flex flex-col gap-2 px-2'>
-              <ColorDropdownMenuItems
-                colors={customColors}
-                updateColor={onUpdateColor}
-              />
-              <DropdownMenuItem
-                className='justify-center text-xs text-muted-foreground hover:text-destructive'
-                onClick={(e) => {
-                  e.preventDefault();
-                  clearCustomColors();
-                }}
-              >
-                مسح الألوان المخصصة
-              </DropdownMenuItem>
-            </div>
-          </ToolbarMenuGroup>
-        )}
-
-        {/* Default Colors - Last */}
-        <ToolbarMenuGroup label='ألوان افتراضية'>
-          <ColorDropdownMenuItems
-            className='px-2'
-            colors={DEFAULT_COLORS}
-            updateColor={onUpdateColor}
-          />
-        </ToolbarMenuGroup>
+        <ColorMenuContent onClear={clearBackground} onSelect={setBackground} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -578,7 +481,6 @@ export function TableRowElement({
       attributes={{
         ...props.attributes,
         'data-selected': selected ? 'true' : undefined,
-        'data-ltr-element': true,
       }}
       className={cn('group/row', isDragging && 'opacity-50')}
       ref={useComposedRef(props.ref, previewRef)}
@@ -604,7 +506,7 @@ function RowDragHandle({ dragRef }: { dragRef: React.Ref<HTMLButtonElement> }) {
       className={cn(
         'absolute top-1/2 z-[51] h-6 w-4 -translate-y-1/2 p-0 focus-visible:ring-0 focus-visible:ring-offset-0 ltr:right-0 rtl:left-0',
         'cursor-grab active:cursor-grabbing',
-        `${styles.rowDragHandle} opacity-0 transition-opacity duration-100 group-hover/row:opacity-100`
+        'opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 group-data-[resizing=true]/row:opacity-0'
       )}
       onClick={() => {
         editor.tf.select(element);
@@ -612,7 +514,10 @@ function RowDragHandle({ dragRef }: { dragRef: React.Ref<HTMLButtonElement> }) {
       ref={dragRef}
       variant='outline'
     >
-      <GripVertical className='text-muted-foreground' />
+      <Icon
+        icon='solar:grip-vertical-linear'
+        className='text-muted-foreground'
+      />
     </Button>
   );
 }
@@ -665,6 +570,21 @@ export function TableCellElement({
       rowIndex,
     });
 
+  const resizeEdge = React.useContext(ResizeEdgeContext);
+  const showColumnEdge = useStore(resizeEdge, (s) => s.edge === colIndex);
+  const showLeadingEdge = useStore(
+    resizeEdge,
+    (s) => colIndex === 0 && s.edge === LEADING_EDGE
+  );
+  const handleColumnEdge = React.useCallback(
+    (active: boolean) => setResizeEdge(resizeEdge, colIndex, active),
+    [resizeEdge, colIndex]
+  );
+  const handleLeadingEdge = React.useCallback(
+    (active: boolean) => setResizeEdge(resizeEdge, LEADING_EDGE, active),
+    [resizeEdge]
+  );
+
   return (
     <PlateElement
       {...props}
@@ -672,33 +592,19 @@ export function TableCellElement({
       attributes={{
         ...props.attributes,
         colSpan: api.table.getColSpan(element),
-        'data-ltr-element': true,
         rowSpan: api.table.getRowSpan(element),
       }}
       className={cn(
-        'h-full overflow-visible border-none bg-background p-0',
-        element.background ? 'bg-[--cellBackground]' : 'bg-background',
-        isHeader && 'text-end *:m-0',
-        'before:size-full',
-        selected && 'before:z-10 before:bg-primary/5',
-        "before:absolute before:box-border before:select-none before:content-['']",
-        borders.bottom?.size && 'before:border-b before:border-b-border',
-        borders.right?.size && 'before:border-e before:border-e-border',
-        borders.left?.size && 'before:border-s before:border-s-border',
-        borders.top?.size && 'before:border-t before:border-t-border'
+        tableCellClass({
+          background: element.background,
+          borders,
+          isHeader: !!isHeader,
+        }),
+        selected && 'before:z-10 before:bg-primary/5'
       )}
-      style={
-        {
-          '--cellBackground': element.background,
-          maxWidth: width || 240,
-          minWidth: width || 120,
-        } as React.CSSProperties
-      }
+      style={tableCellStyle(element, width)}
     >
-      <div
-        className='relative z-20 box-border h-full px-3 py-2'
-        style={{ minHeight }}
-      >
+      <div className={TABLE_CELL_CONTENT_CLASS} style={{ minHeight }}>
         {props.children}
       </div>
 
@@ -713,35 +619,24 @@ export function TableCellElement({
               <ResizeHandle
                 {...rightProps}
                 className='-top-2 h-[calc(100%_+_8px)] w-2 ltr:-left-1 rtl:-right-1'
-                data-col={colIndex}
+                onActiveChange={handleColumnEdge}
               />
               <ResizeHandle {...bottomProps} className='-bottom-1 h-2' />
               {!hiddenLeft && (
                 <ResizeHandle
                   {...leftProps}
                   className='top-0 w-2 ltr:-right-1 rtl:-left-1'
-                  data-resizer-left={colIndex === 0 ? 'true' : undefined}
+                  onActiveChange={
+                    colIndex === 0 ? handleLeadingEdge : undefined
+                  }
                 />
               )}
 
-              <div
-                className={cn(
-                  'absolute top-0 z-30 hidden h-full w-1 bg-ring',
-                  'ltr:left-[-1.5px] rtl:right-[-1.5px]',
-                  columnResizeVariants({
-                    colIndex: colIndex as
-                      0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10,
-                  })
-                )}
-              />
-              {colIndex === 0 && (
-                <div
-                  className={cn(
-                    'absolute top-0 z-30 h-full w-1 bg-ring',
-                    'ltr:right-[-1.5px] rtl:left-[-1.5px]',
-                    'hidden animate-in fade-in group-has-[[data-resizer-left]:hover]/table:block group-has-[[data-resizer-left][data-resizing="true"]]/table:block'
-                  )}
-                />
+              {showColumnEdge && (
+                <div className='absolute top-0 z-30 h-full w-1 bg-ring animate-in fade-in ltr:left-[-1.5px] rtl:right-[-1.5px]' />
+              )}
+              {showLeadingEdge && (
+                <div className='absolute top-0 z-30 h-full w-1 bg-ring animate-in fade-in ltr:right-[-1.5px] rtl:left-[-1.5px]' />
               )}
             </>
           )}
@@ -760,21 +655,3 @@ export function TableCellHeaderElement(
 ) {
   return <TableCellElement {...props} isHeader />;
 }
-
-const columnResizeVariants = cva('fade-in hidden animate-in', {
-  variants: {
-    colIndex: {
-      0: 'group-has-[[data-col="0"]:hover]/table:block group-has-[[data-col="0"][data-resizing="true"]]/table:block',
-      1: 'group-has-[[data-col="1"]:hover]/table:block group-has-[[data-col="1"][data-resizing="true"]]/table:block',
-      2: 'group-has-[[data-col="2"]:hover]/table:block group-has-[[data-col="2"][data-resizing="true"]]/table:block',
-      3: 'group-has-[[data-col="3"]:hover]/table:block group-has-[[data-col="3"][data-resizing="true"]]/table:block',
-      4: 'group-has-[[data-col="4"]:hover]/table:block group-has-[[data-col="4"][data-resizing="true"]]/table:block',
-      5: 'group-has-[[data-col="5"]:hover]/table:block group-has-[[data-col="5"][data-resizing="true"]]/table:block',
-      6: 'group-has-[[data-col="6"]:hover]/table:block group-has-[[data-col="6"][data-resizing="true"]]/table:block',
-      7: 'group-has-[[data-col="7"]:hover]/table:block group-has-[[data-col="7"][data-resizing="true"]]/table:block',
-      8: 'group-has-[[data-col="8"]:hover]/table:block group-has-[[data-col="8"][data-resizing="true"]]/table:block',
-      9: 'group-has-[[data-col="9"]:hover]/table:block group-has-[[data-col="9"][data-resizing="true"]]/table:block',
-      10: 'group-has-[[data-col="10"]:hover]/table:block group-has-[[data-col="10"][data-resizing="true"]]/table:block',
-    },
-  },
-});

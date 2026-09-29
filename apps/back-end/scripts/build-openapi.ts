@@ -18,11 +18,15 @@ import path from 'node:path';
 import { ROUTES } from '@/routes';
 
 import { openApiDocument } from '@/lib/http/openapi/document';
-import { OPENAPI_ARTIFACT_PATH } from '@/lib/http/openapi/route';
+import {
+  OPENAPI_ARTIFACT_PATH,
+  openApiArtifactFile,
+} from '@/lib/http/openapi/route';
 import { toPublishedManifest } from '@/lib/http/route-manifest';
 
-const WORKSPACE_ROOT = path.resolve(import.meta.dirname, '..');
-const OUTPUT = path.join(WORKSPACE_ROOT, OPENAPI_ARTIFACT_PATH);
+import { logLine } from '@/utils/log';
+
+const OUTPUT = openApiArtifactFile();
 
 // The deployed document, whatever this machine's NODE_ENV is.
 const manifest = toPublishedManifest(ROUTES, true);
@@ -48,15 +52,13 @@ if (leaked.length > 0)
     `OpenAPI document exposes non-production paths: ${leaked.join(', ')}`
   );
 
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- path is derived from this file's own location, not from input
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- path is derived from a module's own location, not from input
 mkdirSync(path.dirname(OUTPUT), { recursive: true });
 // eslint-disable-next-line security/detect-non-literal-fs-filename -- same
 writeFileSync(OUTPUT, JSON.stringify(document), 'utf8');
 
-console.log(
-  JSON.stringify({
-    msg: 'openapi.built',
-    output: OPENAPI_ARTIFACT_PATH,
-    paths: Object.keys(paths).length,
-  })
-);
+logLine('log', {
+  msg: 'openapi.built',
+  output: OPENAPI_ARTIFACT_PATH,
+  paths: Object.keys(paths).length,
+});

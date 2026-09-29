@@ -17,9 +17,9 @@
  * deliberately unreachable host, so the SQLite checks are asserted one by one
  * and the aggregate `status` only has to be CONSISTENT with `checks`.
  */
-// The leaf, not `@/lib/audit`: that one loads `db/schema`, zod and the OTP
-// config into this parent process for one constant.
-import { TRUSTED_IP_HEADERS } from '@/lib/audit/constants';
+// Not `@/lib/audit`: that one loads `db/schema` and the OTP config into this
+// parent process for one constant.
+import { TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
 import { SECURITY_HEADERS } from '@/lib/http/security-headers';
 
 /**

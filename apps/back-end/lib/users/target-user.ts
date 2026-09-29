@@ -1,19 +1,24 @@
 import type { Executor } from '@/db';
-import type { PermissionObject } from '@app/shared/permissions/constants';
+import type { ActorPermissions } from '@/lib/permissions/checker';
+import type { RolePolicyTarget } from '@/lib/permissions/roles';
+import type { AccessScope } from '@app/shared/permissions/constants';
 import type { EntityID } from '@app/shared/types';
 
-import { HTTP_STATUS, MSG_NOT_FOUND } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
-import {
-  isProtectedSystemRole,
-  validateRolePermissionScope,
-} from '@/lib/permissions/utils';
+import { notFoundError } from '@/lib/http/response';
+import { isProtectedSystemRole } from '@/lib/permissions/roles';
+import { validateRolePermissionScope } from '@/lib/permissions/scope';
 
-export type RolePolicyShape = {
-  roleName?: string | null;
-  scope?: string | null;
-} | null;
+interface TargetUserVisibility {
+  isSelf: boolean;
+  roleId: EntityID | null;
+  createdBy: EntityID | null;
+  role: RolePolicyTarget;
+  actorUserId: EntityID;
+  scope: AccessScope | null;
+}
 
 /**
  * The single definition of "which user rows this actor may act on", shared by
@@ -22,28 +27,41 @@ export type RolePolicyShape = {
  *
  * Returns the target's role id, already proved present.
  */
-export function assertTargetUserVisible(opts: {
-  isSelf: boolean;
-  roleId: EntityID | null;
-  createdBy: EntityID | null;
-  role: RolePolicyShape;
-  actorUserId: EntityID;
-  scope: 'all' | 'own' | null;
-}): EntityID {
-  if (!opts.roleId) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+export function assertTargetUserVisible(opts: TargetUserVisibility): EntityID {
+  if (!opts.roleId) throw notFoundError();
 
   // Self is exempt: a system-role owner can still read their own account.
-  if (!opts.isSelf && isProtectedSystemRole(opts.role))
-    throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (!opts.isSelf && isProtectedSystemRole(opts.role)) throw notFoundError();
 
   if (
     !opts.isSelf &&
     opts.scope === 'own' &&
     opts.createdBy !== opts.actorUserId
   )
-    throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    throw notFoundError();
 
   return opts.roleId;
+}
+
+/**
+ * `assertTargetUserVisible`, then role authority over the target's role as
+ * the same 404.
+ */
+export async function assertTargetUserReachable(
+  executor: Executor,
+  opts: TargetUserVisibility & {
+    actorPermissions: ActorPermissions | undefined;
+  }
+): Promise<EntityID> {
+  const roleId = assertTargetUserVisible(opts);
+  if (opts.actorPermissions)
+    await validateRolePermissionScope(
+      opts.actorPermissions,
+      roleId,
+      executor,
+      'reachability'
+    );
+  return roleId;
 }
 
 /**
@@ -51,7 +69,7 @@ export function assertTargetUserVisible(opts: {
  * than refused, so both paths ask the authority question the same way.
  */
 export async function actorCoversTargetRole(
-  actorPermissions: Partial<PermissionObject> | undefined,
+  actorPermissions: ActorPermissions | undefined,
   roleId: EntityID,
   executor: Executor
 ): Promise<boolean> {

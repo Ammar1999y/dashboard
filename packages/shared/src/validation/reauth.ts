@@ -1,6 +1,7 @@
 import * as z from 'zod';
 
-export type ReauthMethod = 'password' | 'passkey';
+export const REAUTH_METHODS = ['password', 'passkey'] as const;
+export type ReauthMethod = (typeof REAUTH_METHODS)[number];
 
 /**
  * `POST /api/auth/reauth/passkey/verify`: the WebAuthn assertion, opaque to

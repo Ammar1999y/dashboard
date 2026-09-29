@@ -6,7 +6,7 @@ import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { requestActor } from '@/lib/media/actor';
+import { grantedActor } from '@/lib/media/actor';
 import {
   downloadUrl,
   findFile,
@@ -85,7 +85,7 @@ export const PUT = withApiErrors(
       id,
       displayName: input.displayName,
       folderId: input.folderId,
-      actor: requestActor(ctx, caller, caller.scope ?? 'all'),
+      actor: grantedActor(ctx, caller),
     });
 
     return apiSuccess({

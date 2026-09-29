@@ -7,33 +7,30 @@ import type { BucketType } from '@app/shared/validation/enums';
 import { and, eq, isNotNull, lt, ne, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
-import { files, orphanedObjects } from '@/db/schema';
+import { files } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
-import { purgeUrls } from '@/lib/cloudflare/purge';
 import { generateUuidV7 } from '@/lib/id';
 import {
   copyFileInR2,
-  deleteFromR2,
-  getPublicUrl,
-  hasPublicUrl,
   headObjectInR2,
   isVisibilityEnabled,
 } from '@/lib/r2/client';
 
-import { sanitizeForLog } from '@/utils/log';
+import { errorTypeOf, logSanitized } from '@/utils/log';
 
-import { auditAs } from './actor';
+import { auditAs, withinScope } from './actor';
 import {
   downloadFilename,
   FILE_COLUMNS,
   governedIds,
   matchesRow,
 } from './files';
-import { getCacheControlHeader, getContentDisposition } from './headers';
+import { objectHeaders } from './headers';
 import { mediaMsg } from './messages';
+import { removeObject, removeOrphanedObject } from './orphaned-objects';
 import { hasPublicUsage } from './usages';
 
 /**
@@ -42,6 +39,9 @@ import { hasPublicUsage } from './usages';
  * slow copy, short against a stale `to_public` that keeps a file unpublishable.
  */
 const TRANSITION_STALE_AFTER = '10 minutes';
+
+const staleTransition = () =>
+  lt(files.updatedAt, sql`now() - ${TRANSITION_STALE_AFTER}::interval`);
 
 /**
  * How many times one cleanup will delete again because a losing attempt
@@ -54,13 +54,6 @@ const TRANSITION_STALE_AFTER = '10 minutes';
 const CLEANUP_ROUNDS = 3;
 
 /**
- * Orphan demands one drain pass will work through, each an R2 delete and
- * possibly a purge call. The table holds a row only for a leftover whose delete
- * already failed once.
- */
-export const ORPHAN_DRAIN_BATCH = 100;
-
-/**
  * Stalled sagas one recovery pass will work through. Each one is at least an R2
  * delete against the row's own clock.
  */
@@ -71,118 +64,6 @@ const other = (bucket: BucketType): BucketType =>
 
 const towards = (bucket: BucketType): FileTransition =>
   bucket === 'public' ? 'to_public' : 'to_private';
-
-function targetHeaders(
-  row: Pick<MediaFileRow, 'mimeType' | 'kind' | 'displayName'>,
-  to: BucketType
-) {
-  return {
-    contentType: row.mimeType,
-    cacheControl: getCacheControlHeader({
-      mimeType: row.mimeType,
-      isPublic: to === 'public',
-    }),
-    contentDisposition: getContentDisposition({
-      filename: downloadFilename(row),
-      inline: row.kind === 'image',
-    }),
-  };
-}
-
-/**
- * Removes one object and, for a public one with the purge configured, its edge
- * copy. Never throws — every caller is already handling a failure.
- */
-async function removeObject(
-  key: string,
-  bucketType: BucketType
-): Promise<boolean> {
-  try {
-    await deleteFromR2({ key, bucketType });
-    if (bucketType === 'public' && hasPublicUrl()) {
-      const purge = await purgeUrls([getPublicUrl(key)]);
-      // An object gone from the origin but still served from the edge is not
-      // gone, so this counts as a failed cleanup and the marker stays.
-      if (purge.failed.length > 0) return false;
-    }
-    return true;
-  } catch (error) {
-    console.error(
-      sanitizeForLog({
-        msg: 'media.transition cleanup failed',
-        errorClass: error instanceof Error ? error.name : typeof error,
-      })
-    );
-    return false;
-  }
-}
-
-/** One demand as its holder read it; the pair a clear has to match again. */
-interface OrphanDemand {
-  id: EntityID;
-  requests: number;
-}
-
-/**
- * Clear one drained demand — and only while it is still the demand this holder
- * read.
- *
- * On the row identity AND on `cleanup_requests`, never on `(r2_key,
- * bucket_type)` alone: another abandoned writer recording its own copy of the
- * same object bumps the counter, and clearing by key would delete the retry that
- * writer is relying on. A refused clear leaves the row for whoever bumped it.
- * See `orphanedObjects.cleanupRequests`.
- */
-async function clearOrphanDemand(demand: OrphanDemand): Promise<boolean> {
-  const cleared = await db
-    .delete(orphanedObjects)
-    .where(
-      and(
-        eq(orphanedObjects.id, demand.id),
-        eq(orphanedObjects.cleanupRequests, demand.requests)
-      )
-    )
-    .returning({ id: orphanedObjects.id });
-  return cleared.length > 0;
-}
-
-/**
- * `removeObject`, made durable, for the one caller whose row is already gone.
- *
- * Recorded before the attempt and cleared only after it succeeds: with the file
- * row gone there is no marker, counter or `deleting` row to fall back on, so an
- * unrecorded failure is a leftover nothing will ever retry. See
- * `orphanedObjects`.
- *
- * The enqueue advances `cleanup_requests` on conflict rather than doing nothing,
- * because two abandoned writers can hold a copy of the same key in the same
- * bucket, and the clear has to tell its own demand from a newer one. A writer
- * whose clear is refused has still removed every copy that landed before it —
- * each writer records only after its own copy has landed — so the surviving row
- * is the newer writer's.
- */
-async function removeOrphanedObject(
-  key: string,
-  bucketType: BucketType
-): Promise<boolean> {
-  const [demand] = await db
-    .insert(orphanedObjects)
-    .values({ r2Key: key, bucketType })
-    .onConflictDoUpdate({
-      target: [orphanedObjects.r2Key, orphanedObjects.bucketType],
-      set: {
-        cleanupRequests: sql`${orphanedObjects.cleanupRequests} + 1`,
-        updatedAt: sql`now()`,
-      },
-    })
-    .returning({
-      id: orphanedObjects.id,
-      requests: orphanedObjects.cleanupRequests,
-    });
-  if (!(await removeObject(key, bucketType))) return false;
-  if (demand) await clearOrphanDemand(demand);
-  return true;
-}
 
 /**
  * Ownership of the cleanup, and what a caller that cannot take it leaves behind.
@@ -283,12 +164,10 @@ async function removeStaleCopy(
         .from(files)
         .where(eq(files.id, fileId));
       if (!live) {
-        console.error(
-          sanitizeForLog({
-            msg: 'media.transition stale copy outlived its row',
-            id: fileId,
-          })
-        );
+        logSanitized('error', {
+          msg: 'media.transition stale copy outlived its row',
+          id: fileId,
+        });
         return {
           removed: await removeOrphanedObject(key, bucketType),
           row: null,
@@ -297,12 +176,10 @@ async function removeStaleCopy(
       // Not this caller's row: the demand is recorded against the attempt that
       // owns it, or there is nothing to remove because the row names this
       // bucket itself and the object in it is live.
-      console.error(
-        sanitizeForLog({
-          msg: 'media.transition stale copy handed to the transition that owns the row',
-          id: fileId,
-        })
-      );
+      logSanitized('error', {
+        msg: 'media.transition stale copy handed to the transition that owns the row',
+        id: fileId,
+      });
       return { removed: false, row: null };
     }
     token = owned.token;
@@ -389,7 +266,7 @@ export async function transitionFile(params: {
         : null;
     if (
       !row ||
-      (actor.scope === 'own' && row.uploadedBy !== actor.userId) ||
+      !withinScope(actor, row.uploadedBy) ||
       (governed !== null && !governed.has(id))
     )
       throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
@@ -418,7 +295,14 @@ export async function transitionFile(params: {
       destinationKey: row.r2Key,
       sourceBucketType: from,
       bucketType: to,
-      replace: targetHeaders(row, to),
+      replace: objectHeaders(
+        {
+          mimeType: row.mimeType,
+          kind: row.kind,
+          filename: downloadFilename(row),
+        },
+        to
+      ),
     });
     const target = await headObjectInR2({ key: row.r2Key, bucketType: to });
     if (
@@ -428,20 +312,16 @@ export async function transitionFile(params: {
     )
       throw new Error('copied object does not match its source');
   } catch (error) {
-    console.error(
-      sanitizeForLog({
-        msg: 'media.transition copy failed',
-        errorClass: error instanceof Error ? error.name : typeof error,
-      })
-    );
+    logSanitized('error', {
+      msg: 'media.transition copy failed',
+      errorClass: errorTypeOf(error),
+    });
     const reverted = await removeStaleCopy(id, row.r2Key, to, transitionToken);
     if (!reverted.removed)
-      console.error(
-        sanitizeForLog({
-          msg: 'media.transition revert left to the sweep',
-          id,
-        })
-      );
+      logSanitized('error', {
+        msg: 'media.transition revert left to the sweep',
+        id,
+      });
     throw new CustomError(mediaMsg.storeFailed, HTTP_STATUS.INTERNAL_ERROR);
   }
 
@@ -502,12 +382,7 @@ export async function retryTransitions(): Promise<{
   const stuck = await db
     .select({ ...FILE_COLUMNS, transitionId: files.transitionId })
     .from(files)
-    .where(
-      and(
-        isNotNull(files.transition),
-        lt(files.updatedAt, sql`now() - ${TRANSITION_STALE_AFTER}::interval`)
-      )
-    )
+    .where(and(isNotNull(files.transition), staleTransition()))
     .limit(TRANSITION_RETRY_BATCH);
 
   let reverted = 0;
@@ -519,12 +394,10 @@ export async function retryTransitions(): Promise<{
     // row with a marker and no token can never be claimed and would sit here
     // forever.
     if (!row.transition || !row.transitionId) {
-      console.error(
-        sanitizeForLog({
-          msg: 'media.transition sweep found a saga with no owner token',
-          id: row.id,
-        })
-      );
+      logSanitized('error', {
+        msg: 'media.transition sweep found a saga with no owner token',
+        id: row.id,
+      });
       failed += 1;
       continue;
     }
@@ -542,7 +415,7 @@ export async function retryTransitions(): Promise<{
         and(
           eq(files.id, row.id),
           eq(files.transitionId, row.transitionId),
-          lt(files.updatedAt, sql`now() - ${TRANSITION_STALE_AFTER}::interval`)
+          staleTransition()
         )
       )
       .returning({ id: files.id });
@@ -569,72 +442,5 @@ export async function retryTransitions(): Promise<{
     finished,
     failed,
     hasMore: stuck.length === TRANSITION_RETRY_BATCH,
-  };
-}
-
-/**
- * Finish the deletes recorded by `removeOrphanedObject`.
- *
- * Each row names the exact bucket its leftover is in, so this deletes from that
- * one rather than from every enabled bucket the way `finishDeleting` does: by
- * the time a row lands here the file's own delete has already swept them all.
- * A row survives its own failure and is retried on the next pass; `failed` is
- * what makes the retention sweep report `degraded` until it clears.
- *
- * ⚠️ Least recently touched first, and a failed attempt is restamped. Oldest
- * first starves: once a batch's worth of demands fail for a reason of their own,
- * every later pass selects that same prefix and nothing behind it is attempted.
- * Restamping makes the queue a rotation, so every outstanding demand is reached
- * within ⌈rows / batch⌉ passes.
- *
- * `hasMore` reports work this bounded pass did not settle — rows it never
- * reached, and rows a concurrent writer re-recorded while it was working — which
- * is a backlog rather than a failure and is reported separately from `failed`.
- */
-export async function sweepOrphanedObjects(): Promise<{
-  removed: number;
-  failed: number;
-  hasMore: boolean;
-}> {
-  const due = await db
-    .select({
-      id: orphanedObjects.id,
-      r2Key: orphanedObjects.r2Key,
-      bucketType: orphanedObjects.bucketType,
-      requests: orphanedObjects.cleanupRequests,
-    })
-    .from(orphanedObjects)
-    .orderBy(orphanedObjects.updatedAt, orphanedObjects.id)
-    .limit(ORPHAN_DRAIN_BATCH);
-
-  let removed = 0;
-  let failed = 0;
-  let deferred = 0;
-  for (const row of due) {
-    if (!(await removeObject(row.r2Key, row.bucketType))) {
-      failed += 1;
-      // Yields this row's place in the queue; see the ordering note above.
-      await db
-        .update(orphanedObjects)
-        .set({ updatedAt: sql`now()` })
-        .where(eq(orphanedObjects.id, row.id));
-      continue;
-    }
-    removed += 1;
-    // The object is gone either way; a refused clear means a newer writer owns
-    // the row now and its own delete is still outstanding.
-    if (!(await clearOrphanDemand(row))) deferred += 1;
-  }
-  if (failed > 0)
-    console.error(
-      sanitizeForLog({
-        msg: 'media.orphan drain could not finish every recorded delete',
-        count: failed,
-      })
-    );
-  return {
-    removed,
-    failed,
-    hasMore: due.length === ORPHAN_DRAIN_BATCH || deferred > 0,
   };
 }

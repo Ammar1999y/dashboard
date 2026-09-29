@@ -1,6 +1,6 @@
 import type { VerifiedPasswordProof } from '@/lib/auth/login-guard';
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
@@ -11,8 +11,8 @@ import { changePasswordSchema } from '@app/shared/validation/auth';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth/credential';
+import { credentialAccountOf } from '@/lib/auth/credential-account';
 import { verifyLoginAttempt } from '@/lib/auth/login-guard';
-import { otpMsg } from '@/lib/auth/messages';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword, verifyPassword } from '@/lib/auth/password/hash';
 import { requireReauthWindow } from '@/lib/auth/reauth/window';
@@ -20,13 +20,14 @@ import {
   revokeOtherSessions,
   revokePendingProofs,
 } from '@/lib/auth/session/rotation';
-import { verifyTurnstileRequest } from '@/lib/captcha';
+import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
 import { insufficientPermissions } from '@/lib/permissions/checker';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 import { asCurrentPasswordIncorrect } from '@/lib/users/current-password';
+import { liveUser } from '@/lib/users/filters';
 import { userMsg } from '@/lib/users/messages';
 
 export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
@@ -39,9 +40,7 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
     failClosed: true,
   });
 
-  const captchaOk = await verifyTurnstileRequest(ctx.headers);
-  if (!captchaOk)
-    throw new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
+  if (!(await verifyTurnstileRequest(ctx.headers))) throw captchaRefused();
 
   const input = await readJsonBody(ctx, changePasswordSchema);
 
@@ -68,12 +67,7 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
       const [credential] = await db
         .select({ accountId: accounts.id, expectedHash: accounts.password })
         .from(accounts)
-        .where(
-          and(
-            eq(accounts.userId, userId),
-            eq(accounts.providerId, CREDENTIAL_PROVIDER_ID)
-          )
-        );
+        .where(credentialAccountOf(userId));
       if (!credential?.expectedHash)
         throw new CustomError(
           userMsg.passwordUpdateFailed,
@@ -122,7 +116,7 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
     const [freshUser] = await tx
       .select({ roleId: users.roleId, isActive: users.isActive })
       .from(users)
-      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .where(liveUser(eq(users.id, userId)))
       .for('update');
 
     if (!freshUser || !freshUser.isActive || !freshUser.roleId)

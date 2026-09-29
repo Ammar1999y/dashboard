@@ -1,10 +1,15 @@
 'use client';
 
-import type { NodeEntry, Path, TElement } from 'platejs';
+import type { BlockTypeItem } from './block-types';
+import type { NodeEntry, Path, SlateEditor, TElement } from 'platejs';
 import type { PlateEditor } from 'platejs/react';
 
 import { insertCallout } from '@platejs/callout';
-import { insertCodeBlock, toggleCodeBlock } from '@platejs/code-block';
+import {
+  insertCodeBlock,
+  toggleCodeBlock,
+  unwrapCodeBlock,
+} from '@platejs/code-block';
 import { insertDate } from '@platejs/date';
 import { insertColumnGroup, toggleColumnGroup } from '@platejs/layout';
 import { triggerFloatingLink } from '@platejs/link/react';
@@ -18,9 +23,9 @@ import {
 import { SuggestionPlugin } from '@platejs/suggestion/react';
 import { TablePlugin } from '@platejs/table/react';
 import { insertToc } from '@platejs/toc';
-import { KEYS, PathApi } from 'platejs';
+import { ElementApi, KEYS, PathApi } from 'platejs';
 
-const ACTION_THREE_COLUMNS = 'action_three_columns';
+import { THREE_COLUMNS } from './block-types';
 
 const insertList = (editor: PlateEditor, type: string) => {
   editor.tf.insertNodes(
@@ -39,7 +44,7 @@ const insertBlockMap: Record<
   [KEYS.listTodo]: insertList,
   [KEYS.ol]: insertList,
   [KEYS.ul]: insertList,
-  [ACTION_THREE_COLUMNS]: (editor) =>
+  [THREE_COLUMNS]: (editor) =>
     insertColumnGroup(editor, { columns: 3, select: true }),
   [KEYS.audio]: (editor) => insertAudioPlaceholder(editor, { select: true }),
   [KEYS.callout]: (editor) => insertCallout(editor, { select: true }),
@@ -76,7 +81,7 @@ type InsertBlockOptions = {
   upsert?: boolean;
 };
 
-export const insertBlock = (
+const insertBlock = (
   editor: PlateEditor,
   type: string,
   options: InsertBlockOptions = {}
@@ -115,11 +120,19 @@ export const insertBlock = (
   });
 };
 
-export const insertInlineElement = (editor: PlateEditor, type: string) => {
-  if (insertInlineMap[type]) {
-    insertInlineMap[type](editor, type);
-  }
+const insertInlineElement = (editor: PlateEditor, type: string) => {
+  insertInlineMap[type]?.(editor, type);
 };
+
+/** Inserts a menu item: inline at the cursor, a block after the current one. */
+export function insertItem(
+  editor: PlateEditor,
+  item: BlockTypeItem,
+  options?: InsertBlockOptions
+) {
+  if (item.inline) insertInlineElement(editor, item.value);
+  else insertBlock(editor, item.value, options);
+}
 
 const setList = (
   editor: PlateEditor,
@@ -144,7 +157,7 @@ const setBlockMap: Record<
   [KEYS.listTodo]: setList,
   [KEYS.ol]: setList,
   [KEYS.ul]: setList,
-  [ACTION_THREE_COLUMNS]: (editor) => toggleColumnGroup(editor, { columns: 3 }),
+  [THREE_COLUMNS]: (editor) => toggleColumnGroup(editor, { columns: 3 }),
   [KEYS.codeBlock]: (editor) => toggleCodeBlock(editor),
 };
 
@@ -178,11 +191,8 @@ export const setBlockType = (
       }
     }
 
-    const entries = editor.api.blocks({ mode: 'lowest' });
-
-    entries.forEach((entry) => {
-      setEntry(entry);
-    });
+    const blocks = editor.api.blocks<TElement>({ mode: 'lowest' });
+    for (const entry of blocks) setEntry(entry);
   });
 };
 
@@ -199,3 +209,34 @@ export const getBlockType = (block: TElement) => {
 
   return block.type;
 };
+
+const RESET_TO_PARAGRAPH = new Set<string>([
+  ...KEYS.heading,
+  KEYS.blockquote,
+  KEYS.callout,
+]);
+
+const BLOCK_FORMAT_PROPS = [
+  'align',
+  'dir',
+  KEYS.lineHeight,
+  KEYS.indent,
+  KEYS.listType,
+];
+
+/** Marks and block formats off the selection; formatted blocks become paragraphs. */
+export function clearFormatting(editor: SlateEditor) {
+  editor.tf.removeMarks();
+  // A code block holds code lines, so it is unwrapped rather than retyped.
+  unwrapCodeBlock(editor);
+  editor.tf.unsetNodes(BLOCK_FORMAT_PROPS, {
+    match: (node) => ElementApi.isElement(node),
+  });
+  editor.tf.setNodes(
+    { type: KEYS.p },
+    {
+      match: (node) =>
+        ElementApi.isElement(node) && RESET_TO_PARAGRAPH.has(node.type),
+    }
+  );
+}

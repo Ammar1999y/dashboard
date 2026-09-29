@@ -1,11 +1,12 @@
+import type { Variants } from 'framer-motion';
 import type { ComponentType } from 'react';
 
 import { memo, useEffect } from 'react';
 
-import { AnimatedContent } from '@/components/animated-content';
-import { SmoothHeightContainer } from '@/components/smooth-height-container';
+import { AnimatePresence, motion } from 'framer-motion';
 
 import { MainTabs } from './main-tabs';
+import { SmoothHeightContainer } from './smooth-height-container';
 import { useTabsStore } from './store';
 
 export interface FormTab {
@@ -19,7 +20,25 @@ interface FormTabsProps {
   tabs: readonly [FormTab, ...FormTab[]];
 }
 
-const FormTabs = memo(({ tabs }: FormTabsProps) => {
+const PANEL_TRANSITION = { duration: 0.3, ease: [0.4, 0, 0.2, 1] } as const;
+
+const panelVariants: Variants = {
+  initial: { opacity: 0, x: 20, filter: 'blur(4px)' },
+  animate: {
+    opacity: 1,
+    x: 0,
+    filter: 'blur(0px)',
+    transition: PANEL_TRANSITION,
+  },
+  exit: {
+    opacity: 0,
+    x: -20,
+    filter: 'blur(4px)',
+    transition: PANEL_TRANSITION,
+  },
+};
+
+export const FormTabs = memo(({ tabs }: FormTabsProps) => {
   useEffect(() => () => useTabsStore.getState().reset(), []);
 
   return (
@@ -39,12 +58,18 @@ const ActivePanel = memo(({ tabs }: FormTabsProps) => {
   const { id, Panel } = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
 
   return (
-    <AnimatedContent keyValue={id}>
-      <Panel />
-    </AnimatedContent>
+    <AnimatePresence mode='wait'>
+      <motion.div
+        key={id}
+        variants={panelVariants}
+        initial='initial'
+        animate='animate'
+        exit='exit'
+      >
+        <Panel />
+      </motion.div>
+    </AnimatePresence>
   );
 });
 
 ActivePanel.displayName = 'FormTabsActivePanel';
-
-export { FormTabs };

@@ -3,8 +3,8 @@
 import type * as React from 'react';
 
 import { useIndentButton, useOutdentButton } from '@platejs/indent/react';
-import { IndentIcon, OutdentIcon } from 'lucide-react';
 
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 
 export function IndentToolbarButton(
@@ -14,7 +14,7 @@ export function IndentToolbarButton(
 
   return (
     <ToolbarButton {...props} {...buttonProps} tooltip='زيادة المسافة'>
-      <IndentIcon className='rtl:rotate-180' />
+      <Icon icon='lucide:list-indent-increase' className='rtl:rotate-180' />
     </ToolbarButton>
   );
 }
@@ -26,7 +26,7 @@ export function OutdentToolbarButton(
 
   return (
     <ToolbarButton {...props} {...buttonProps} tooltip='تقليل المسافة'>
-      <OutdentIcon className='rtl:rotate-180' />
+      <Icon icon='lucide:list-indent-decrease' className='rtl:rotate-180' />
     </ToolbarButton>
   );
 }

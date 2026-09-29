@@ -19,7 +19,9 @@ export const BlockSelectionKit = [
         if (!props.attributes.className?.includes('slate-selectable'))
           return null;
 
-        return <BlockSelection {...(props as PlateElementProps)} />;
+        // Core spreads the rendered element's props here, so `plugin` is that
+        // element's plugin, not BlockSelectionPlugin as the signature claims.
+        return <BlockSelection {...(props as unknown as PlateElementProps)} />;
       },
     },
   })),

@@ -43,8 +43,9 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze(
 
 /**
  * Writes the header set onto a framework's mutable header bag — key by key,
- * because the CORS plugin has already written `Access-Control-Allow-Origin` and
- * `Vary` there and replacing the bag would drop them.
+ * because on the `onError` path the CORS plugin has already written
+ * `Access-Control-Allow-Origin` and `Vary` there, and replacing the bag would
+ * drop them.
  */
 export function applySecurityHeaders(
   target: Record<string, string | number | undefined>

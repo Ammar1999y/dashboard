@@ -1,0 +1,161 @@
+/*
+ * Rich-text content rules Tailwind cannot express. Global rather than a module:
+ * scripts/build-editor-css.ts copies this file into the stylesheet that the
+ * exported HTML inlines, and a module's hashed class names would not match
+ * there. `.editor-code-block` is EDITOR_CODE_BLOCK_CLASS in
+ * components/editor/styles.ts.
+ */
+
+/*
+ * The inline direction as a sign, for transforms that must mirror. Custom
+ * properties inherit, so the nearest `dir` wins, as with `:dir()`, which is
+ * past the browserslist.
+ */
+[dir='ltr'] {
+  --inline-sign: 1;
+}
+
+[dir='rtl'] {
+  --inline-sign: -1;
+}
+
+.editor-code-block .hljs-addition {
+  background-color: #f0fff4;
+  color: #22863a;
+}
+
+.editor-code-block .hljs-attr,
+.editor-code-block .hljs-attribute,
+.editor-code-block .hljs-literal,
+.editor-code-block .hljs-meta,
+.editor-code-block .hljs-number,
+.editor-code-block .hljs-operator,
+.editor-code-block .hljs-selector-attr,
+.editor-code-block .hljs-selector-class,
+.editor-code-block .hljs-selector-id,
+.editor-code-block .hljs-variable {
+  color: #005cc5;
+}
+
+.editor-code-block .hljs-built_in,
+.editor-code-block .hljs-symbol {
+  color: #e36209;
+}
+
+.editor-code-block .hljs-bullet {
+  color: #735c0f;
+}
+
+.editor-code-block .hljs-comment,
+.editor-code-block .hljs-code,
+.editor-code-block .hljs-formula {
+  color: #6a737d;
+}
+
+.editor-code-block .hljs-deletion {
+  background-color: #ffeef0;
+  color: #b31d28;
+}
+
+.editor-code-block .hljs-emphasis {
+  font-style: italic;
+}
+
+.editor-code-block .hljs-keyword,
+.editor-code-block .hljs-doctag,
+.editor-code-block .hljs-template-tag,
+.editor-code-block .hljs-template-variable,
+.editor-code-block .hljs-type,
+.editor-code-block .hljs-variable.language_ {
+  color: #d73a49;
+}
+
+.editor-code-block .hljs-name,
+.editor-code-block .hljs-quote,
+.editor-code-block .hljs-selector-tag,
+.editor-code-block .hljs-selector-pseudo {
+  color: #22863a;
+}
+
+.editor-code-block .hljs-regexp,
+.editor-code-block .hljs-string,
+.editor-code-block .hljs-meta .hljs-string {
+  color: #032f62;
+}
+
+.editor-code-block .hljs-section {
+  font-weight: bold;
+  color: #005cc5;
+}
+
+.editor-code-block .hljs-strong {
+  font-weight: bold;
+}
+
+.editor-code-block .hljs-title,
+.editor-code-block .hljs-title.class_,
+.editor-code-block .hljs-title.class_.inherited__,
+.editor-code-block .hljs-title.function_ {
+  color: #6f42c1;
+}
+
+.dark .editor-code-block .hljs-addition {
+  background-color: #3c5743;
+  color: #ceead5;
+}
+
+.dark .editor-code-block .hljs-attr,
+.dark .editor-code-block .hljs-attribute,
+.dark .editor-code-block .hljs-literal,
+.dark .editor-code-block .hljs-meta,
+.dark .editor-code-block .hljs-number,
+.dark .editor-code-block .hljs-operator,
+.dark .editor-code-block .hljs-selector-attr,
+.dark .editor-code-block .hljs-selector-class,
+.dark .editor-code-block .hljs-selector-id,
+.dark .editor-code-block .hljs-variable {
+  color: #6596cf;
+}
+
+.dark .editor-code-block .hljs-built_in,
+.dark .editor-code-block .hljs-symbol {
+  color: #c3854e;
+}
+
+.dark .editor-code-block .hljs-deletion {
+  background-color: #473235;
+  color: #e7c7cb;
+}
+
+.dark .editor-code-block .hljs-keyword,
+.dark .editor-code-block .hljs-doctag,
+.dark .editor-code-block .hljs-template-tag,
+.dark .editor-code-block .hljs-template-variable,
+.dark .editor-code-block .hljs-type,
+.dark .editor-code-block .hljs-variable.language_ {
+  color: #ee6960;
+}
+
+.dark .editor-code-block .hljs-name,
+.dark .editor-code-block .hljs-quote,
+.dark .editor-code-block .hljs-selector-tag,
+.dark .editor-code-block .hljs-selector-pseudo {
+  color: #36a84f;
+}
+
+.dark .editor-code-block .hljs-regexp,
+.dark .editor-code-block .hljs-string,
+.dark .editor-code-block .hljs-meta .hljs-string {
+  color: #3593ff;
+}
+
+.dark .editor-code-block .hljs-section {
+  color: #61a5f2;
+}
+
+.dark .editor-code-block .hljs-title,
+.dark .editor-code-block .hljs-title.class_,
+.dark .editor-code-block .hljs-title.class_.inherited__,
+.dark .editor-code-block .hljs-title.function_ {
+  color: #a77bfa;
+}

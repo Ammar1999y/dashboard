@@ -1,5 +1,7 @@
 'use client';
 
+import type { Alignment } from '@platejs/basic-styles';
+
 import * as React from 'react';
 
 import {
@@ -7,23 +9,6 @@ import {
   BlockMenuPlugin,
   BlockSelectionPlugin,
 } from '@platejs/selection/react';
-import {
-  AlignCenterIcon,
-  AlignJustifyIcon,
-  AlignLeftIcon,
-  AlignRightIcon,
-  CopyIcon,
-  Heading1Icon,
-  Heading2Icon,
-  Heading3Icon,
-  IndentDecreaseIcon,
-  IndentIncreaseIcon,
-  PilcrowIcon,
-  QuoteIcon,
-  RefreshCwIcon,
-  Trash2Icon,
-} from 'lucide-react';
-import { KEYS } from 'platejs';
 import { useEditorPlugin, usePlateState, usePluginOption } from 'platejs/react';
 
 import { useIsTouchDevice } from '@/hooks/use-is-touch-device';
@@ -37,6 +22,10 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
+import { Icon } from '@/components/ui/icon';
+import { ALIGN_ITEMS } from '@/components/editor/align';
+import { BLOCK_MENU_TURN_INTO_ITEMS } from '@/components/editor/block-types';
+import { setBlockType } from '@/components/editor/transforms';
 
 export function BlockContextMenu({ children }: { children: React.ReactNode }) {
   const { api, editor } = useEditorPlugin(BlockMenuPlugin);
@@ -45,56 +34,48 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
   const openId = usePluginOption(BlockMenuPlugin, 'openId');
   const isOpen = openId === BLOCK_CONTEXT_MENU_ID;
 
+  const selection = React.useCallback(
+    () => editor.getTransforms(BlockSelectionPlugin).blockSelection,
+    [editor]
+  );
+
   const handleTurnInto = React.useCallback(
     (type: string) => {
-      editor
+      for (const [, path] of editor
         .getApi(BlockSelectionPlugin)
-        .blockSelection.getNodes()
-        .forEach(([node, path]) => {
-          if (node[KEYS.listType]) {
-            editor.tf.unsetNodes([KEYS.listType, 'indent'], {
-              at: path,
-            });
-          }
-
-          editor.tf.toggleBlock(type, { at: path });
-        });
+        .blockSelection.getNodes()) {
+        setBlockType(editor, type, { at: path });
+      }
     },
     [editor]
   );
 
   const handleAlign = React.useCallback(
-    (align: 'center' | 'left' | 'right') => {
-      editor
-        .getTransforms(BlockSelectionPlugin)
-        .blockSelection.setNodes({ align });
-    },
-    [editor]
+    (align: Alignment) => selection().setNodes({ align }),
+    [selection]
   );
 
-  if (isTouch) {
-    return children;
-  }
+  if (isTouch) return children;
 
   return (
     <ContextMenu
       modal={false}
       onOpenChange={(open) => {
-        if (!open) {
-          api.blockMenu.hide();
-        }
+        if (!open) api.blockMenu.hide();
       }}
     >
       <ContextMenuTrigger
         asChild
         onContextMenu={(event) => {
-          const dataset = (event.target as HTMLElement).dataset;
-          const disabled =
-            dataset?.slateEditor === 'true' ||
+          const { dataset } = event.target as HTMLElement;
+          if (
             readOnly ||
-            dataset?.plateOpenContextMenu === 'false';
-
-          if (disabled) return event.preventDefault();
+            dataset.slateEditor === 'true' ||
+            dataset.plateOpenContextMenu === 'false'
+          ) {
+            event.preventDefault();
+            return;
+          }
 
           setTimeout(() => {
             api.blockMenu.show(BLOCK_CONTEXT_MENU_ID, {
@@ -109,104 +90,74 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
       {isOpen && (
         <ContextMenuContent
           className='w-52'
-          onCloseAutoFocus={(e) => {
-            e.preventDefault();
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
             editor.getApi(BlockSelectionPlugin).blockSelection.focus();
           }}
         >
           <ContextMenuGroup>
             <ContextMenuItem
               onClick={() => {
-                editor
-                  .getTransforms(BlockSelectionPlugin)
-                  .blockSelection.removeNodes();
+                selection().removeNodes();
                 editor.tf.focus();
               }}
             >
-              <Trash2Icon />
+              <Icon icon='solar:trash-bin-trash-linear' />
               حذف
             </ContextMenuItem>
-            <ContextMenuItem
-              onClick={() => {
-                editor
-                  .getTransforms(BlockSelectionPlugin)
-                  .blockSelection.duplicate();
-              }}
-            >
-              <CopyIcon />
+            <ContextMenuItem onClick={() => selection().duplicate()}>
+              <Icon icon='solar:copy-linear' />
               تكرار
             </ContextMenuItem>
             <ContextMenuSub>
               <ContextMenuSubTrigger>
-                <RefreshCwIcon />
+                <Icon icon='lucide:refresh-ccw' />
                 تحويل إلى
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className='w-40'>
-                <ContextMenuItem onClick={() => handleTurnInto(KEYS.p)}>
-                  <PilcrowIcon />
-                  فقرة
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handleTurnInto(KEYS.h1)}>
-                  <Heading1Icon />
-                  عنوان 1
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handleTurnInto(KEYS.h2)}>
-                  <Heading2Icon />
-                  عنوان 2
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handleTurnInto(KEYS.h3)}>
-                  <Heading3Icon />
-                  عنوان 3
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={() => handleTurnInto(KEYS.blockquote)}
-                >
-                  <QuoteIcon />
-                  اقتباس
-                </ContextMenuItem>
+                {BLOCK_MENU_TURN_INTO_ITEMS.map((item) => (
+                  <ContextMenuItem
+                    key={item.value}
+                    onClick={() => handleTurnInto(item.value)}
+                  >
+                    <Icon icon={item.icon} className={item.iconClassName} />
+                    {item.label}
+                  </ContextMenuItem>
+                ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
           </ContextMenuGroup>
 
           <ContextMenuGroup>
-            <ContextMenuItem
-              onClick={() =>
-                editor
-                  .getTransforms(BlockSelectionPlugin)
-                  .blockSelection.setIndent(1)
-              }
-            >
-              <IndentIncreaseIcon />
+            <ContextMenuItem onClick={() => selection().setIndent(1)}>
+              <Icon
+                icon='lucide:list-indent-increase'
+                className='rtl:rotate-180'
+              />
               زيادة المسافة
             </ContextMenuItem>
-            <ContextMenuItem
-              onClick={() =>
-                editor
-                  .getTransforms(BlockSelectionPlugin)
-                  .blockSelection.setIndent(-1)
-              }
-            >
-              <IndentDecreaseIcon />
+            <ContextMenuItem onClick={() => selection().setIndent(-1)}>
+              <Icon
+                icon='lucide:list-indent-decrease'
+                className='rtl:rotate-180'
+              />
               تقليل المسافة
             </ContextMenuItem>
             <ContextMenuSub>
               <ContextMenuSubTrigger>
-                <AlignJustifyIcon />
+                <Icon icon='lucide:text-align-justify' />
                 محاذاة
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className='w-40'>
-                <ContextMenuItem onClick={() => handleAlign('left')}>
-                  <AlignLeftIcon />
-                  يسار
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handleAlign('center')}>
-                  <AlignCenterIcon />
-                  وسط
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handleAlign('right')}>
-                  <AlignRightIcon />
-                  يمين
-                </ContextMenuItem>
+                {ALIGN_ITEMS.map((item) => (
+                  <ContextMenuItem
+                    key={item.value}
+                    onClick={() => handleAlign(item.value)}
+                  >
+                    <Icon icon={item.icon} />
+                    {item.label}
+                  </ContextMenuItem>
+                ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
           </ContextMenuGroup>

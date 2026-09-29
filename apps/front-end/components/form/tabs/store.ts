@@ -1,33 +1,20 @@
 import { create } from 'zustand';
 
-// LANGUAGES-TODOS
-
-interface TabsStoreState {
+// LANGUAGES-TODOS: the active content language joins this store.
+interface TabsState {
   activeMainTab: string | null;
   hoveredMainTab: string | null;
-  // activeLang: Language | null;
-}
-
-interface TabsStoreActions {
   setActiveMainTab: (tab: string) => void;
   setHoveredMainTab: (tab: string | null) => void;
-  // setActiveLang: (lang: Language | null) => void;
   reset: () => void;
 }
 
-const initialTabsStoreState: TabsStoreState = {
-  activeMainTab: null,
-  hoveredMainTab: null,
-  // activeLang: null,
-};
+const INITIAL = { activeMainTab: null, hoveredMainTab: null };
 
-export const useTabsStore = create<TabsStoreState & TabsStoreActions>(
-  (set) => ({
-    ...initialTabsStoreState,
-
-    setActiveMainTab: (tab) => set({ activeMainTab: tab }),
-    setHoveredMainTab: (tab) => set({ hoveredMainTab: tab }),
-    // setActiveLang: (lang) => set({ activeLang: lang }),
-    reset: () => set({ ...initialTabsStoreState }),
-  })
-);
+/** One tab strip is mounted at a time; `FormTabs` resets it on unmount. */
+export const useTabsStore = create<TabsState>((set) => ({
+  ...INITIAL,
+  setActiveMainTab: (tab) => set({ activeMainTab: tab }),
+  setHoveredMainTab: (tab) => set({ hoveredMainTab: tab }),
+  reset: () => set(INITIAL),
+}));

@@ -125,10 +125,14 @@ interface LedgerRow {
 
 /** The ledger, oldest first — the order the migrator wrote it in. */
 async function ledgerRows(): Promise<LedgerRow[] | null> {
-  const [probe] = (await client`
+  const [probe]: unknown[] = await client`
     select to_regclass('drizzle.__drizzle_migrations') is not null as present
-  `) as Array<{ present: boolean }>;
-  if (!probe?.present) return null;
+  `;
+  const present =
+    typeof probe === 'object' && probe !== null && 'present' in probe
+      ? probe.present
+      : undefined;
+  if (!present) return null;
   return (await client`
     select hash, created_at
     from drizzle.__drizzle_migrations

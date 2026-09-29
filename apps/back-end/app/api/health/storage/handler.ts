@@ -28,6 +28,7 @@ import { HTTP_STATUS } from '@app/shared/api-messages';
 import { apiRaw } from '@/lib/http/response';
 import { maintenanceTokenMatches } from '@/lib/maintenance/token';
 import {
+  admitWindow,
   getRateLimitStore,
   RATE_LIMIT_SCHEMA_VERSION,
 } from '@/lib/rate-limit/store';
@@ -38,7 +39,7 @@ import {
   SYNCHRONOUS_VALUE,
 } from '@/lib/sqlite/database';
 
-import { errorClassOf } from '@/utils/log';
+import { errorClassOf, logLine } from '@/utils/log';
 
 const PROBE_KEY = 'health:write-probe';
 
@@ -47,12 +48,10 @@ async function postgresReachable(): Promise<boolean> {
     return await pingDatabase();
   } catch (error) {
     // Driver errors can include connection details, so log only their class.
-    console.error(
-      JSON.stringify({
-        msg: 'health.postgres unreachable',
-        errorClass: errorClassOf(error),
-      })
-    );
+    logLine('error', {
+      msg: 'health.postgres unreachable',
+      errorClass: errorClassOf(error),
+    });
     return false;
   }
 }
@@ -91,13 +90,13 @@ export const GET: Handler = async (ctx) => {
       // sweep reclaims it, so an explicit delete would be a second write for no
       // additional guarantee.
       const now = Date.now();
-      const written = store.consume.get<{ count: number }>(
-        PROBE_KEY,
-        now,
-        1,
-        now + 1000,
-        Number.MAX_SAFE_INTEGER
-      );
+      const written = admitWindow(store, {
+        key: PROBE_KEY,
+        windowStart: now,
+        cost: 1,
+        expiresAt: now + 1000,
+        limit: Number.MAX_SAFE_INTEGER,
+      });
       checks.writable = Boolean(written);
     }
 
@@ -107,12 +106,10 @@ export const GET: Handler = async (ctx) => {
       status: ok ? HTTP_STATUS.OK : HTTP_STATUS.SERVICE_UNAVAILABLE,
     });
   } catch (error) {
-    console.error(
-      JSON.stringify({
-        msg: 'storage readiness failed',
-        errorClass: errorClassOf(error),
-      })
-    );
+    logLine('error', {
+      msg: 'storage readiness failed',
+      errorClass: errorClassOf(error),
+    });
     return apiRaw({
       body: { status: 'error' },
       status: HTTP_STATUS.SERVICE_UNAVAILABLE,

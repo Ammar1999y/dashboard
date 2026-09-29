@@ -1,4 +1,5 @@
 import type { JsonSchema } from './json-schema';
+import type { BodySchemas } from '@app/shared/contract';
 import type * as z from 'zod';
 
 import { PHONE_ENABLED, PHONE_REQUIRED } from '@app/shared/config';
@@ -12,12 +13,15 @@ import {
   MAX_IMAGE_EDGE,
   MAX_IMAGE_PIXELS,
   MAX_IMAGE_SIZE,
+  MIB,
 } from '@app/shared/validation/constants';
+import {
+  ALLOWED_MIME_TYPES,
+  mimeTypesOfKind,
+} from '@app/shared/validation/media-types';
 import { isChannelEnabled } from '@app/shared/validation/otp';
 
-import { ALLOWED_MIME_TYPES, mimeTypesOfKind } from '@/lib/media/allowlist';
-import { MIB } from '@/lib/media/units';
-
+import { NULL_SCHEMA } from './components';
 import {
   branchKey,
   isJsonSchema,
@@ -25,13 +29,11 @@ import {
   withRequiredKeys,
 } from './json-schema';
 
-type RequestSchemas = z.ZodType | readonly z.ZodType[];
-
 /**
  * `REQUEST_BODIES` with its keys widened to `string`, because the document
  * looks routes up from the manifest rather than naming them.
  */
-export const requestBodies: Readonly<Record<string, RequestSchemas>> =
+export const requestBodies: Readonly<Record<string, BodySchemas>> =
   REQUEST_BODIES;
 
 /**
@@ -169,7 +171,7 @@ function addUserRoleRules(schema: JsonSchema, update: boolean): JsonSchema {
   else if (PHONE_REQUIRED)
     rules.push({
       properties: {
-        phoneNumber: { not: { type: 'null' } },
+        phoneNumber: { not: NULL_SCHEMA },
       },
       ...(!update && { required: ['phoneNumber'] }),
     });
@@ -278,14 +280,12 @@ function applyRequestContractRules(
   return result;
 }
 
-function isSchemaList(
-  schemas: RequestSchemas
-): schemas is readonly z.ZodType[] {
+function isSchemaList(schemas: BodySchemas): schemas is readonly z.ZodType[] {
   return Array.isArray(schemas);
 }
 
 export function requestBody(
-  schemas: RequestSchemas,
+  schemas: BodySchemas,
   key?: string
 ): JsonSchema | null {
   const list = isSchemaList(schemas) ? schemas : [schemas];

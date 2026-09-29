@@ -1,5 +1,6 @@
 import * as z from 'zod';
 
+import { MSG_INVALID_INPUT } from '../api-messages';
 import { safeDate } from '../time';
 import {
   normalizeArabicDigits,
@@ -76,13 +77,11 @@ export const strictTextMaximum = (max: number) =>
 export const idRequired =
   'رقم المعرف غير صحيح، اعد تحميل الصفحة ثم حاول مرة اخرى';
 
-const MSG_CHECK_INPUT = 'قم بالتحقق من البيانات المدخله';
-
 /**
  * A server-owned Arabic message per issue code, for every schema node that did
  * not author one.
  *
- * An issue code absent from this map takes `MSG_CHECK_INPUT` from the `??`
+ * An issue code absent from this map takes `MSG_INVALID_INPUT` from the `??`
  * below, so `invalid_union` needs no entry — that is the message it would carry.
  *
  * Mapped HERE rather than at each node, because a node is exactly where it gets
@@ -136,11 +135,11 @@ function reflectPath(path: readonly PropertyKey[]): string {
  */
 export function zodIssueMessage(error: z.ZodError): string {
   const issue = error.issues[0];
-  if (!issue) return MSG_CHECK_INPUT;
+  if (!issue) return MSG_INVALID_INPUT;
   if (issue.code === 'unrecognized_keys')
     return `حقول غير معروفة في الطلب: ${reflectKeys(issue.keys)}`;
   if (ARABIC_LETTER.test(issue.message)) return issue.message;
-  return `${ISSUE_FALLBACKS[issue.code] ?? MSG_CHECK_INPUT}${reflectPath(issue.path)}`;
+  return `${ISSUE_FALLBACKS[issue.code] ?? MSG_INVALID_INPUT}${reflectPath(issue.path)}`;
 }
 
 function reflectKeys(keys: readonly PropertyKey[]): string {

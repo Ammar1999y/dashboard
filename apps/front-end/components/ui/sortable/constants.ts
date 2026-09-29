@@ -52,30 +52,19 @@ export const orientationConfig = {
 
 export type Orientation = keyof typeof orientationConfig;
 
-export interface SortableRootContextValue<T> {
-  id: string;
+export interface SortableRootContextValue {
   items: UniqueIdentifier[];
   modifiers: DndContextProps['modifiers'];
   strategy: SortableContextProps['strategy'];
   activeId: UniqueIdentifier | null;
-  setActiveId: (id: UniqueIdentifier | null) => void;
-  getItemValue: (item: T) => UniqueIdentifier;
   flatCursor: boolean;
 }
 
-const EMPTY_ATTRIBUTES = {} as DraggableAttributes;
-const EMPTY_LISTENERS = {} as DraggableSyntheticListeners;
-
-export function getConditionalProps(
-  condition: boolean,
+/** The drag attributes and listeners, only on the element that is the handle. */
+export function getHandleProps(
+  isHandle: boolean,
   attributes: DraggableAttributes,
-  listeners: DraggableSyntheticListeners | undefined
+  listeners: DraggableSyntheticListeners
 ) {
-  if (condition) {
-    return { attributes, listeners };
-  }
-  return {
-    attributes: EMPTY_ATTRIBUTES,
-    listeners: EMPTY_LISTENERS,
-  };
+  return isHandle ? { ...attributes, ...listeners } : undefined;
 }

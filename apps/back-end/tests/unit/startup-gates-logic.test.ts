@@ -9,7 +9,7 @@
  * whole suite green, which is precisely how a fail-closed guard regresses to
  * fail-open unnoticed.
  *
- * `utils/startup.ts` holds the decision and `server.ts` holds one line of wiring
+ * `lib/startup.ts` holds the decision and `server.ts` holds one line of wiring
  * per gate. What is asserted here is the decision; what the spawned cases in
  * `tests/process/startup-gates.test.ts` assert is that a refusal really ends the
  * process non-zero, for the two gates a child CAN drive.
@@ -28,7 +28,7 @@ import {
   parseVersionParts,
   portVerdict,
   sqliteVersionVerdict,
-} from '@/utils/startup';
+} from '@/lib/startup';
 
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 

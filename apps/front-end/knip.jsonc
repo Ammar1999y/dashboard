@@ -27,5 +27,7 @@
     "eslint-plugin-no-unsanitized",
     "eslint-plugin-security",
     "eslint-plugin-import",
+    // Read by `scripts/build-icons.ts` through a computed `require.resolve`.
+    "@iconify-json/*",
   ],
 }

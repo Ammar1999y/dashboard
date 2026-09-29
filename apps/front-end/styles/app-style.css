@@ -79,12 +79,3 @@ html[dir='rtl'] body[data-scroll-locked] .header {
   padding-right: 2rem;
   padding-bottom: 3.5rem;
 }
-
-[data-slate-node='element'][data-ltr-element]:not([dir]) {
-  direction: ltr;
-}
-
-[dir='rtl'] .toggle {
-  right: calc(var(--spacing) * -0.5);
-  left: auto;
-}

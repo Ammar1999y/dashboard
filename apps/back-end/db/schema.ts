@@ -190,7 +190,7 @@ export const users = pgTable(
     // The property name is what Better Auth reads (not the SQL column), so it
     // must stay `twoFactorEnabled`. "The user turned 2FA on", not "the user has
     // a usable second factor" — see the downgrade path in
-    // lib/auth/two-factor/challenge.ts.
+    // lib/auth/two-factor/issue.ts.
     twoFactorEnabled: boolean('two_factor_enabled').default(false).notNull(),
     isActive: boolean('is_active').default(true).notNull(),
     roleId: uuid('role_id').references(() => roles.id, {
@@ -435,8 +435,8 @@ export const twoFactorCredentials = pgTable(
     backupCodesAcknowledgedSetId: uuid('backup_codes_acknowledged_set_id'),
     // How many of that set are unspent. An exhausted set is not recovery
     // material, and the encrypted blob cannot be counted without the key, so the
-    // count is kept here. See `lib/auth/two-factor/enrolment.ts` for who writes
-    // it and which direction it fails in.
+    // count is kept here. See `lib/auth/two-factor/backup-codes.ts` for who
+    // writes it and which direction it fails in.
     backupCodesRemaining: integer('backup_codes_remaining')
       .default(0)
       .notNull(),

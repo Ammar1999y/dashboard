@@ -17,7 +17,7 @@ import {
 
 import { escapeLike } from '@/lib/data-table/filter-columns';
 
-import { auditAs } from './actor';
+import { auditAs, withinScope } from './actor';
 import { mediaMsg } from './messages';
 
 interface FolderSummary {
@@ -266,20 +266,21 @@ export async function lockFolderFor(
     .for('update');
   // Out of scope answers exactly like absent, the way every `own`-scoped gate in
   // this codebase does.
-  if (!folder || (actor.scope === 'own' && folder.createdBy !== actor.userId))
+  if (!folder || !withinScope(actor, folder.createdBy))
     throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
   return folder;
 }
 
-export async function getFolder(
+export async function requireFolder(
   folderId: EntityID,
   executor: Executor = db
-): Promise<FolderSummary | null> {
+): Promise<void> {
   const [folder] = await executor
     .select(FOLDER_COLUMNS)
     .from(folders)
     .where(eq(folders.id, folderId));
-  return folder ?? null;
+  if (!folder)
+    throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
 }
 
 /** Direct children, by name. Bounded by the cap, which the root shares, so never paginated. */

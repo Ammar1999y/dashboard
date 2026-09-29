@@ -3,13 +3,17 @@ const { API_URL, PUBLIC_URL } = require('./lib/env');
 
 // TODO: clear the unuse
 const isDev = process.env.NODE_ENV !== 'production';
+// A mock build (see mocks/) routes every request through a service worker. Its
+// pass-through fetches fall under `connect-src`, the Turnstile script included,
+// and an upgraded https API URL would no longer match the http one it allows.
+const isApiMocking = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
 const CSP = `
   base-uri 'self';
   default-src 'self';
   script-src 'self' https://challenges.cloudflare.com/turnstile/${isDev ? " 'unsafe-eval' 'unsafe-inline'" : ''};
   style-src 'self' 'unsafe-inline';
   font-src 'self';
-  connect-src 'self' ${API_URL};
+  connect-src 'self' ${API_URL}${isApiMocking ? ' https://challenges.cloudflare.com' : ''};
   frame-src 'self' https://challenges.cloudflare.com/;
   worker-src 'self' blob:;
   img-src 'self' data: blob:;
@@ -17,7 +21,7 @@ const CSP = `
   object-src 'none';
   form-action 'none';
   frame-ancestors 'none';
-  upgrade-insecure-requests;
+  ${isApiMocking ? '' : 'upgrade-insecure-requests;'}
 `;
 // TODO: try to add this in production
 /* 
@@ -26,7 +30,7 @@ Content-Security-Policy: require-trusted-types-for 'script';
 */
 
 // TODO: activate the caches in production
-const headers = isDev
+const headers = true
   ? []
   : [
       {
@@ -156,10 +160,13 @@ const headers = isDev
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
+  reactStrictMode: false,
   reactCompiler: true,
   poweredByHeader: false,
   devIndicators: false,
+  // Inlined even when unset: an unset public variable is left as a runtime
+  // lookup, and then the bundler cannot drop the `mocks/` chunk.
+  env: { NEXT_PUBLIC_API_MOCKING: isApiMocking ? 'enabled' : '' },
   // `@app/shared` ships TypeScript source from the workspace, not a build.
   transpilePackages: ['@platejs/math', 'react-tweet', '@app/shared'],
   // The workspace root, so file tracing follows imports into `packages/`.
@@ -183,6 +190,11 @@ const nextConfig = {
   },
   async headers() {
     return headers;
+  },
+  // The dashboard is the whole app for now; its layout sends a signed-out
+  // visitor on to sign-in.
+  async redirects() {
+    return [{ source: '/', destination: '/dash', permanent: false }];
   },
   logging: {
     fetches: {

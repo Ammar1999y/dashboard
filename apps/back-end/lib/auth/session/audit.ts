@@ -4,7 +4,7 @@ import { withTransaction } from '@/db';
 
 import { auditLog } from '@/lib/audit';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 /**
  * Records that a just-issued session was withdrawn before its cookie shipped.
@@ -40,13 +40,11 @@ export async function recordAbandonedSession(params: {
       })
     );
   } catch (error) {
-    console.error(
-      sanitizeForLog({
-        msg: 'auth.abandonedSessionAudit.failed',
-        userId: params.userId,
-        sessionId: params.sessionId,
-        error,
-      })
-    );
+    logSanitized('error', {
+      msg: 'auth.abandonedSessionAudit.failed',
+      userId: params.userId,
+      sessionId: params.sessionId,
+      error,
+    });
   }
 }

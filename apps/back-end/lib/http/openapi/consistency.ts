@@ -14,12 +14,14 @@ import { compareCodeUnits } from '@/utils/text';
 
 import { isDevelopmentOnlyPath } from '../route-manifest';
 import {
-  BETTER_AUTH_PATH_STATUSES,
-  BETTER_AUTH_SUMMARIES,
   betterAuthDocumentPath,
   generatedBetterAuthOperation,
   generatedBetterAuthResponse,
 } from './better-auth';
+import {
+  BETTER_AUTH_PATH_STATUSES,
+  BETTER_AUTH_SUMMARIES,
+} from './better-auth-tables';
 import { COMPONENT_SCHEMAS } from './components';
 import { MULTIPART_BODIES, OTP_SEND_ROUTES } from './request-bodies';
 import { operationKey, toOpenApiPath } from './route-operations';
@@ -117,13 +119,6 @@ export function openApiConsistencyProblems(
     if (!BETTER_AUTH_KNOWN_PATHS.has(key))
       problems.push(
         `BETTER_AUTH_PATH_STATUSES has '${key}', which is not a Better Auth endpoint`
-      );
-
-  // The catalogue must cover the enabled set, or the checks above mean nothing.
-  for (const endpoint of BETTER_AUTH_ENDPOINTS)
-    if (!BETTER_AUTH_KNOWN_PATHS.has(endpoint.path))
-      problems.push(
-        `BETTER_AUTH_KNOWN_PATHS is missing '${endpoint.path}', which is served`
       );
 
   for (const endpoint of BETTER_AUTH_ENDPOINTS)

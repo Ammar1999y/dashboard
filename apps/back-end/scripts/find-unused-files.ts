@@ -96,7 +96,7 @@ const resolveSpecifier = (
     base = path.posix.normalize(
       path.posix.join(path.posix.dirname(fromKey), specifier)
     );
-  else return null; // package or bare module
+  else return null;
 
   return candidatesFor(path.posix.normalize(base)).find((candidate) =>
     files.has(candidate)

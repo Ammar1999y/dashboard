@@ -3,28 +3,20 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+import { contactKindOf } from '@app/shared/validation/enums';
 import {
   OTP_ENABLED,
   recoverySecondFactorSendSchema,
 } from '@app/shared/validation/otp';
 
 import { otpMsg } from '@/lib/auth/messages';
-import { readRecoveryGrant } from '@/lib/auth/recovery/grant';
-import {
-  readEnrolmentState,
-  recoveryOptions,
-} from '@/lib/auth/two-factor/methods';
+import { resolveRecoveryOption } from '@/lib/auth/recovery/grant';
+import { sendTwoFactorCode } from '@/lib/auth/two-factor/otp';
 import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, requireFeature, withApiErrors } from '@/lib/http/response';
-import { CONTACT_LABEL } from '@/lib/otp/content';
-import { processOtpSend } from '@/lib/otp/send';
-import {
-  enforceOtpSurfaceSendQuota,
-  enforceRateLimit,
-  ipIdentifier,
-} from '@/lib/rate-limit';
+import { invalidOrExpiredCode } from '@/lib/otp/throttle';
+import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
+import { contactOf } from '@/lib/users/contact';
 
 /**
  * Sends the second-factor code for a recovery grant.
@@ -53,45 +45,24 @@ export const POST = withApiErrors(otpMsg.sendError, async (ctx) => {
     { message: otpMsg.invalidInput }
   );
 
-  const grant = await readRecoveryGrant(grantToken);
-  if (!grant)
-    throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
-
-  // The issued set narrowed by CURRENT capability: an enrolment gone since the
-  // grant was minted is no option, and one that appeared is none either.
-  const state = await readEnrolmentState(grant.userId);
-  const issued = new Set(grant.options);
-  const option = recoveryOptions(state, grant.excludeContactKind).find(
-    (entry) =>
-      issued.has(entry.id) && entry.method === 'otp' && entry.id === requested
-  );
-  if (!option?.channel)
-    throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
+  const resolved = await resolveRecoveryOption(grantToken, requested);
+  if (!resolved) throw invalidOrExpiredCode();
+  const { grant, option } = resolved;
+  if (option.method !== 'otp' || !option.channel) throw invalidOrExpiredCode();
 
   const [user] = await db
     .select({ email: users.email, phoneNumber: users.phoneNumber })
     .from(users)
     .where(eq(users.id, grant.userId))
     .limit(1);
-  const destination =
-    option.contactKind === 'email' ? user?.email : user?.phoneNumber;
-  if (!destination)
-    throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
+  const destination = user && contactOf(user, contactKindOf(option.channel));
+  if (!destination) throw invalidOrExpiredCode();
 
-  await enforceOtpSurfaceSendQuota({
+  const { nextAllowedIn } = await sendTwoFactorCode({
+    userId: grant.userId,
     channel: option.channel,
     destination,
     surface: 'recovery_second_factor',
-  });
-
-  const { nextAllowedIn } = await processOtpSend({
-    userId: grant.userId,
-    identifier: destination,
-    channel: option.channel,
-    purpose: 'two_factor',
-    sendTo: destination,
-    entityName:
-      CONTACT_LABEL[option.contactKind === 'email' ? 'email' : 'phone'],
   });
 
   return apiSuccess({

@@ -7,13 +7,16 @@ import {
   HTTP_STATUS,
   MSG_INTERNAL_ERROR,
   MSG_INVALID_INPUT,
+  MSG_NOT_FOUND,
   MSG_PAGE_NOT_FOUND,
 } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
-import { responsePayload, serializeSetCookie } from './contract';
+import { responsePayload } from './contract';
+import { serializeSetCookie } from './cookies';
+import { DEFAULT_CACHE_CONTROL } from './response-policy';
 
 interface ApiSuccessOptions<T = unknown> {
   message: string;
@@ -33,18 +36,18 @@ interface ApiErrorOptions {
 
 export function apiSuccess<T = unknown>({
   message,
-  data = null as T,
+  data,
   meta,
   status = HTTP_STATUS.OK,
   headers,
   cookies,
-}: ApiSuccessOptions<T>): HandlerOutput<T> {
+}: ApiSuccessOptions<T>): HandlerOutput<T | null> {
   return {
     status,
     body: {
       success: true,
       message,
-      data,
+      data: data ?? null,
       ...(meta && { meta }),
     },
     ...(headers && { headers }),
@@ -118,7 +121,7 @@ export function handleApiError(
       ...(extraHeaders && { headers: extraHeaders }),
     });
 
-  console.error(sanitizeForLog(error));
+  logSanitized('error', error);
   return apiError({
     message: fallbackMessage ?? MSG_INTERNAL_ERROR,
     status: HTTP_STATUS.INTERNAL_ERROR,
@@ -144,20 +147,15 @@ export function withApiErrors(
   };
 }
 
+export function notFoundError(): CustomError {
+  return new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+}
+
 export function requireFeature(enabled: boolean): void {
   if (!enabled)
     throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 }
 
-/**
- * Every API response is per-user, credentialed, or an error, and `no-store` is
- * the one directive every intermediary, the back/forward cache included,
- * honours. A handler serving a public cacheable body sets its own
- * `Cache-Control`; this is a default, not an override.
- */
-export const DEFAULT_CACHE_CONTROL = 'no-store';
-
-/** Keep Better Auth's raw cookie values and extension attributes intact across adapters. */
 export function toWebResponse(output: HandlerOutput): Response {
   const headers = new Headers();
   const extraHeaders = Object.entries(output.headers ?? {});

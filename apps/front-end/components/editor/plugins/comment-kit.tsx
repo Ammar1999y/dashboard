@@ -15,7 +15,6 @@ type CommentConfig = ExtendConfig<
     activeId: string | null;
     commentingBlock: Path | null;
     hoverId: string | null;
-    uniquePathMap: Map<string, Path>;
   }
 >;
 
@@ -60,7 +59,6 @@ export const commentPlugin = toTPlatePlugin<CommentConfig>(BaseCommentPlugin, {
     activeId: null,
     commentingBlock: null,
     hoverId: null,
-    uniquePathMap: new Map(),
   },
 })
   .extendTransforms(({ editor, setOption, tf }) => {

@@ -12,6 +12,7 @@
 import type { Executor, Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
 import type { EntityID } from '@app/shared/types';
+import type { SQL } from 'drizzle-orm';
 
 import { and, eq, inArray, like, ne, sql } from 'drizzle-orm';
 
@@ -26,6 +27,7 @@ import {
 
 import { auditLog } from '@/lib/audit';
 
+import { GOOGLE_PROVIDER_ID } from '../credential';
 import {
   reauthMethodKey,
   reauthPasskeyKey,
@@ -43,8 +45,8 @@ import {
  * None stores the user id, so a session deleted without them leaves rows
  * nothing can find again until they expire. Every path that deletes a session
  * owes this call: this codebase's own deletes inside their transaction, Better
- * Auth's through the `session.delete.after` hook in `lib/auth/index.ts` — which
- * runs after the library's transaction committed, hence `Executor`.
+ * Auth's through the `session.delete.after` hook in `lib/auth/session/hooks.ts`
+ * — which runs after the library's transaction committed, hence `Executor`.
  */
 export async function revokeSessionArtifacts(
   tx: Executor,
@@ -61,6 +63,20 @@ export async function revokeSessionArtifacts(
       ])
     )
   );
+}
+
+/** Deletes the sessions `where` selects and their artifacts; returns their ids. */
+export async function revokeSessionsWhere(
+  tx: Tx,
+  where: SQL | undefined
+): Promise<string[]> {
+  const removed = await tx
+    .delete(sessions)
+    .where(where)
+    .returning({ id: sessions.id });
+  const ids = removed.map((session) => session.id);
+  await revokeSessionArtifacts(tx, ids);
+  return ids;
 }
 
 /**
@@ -101,7 +117,6 @@ async function revokeVerificationArtifacts(
         ])
       );
 
-  // Every other row valued by the user id.
   await tx.delete(verifications).where(eq(verifications.value, userId));
 
   // ⚠️ The device-trust proof is keyed by SESSION id: method removal KEEPS the
@@ -157,17 +172,11 @@ export async function revokeOtherSessions(
   userId: EntityID,
   keepSessionId?: string | null
 ): Promise<void> {
-  const removed = await tx
-    .delete(sessions)
-    .where(
-      keepSessionId
-        ? and(eq(sessions.userId, userId), ne(sessions.id, keepSessionId))
-        : eq(sessions.userId, userId)
-    )
-    .returning({ id: sessions.id });
-  await revokeSessionArtifacts(
+  await revokeSessionsWhere(
     tx,
-    removed.map((session) => session.id)
+    keepSessionId
+      ? and(eq(sessions.userId, userId), ne(sessions.id, keepSessionId))
+      : eq(sessions.userId, userId)
   );
 }
 
@@ -217,7 +226,12 @@ export async function unlinkGoogle(
 ): Promise<void> {
   const removed = await tx
     .delete(accounts)
-    .where(and(eq(accounts.userId, userId), eq(accounts.providerId, 'google')))
+    .where(
+      and(
+        eq(accounts.userId, userId),
+        eq(accounts.providerId, GOOGLE_PROVIDER_ID)
+      )
+    )
     .returning({ id: accounts.id });
   if (removed.length === 0) return;
   const [user] = await tx

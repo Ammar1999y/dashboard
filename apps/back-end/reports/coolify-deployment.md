@@ -594,9 +594,14 @@ Docker network: decide deliberately. Remote: `require` or stricter.
 throughput knob — `withTransaction` reserves a connection for the whole block.
 `processOtpSend` commits before it calls the provider, so delivery latency holds
 no connection; a failed delivery opens a short refund transaction afterwards.
-Callers beyond 10 queue, then fail on Bun's 30 s `connectionTimeout`. Confirm
-the server's `max_connections` leaves headroom for a migration run and a `psql`
-session on top of the app's 10.
+Callers beyond 10 queue **with no time limit**: Bun's `connectionTimeout` bounds
+only opening a new connection, not waiting for a free pool slot. Measured on Bun
+1.4.2: a `max: 1, connectionTimeout: 2` pool with its connection reserved left a
+second query pending for 6 s without error. A pool that fills with transactions
+waiting on something that never comes stays stuck until a restart; audit 2FA-3
+is one such trigger. §3.3's `idle_in_transaction_session_timeout` is the
+server-side bound. Confirm the server's `max_connections` leaves headroom for a
+migration run and a `psql` session on top of the app's 10.
 
 **d. `prepare: true` is the default and is correct only here.** Bun creates
 named prepared statements on the server, which is right against PostgreSQL
@@ -640,6 +645,118 @@ the horizon above. Never remove and add in one step.
 So a pepper rollback is a two-variable operation in both directions. Roll the
 keyring and the active id together, and after any rotation confirm the active id
 names the highest generation present.
+
+### 3.3 PostgreSQL server configuration
+
+Added 2026-09-27. Applies to a Coolify-managed PostgreSQL 18 (`postgres:18-alpine`,
+Coolify's default) on the same VPS as the app. Values were chosen for this
+workload, not copied from a generic tuning guide: one Bun process with a
+10-connection pool plus a 1-connection health probe (`db/index.ts`), short OLTP
+transactions, `pg_trgm` GIN indexes, and nothing else connecting (the front-end
+never opens a database connection).
+
+**Two places, on purpose.** Memory and logging settings are server-wide and go
+in Coolify's **Custom PostgreSQL Configuration** (a `postgresql.conf`, applied
+on database restart). Timeouts go on the application's **role**, because the
+PostgreSQL 18 manual advises against `statement_timeout`, `lock_timeout` and
+`transaction_timeout` in `postgresql.conf` ("it would affect all sessions"), and
+a role setting is stored in the database, so it survives a Coolify config-file
+regression (see verification below).
+
+#### Memory and planner, in Coolify's custom configuration
+
+Size from the RAM you give PostgreSQL, not the VPS total: Coolify, Traefik and
+the Bun app share the box. Give PostgreSQL about half of RAM.
+
+| Setting                | VPS 4 GB (PG ≈ 2 GB) | VPS 8 GB (PG ≈ 4 GB) | Why                                                                                                                                                                                                                                                                              |
+| ---------------------- | -------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shared_buffers`       | `512MB`              | `1GB`                | 25 % of PostgreSQL's share. Needs a restart.                                                                                                                                                                                                                                     |
+| `effective_cache_size` | `1GB`                | `3GB`                | Planner hint only, allocates nothing: what the OS page cache can realistically hold for PostgreSQL.                                                                                                                                                                              |
+| `work_mem`             | `4MB`                | `4MB`                | Default. Per sort/hash node, per query; the data-table queries sort under `LIMIT`. Raise only on evidence (`log_temp_files`).                                                                                                                                                    |
+| `maintenance_work_mem` | `128MB`              | `256MB`              | `CREATE INDEX` on the trigram GIN indexes (`db/migrations/`) and vacuum.                                                                                                                                                                                                         |
+| `random_page_cost`     | `1.1`                | `1.1`                | SSD/NVMe only. Check `lsblk -d -o name,rota` on the host: `0` = SSD. On spinning disk keep `4`.                                                                                                                                                                                  |
+| `max_connections`      | `50`                 | `50`                 | Today's need is 11 per app process + 1 per migration run + admin sessions. 50 covers 3 app processes (the multi-process target) with headroom. Do not raise it to hide pool exhaustion: exhaustion here has been a code bug (audit 2FA-3), and more slots would not have helped. |
+
+Leave the PostgreSQL 18 defaults for `io_method` (`worker`),
+`effective_io_concurrency` (`16`), `max_wal_size` (`1GB`) and
+`checkpoint_completion_target` (`0.9`). Nothing measured here argues for a
+change.
+
+#### Logging, in the same file, to earn the settings still deferred
+
+```conf
+log_min_duration_statement = 500ms   # evidence for the deferred statement_timeout
+log_lock_waits = on                  # logs waits longer than deadlock_timeout (1 s)
+log_temp_files = 0                   # a sort spilling to disk means work_mem is too small
+shared_preload_libraries = 'pg_stat_statements'
+```
+
+Then, once, as a superuser: `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;`.
+Known issue #2 (`statement_timeout`) is deferred until p99 query durations are
+measured, and this is how they are measured. `log_lock_waits` makes the
+known user-delete ↔ role-delete deadlock (#57) visible.
+
+#### Timeouts, on the application role
+
+Run once as a superuser, naming the role in the app's `DATABASE_URL` (if that is
+the `postgres` superuser itself, use `ALTER DATABASE <db> SET …` instead):
+
+```sql
+ALTER ROLE app_user SET idle_in_transaction_session_timeout = '10s';
+```
+
+It applies to new sessions, so restart the app afterwards. What it does, measured
+on the harness database (Bun 1.4.2, PostgreSQL 18.6):
+
+- **It ends a pool deadlock.** 12 concurrent Google sign-ins with an OTP option
+  (audit 2FA-3) left all 10 pooled connections `idle in transaction` forever
+  without it: still stuck at 125 s, with `select 1` never answering. With it, all
+  12 requests failed at 10.3 s, Bun replaced the terminated connections, and the
+  next query answered in 213 ms, then 0–1 ms. Sign-in and a new Google sign-in
+  worked immediately after. The requests caught in the deadlock still fail (401);
+  the setting turns a permanent outage into a 10-second one.
+- **It did not break legitimate paths.** `credential-concurrency.test.ts` (3/3)
+  and `media-files.test.ts` (50/50) passed with it. The longest legitimate idle
+  gap measured was **4.58 s**, typically about 1 s: password sign-in holds its
+  transaction open while Argon2 runs (audit AUTH-6), and 20 concurrent sign-ins
+  queue on the CPU. That gap grows with CPU load, so on a VPS with fewer cores
+  than the 8 measured here, check `pg_stat_activity` under a sign-in burst before
+  shortening the value, and never set it below a few seconds.
+- **Not set, deliberately:** `statement_timeout` (known issue #2, waiting on the
+  logging above), `lock_timeout` and `transaction_timeout` (the manual's own
+  caution; a migration may legitimately hold locks longer), and
+  `idle_session_timeout` (it would close idle pooled connections the app expects
+  to reuse). `PGOPTIONS` is **ignored** by `bun:sql`, so do not rely on it. A
+  `?options=-c …` URL parameter does work if a per-app override is ever needed.
+
+#### Container shared memory
+
+The official image's documentation sets `shm_size: 128mb` in its Compose example;
+Docker's default `/dev/shm` is 64 MB, which parallel queries use. In the database
+container run `df -h /dev/shm`. If the logs ever show `could not resize shared
+memory segment`, raise it in Coolify's database resource settings (or custom
+Docker options) and record the value here.
+
+#### Verify after every database restart
+
+```sql
+SELECT name, setting, unit, source
+FROM pg_settings
+WHERE source NOT IN ('default', 'override')
+ORDER BY name;
+SELECT rolname, setconfig FROM pg_roles WHERE setconfig IS NOT NULL;
+```
+
+Every value above must appear, with `source = configuration file` for the
+memory and logging rows. Coolify has had bugs where a custom configuration was
+not applied: a permission error on `/etc/postgresql/postgresql.conf`
+([coollabsio/coolify#4455](https://github.com/coollabsio/coolify/issues/4455)),
+and a custom file ignored while SSL was enabled
+([#6230](https://github.com/coollabsio/coolify/issues/6230), closed). A healthy
+container is not proof the file was read. For comparison, the development
+server (PostgreSQL 18.6) reports `shared_buffers` 128 MB, `random_page_cost` 4,
+`effective_cache_size` 4 GB, and every timeout at 0. That is the state an unapplied
+file leaves.
 
 ## 4. Add persistent SQLite storage
 
@@ -1435,6 +1552,78 @@ exact path and the driver belongs in `server.ts` beside the existing assertions
   `missing client ip headers`.
 - Login/session and one non-delivery API flow work.
 - Coolify shows exactly one running app container.
+
+### Checks only Linux or Docker can answer
+
+Added 2026-09-27 from `reports/opus-5.5-audit.md`. The development machine is
+Windows with no Docker and no WSL distribution, so these were proven only as far
+as that allows. Run them once on the VPS, or on any Ubuntu 24 host with Docker,
+and record the output next to the release commit.
+
+**a. The image builds (audit OPS-1).** Every stage `extends`
+`../../tsconfig.base.json`, which the `manifests` stage does not copy, so the
+`verify` stage's `tsc --noEmit` is expected to fail with `TS5083: Cannot read
+file '/app/tsconfig.base.json'` until the Dockerfile copies it. From the
+repository root:
+
+```sh
+docker build -f apps/back-end/Dockerfile --target verify -t back-end:verify .
+docker build -f apps/back-end/Dockerfile -t back-end:check .
+```
+
+Both must exit 0. A failure at `RUN bun run build` naming `tsconfig.base.json`
+confirms OPS-1. Coolify would fail the same way on every deploy. A file-for-file
+simulation of the two stages on Windows (only the `COPY`d files, `.dockerignore`
+honoured, the stage's `ENV`) already failed exactly so: `TS5083` plus 176
+cascading errors, exit 2. The same tree with `tsconfig.base.json` added exited 0.
+
+**b. The process is not root (audit OPS-2).** The runtime stage has no `USER`
+line today, so this is expected to print `0`. §4's `0700` ownership rule assumes
+a non-root runtime UID:
+
+```sh
+docker run --rm --entrypoint id back-end:check -u
+```
+
+**c. A crafted `.xls` asks the parser for 4 GiB (audit MEDIA-3, latent).**
+`.doc`/`.xls` are disabled uploads today (`DISABLED_FILE_TYPES`), so this
+matters before either is re-enabled. On Windows, a 2 048-byte file whose
+`Workbook` entry claims `0xFFFFFFF0` bytes made `detectCompoundFile` construct
+`new Uint8Array(4294967280)` and answer `container` in 2 ms with no RSS growth,
+because the pages were never touched. On Linux the answer depends on
+`vm.overcommit_memory` and the container's memory limit: the allocation may
+succeed lazily, fail with a `RangeError`, or be OOM-killed. Inside the running
+container (`/app/apps/back-end`), with `cat /proc/sys/vm/overcommit_memory`
+recorded first:
+
+```sh
+cd /app/apps/back-end && bun - 4294967280 <<'BUN'
+let largest = 0;
+const U8 = Uint8Array;
+globalThis.Uint8Array = new Proxy(U8, { construct(t, a) { if (typeof a[0] === 'number' && a[0] > largest) largest = a[0]; return Reflect.construct(t, a); } });
+const { detectCompoundFile } = await import(`${process.cwd()}/lib/media/office/cfb.ts`);
+const claimed = Number(process.argv.at(-1));
+const b = new U8(2048), v = new DataView(b.buffer);
+b.set([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+v.setUint16(24, 0x3e, true); v.setUint16(26, 3, true); v.setUint16(28, 0xfffe, true); v.setUint16(30, 9, true); v.setUint16(32, 6, true);
+v.setUint32(44, 1, true); v.setUint32(48, 1, true); v.setUint32(56, 4096, true); v.setUint32(60, 0xfffffffe, true); v.setUint32(68, 0xfffffffe, true);
+for (let i = 1; i < 109; i++) v.setUint32(76 + i * 4, 0xffffffff, true);
+for (let i = 0; i < 128; i++) v.setUint32(512 + i * 4, i === 0 ? 0xfffffffd : i < 3 ? 0xfffffffe : 0xffffffff, true);
+const entry = (at, name, type, start, size) => { for (let i = 0; i < name.length; i++) v.setUint16(at + i * 2, name.charCodeAt(i), true); v.setUint16(at + 64, (name.length + 1) * 2, true); b[at + 66] = type; for (const o of [68, 72, 76]) v.setUint32(at + o, 0xffffffff, true); v.setUint32(at + 116, start, true); v.setUint32(at + 120, size, true); };
+entry(1024, 'Root Entry', 5, 0xfffffffe, 0); entry(1152, 'Workbook', 2, 2, claimed);
+const t0 = performance.now(), r0 = process.memoryUsage().rss;
+let result; try { result = detectCompoundFile(b, 'excel'); } catch (e) { result = { threw: String(e) }; }
+console.log(JSON.stringify({ platform: process.platform, bun: Bun.version, result, ms: Math.round(performance.now() - t0), largestAllocation: largest, rssDeltaMB: Math.round((process.memoryUsage().rss - r0) / 2 ** 20) }));
+BUN
+```
+
+Windows result for comparison:
+`{"result":{"ok":false,"reason":"container"},"ms":2,"largestAllocation":4294967280,"rssDeltaMB":1}`.
+`largestAllocation: 4294967280` confirms the defect on this platform. A
+`threw: RangeError…` result means an upload would escape as a 500. A killed
+process (exit 137, no output) means one upload restarts the container. The fix
+is `Math.min(entry.size, limit, bytes.length)` in `readStream`; after it,
+`largestAllocation` must be `2048`.
 
 ## 9. Scheduled tasks
 

@@ -15,7 +15,7 @@ import { Elysia } from 'elysia';
 import { auth } from '@/lib/auth';
 import { betterAuthServes } from '@/lib/auth/allowed-paths';
 
-import { errorClassOf } from '@/utils/log';
+import { errorClassOf, logLine } from '@/utils/log';
 
 // Load-time gates for the OTP and two-factor configuration; imported here so
 // they run when the application is assembled, whatever else imports them.
@@ -23,14 +23,12 @@ import '@/lib/otp/config';
 
 import {
   HTTP_STATUS,
-  MSG_BODY_TOO_LARGE,
   MSG_INTERNAL_ERROR,
   MSG_METHOD_NOT_ALLOWED,
   MSG_PAGE_NOT_FOUND,
 } from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
 
-import { BASE_ERROR_CODES, CUSTOM_AUTH_CODE } from '@/lib/auth/errors';
+import { CUSTOM_AUTH_CODE, localisedAuthMessage } from '@/lib/auth/errors';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { elysiaRouteConfig, toElysiaHandler } from '@/lib/http/adapters/elysia';
 import { runAfterResponse } from '@/lib/http/after-response';
@@ -40,6 +38,7 @@ import {
   UNKNOWN_PREFIX_SCOPE,
 } from '@/lib/http/pre-auth';
 import {
+  bodyTooLarge,
   boundedBodyRequest,
   buildRequestMeta,
   declaresBodyOver,
@@ -75,13 +74,13 @@ async function localiseAuthError(response: Response): Promise<Response> {
     typeof body === 'object' && body !== null && 'code' in body
       ? body.code
       : undefined;
-  if (typeof code !== 'string' || !Object.hasOwn(BASE_ERROR_CODES, code))
-    return response;
+  const message = localisedAuthMessage(code);
+  if (message === undefined) return response;
 
   const headers = new Headers(response.headers);
   headers.set('content-type', 'application/json;charset=utf-8');
   return Response.json(
-    { message: BASE_ERROR_CODES[code], code: CUSTOM_AUTH_CODE },
+    { message, code: CUSTOM_AUTH_CODE },
     { status: response.status, statusText: response.statusText, headers }
   );
 }
@@ -198,11 +197,13 @@ function routeMiss(pathname: string): Response {
   const methods = lookupMethods(pathname);
   if (methods.size === 0) return notFound();
 
-  return toWebResponse({
-    status: HTTP_STATUS.METHOD_NOT_ALLOWED,
-    body: { success: false, message: MSG_METHOD_NOT_ALLOWED, data: null },
-    headers: { Allow: allowHeader(methods) },
-  });
+  return toWebResponse(
+    apiError({
+      message: MSG_METHOD_NOT_ALLOWED,
+      status: HTTP_STATUS.METHOD_NOT_ALLOWED,
+      headers: { Allow: allowHeader(methods) },
+    })
+  );
 }
 
 const base = new Elysia({
@@ -248,14 +249,7 @@ const base = new Elysia({
     // the body is read — `readBoundedText` for table routes,
     // `boundedBodyRequest` at the Better Auth prefix below.
     if (declaresBodyOver(request, lookupBodyCeiling(url.pathname)))
-      return finish(
-        request,
-        toWebResponse(
-          handleApiError(
-            new CustomError(MSG_BODY_TOO_LARGE, HTTP_STATUS.CONTENT_TOO_LARGE)
-          )
-        )
-      );
+      return finish(request, toWebResponse(handleApiError(bodyTooLarge())));
 
     // Route-aware OPTIONS, ahead of the CORS plugin's own `OPTIONS /*`
     // catch-all, which answers 204 on any path. The trailing-slash redirect is
@@ -286,7 +280,6 @@ const base = new Elysia({
     if (!(responseValue instanceof Response)) return;
     return finish(request, responseValue) as never;
   })
-  // One wiring line by design; the work lives in `lib/http/after-response.ts`.
   .onAfterResponse(({ request, set, path, responseValue }) => {
     const started = startedAt.get(request);
     startedAt.delete(request);
@@ -320,13 +313,11 @@ const base = new Elysia({
 
     // A framework-level fault that escaped `toElysiaHandler`'s own catch. The
     // message is never echoed: it can carry internals.
-    console.error(
-      JSON.stringify({
-        msg: 'unhandled server error',
-        code,
-        errorClass: errorClassOf(error),
-      })
-    );
+    logLine('error', {
+      msg: 'unhandled server error',
+      code,
+      errorClass: errorClassOf(error),
+    });
     return finish(
       request,
       toWebResponse(

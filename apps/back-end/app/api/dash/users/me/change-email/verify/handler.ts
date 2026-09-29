@@ -1,18 +1,13 @@
-import { withTransaction } from '@/db';
-
-import { HTTP_STATUS, MSG_UPDATE_ERROR } from '@app/shared/api-messages';
-import { OTP_AUTO_VERIFY } from '@app/shared/config';
-import { CustomError } from '@app/shared/error-class';
+import { MSG_UPDATE_ERROR } from '@app/shared/api-messages';
 import { changeEmailVerifySchema } from '@app/shared/validation/auth';
 
 import { getAuditMeta } from '@/lib/audit';
-import { otpMsg } from '@/lib/auth/messages';
-import { verifyTurnstileRequest } from '@/lib/captcha';
+import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
-import { processOtpVerify } from '@/lib/otp/verify';
+import { verifyOtpOrAutoVerify } from '@/lib/otp/verify';
 import {
   enforceOtpVerifyQuota,
   enforceRateLimit,
@@ -41,9 +36,7 @@ export const POST = withApiErrors(
       failClosed: true,
     });
 
-    const captchaOk = await verifyTurnstileRequest(ctx.headers);
-    if (!captchaOk)
-      throw new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
+    if (!(await verifyTurnstileRequest(ctx.headers))) throw captchaRefused();
 
     const input = await readJsonBody(ctx, changeEmailVerifySchema);
 
@@ -59,33 +52,24 @@ export const POST = withApiErrors(
     // OTP_AUTO_VERIFY commits directly, idempotent if the initiate step already
     // did. Otherwise the proof is looked up by (user, contact kind, purpose,
     // identifier), so a code can only commit the address it was issued for.
-    await (OTP_AUTO_VERIFY
-      ? withTransaction((tx) =>
-          commitEmailChange({
-            tx,
-            userId,
-            newEmail,
-            auditMeta,
-          })
-        )
-      : processOtpVerify({
+    await verifyOtpOrAutoVerify({
+      userId,
+      userEmail: session.user.email,
+      channel: 'email',
+      purpose: 'change_email',
+      identifier: newEmail,
+      code: input.code,
+      auditMeta,
+      // The address bound to the proven session, not the request body.
+      onVerified: (tx, matched) =>
+        commitEmailChange({
+          tx,
           userId,
-          userEmail: session.user.email,
-          channel: 'email',
-          purpose: 'change_email',
-          identifier: newEmail,
-          code: input.code,
+          newEmail: matched?.targetIdentifier ?? newEmail,
+          keepVerificationSessionId: matched?.verificationSessionId,
           auditMeta,
-          // The address bound to the proven session, not the request body.
-          onVerified: (tx, matched) =>
-            commitEmailChange({
-              tx,
-              userId,
-              newEmail: matched.targetIdentifier ?? newEmail,
-              keepVerificationSessionId: matched.verificationSessionId,
-              auditMeta,
-            }),
-        }));
+        }),
+    });
 
     return apiSuccess({
       message: userMsg.emailChanged,

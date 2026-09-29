@@ -1,6 +1,5 @@
 import { parseEnumList } from '@app/shared/validation/env-list';
-
-const OAUTH_PROVIDERS = ['google'] as const;
+import { OAUTH_PROVIDERS } from '@app/shared/validation/oauth';
 
 export const ENABLED_OAUTH_PROVIDERS = parseEnumList(
   process.env.ENABLED_OAUTH_PROVIDERS,

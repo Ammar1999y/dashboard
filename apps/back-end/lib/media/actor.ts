@@ -44,12 +44,26 @@ export function requestActor(
   };
 }
 
+/** The actor of a route whose grant may be the `Own` variant. */
+export function grantedActor(
+  ctx: HandlerInput,
+  caller: AuthorisedCaller & { scope?: Actor['scope'] | null }
+): Actor {
+  return requestActor(ctx, caller, caller.scope ?? 'all');
+}
+
+export function withinScope(
+  actor: Pick<Actor, 'userId' | 'scope'>,
+  ownerId: EntityID | null
+): boolean {
+  return actor.scope !== 'own' || ownerId === actor.userId;
+}
+
 type ActorAuditEntry = Omit<
   Parameters<typeof auditLog>[1],
   'userId' | 'userEmail' | 'meta'
 >;
 
-/** One audit row written in the actor's name. */
 export function auditAs(
   tx: Tx,
   actor: AuditActor,

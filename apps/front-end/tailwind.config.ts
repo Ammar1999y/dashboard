@@ -83,8 +83,8 @@ const config: Config = {
         xl: ['var(--text-xl)', 'var(--text-xl-line-height)'],
         '2xl': ['var(--text-2xl)', 'var(--text-2xl-line-height)'],
         '3xl': ['var(--text-3xl)', 'var(--text-3xl-line-height)'],
-        '4xl': ['var(--text-4xl)', 'var(--text-4xl--line-height)'],
-        '5xl': ['var(--text-5xl)', 'var(--text-5xl--line-height)'],
+        '4xl': ['var(--text-4xl)', 'var(--text-4xl-line-height)'],
+        '5xl': ['var(--text-5xl)', 'var(--text-5xl-line-height)'],
       },
       colors: {
         gray: {

@@ -28,12 +28,15 @@ import {
   DISABLED_FILE_TYPES,
   DOC_MIME_TYPE,
   DOCX_MIME_TYPE,
-  FILE_TYPE_TABLE,
-  FILE_TYPES,
-  fileTypeFor,
   mimeTypesOfKind,
   XLS_MIME_TYPE,
   XLSX_MIME_TYPE,
+} from '@app/shared/validation/media-types';
+
+import {
+  FILE_TYPE_TABLE,
+  FILE_TYPES,
+  fileTypeFor,
 } from '@/lib/media/allowlist';
 import { detectCompoundFile } from '@/lib/media/office/cfb';
 import {

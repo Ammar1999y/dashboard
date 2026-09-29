@@ -10,7 +10,7 @@ import { Slot } from '@radix-ui/react-slot';
 import { cn } from '@/lib/utils';
 
 import {
-  getConditionalProps,
+  getHandleProps,
   ITEM_HANDLE_NAME,
   ITEM_NAME,
   SORTABLE_ERRORS,
@@ -61,11 +61,15 @@ export function SortableItem(props: SortableItemProps) {
     isDragging,
   } = useSortable({ id: value, disabled });
 
-  const composedRef = useComposedRefs(ref, (node) => {
-    if (disabled) return;
-    setNodeRef(node);
-    if (asHandle) setActivatorNodeRef(node);
-  });
+  const setSortableRef = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      if (disabled) return;
+      setNodeRef(node);
+      if (asHandle) setActivatorNodeRef(node);
+    },
+    [disabled, asHandle, setNodeRef, setActivatorNodeRef]
+  );
+  const composedRef = useComposedRefs(ref, setSortableRef);
 
   const composedStyle = React.useMemo<React.CSSProperties>(
     () => ({
@@ -88,24 +92,17 @@ export function SortableItem(props: SortableItemProps) {
     [id, attributes, listeners, setActivatorNodeRef, isDragging, disabled]
   );
 
-  const isHandle = asHandle === true && !disabled;
-  const conditionalProps = getConditionalProps(isHandle, attributes, listeners);
-
-  const ItemPrimitive = React.useMemo(
-    () => (asChild ? Slot : 'div'),
-    [asChild]
-  );
+  const ItemPrimitive = asChild ? Slot : 'div';
 
   return (
     <SortableItemContext.Provider value={itemContext}>
       <ItemPrimitive
         id={id}
-        data-disabled={disabled}
+        data-disabled={disabled ? '' : undefined}
         data-dragging={isDragging ? '' : undefined}
         data-slot='sortable-item'
         {...itemProps}
-        {...conditionalProps.attributes}
-        {...conditionalProps.listeners}
+        {...getHandleProps(!!asHandle && !disabled, attributes, listeners)}
         ref={composedRef}
         style={composedStyle}
         className={cn(
@@ -137,32 +134,30 @@ export function SortableItemHandle(props: SortableItemHandleProps) {
 
   const isDisabled = disabled ?? itemContext.disabled;
 
-  const composedRef = useComposedRefs(ref, (node) => {
-    if (isDisabled) return;
-    itemContext.setActivatorNodeRef(node);
-  });
-
-  const conditionalProps = getConditionalProps(
-    !isDisabled,
-    itemContext.attributes,
-    itemContext.listeners
+  const { setActivatorNodeRef } = itemContext;
+  const setHandleRef = React.useCallback(
+    (node: HTMLButtonElement | null) => {
+      if (!isDisabled) setActivatorNodeRef(node);
+    },
+    [isDisabled, setActivatorNodeRef]
   );
+  const composedRef = useComposedRefs(ref, setHandleRef);
 
-  const HandlePrimitive = React.useMemo(
-    () => (asChild ? Slot : 'button'),
-    [asChild]
-  );
+  const HandlePrimitive = asChild ? Slot : 'button';
 
   return (
     <HandlePrimitive
       type='button'
       aria-controls={itemContext.id}
-      data-disabled={isDisabled}
+      data-disabled={isDisabled ? '' : undefined}
       data-dragging={itemContext.isDragging ? '' : undefined}
       data-slot='sortable-item-handle'
       {...itemHandleProps}
-      {...conditionalProps.attributes}
-      {...conditionalProps.listeners}
+      {...getHandleProps(
+        !isDisabled,
+        itemContext.attributes,
+        itemContext.listeners
+      )}
       ref={composedRef}
       className={cn(
         'select-none disabled:pointer-events-none disabled:opacity-50',

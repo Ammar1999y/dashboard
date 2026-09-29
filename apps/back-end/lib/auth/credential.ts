@@ -1,4 +1,9 @@
+// Import-free: `db/schema.ts` reads `CREDENTIAL_ISSUER` at load, so an import
+// here closes a cycle through the schema.
+
 export const CREDENTIAL_PROVIDER_ID = 'credential' as const;
+
+export const GOOGLE_PROVIDER_ID = 'google' as const;
 
 /**
  * The `accounts.issuer` value Better Auth requires for a password account.

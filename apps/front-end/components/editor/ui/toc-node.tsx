@@ -1,59 +1,61 @@
 'use client';
 
+import type { Heading } from '@platejs/toc';
 import type { PlateElementProps } from 'platejs/react';
+import type { MouseEvent } from 'react';
+
+import { memo, useCallback } from 'react';
 
 import { useTocElement, useTocElementState } from '@platejs/toc/react';
-import { cva } from 'class-variance-authority';
 import { PlateElement } from 'platejs/react';
+import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
+import { EMPTY_TOC_LABEL } from '@/components/editor/labels';
+import {
+  TOC_CLASS,
+  tocDepth,
+  tocItemVariants,
+} from '@/components/editor/styles';
 
-const headingItemVariants = cva(
-  'block h-auto w-full cursor-pointer truncate rounded-none px-0.5 py-1.5 text-end font-medium text-muted-foreground underline decoration-[0.5px] underline-offset-4 hover:bg-accent hover:text-muted-foreground',
-  {
-    variants: {
-      depth: {
-        1: 'ps-0.5',
-        2: 'ps-6',
-        3: 'ps-12',
-      },
-    },
+type TocClick = ReturnType<typeof useTocElement>['props']['onClick'];
+
+const TocItem = memo(
+  ({ item, onNavigate }: { item: Heading; onNavigate: TocClick }) => {
+    const handleClick = useCallback(
+      (event: MouseEvent<HTMLElement>) => onNavigate(event, item, 'smooth'),
+      [item, onNavigate]
+    );
+
+    return (
+      <Button
+        className={cn(
+          tocItemVariants({ depth: tocDepth(item.depth) }),
+          'cursor-pointer hover:bg-accent hover:text-muted-foreground'
+        )}
+        onClick={handleClick}
+        variant='ghost'
+      >
+        {item.title}
+      </Button>
+    );
   }
 );
+TocItem.displayName = 'TocItem';
 
 export function TocElement(props: PlateElementProps) {
   const state = useTocElementState();
-  const { props: btnProps } = useTocElement(state);
-  const { headingList } = state;
+  const { props: tocProps } = useTocElement(state);
 
   return (
-    <PlateElement
-      {...props}
-      attributes={{
-        ...props.attributes,
-        'data-ltr-element': true,
-      }}
-      className='mb-1 p-0'
-    >
+    <PlateElement {...props} className={TOC_CLASS}>
       <div contentEditable={false}>
-        {headingList.length > 0 ? (
-          headingList.map((item) => (
-            <Button
-              aria-current
-              className={headingItemVariants({
-                depth: item.depth as 1 | 2 | 3,
-              })}
-              key={item.id}
-              onClick={(e) => btnProps.onClick(e, item, 'smooth')}
-              variant='ghost'
-            >
-              {item.title}
-            </Button>
+        {state.headingList.length > 0 ? (
+          state.headingList.map((item) => (
+            <TocItem item={item} key={item.id} onNavigate={tocProps.onClick} />
           ))
         ) : (
-          <div className='text-sm text-gray-500'>
-            Create a heading to display the table of contents.
-          </div>
+          <div className='text-sm text-muted-foreground'>{EMPTY_TOC_LABEL}</div>
         )}
       </div>
       {props.children}

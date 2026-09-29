@@ -1,14 +1,14 @@
 'use client';
 
-import type { DropdownMenuProps } from '@radix-ui/react-dropdown-menu';
+import type { PlateEditor } from 'platejs/react';
 
 import * as React from 'react';
 
 import { MarkdownPlugin } from '@platejs/markdown';
-import { ArrowUpToLineIcon } from 'lucide-react';
 import { useEditorRef } from 'platejs/react';
-import { getEditorDOMFromHtmlString } from 'platejs/static';
 import { useFilePicker } from 'use-file-picker';
+
+import { toastError } from '@/utils/mutation';
 
 import {
   DropdownMenu,
@@ -17,9 +17,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
-
-type ImportType = 'html' | 'markdown';
+import { deserializeEditorHtml } from '@/components/editor/export';
 
 /**
  * `useFilePicker`'s config is a union discriminated on `readAs`/`readFilesContent`,
@@ -28,78 +28,47 @@ type ImportType = 'html' | 'markdown';
  */
 type PickedFiles = { plainFiles?: File[] };
 
-export function ImportToolbarButton(props: DropdownMenuProps) {
+const PARSERS = {
+  html: deserializeEditorHtml,
+  markdown: (editor: PlateEditor, text: string) =>
+    editor.getApi(MarkdownPlugin).markdown.deserialize(text),
+};
+
+function useImportPicker(accept: string[], parse: keyof typeof PARSERS) {
   const editor = useEditorRef();
+  return useFilePicker({
+    accept,
+    multiple: false,
+    onFilesSelected: ({ plainFiles }: PickedFiles) => {
+      const file = plainFiles?.[0];
+      if (!file) return;
+      file
+        .text()
+        .then((text) => editor.tf.insertNodes(PARSERS[parse](editor, text)))
+        .catch(toastError);
+    },
+  }).openFilePicker;
+}
+
+export function ImportToolbarButton() {
   const [open, setOpen] = React.useState(false);
-
-  const getFileNodes = (text: string, type: ImportType) => {
-    if (type === 'html') {
-      const editorNode = getEditorDOMFromHtmlString(text);
-      const nodes = editor.api.html.deserialize({
-        element: editorNode,
-      });
-
-      return nodes;
-    }
-
-    if (type === 'markdown') {
-      return editor.getApi(MarkdownPlugin).markdown.deserialize(text);
-    }
-
-    return [];
-  };
-
-  const { openFilePicker: openMdFilePicker } = useFilePicker({
-    accept: ['.md', '.mdx'],
-    multiple: false,
-    onFilesSelected: async (data: PickedFiles) => {
-      if (!data.plainFiles || data.plainFiles.length === 0) return;
-
-      const text = await data.plainFiles[0].text();
-
-      const nodes = getFileNodes(text, 'markdown');
-
-      editor.tf.insertNodes(nodes);
-    },
-  });
-
-  const { openFilePicker: openHtmlFilePicker } = useFilePicker({
-    accept: ['text/html'],
-    multiple: false,
-    onFilesSelected: async (data: PickedFiles) => {
-      if (!data.plainFiles || data.plainFiles.length === 0) return;
-
-      const text = await data.plainFiles[0].text();
-
-      const nodes = getFileNodes(text, 'html');
-
-      editor.tf.insertNodes(nodes);
-    },
-  });
+  const openHtml = useImportPicker(['text/html', '.html', '.htm'], 'html');
+  const openMarkdown = useImportPicker(['.md', '.mdx'], 'markdown');
 
   return (
-    <DropdownMenu modal={false} onOpenChange={setOpen} open={open} {...props}>
+    <DropdownMenu modal={false} onOpenChange={setOpen} open={open}>
       <DropdownMenuTrigger asChild>
         <ToolbarButton isDropdown pressed={open} tooltip='استيراد'>
-          <ArrowUpToLineIcon className='size-4' />
+          <Icon icon='solar:upload-minimalistic-linear' className='size-4' />
         </ToolbarButton>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align='start'>
         <DropdownMenuGroup>
-          <DropdownMenuItem
-            onSelect={() => {
-              openHtmlFilePicker();
-            }}
-          >
+          <DropdownMenuItem onSelect={openHtml}>
             استيراد من HTML
           </DropdownMenuItem>
-
-          <DropdownMenuItem
-            onSelect={() => {
-              openMdFilePicker();
-            }}
-          >
+          <DropdownMenuItem onSelect={openMarkdown}>
             استيراد من Markdown
           </DropdownMenuItem>
         </DropdownMenuGroup>

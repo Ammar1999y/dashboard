@@ -23,6 +23,7 @@ import {
   PASSWORD_MIN,
 } from '@app/shared/validation/constants';
 import { OTP_CHANNELS } from '@app/shared/validation/enums';
+import { ALLOWED_MIME_TYPES } from '@app/shared/validation/media-types';
 import { isChannelEnabled } from '@app/shared/validation/otp';
 import { isTwoFactorMethodEnabled } from '@app/shared/validation/two-factor';
 
@@ -32,10 +33,8 @@ import {
   betterAuthServes,
 } from '@/lib/auth/allowed-paths';
 import { operatorsForSpec } from '@/lib/data-table/column-specs';
-import {
-  BETTER_AUTH_OVERRIDDEN_RESPONSES,
-  BETTER_AUTH_TRUSTED_RESPONSES,
-} from '@/lib/http/openapi/better-auth';
+import { BETTER_AUTH_OVERRIDDEN_RESPONSES } from '@/lib/http/openapi/better-auth';
+import { BETTER_AUTH_TRUSTED_RESPONSES } from '@/lib/http/openapi/better-auth-tables';
 import { openApiDocument } from '@/lib/http/openapi/document';
 import {
   memoiseOpenApiDocument,
@@ -46,7 +45,6 @@ import {
   toPublishedManifest,
   toRegisteredRoutes,
 } from '@/lib/http/route-manifest';
-import { ALLOWED_MIME_TYPES } from '@/lib/media/allowlist';
 
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 

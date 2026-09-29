@@ -1,12 +1,18 @@
-import type { ChangeEvent, Ref, TextareaHTMLAttributes } from 'react';
+import type { ChangeEvent, ComponentProps } from 'react';
 
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react';
 
+import { useComposedRefs } from '@radix-ui/react-compose-refs';
 import { cn } from '@/lib/utils';
 
-import useIsomorphicLayoutEffect from '@/hooks/use-layout-effect';
-
-import { fieldSurface } from './field-surface';
+import { fieldSurface } from '@/components/ui/field-surface';
 
 // Computed lengths carry their unit (`"1px"`), which `Number` alone rejects.
 function parsePx(value: string | null): number {
@@ -58,10 +64,7 @@ function measureAndSetHeight(
   textarea.style.overflowY = contentHeight > maxHeightPx ? 'auto' : 'hidden';
 }
 
-type AutosizeTextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement> &
-  HeightConstraints & {
-    ref?: Ref<HTMLTextAreaElement>;
-  };
+type AutosizeTextareaProps = ComponentProps<'textarea'> & HeightConstraints;
 
 export const AutosizeTextarea = memo(
   ({
@@ -74,11 +77,12 @@ export const AutosizeTextarea = memo(
     value,
     defaultValue,
     rows,
+    disabled,
     ref,
     ...props
   }: AutosizeTextareaProps) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const lastObservedWidth = useRef<number | null>(null);
+    const composedRef = useComposedRefs(ref, textareaRef);
 
     const constraints = useMemo(
       () => ({ minRows, maxRows, minHeight, maxHeight }),
@@ -90,43 +94,28 @@ export const AutosizeTextarea = memo(
       if (el) measureAndSetHeight(el, constraints);
     }, [constraints]);
 
-    const mergedRef = useCallback(
-      (node: HTMLTextAreaElement | null) => {
-        textareaRef.current = node;
-        if (typeof ref === 'function') ref(node);
-        else if (ref) ref.current = node;
-      },
-      [ref]
-    );
-
     // Before paint, so a value change never shows a frame at the old height.
-    useIsomorphicLayoutEffect(() => {
+    useLayoutEffect(() => {
       adjust();
     }, [value, defaultValue, adjust]);
 
-    // Width changes re-wrap the text, so the height has to follow.
+    // Width changes re-wrap the text, so the height has to follow. Height is
+    // ignored: `adjust` writes it, and reacting to that would loop.
     useEffect(() => {
       const el = textareaRef.current;
       if (!el) return;
 
-      if (typeof ResizeObserver !== 'undefined') {
-        const ro = new ResizeObserver((entries) => {
-          const width = entries[0]?.contentRect.width;
-          if (width === undefined) return;
-          if (
-            lastObservedWidth.current === null ||
-            Math.abs(width - lastObservedWidth.current) > 0.5
-          ) {
-            lastObservedWidth.current = width;
-            adjust();
-          }
-        });
-        ro.observe(el);
-        return () => ro.disconnect();
-      }
-
-      window.addEventListener('resize', adjust);
-      return () => window.removeEventListener('resize', adjust);
+      let lastWidth: number | undefined;
+      const ro = new ResizeObserver((entries) => {
+        const width = entries[0]?.contentRect.width;
+        if (width === undefined) return;
+        if (lastWidth === undefined || Math.abs(width - lastWidth) > 0.5) {
+          lastWidth = width;
+          adjust();
+        }
+      });
+      ro.observe(el);
+      return () => ro.disconnect();
     }, [adjust]);
 
     const handleChange = useCallback(
@@ -140,16 +129,17 @@ export const AutosizeTextarea = memo(
     return (
       <textarea
         data-lenis-prevent
-        ref={mergedRef}
+        ref={composedRef}
         rows={rows ?? minRows}
         className={cn(
           fieldSurface,
           'block w-full min-w-0 resize-none px-3 py-2 caret-primary placeholder:text-muted-foreground',
-          className,
-          props.disabled && 'disabled'
+          disabled && 'disabled',
+          className
         )}
         value={value}
         defaultValue={defaultValue}
+        disabled={disabled}
         onChange={handleChange}
         {...props}
       />

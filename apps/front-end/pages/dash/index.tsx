@@ -1,11 +1,5 @@
-export default function Home() {
-  return <div></div>;
-}
+import type { Page } from '@/types/page';
 
-export async function getStaticProps() {
-  return {
-    props: {
-      pathname: '/',
-    },
-  };
-}
+const HomePage: Page = () => <div />;
+
+export default HomePage;

@@ -1,4 +1,4 @@
-import type { RoutePrefixPath } from '@/lib/http/route-manifest';
+import type { RoutePrefix, RoutePrefixPath } from '@/lib/http/route-manifest';
 
 import {
   isTwoFactorMethodEnabled,
@@ -8,39 +8,147 @@ import {
 
 import { GOOGLE_ENABLED } from './oauth/config';
 
-/**
- * The two-factor surface, gated per METHOD by the environment: a method that is
- * off contributes no entry, so `app.ts` never forwards its path to Better Auth
- * and the `before` hook rejects it a second time.
- *
- * `/two-factor/send-otp` and `/two-factor/verify-otp` are absent
- * unconditionally — the plugin's OTP is not configured, so listing them would
- * advertise an endpoint that answers `OTP_NOT_CONFIGURED`.
- *
- * ⚠️ A path here carrying a `password` field must also be in
- * `PASSWORD_PROOF_PATHS` (`lib/auth/path-policy.ts`), or it rejects every
- * password.
- */
-function twoFactorEndpoints(): RoutePrefixPath[] {
-  if (!TWO_FACTOR_ENABLED) return [];
+interface EndpointGroup {
+  enabled: boolean;
+  endpoints: readonly RoutePrefixPath[];
+}
 
+/**
+ * Every endpoint this codebase can serve, grouped by the switch that turns it
+ * on. Row order is `BETTER_AUTH_ENDPOINTS`' order.
+ */
+const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
+  {
+    enabled: true,
+    endpoints: [
+      {
+        path: '/capabilities',
+        methods: ['GET'],
+        preAuthLimit: 60,
+        captcha: false,
+        session: 'none',
+      },
+      {
+        path: '/reauth/methods',
+        methods: ['GET'],
+        preAuthLimit: 60,
+        captcha: false,
+        session: 'session',
+      },
+    ],
+  },
+  {
+    enabled: isTwoFactorMethodEnabled('passkey'),
+    endpoints: [
+      {
+        path: '/reauth/passkey/options',
+        methods: ['POST'],
+        preAuthLimit: 20,
+        captcha: false,
+        session: 'session',
+      },
+      {
+        path: '/reauth/passkey/verify',
+        methods: ['POST'],
+        preAuthLimit: 20,
+        captcha: false,
+        session: 'session',
+      },
+    ],
+  },
+  {
+    enabled: GOOGLE_ENABLED,
+    endpoints: [
+      {
+        path: '/oauth/google/start',
+        methods: ['POST'],
+        preAuthLimit: 20,
+        captcha: true,
+        session: 'none',
+      },
+      {
+        path: '/oauth/google/callback',
+        methods: ['GET'],
+        preAuthLimit: 30,
+        captcha: false,
+        session: 'none',
+      },
+      {
+        path: '/oauth/result',
+        methods: ['GET'],
+        preAuthLimit: 60,
+        captcha: false,
+        session: 'none',
+      },
+    ],
+  },
+  {
+    enabled: true,
+    endpoints: [
+      // GET only, although `getSession` declares `["GET", "POST"]`: its handler
+      // refuses POST unless `session.deferSessionRefresh` is enabled, and
+      // `lib/auth/index.ts` does not enable it. Enabling it is what would make
+      // POST belong here. The budget is separate from credential attempts for
+      // shared NATs.
+      {
+        path: '/get-session',
+        methods: ['GET'],
+        preAuthLimit: 300,
+        captcha: false,
+        session: 'optional',
+      },
+      {
+        path: '/sign-out',
+        methods: ['POST'],
+        preAuthLimit: 30,
+        captcha: false,
+        session: 'optional',
+      },
+      {
+        path: '/sign-in/email',
+        methods: ['POST'],
+        preAuthLimit: 20,
+        captcha: true,
+        session: 'none',
+      },
+      // Verifies its own captcha, rate limit and OTP.
+      {
+        path: '/passwordless/verify',
+        methods: ['POST'],
+        preAuthLimit: 60,
+        captcha: true,
+        session: 'none',
+      },
+    ],
+  },
+
+  // The two-factor surface, gated per METHOD: a method that is off contributes
+  // no entry, so `app.ts` never forwards its path to Better Auth and the
+  // `before` hook rejects it a second time.
+  //
+  // `/two-factor/send-otp` and `/two-factor/verify-otp` are absent
+  // unconditionally — the plugin's OTP is not configured, so listing them would
+  // advertise an endpoint that answers `OTP_NOT_CONFIGURED`.
+  //
   // ⚠️ `/two-factor/enable` is ABSENT and stays absent. It can only produce TOTP
   // in this configuration, and it writes the flag and the credential outside the
   // transaction that has to carry the intent row with them. Enrolment is
   // `lib/auth/two-factor/enrolment.ts`.
-  const paths: RoutePrefixPath[] = [
-    {
-      path: '/two-factor/disable',
-      methods: ['POST'],
-      preAuthLimit: 20,
-      captcha: false,
-      session: 'session',
-    },
-  ];
-
-  // eslint-disable-next-line unicorn/no-immediate-mutation -- the list is built method by method below, each block behind its own gate and comment; one literal would bury them
-  if (isTwoFactorMethodEnabled('totp'))
-    paths.push(
+  {
+    enabled: TWO_FACTOR_ENABLED,
+    endpoints: [
+      {
+        path: '/two-factor/disable',
+        methods: ['POST'],
+        preAuthLimit: 20,
+        captcha: false,
+        session: 'session',
+      },
+    ],
+  },
+  {
+    enabled: isTwoFactorMethodEnabled('totp'),
+    endpoints: [
       {
         path: '/two-factor/get-totp-uri',
         methods: ['POST'],
@@ -70,66 +178,69 @@ function twoFactorEndpoints(): RoutePrefixPath[] {
         preAuthLimit: 30,
         captcha: false,
         session: 'challenge',
-      }
-    );
-
+      },
+    ],
+  },
   // Not gated on any single method: this is how a user reaches all of them.
-  paths.push(
-    {
-      path: '/two-factor/trust-device',
-      methods: ['POST'],
-      preAuthLimit: 20,
-      captcha: false,
-      session: 'session',
-    },
-    {
-      path: '/two-factor/trusted-devices',
-      methods: ['GET'],
-      preAuthLimit: 60,
-      captcha: false,
-      session: 'session',
-    },
-    {
-      path: '/two-factor/trusted-devices/revoke',
-      methods: ['POST'],
-      preAuthLimit: 30,
-      captcha: false,
-      session: 'session',
-    },
-    {
-      path: '/two-factor/methods',
-      methods: ['GET'],
-      preAuthLimit: 60,
-      captcha: false,
-      session: 'session',
-    },
-    {
-      path: '/two-factor/methods/disable',
-      methods: ['POST'],
-      preAuthLimit: 20,
-      captcha: false,
-      session: 'session',
-    },
-    {
-      path: '/two-factor/methods/default',
-      methods: ['POST'],
-      preAuthLimit: 30,
-      captcha: false,
-      session: 'session',
-    },
-    {
-      path: '/two-factor/backup-codes/acknowledge',
-      methods: ['POST'],
-      preAuthLimit: 20,
-      captcha: false,
-      session: 'session',
-    }
-  );
-
+  {
+    enabled: TWO_FACTOR_ENABLED,
+    endpoints: [
+      {
+        path: '/two-factor/trust-device',
+        methods: ['POST'],
+        preAuthLimit: 20,
+        captcha: false,
+        session: 'session',
+      },
+      {
+        path: '/two-factor/trusted-devices',
+        methods: ['GET'],
+        preAuthLimit: 60,
+        captcha: false,
+        session: 'session',
+      },
+      {
+        path: '/two-factor/trusted-devices/revoke',
+        methods: ['POST'],
+        preAuthLimit: 30,
+        captcha: false,
+        session: 'session',
+      },
+      {
+        path: '/two-factor/methods',
+        methods: ['GET'],
+        preAuthLimit: 60,
+        captcha: false,
+        session: 'session',
+      },
+      {
+        path: '/two-factor/methods/disable',
+        methods: ['POST'],
+        preAuthLimit: 20,
+        captcha: false,
+        session: 'session',
+      },
+      {
+        path: '/two-factor/methods/default',
+        methods: ['POST'],
+        preAuthLimit: 30,
+        captcha: false,
+        session: 'session',
+      },
+      {
+        path: '/two-factor/backup-codes/acknowledge',
+        methods: ['POST'],
+        preAuthLimit: 20,
+        captcha: false,
+        session: 'session',
+      },
+    ],
+  },
   // Neither is anonymous — enrolment needs a session, sign-in a challenge
   // cookie — so neither carries a captcha, and both credentials are published.
-  if (TWO_FACTOR_OTP_AVAILABLE)
-    paths.push(
+  {
+    enabled: TWO_FACTOR_OTP_AVAILABLE,
+    endpoints: [
       {
         path: '/two-factor/otp/send',
         methods: ['POST'],
@@ -144,11 +255,12 @@ function twoFactorEndpoints(): RoutePrefixPath[] {
         preAuthLimit: 30,
         captcha: false,
         session: 'session-or-challenge',
-      }
-    );
-
-  if (isTwoFactorMethodEnabled('backup_code'))
-    paths.push(
+      },
+    ],
+  },
+  {
+    enabled: isTwoFactorMethodEnabled('backup_code'),
+    endpoints: [
       {
         path: '/two-factor/generate-backup-codes',
         methods: ['POST'],
@@ -162,11 +274,12 @@ function twoFactorEndpoints(): RoutePrefixPath[] {
         preAuthLimit: 30,
         captcha: false,
         session: 'challenge',
-      }
-    );
-
-  if (isTwoFactorMethodEnabled('passkey'))
-    paths.push(
+      },
+    ],
+  },
+  {
+    enabled: isTwoFactorMethodEnabled('passkey'),
+    endpoints: [
       // The POST re-authentication in front of the ceremony. The ceremony
       // endpoints are the library's and take the library's bodies, so the
       // password is proven here and spent there.
@@ -226,15 +339,14 @@ function twoFactorEndpoints(): RoutePrefixPath[] {
         preAuthLimit: 30,
         captcha: false,
         session: 'challenge',
-      }
+      },
       // ⚠️ `/passkey/generate-authenticate-options` and
       // `/passkey/verify-authentication` are ABSENT, permanently and with no
       // flag: the second resolves a credential by id alone and issues a session
       // to whoever owns it. Adding either reopens an unauthenticated sign-in.
-    );
-
-  return paths;
-}
+    ],
+  },
+];
 
 /**
  * The complete Better Auth surface this deployment exposes, per ENDPOINT.
@@ -254,99 +366,10 @@ function twoFactorEndpoints(): RoutePrefixPath[] {
  * the real `verifyLoginAttempt`: a password-bearing path added here must also
  * be in `PASSWORD_PROOF_PATHS`, or it rejects every password.
  */
-export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] = [
-  {
-    path: '/capabilities',
-    methods: ['GET'],
-    preAuthLimit: 60,
-    captcha: false,
-    session: 'none',
-  },
-  {
-    path: '/reauth/methods',
-    methods: ['GET'],
-    preAuthLimit: 60,
-    captcha: false,
-    session: 'session',
-  },
-  ...(isTwoFactorMethodEnabled('passkey')
-    ? ([
-        {
-          path: '/reauth/passkey/options',
-          methods: ['POST'],
-          preAuthLimit: 20,
-          captcha: false,
-          session: 'session',
-        },
-        {
-          path: '/reauth/passkey/verify',
-          methods: ['POST'],
-          preAuthLimit: 20,
-          captcha: false,
-          session: 'session',
-        },
-      ] satisfies RoutePrefixPath[])
-    : []),
-  ...(GOOGLE_ENABLED
-    ? ([
-        {
-          path: '/oauth/google/start',
-          methods: ['POST'],
-          preAuthLimit: 20,
-          captcha: true,
-          session: 'none',
-        },
-        {
-          path: '/oauth/google/callback',
-          methods: ['GET'],
-          preAuthLimit: 30,
-          captcha: false,
-          session: 'none',
-        },
-        {
-          path: '/oauth/result',
-          methods: ['GET'],
-          preAuthLimit: 60,
-          captcha: false,
-          session: 'none',
-        },
-      ] satisfies RoutePrefixPath[])
-    : []),
-  // GET only, although `getSession` declares `["GET", "POST"]`: its handler
-  // refuses POST unless `session.deferSessionRefresh` is enabled, and
-  // `lib/auth/index.ts` does not enable it. Enabling it is what would make POST
-  // belong here. The budget is separate from credential attempts for shared NATs.
-  {
-    path: '/get-session',
-    methods: ['GET'],
-    preAuthLimit: 300,
-    captcha: false,
-    session: 'optional',
-  },
-  {
-    path: '/sign-out',
-    methods: ['POST'],
-    preAuthLimit: 30,
-    captcha: false,
-    session: 'optional',
-  },
-  {
-    path: '/sign-in/email',
-    methods: ['POST'],
-    preAuthLimit: 20,
-    captcha: true,
-    session: 'none',
-  },
-  // Verifies its own captcha, rate limit and OTP.
-  {
-    path: '/passwordless/verify',
-    methods: ['POST'],
-    preAuthLimit: 60,
-    captcha: true,
-    session: 'none',
-  },
-  ...twoFactorEndpoints(),
-];
+export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] =
+  ENDPOINT_GROUPS.filter((group) => group.enabled).flatMap(
+    (group) => group.endpoints
+  );
 
 /**
  * Every Better Auth path this codebase can serve under SOME configuration, as
@@ -358,43 +381,30 @@ export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] = [
  * ⚠️ Not used for enforcement — `BETTER_AUTH_ALLOWED_PATH_SET` decides that, and
  * it is derived from the enabled set alone.
  */
-export const BETTER_AUTH_KNOWN_PATHS: ReadonlySet<string> = new Set([
-  '/capabilities',
-  '/reauth/methods',
-  '/reauth/passkey/options',
-  '/reauth/passkey/verify',
-  '/oauth/google/start',
-  '/oauth/google/callback',
-  '/oauth/result',
-  '/get-session',
-  '/sign-out',
-  '/sign-in/email',
-  '/passwordless/verify',
-  '/two-factor/disable',
-  '/two-factor/get-totp-uri',
-  '/two-factor/totp/start',
-  '/two-factor/totp/confirm',
-  '/two-factor/verify-totp',
-  '/two-factor/generate-backup-codes',
-  '/two-factor/verify-backup-code',
-  '/two-factor/otp/send',
-  '/two-factor/otp/verify',
-  '/two-factor/passkey/options',
-  '/two-factor/passkey/verify',
-  '/two-factor/trust-device',
-  '/two-factor/trusted-devices',
-  '/two-factor/trusted-devices/revoke',
-  '/two-factor/methods',
-  '/two-factor/methods/disable',
-  '/two-factor/methods/default',
-  '/two-factor/backup-codes/acknowledge',
-  '/two-factor/passkey/grant',
-  '/passkey/generate-register-options',
-  '/passkey/verify-registration',
-  '/passkey/list-user-passkeys',
-  '/passkey/delete-passkey',
-  '/passkey/update-passkey',
-]);
+export const BETTER_AUTH_KNOWN_PATHS: ReadonlySet<string> = new Set(
+  ENDPOINT_GROUPS.flatMap((group) =>
+    group.endpoints.map((endpoint) => endpoint.path)
+  )
+);
+
+/**
+ * Better Auth owns its own sub-routing under `/api/auth`, so it is a prefix
+ * rather than a set of routes.
+ *
+ * The reachable surface is exact in both dimensions — path AND method. Not the
+ * whole prefix and not one method set for all of it: Better Auth 404s every path
+ * outside the list and every method a path does not declare, so anything broader
+ * would make the 405 boundary claim operations the handler itself rejects.
+ */
+export const BETTER_AUTH_ROUTE_PREFIX: RoutePrefix = {
+  prefix: '/api/auth',
+  // Better Auth reads every path it serves as TEXT — JSON, or the
+  // URL-encoded form its sign-in also accepts. Nothing under here takes a
+  // file, so the prefix takes the parsed-into-memory ceiling and a caller
+  // cannot claim the upload allowance on `/sign-in/email`.
+  body: 'json',
+  paths: BETTER_AUTH_ENDPOINTS,
+};
 
 /** Membership test for the `before` hook, which decides on the PATH alone. */
 export const BETTER_AUTH_ALLOWED_PATH_SET: ReadonlySet<string> = new Set(

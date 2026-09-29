@@ -6,7 +6,6 @@ import {
   FONT_SCALE_MIN,
   PRESET_NAME_MAX,
 } from '@app/shared/validation/constants';
-import { CONTACT_KINDS, OTP_CHANNELS } from '@app/shared/validation/enums';
 import {
   COLOR_MODES,
   PRESET_NAME_PATTERN,
@@ -23,7 +22,10 @@ import {
   MEDIA_FILE_PROPERTIES,
   MEDIA_FOLDER_PROPERTIES,
   NULL_SCHEMA,
+  NULLABLE_CONTACT_KIND_SCHEMA,
   NULLABLE_CURSOR_SCHEMA,
+  NULLABLE_DEFAULT_METHOD_SCHEMA,
+  NULLABLE_OTP_CHANNEL_SCHEMA,
   NULLABLE_STRING_SCHEMA,
   PAGE_PERMISSION_SCHEMA,
   UUID_SCHEMA,
@@ -167,14 +169,17 @@ const RECOVERY_OPTION_SCHEMA: JsonSchema = {
   properties: {
     id: { type: 'string' },
     method: { type: 'string', enum: ['totp', 'otp', 'backup_code'] },
-    contactKind: {
-      anyOf: [{ type: 'string', enum: [...CONTACT_KINDS] }, { type: 'null' }],
-    },
-    channel: {
-      anyOf: [{ type: 'string', enum: [...OTP_CHANNELS] }, { type: 'null' }],
-    },
+    contactKind: NULLABLE_CONTACT_KIND_SCHEMA,
+    channel: NULLABLE_OTP_CHANNEL_SCHEMA,
   },
   required: ['id', 'method', 'contactKind', 'channel'],
+  additionalProperties: false,
+};
+
+const RESET_DONE_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { reset: { const: true } },
+  required: ['reset'],
   additionalProperties: false,
 };
 
@@ -184,12 +189,7 @@ const RECOVERY_OPTION_SCHEMA: JsonSchema = {
  */
 const RESET_OUTCOME_SCHEMA: JsonSchema = {
   anyOf: [
-    {
-      type: 'object',
-      properties: { reset: { const: true } },
-      required: ['reset'],
-      additionalProperties: false,
-    },
+    RESET_DONE_SCHEMA,
     {
       type: 'object',
       properties: {
@@ -197,9 +197,7 @@ const RESET_OUTCOME_SCHEMA: JsonSchema = {
         twoFactorRequired: { const: true },
         grant: { type: 'string' },
         options: { type: 'array', items: RECOVERY_OPTION_SCHEMA },
-        defaultMethod: {
-          anyOf: [{ type: 'string' }, { type: 'null' }],
-        },
+        defaultMethod: NULLABLE_DEFAULT_METHOD_SCHEMA,
       },
       required: [
         'reset',
@@ -325,12 +323,7 @@ const FOLDER_DELETE_SCHEMA: JsonSchema = {
 export const SUCCESS_DATA_SCHEMAS: Record<string, JsonSchema> = {
   'POST /api/auth/forgot-password/reset': RESET_OUTCOME_SCHEMA,
   'POST /api/auth/forgot-password/second-factor/send': OTP_LADDER_SENT_SCHEMA,
-  'POST /api/auth/forgot-password/complete': {
-    type: 'object',
-    properties: { reset: { const: true } },
-    required: ['reset'],
-    additionalProperties: false,
-  },
+  'POST /api/auth/forgot-password/complete': RESET_DONE_SCHEMA,
   'POST /api/auth/forgot-password/send': OTP_SENT_SCHEMA,
   'POST /api/auth/otp/send': OTP_SENT_SCHEMA,
   'POST /api/auth/otp/verify': VERIFIED_SCHEMA,

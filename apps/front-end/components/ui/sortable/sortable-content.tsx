@@ -1,6 +1,5 @@
 import type { SortableContextProps } from '@dnd-kit/sortable';
-
-import * as React from 'react';
+import type * as React from 'react';
 
 import { SortableContext } from '@dnd-kit/sortable';
 import { Slot } from '@radix-ui/react-slot';
@@ -27,10 +26,7 @@ export function SortableContent(props: SortableContentProps) {
 
   const context = useSortableContext(CONTENT_NAME);
 
-  const ContentPrimitive = React.useMemo(
-    () => (asChild ? Slot : 'div'),
-    [asChild]
-  );
+  const ContentPrimitive = asChild ? Slot : 'div';
 
   return (
     <SortableContentContext.Provider value={true}>

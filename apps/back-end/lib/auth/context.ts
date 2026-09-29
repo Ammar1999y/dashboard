@@ -1,8 +1,14 @@
 import type { AuditMeta } from '@/lib/audit';
 import type { GenericEndpointContext } from '@better-auth/core';
 import type { createAuthMiddleware } from 'better-auth/api';
+import type * as z from 'zod';
 
-import { boundedAuditMeta, getClientIp } from '@/lib/audit';
+import { HTTP_STATUS } from '@app/shared/api-messages';
+
+import { boundedAuditMeta } from '@/lib/audit';
+import { getClientIp } from '@/lib/http/client-ip';
+
+import { authError } from './errors';
 
 export type AuthContext = GenericEndpointContext;
 
@@ -34,4 +40,15 @@ export function authAuditMeta(
     headers.get('user-agent'),
     path
   );
+}
+
+/** `readJsonBody`'s counterpart for a Better Auth endpoint. */
+export function parseAuthBody<S extends z.ZodType>(
+  ctx: { body?: unknown },
+  schema: S,
+  message: string
+): z.output<S> {
+  const parsed = schema.safeParse(ctx.body);
+  if (!parsed.success) throw authError(HTTP_STATUS.UNPROCESSABLE, message);
+  return parsed.data;
 }

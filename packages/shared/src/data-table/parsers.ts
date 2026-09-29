@@ -202,7 +202,7 @@ function parseJsonArray(value: string): unknown[] | null {
   return Array.isArray(parsed) ? parsed : null;
 }
 
-function parseSortingState<TData>(
+export function parseSortingState<TData>(
   value: string | null | undefined,
   columnIds?: string[] | Set<string>,
   /**
@@ -327,7 +327,7 @@ function parseFilterItem(raw: unknown): FilterItemSchema | null {
   };
 }
 
-function parseFiltersState<TData>(
+export function parseFiltersState<TData>(
   value: string | null | undefined,
   columnIds?: string[] | Set<string>,
   /**

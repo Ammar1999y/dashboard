@@ -1,38 +1,38 @@
-import type { Table } from '@tanstack/react-table';
-
-import { memo } from 'react';
+import type { Column, ColumnSort } from '@tanstack/react-table';
 
 import { DataTableFilterList } from './filters/data-table-filter-list';
 import { DataTableSearch } from './filters/data-table-search';
 import { DataTableSortList } from './filters/data-table-sort-list';
+import { genericMemo } from './utils/generic-memo';
 import { DataTableViewOptions } from './view-options';
 
-type DataTableToolbarProps<TData = unknown> = {
-  table: Table<TData>;
-  STORAGE_KEY: string;
-};
+interface DataTableToolbarProps<TData> {
+  columns: Column<TData>[];
+  defaultSort: ColumnSort[];
+}
 
 const DataTableToolbarInner = <TData,>({
-  table,
-  STORAGE_KEY,
-}: DataTableToolbarProps<TData>) => {
-  return (
-    <div
-      role='toolbar'
-      aria-orientation='horizontal'
-      className='flex w-full items-center justify-start gap-2 p-1'
-    >
-      <DataTableSearch />
-      <DataTableSortList table={table} align='start' />
-      <DataTableFilterList table={table} align='start' />
-      <div className='flex flex-1 justify-end'>
-        <DataTableViewOptions table={table} storageKey={STORAGE_KEY} />
-      </div>
+  columns,
+  defaultSort,
+}: DataTableToolbarProps<TData>) => (
+  <div
+    role='toolbar'
+    aria-orientation='horizontal'
+    className='flex w-full items-center justify-start gap-2 p-1'
+  >
+    <DataTableSearch />
+    <DataTableSortList
+      columns={columns}
+      defaultSort={defaultSort}
+      align='start'
+    />
+    <DataTableFilterList columns={columns} align='start' />
+    <div className='flex flex-1 justify-end'>
+      <DataTableViewOptions columns={columns} />
     </div>
-  );
-};
+  </div>
+);
 
-const DataTableToolbar = memo(DataTableToolbarInner) as <TData>(
-  props: DataTableToolbarProps<TData>
-) => React.ReactElement | null;
+const DataTableToolbar = genericMemo(DataTableToolbarInner, 'DataTableToolbar');
+
 export { DataTableToolbar };

@@ -1,5 +1,7 @@
 import type { SqliteStatement } from './driver';
 
+import { yieldToEventLoop } from '@/utils/event-loop';
+
 /** Rows per statement: small enough that one commit is never a long lock hold. */
 const BATCH_SIZE = 500;
 
@@ -14,10 +16,6 @@ export interface SweepResult {
    * alert on sustained `true`, not one occurrence.
    */
   hasMore: boolean;
-}
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
 }
 
 /**

@@ -13,6 +13,7 @@ import { emailSchema } from '@app/shared/validation/rules';
 import { auditLog } from '@/lib/audit';
 import { markContactVerified } from '@/lib/otp/contact';
 
+import { GOOGLE_PROVIDER_ID } from '../credential';
 import { CUSTOM_AUTH_CODE } from '../errors';
 import { lockEligibleAuthUser } from '../user-eligibility';
 
@@ -90,7 +91,7 @@ export async function resolveGoogleIdentity(
     .from(accounts)
     .where(
       and(
-        eq(accounts.providerId, 'google'),
+        eq(accounts.providerId, GOOGLE_PROVIDER_ID),
         eq(accounts.accountId, identity.subject)
       )
     );
@@ -107,7 +108,10 @@ export async function resolveGoogleIdentity(
     .select()
     .from(accounts)
     .where(
-      and(eq(accounts.providerId, 'google'), eq(accounts.userId, user.id))
+      and(
+        eq(accounts.providerId, GOOGLE_PROVIDER_ID),
+        eq(accounts.userId, user.id)
+      )
     );
   // The initial link read precedes the user lock; a concurrent unlink must not turn this into a first login.
   if (linked && existing.length === 0)
@@ -124,7 +128,7 @@ export async function resolveGoogleIdentity(
     const [account] = await tx
       .insert(accounts)
       .values({
-        providerId: 'google',
+        providerId: GOOGLE_PROVIDER_ID,
         issuer: GOOGLE_ISSUER,
         accountId: identity.subject,
         userId: user.id,

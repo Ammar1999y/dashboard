@@ -87,7 +87,7 @@ const SQL_SWEEP_RATE_LIMIT = `DELETE FROM rate_limit WHERE expires_at <= ? LIMIT
 const SQL_ANY_EXPIRED = `
   SELECT EXISTS(SELECT 1 FROM rate_limit WHERE expires_at <= ?) AS present`;
 
-export interface ConsumeRow {
+interface ConsumeRow {
   count: number;
   window_start: number;
 }
@@ -107,6 +107,26 @@ const limiterStore = lazyStore(
 
 export const getRateLimitStore = limiterStore.get;
 export const closeRateLimitStore = limiterStore.close;
+
+/** One `SQL_CONSUME` admission against the store the caller already holds. */
+export function admitWindow(
+  store: ReturnType<typeof getRateLimitStore>,
+  admission: {
+    key: string;
+    windowStart: number;
+    cost: number;
+    expiresAt: number;
+    limit: number;
+  }
+): ConsumeRow | null {
+  return store.consume.get<ConsumeRow>(
+    admission.key,
+    admission.windowStart,
+    admission.cost,
+    admission.expiresAt,
+    admission.limit
+  );
+}
 
 /**
  * Reclaims disk only: expiry is filtered on every read, so a late or failed

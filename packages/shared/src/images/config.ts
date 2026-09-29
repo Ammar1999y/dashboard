@@ -1,3 +1,5 @@
+import { SERVER_MAX_IMAGE_SIZE } from '../validation/constants';
+
 export type SvgRejectionReason =
   'animated' | 'edge-too-long' | 'invalid-inline-raster' | 'too-many-pixels';
 
@@ -17,6 +19,9 @@ export type SanitizeResult =
     };
 
 export const SVG_MAX_ELEMENTS = 500;
+
+/** MiB, of markup: checked before the sanitizer runs and again on its output. */
+export const SVG_MAX_SIZE = SERVER_MAX_IMAGE_SIZE * 2;
 
 /**
  * Ceiling on the RENDERED node count, which `SVG_MAX_ELEMENTS` does not bound.

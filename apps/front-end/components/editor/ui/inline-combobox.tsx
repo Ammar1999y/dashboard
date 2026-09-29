@@ -41,6 +41,14 @@ type InlineComboboxContextValue = {
   setHasEmpty: (hasEmpty: boolean) => void;
 };
 
+/**
+ * Items report whether the search shows them, so a group with none hides. The
+ * CSS way, `:has([role=option])`, is past the browserslist.
+ */
+const GroupVisibilityContext = React.createContext<
+  ((item: string, visible: boolean) => void) | null
+>(null);
+
 const InlineComboboxContext = React.createContext<InlineComboboxContextValue>(
   null as unknown as InlineComboboxContextValue
 );
@@ -227,10 +235,10 @@ const InlineComboboxInput = ({
     <>
       {showTrigger && trigger}
 
-      <span className='relative min-h-[1lh]'>
+      <span className='relative'>
         <span
           aria-hidden='true'
-          className='invisible overflow-hidden text-nowrap'
+          className='invisible overflow-hidden whitespace-nowrap'
         >
           {value || '\u{200B}'}
         </span>
@@ -316,6 +324,12 @@ const InlineComboboxItem = ({
     [filter, group, keywords, label, value, search]
   );
 
+  const reportVisibility = React.useContext(GroupVisibilityContext);
+  React.useLayoutEffect(() => {
+    reportVisibility?.(value, visible);
+    return () => reportVisibility?.(value, false);
+  }, [reportVisibility, value, visible]);
+
   if (!visible) return null;
 
   return (
@@ -357,20 +371,36 @@ const InlineComboboxEmpty = ({
   );
 };
 
-export { ComboboxRow as InlineComboboxRow } from '@ariakit/react';
-
 function InlineComboboxGroup({
   className,
   ...props
 }: React.ComponentProps<typeof ComboboxGroup>) {
+  const [shown, setShown] = React.useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const reportVisibility = React.useCallback(
+    (item: string, visible: boolean) =>
+      setShown((current) => {
+        if (current.has(item) === visible) return current;
+        const next = new Set(current);
+        if (visible) next.add(item);
+        else next.delete(item);
+        return next;
+      }),
+    []
+  );
+
   return (
-    <ComboboxGroup
-      {...props}
-      className={cn(
-        'hidden py-1.5 [&:has([role=option])]:block [&:not(:last-child)]:border-b',
-        className
-      )}
-    />
+    <GroupVisibilityContext.Provider value={reportVisibility}>
+      <ComboboxGroup
+        {...props}
+        className={cn(
+          'py-1.5 [&:not(:last-child)]:border-b',
+          shown.size === 0 && 'hidden',
+          className
+        )}
+      />
+    </GroupVisibilityContext.Provider>
   );
 }
 

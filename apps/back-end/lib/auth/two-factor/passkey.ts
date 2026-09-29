@@ -22,8 +22,9 @@ import * as z from 'zod';
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { twoFactorPasskeyVerifySchema } from '@app/shared/validation/two-factor';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
+import { parseAuthBody } from '../context';
 import { authError } from '../errors';
 import { twoFactorMsg } from '../messages';
 import {
@@ -115,13 +116,11 @@ export const twoFactorPasskey = () =>
             method: 'passkey',
           });
 
-          const parsed = twoFactorPasskeyVerifySchema.safeParse(ctx.body);
-          if (!parsed.success)
-            throw authError(
-              HTTP_STATUS.UNPROCESSABLE,
-              twoFactorMsg.invalidCode
-            );
-          const { response } = parsed.data;
+          const { response } = parseAuthBody(
+            ctx,
+            twoFactorPasskeyVerifySchema,
+            twoFactorMsg.invalidCode
+          );
 
           const attempt = await spendChallengeAttempt(
             ctx,
@@ -167,9 +166,10 @@ export const twoFactorPasskey = () =>
               );
             } catch (error) {
               await chargeFailure();
-              console.error(
-                sanitizeForLog({ msg: 'twoFactor.passkey.verifyFailed', error })
-              );
+              logSanitized('error', {
+                msg: 'twoFactor.passkey.verifyFailed',
+                error,
+              });
               throw authError(
                 HTTP_STATUS.UNAUTHORIZED,
                 twoFactorMsg.invalidCode
@@ -187,12 +187,10 @@ export const twoFactorPasskey = () =>
                 verification.newCounter
               ))
             )
-              console.error(
-                sanitizeForLog({
-                  msg: 'twoFactor.passkey.counterReconciled',
-                  passkeyId: verification.credential.id,
-                })
-              );
+              logSanitized('error', {
+                msg: 'twoFactor.passkey.counterReconciled',
+                passkeyId: verification.credential.id,
+              });
 
             // The challenge is about to be consumed, so nothing after this may
             // re-arm its counter.

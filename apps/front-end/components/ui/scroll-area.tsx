@@ -1,29 +1,25 @@
-import * as React from 'react';
+import type * as React from 'react';
 
 import * as ScrollAreaPrimitive from '@radix-ui/react-scroll-area';
 import { cn } from '@/lib/utils';
-
-interface ScrollAreaProps extends React.ComponentPropsWithoutRef<
-  typeof ScrollAreaPrimitive.Root
-> {
-  ref?: React.Ref<React.ComponentRef<typeof ScrollAreaPrimitive.Root>>;
-  viewportClassName?: string;
-}
 
 function ScrollArea({
   className,
   viewportClassName,
   children,
-  ref,
   ...props
-}: ScrollAreaProps) {
+}: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
+  viewportClassName?: string;
+}) {
   return (
     <ScrollAreaPrimitive.Root
-      ref={ref}
       className={cn('relative overflow-hidden', className)}
       data-lenis-prevent
       {...props}
     >
+      {/* `asChild` fuses the viewport with Radix's inner content wrapper, whose
+          inline `display: table` grows to its content; `!block` overrides it
+          so children lay out at the area's width. */}
       <ScrollAreaPrimitive.Viewport
         className={cn('!block h-full w-full', viewportClassName)}
         asChild
@@ -35,25 +31,14 @@ function ScrollArea({
     </ScrollAreaPrimitive.Root>
   );
 }
-ScrollArea.displayName = ScrollAreaPrimitive.Root.displayName;
-
-interface ScrollBarProps extends React.ComponentPropsWithoutRef<
-  typeof ScrollAreaPrimitive.ScrollAreaScrollbar
-> {
-  ref?: React.Ref<
-    React.ComponentRef<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>
-  >;
-}
 
 function ScrollBar({
   className,
   orientation = 'vertical',
-  ref,
   ...props
-}: ScrollBarProps) {
+}: React.ComponentProps<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>) {
   return (
     <ScrollAreaPrimitive.ScrollAreaScrollbar
-      ref={ref}
       orientation={orientation}
       className={cn(
         'flex cursor-default touch-none select-none transition-colors',
@@ -70,6 +55,5 @@ function ScrollBar({
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   );
 }
-ScrollBar.displayName = ScrollAreaPrimitive.ScrollAreaScrollbar.displayName;
 
 export { ScrollArea, ScrollBar };

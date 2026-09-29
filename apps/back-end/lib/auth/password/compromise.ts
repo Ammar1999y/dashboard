@@ -8,7 +8,7 @@ import {
 } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 const HIBP_RETRIES = 2;
 const HIBP_RETRY_BASE_MS = 75;
@@ -74,7 +74,7 @@ export async function checkPasswordCompromise(password: string): Promise<void> {
       return;
     } catch (error) {
       if (error instanceof CustomError) throw error;
-      console.error(sanitizeForLog({ msg: 'hibp.degraded', attempt, error }));
+      logSanitized('error', { msg: 'hibp.degraded', attempt, error });
       if (attempt < HIBP_RETRIES) {
         await new Promise((r) =>
           setTimeout(r, HIBP_RETRY_BASE_MS * (attempt + 1))

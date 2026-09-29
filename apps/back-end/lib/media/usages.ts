@@ -54,6 +54,26 @@ export function viewablePages(
 }
 
 /**
+ * The driver returns `Record<string, any>[]` for a raw statement whatever
+ * generic is asked for; both columns are cast to `text` in the query, so
+ * `String()` is a type statement, not a conversion.
+ */
+async function* referrers(
+  fileIds: readonly EntityID[],
+  executor: Executor
+): AsyncGenerator<{ source: UsageSource; fileId: string; recordId: string }> {
+  for (const source of USAGE_SOURCES) {
+    const rows = await executor.execute(usageQuery(source, fileIds));
+    for (const row of rows)
+      yield {
+        source,
+        fileId: String(row['file_id']),
+        recordId: String(row['record_id']),
+      };
+  }
+}
+
+/**
  * Who uses each file, filtered to what `viewable` allows the caller to know.
  * Hidden usages are counted, not named: the count is enough to explain a 409.
  */
@@ -66,35 +86,21 @@ export async function usedBy(
   for (const id of fileIds) summaries.set(id, { visible: [], hidden: 0 });
   if (fileIds.length === 0) return summaries;
 
-  for (const source of USAGE_SOURCES) {
-    const rows = await executor.execute(usageQuery(source, fileIds));
-    tally(rows, source, viewable, summaries);
-  }
-  return summaries;
-}
-
-/**
- * `rows` is untyped because the driver returns `Record<string, any>[]` for a raw
- * statement whatever generic is asked for; both columns are cast to `text` in the
- * query, so `String()` is a type statement, not a conversion.
- */
-function tally(
-  rows: readonly Record<string, unknown>[],
-  source: UsageSource,
-  viewable: ReadonlySet<DashboardPage>,
-  summaries: Map<EntityID, UsageSummary>
-): void {
-  for (const row of rows) {
-    const summary = summaries.get(String(row['file_id']));
+  for await (const { source, fileId, recordId } of referrers(
+    fileIds,
+    executor
+  )) {
+    const summary = summaries.get(fileId);
     if (!summary) continue;
     if (viewable.has(source.resource))
       summary.visible.push({
         label: source.label,
         resource: source.resource,
-        recordId: String(row['record_id']),
+        recordId,
       });
     else summary.hidden += 1;
   }
+  return summaries;
 }
 
 /**
@@ -111,25 +117,11 @@ export async function usageVisibilities(
   for (const id of fileIds) held.set(id, new Set());
   if (fileIds.length === 0) return held;
 
-  for (const source of USAGE_SOURCES)
-    collectVisibilities(
-      await executor.execute(usageQuery(source, fileIds)),
-      source,
-      held
-    );
+  for await (const { source, fileId } of referrers(fileIds, executor))
+    held.get(fileId)?.add(source.visibility);
   return held;
 }
 
-function collectVisibilities(
-  rows: readonly Record<string, unknown>[],
-  source: UsageSource,
-  held: Map<EntityID, Set<BucketType>>
-): void {
-  for (const row of rows)
-    held.get(String(row['file_id']))?.add(source.visibility);
-}
-
-/** Whether this project has declared any owner table at all. */
 export function hasUsageSources(): boolean {
   return USAGE_SOURCES.length > 0;
 }
@@ -151,7 +143,7 @@ export function hasUsageSources(): boolean {
  * declared its tables yet.
  */
 export function unreferenced(): SQL {
-  if (USAGE_SOURCES.length === 0) return sql`false`;
+  if (!hasUsageSources()) return sql`false`;
   return sql.join(
     USAGE_SOURCES.map(
       (source) =>

@@ -48,13 +48,13 @@ import {
   twoFactorTotpConfirmSchema,
 } from './validation/two-factor';
 
-type BodySchemas = z.ZodType | readonly z.ZodType[];
+export type BodySchemas = z.ZodType | readonly z.ZodType[];
 
 /**
  * What each application route accepts, keyed `METHOD /path`, as the server
  * parses it.
  *
- * One registry for two readers. `lib/http/openapi.ts` publishes it and refuses
+ * One registry for two readers. The back-end's OpenAPI builder publishes it and refuses
  * a route table where a `body: 'json'` route has no entry or an entry names no
  * route. A client types its requests with `RequestBody<'POST /api/dash/users'>`
  * instead of a hand-written copy that drifts. A route that accepts one of

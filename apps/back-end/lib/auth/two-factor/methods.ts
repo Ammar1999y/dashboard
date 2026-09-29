@@ -377,7 +377,7 @@ export function removalStrandsTwoFactor(
  * enrolment and at every later sign-in. Failing to write it at enrolment
  * silently disables the whole feature for that user.
  */
-export async function recordMethodIntent(
+async function recordMethodIntent(
   tx: Tx,
   params: {
     userId: EntityID;
@@ -418,6 +418,39 @@ export async function recordMethodIntent(
       targetWhere: sql`method <> 'otp'`,
       set: { channel },
     });
+}
+
+/** The intent row, and the user's `twoFactorEnabled` flag with it. */
+export async function recordEnabledMethod(
+  tx: Tx,
+  params: {
+    userId: EntityID;
+    method: TwoFactorMethod;
+    channel?: OtpChannel | null;
+  }
+): Promise<void> {
+  await recordMethodIntent(tx, params);
+  await tx
+    .update(users)
+    .set({ twoFactorEnabled: true })
+    .where(eq(users.id, params.userId));
+}
+
+export async function clearTwoFactorEnrolment(
+  tx: Tx,
+  userId: EntityID,
+  options: { deletePasskeys: boolean }
+): Promise<void> {
+  await tx.delete(twoFactorMethods).where(eq(twoFactorMethods.userId, userId));
+  await tx
+    .delete(twoFactorCredentials)
+    .where(eq(twoFactorCredentials.userId, userId));
+  if (options.deletePasskeys)
+    await tx.delete(passkeys).where(eq(passkeys.userId, userId));
+  await tx
+    .update(users)
+    .set({ twoFactorEnabled: false })
+    .where(eq(users.id, userId));
 }
 
 /** The intent row(s) `method` names; `contactKind` narrows `otp` to ONE of a user's two. */

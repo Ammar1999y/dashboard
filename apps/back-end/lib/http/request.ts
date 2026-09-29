@@ -3,7 +3,7 @@ import type { BodyPolicy, HandlerInput, HandlerRequestMeta } from './contract';
 import { HTTP_STATUS, MSG_BODY_TOO_LARGE } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
-import { getClientIp } from '@/lib/audit';
+import { getClientIp } from './client-ip';
 
 const JSON_TYPE = 'application/json';
 const MULTIPART_TYPE = 'multipart/form-data';
@@ -41,7 +41,7 @@ export function buildRequestMeta(
     url: request.url,
     method: request.method,
     // TODO(proxy-trust): a trusted header validated by syntax only — see the
-    // note on TRUSTED_IP_HEADERS in lib/audit/constants.ts.
+    // note on TRUSTED_IP_HEADERS in ./client-ip.ts.
     ip: getClientIp(request.headers) ?? '',
     userAgent: request.headers.get('user-agent'),
     apiPath: url.pathname,
@@ -121,8 +121,9 @@ function mediaTypeEssence(contentType: string | null): string {
   return essence?.trim().toLowerCase() ?? '';
 }
 
-const tooLarge = () =>
-  new CustomError(MSG_BODY_TOO_LARGE, HTTP_STATUS.CONTENT_TOO_LARGE);
+export function bodyTooLarge(): CustomError {
+  return new CustomError(MSG_BODY_TOO_LARGE, HTTP_STATUS.CONTENT_TOO_LARGE);
+}
 
 /**
  * The ceiling a body may not cross, decided by the POLICY the route declares —
@@ -152,7 +153,7 @@ export function declaresBodyOver(request: Request, maxBytes: number): boolean {
  * reader. `boundedBodyRequest` is the version for handing a request on.
  */
 function boundRequestBody(request: Request, maxBytes: number): Request {
-  if (declaresBodyOver(request, maxBytes)) throw tooLarge();
+  if (declaresBodyOver(request, maxBytes)) throw bodyTooLarge();
 
   const body = request.body;
   if (!body) return request;
@@ -164,7 +165,7 @@ function boundRequestBody(request: Request, maxBytes: number): Request {
         total += chunk.byteLength;
         // Throwing errors the stream, which cancels the source: the rest of the
         // upload stops instead of being drained after it was rejected.
-        if (total > maxBytes) throw tooLarge();
+        if (total > maxBytes) throw bodyTooLarge();
         controller.enqueue(chunk);
       },
     })

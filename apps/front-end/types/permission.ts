@@ -2,8 +2,10 @@ import type { EntityID } from '.';
 import type {
   DashboardPage,
   PermissionAction,
-  RoleScope,
-} from '@/lib/permissions/constants';
+  ROLE_SCOPE,
+} from '@app/shared/permissions/constants';
+
+export type RoleScope = (typeof ROLE_SCOPE)[keyof typeof ROLE_SCOPE];
 
 export interface PagePermission {
   name: DashboardPage;

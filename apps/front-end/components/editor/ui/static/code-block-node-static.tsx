@@ -3,15 +3,19 @@ import type { SlateElementProps, SlateLeafProps } from 'platejs/static';
 
 import { SlateElement, SlateLeaf } from 'platejs/static';
 
-import styles from '@/components/editor/ui/editor-elements.module.css';
+import {
+  CODE_BLOCK_CLASS,
+  CODE_BLOCK_PRE_CLASS,
+  CODE_BLOCK_SURFACE_CLASS,
+} from '@/components/editor/styles';
 
 export function CodeBlockElementStatic(
   props: SlateElementProps<TCodeBlockElement>
 ) {
   return (
-    <SlateElement className={styles.codeBlock} {...props}>
-      <div className='relative rounded-md bg-muted/50'>
-        <pre className='overflow-x-auto p-8 pe-4 font-mono text-sm leading-[normal] [tab-size:2] print:break-inside-avoid'>
+    <SlateElement className={CODE_BLOCK_CLASS} {...props}>
+      <div className={CODE_BLOCK_SURFACE_CLASS}>
+        <pre className={CODE_BLOCK_PRE_CLASS}>
           <code>{props.children}</code>
         </pre>
       </div>
@@ -24,7 +28,12 @@ export function CodeLineElementStatic(props: SlateElementProps) {
 }
 
 export function CodeSyntaxLeafStatic(props: SlateLeafProps) {
-  const tokenClassName = props.leaf.className as string;
+  const { className } = props.leaf;
 
-  return <SlateLeaf className={tokenClassName} {...props} />;
+  return (
+    <SlateLeaf
+      className={typeof className === 'string' ? className : undefined}
+      {...props}
+    />
+  );
 }

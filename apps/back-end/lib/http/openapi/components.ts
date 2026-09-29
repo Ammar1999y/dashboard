@@ -15,10 +15,14 @@ import {
   FOLDER_NAME_MAX,
   MEDIA_DISPLAY_NAME_MAX,
 } from '@app/shared/validation/constants';
-import { BUCKET_TYPES, FILE_KINDS } from '@app/shared/validation/enums';
+import {
+  BUCKET_TYPES,
+  CONTACT_KINDS,
+  FILE_KINDS,
+  OTP_CHANNELS,
+} from '@app/shared/validation/enums';
+import { KNOWN_MIME_TYPES } from '@app/shared/validation/media-types';
 import { SESSION_CURSOR_PATTERN } from '@app/shared/validation/sessions';
-
-import { KNOWN_MIME_TYPES } from '@/lib/media/allowlist';
 
 export const UUID_SCHEMA: JsonSchema = {
   type: 'string',
@@ -36,6 +40,15 @@ export const NULLABLE_CURSOR_SCHEMA: JsonSchema = {
   pattern: SESSION_CURSOR_PATTERN,
 };
 const NULLABLE_UUID_SCHEMA: JsonSchema = { anyOf: [UUID_SCHEMA, NULL_SCHEMA] };
+export const NULLABLE_CONTACT_KIND_SCHEMA: JsonSchema = {
+  anyOf: [{ type: 'string', enum: [...CONTACT_KINDS] }, NULL_SCHEMA],
+};
+export const NULLABLE_OTP_CHANNEL_SCHEMA: JsonSchema = {
+  anyOf: [{ type: 'string', enum: [...OTP_CHANNELS] }, NULL_SCHEMA],
+};
+export const NULLABLE_DEFAULT_METHOD_SCHEMA: JsonSchema = {
+  anyOf: [{ type: 'string' }, NULL_SCHEMA],
+};
 
 export const PAGINATION_META_SCHEMA: JsonSchema = {
   type: 'object',

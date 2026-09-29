@@ -1,7 +1,8 @@
 /**
  * The route table, as data. No framework import: `app.ts` does the
  * Elysia-specific registration, so the table survives a framework move. The
- * 405 boundary and the unused-file scanner read the manifest derived from it.
+ * 405 boundary reads `REGISTERED_ROUTES`, derived from it below; the unused-file
+ * scanner reads this file statically.
  *
  * Paths mirror the handler files: `app/api/dash/users/[id]/handler.ts` serves
  * `/api/dash/users/:id`.
@@ -13,13 +14,12 @@
  * `auth` is read off the handler: `requirePermission` / `requireAnyPermission` /
  * `requireDashboardAccess` are `permission`, `requireSession` alone is
  * `session`, and none of them is `public`. It publishes each operation's 401
- * and 403 in `lib/http/openapi.ts`.
+ * and 403 in `lib/http/openapi/route-operations.ts`.
  *
  * Row order is the order of the document's `paths`. Elysia resolves static
  * segments before wildcards regardless, so `/api/dash/users/me/...` wins over
  * `/api/dash/users/:id`.
  */
-import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
 import type { RouteDefinition, RoutePrefix } from '@/lib/http/route-manifest';
 
 import * as authForgotComplete from '@/app/api/auth/forgot-password/complete/handler';
@@ -54,21 +54,6 @@ import * as devSignUp from '@/app/api/dev/sign-up/handler';
 import * as healthStorage from '@/app/api/health/storage/handler';
 import * as uploadFile from '@/app/api/upload/file/handler';
 
-import { dataTableConfig } from '@app/shared/data-table/config';
-import {
-  DEFAULT_PER_PAGE,
-  MAX_FILTER_ITEMS,
-  MAX_FILTER_VALUES,
-  MAX_FILTERS_RAW_LENGTH,
-  MAX_ID_LENGTH,
-  MAX_PAGE,
-  MAX_PER_PAGE,
-  MAX_SEARCH_LENGTH,
-  MAX_SORT_ITEMS,
-  MAX_SORT_RAW_LENGTH,
-  MAX_VALUE_LENGTH,
-  MIN_SEARCH_LENGTH,
-} from '@app/shared/data-table/parsers';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
 import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
@@ -83,11 +68,8 @@ import {
   SESSIONS_MAX_PAGE_SIZE,
 } from '@app/shared/validation/sessions';
 
-import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
-import {
-  describeFilterColumns,
-  filterColumnIds,
-} from '@/lib/data-table/column-specs';
+import { BETTER_AUTH_ROUTE_PREFIX } from '@/lib/auth/allowed-paths';
+import { dataTableQuery } from '@/lib/data-table/query-parameters';
 import { openApiRouteHandler } from '@/lib/http/openapi/route';
 import {
   toPublishedManifest,
@@ -110,69 +92,6 @@ import {
  */
 const MEDIA_ROUTE_TIMEOUT_SECONDS = 120;
 
-/**
- * The list-query parameters for one route, DERIVED from the descriptor map the
- * handler enforces: `specs` is the object passed to `parseDataTableParams`, so
- * the document and the runtime cannot disagree.
- */
-const dataTableQuery = (
-  specs: FilterColumnSpecs
-): NonNullable<RouteDefinition['query']> => [
-  {
-    name: 'maxPerPage',
-    required: false,
-    description: `Upper bound applied to perPage for this request. Lowering it below the default (${DEFAULT_PER_PAGE}) also lowers the page size used when perPage is omitted.`,
-    type: 'integer',
-    minimum: 1,
-    maximum: MAX_PER_PAGE,
-  },
-  {
-    name: 'page',
-    required: false,
-    description: 'One-based page number.',
-    type: 'integer',
-    minimum: 1,
-    maximum: MAX_PAGE,
-  },
-  {
-    name: 'perPage',
-    required: false,
-    // A dependency between two parameters, which no OpenAPI keyword expresses.
-    description: `Rows per page, defaulting to ${DEFAULT_PER_PAGE}. A \`maxPerPage\` on the same request lowers this ceiling; a value above the effective ceiling is rejected, not clamped.`,
-    type: 'integer',
-    minimum: 1,
-    maximum: MAX_PER_PAGE,
-  },
-  {
-    name: 'sort',
-    required: false,
-    description: `JSON array of { id, desc } objects, at most ${MAX_SORT_ITEMS}, each id at most ${MAX_ID_LENGTH} characters. An id outside the list below is ignored and the route's default sort applies. Allowed ids: ${filterColumnIds(specs)}.`,
-    maxLength: MAX_SORT_RAW_LENGTH,
-    example: '[{"id":"createdAt","desc":true}]',
-  },
-  {
-    name: 'filters',
-    required: false,
-    description: `JSON array of { id, value, variant, operator, filterId } objects, at most ${MAX_FILTER_ITEMS}; \`id\` and \`filterId\` at most ${MAX_ID_LENGTH} characters, each value at most ${MAX_VALUE_LENGTH}, and at most ${MAX_FILTER_VALUES} values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. Columns: ${describeFilterColumns(specs, MIN_SEARCH_LENGTH)}.`,
-    maxLength: MAX_FILTERS_RAW_LENGTH,
-  },
-  {
-    name: 'joinOperator',
-    required: false,
-    description: 'How multiple structured filters are combined.',
-    enum: [...dataTableConfig.joinOperators],
-  },
-  // No `maxLength`, unlike the parameters above: this is the one the parser
-  // ignores rather than rejects, and a bound the server does not enforce makes
-  // a generated client refuse a request this API accepts.
-  {
-    name: 'search',
-    required: false,
-    description: `Quick search. Terms outside ${MIN_SEARCH_LENGTH}–${MAX_SEARCH_LENGTH} characters, and terms carrying no letters or digits the trigram index can key on, are ignored rather than rejected, so the response is the unfiltered list.`,
-  },
-];
-
-/** A route behind a permission grant. */
 const PERMISSION_ROUTE = {
   preAuth: 'ip-limit',
   auth: 'permission',
@@ -671,24 +590,6 @@ export const ROUTES: readonly RouteDefinition[] = [
  */
 export const REGISTERED_ROUTES = toRegisteredRoutes(ROUTES);
 
-/**
- * Better Auth owns its own sub-routing under `/api/auth`, so it is a prefix
- * rather than a set of routes.
- *
- * The reachable surface is exact in both dimensions — path AND method — from the
- * same table `lib/auth/index.ts` enforces and `lib/http/openapi.ts` publishes. Not the
- * whole prefix and not one method set for all of it: Better Auth 404s every path
- * outside the list and every method a path does not declare, so anything broader
- * made the 405 boundary claim operations the handler itself rejects.
- */
 export const ROUTE_PREFIXES: readonly RoutePrefix[] = [
-  {
-    prefix: '/api/auth',
-    // Better Auth reads every path it serves as TEXT — JSON, or the
-    // URL-encoded form its sign-in also accepts. Nothing under here takes a
-    // file, so the prefix takes the parsed-into-memory ceiling and a caller
-    // cannot claim the upload allowance on `/sign-in/email`.
-    body: 'json',
-    paths: BETTER_AUTH_ENDPOINTS,
-  },
+  BETTER_AUTH_ROUTE_PREFIX,
 ];

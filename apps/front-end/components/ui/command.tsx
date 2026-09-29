@@ -1,8 +1,9 @@
-import * as React from 'react';
+import type * as React from 'react';
 
 import { Command as CommandPrimitive } from 'cmdk';
-import { SearchIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+import { Icon } from '@/components/ui/icon';
 
 function Command({
   className,
@@ -29,7 +30,10 @@ function CommandInput({
       data-slot='command-input-wrapper'
       className='flex h-9 items-center border-b px-3 space-x-2'
     >
-      <SearchIcon className='size-4 shrink-0 opacity-50' />
+      <Icon
+        icon='solar:magnifer-linear'
+        className='size-4 shrink-0 opacity-50'
+      />
       <CommandPrimitive.Input
         data-slot='command-input'
         className={cn(

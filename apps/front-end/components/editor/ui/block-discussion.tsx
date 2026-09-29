@@ -17,15 +17,11 @@ import { getDraftCommentKey } from '@platejs/comment';
 import { CommentPlugin } from '@platejs/comment/react';
 import { getTransientSuggestionKey } from '@platejs/suggestion';
 import { SuggestionPlugin } from '@platejs/suggestion/react';
-import {
-  MessageSquareTextIcon,
-  MessagesSquareIcon,
-  PencilLineIcon,
-} from 'lucide-react';
 import { PathApi, TextApi } from 'platejs';
 import { useEditorPlugin, useEditorRef, usePluginOption } from 'platejs/react';
 
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverAnchor,
@@ -198,7 +194,7 @@ const BlockCommentContent = ({
 
         <PopoverContent
           align='center'
-          className='max-h-[min(50dvh,calc(-24px+var(--radix-popper-available-height)))] w-96 min-w-44 max-w-[calc(100vw-24px)] overflow-y-auto p-0 data-[state=closed]:opacity-0'
+          className='max-h-[min(50vh,calc(-24px+var(--radix-popper-available-height)))] w-96 min-w-44 max-w-[calc(100vw-24px)] overflow-y-auto p-0 data-[state=closed]:opacity-0 supports-[height:1dvh]:max-h-[min(50dvh,calc(-24px+var(--radix-popper-available-height)))]'
           onCloseAutoFocus={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => e.preventDefault()}
           side='bottom'
@@ -250,15 +246,21 @@ const BlockCommentContent = ({
                 variant='ghost'
               >
                 {suggestionsCount > 0 && discussionsCount === 0 && (
-                  <PencilLineIcon className='size-4 shrink-0' />
+                  <Icon icon='lucide:pencil-line' className='size-4 shrink-0' />
                 )}
 
                 {suggestionsCount === 0 && discussionsCount > 0 && (
-                  <MessageSquareTextIcon className='size-4 shrink-0' />
+                  <Icon
+                    icon='solar:chat-square-line-linear'
+                    className='size-4 shrink-0'
+                  />
                 )}
 
                 {suggestionsCount > 0 && discussionsCount > 0 && (
-                  <MessagesSquareIcon className='size-4 shrink-0' />
+                  <Icon
+                    icon='solar:dialog-linear'
+                    className='size-4 shrink-0'
+                  />
                 )}
 
                 <span className='text-xs font-semibold'>{totalCount}</span>
@@ -307,31 +309,9 @@ const useResolvedDiscussion = (
   commentNodes: NodeEntry<TCommentText>[],
   blockPath: Path
 ) => {
-  const { api, getOption, setOption } = useEditorPlugin(commentPlugin);
+  const { api } = useEditorPlugin(commentPlugin);
 
   const discussions = usePluginOption(discussionPlugin, 'discussions');
-
-  commentNodes.forEach(([node]) => {
-    const id = api.comment.nodeId(node);
-
-    if (!id) return;
-
-    const map = getOption('uniquePathMap');
-    const previousPath = map.get(id);
-
-    // If there are no comment nodes in the corresponding path in the map, then update it.
-    if (PathApi.isPath(previousPath)) {
-      const nodes = api.comment.node({ id, at: previousPath });
-
-      if (!nodes) {
-        setOption('uniquePathMap', new Map(map).set(id, blockPath));
-        return;
-      }
-
-      return;
-    }
-    setOption('uniquePathMap', new Map(map).set(id, blockPath));
-  });
 
   const commentsIds = new Set(
     commentNodes.map(([node]) => api.comment.nodeId(node)).filter(Boolean)
@@ -343,12 +323,9 @@ const useResolvedDiscussion = (
       createdAt: new Date(d.createdAt),
     }))
     .filter((item: TDiscussion) => {
-      /** If comment cross blocks just show it in the first block */
-      const commentsPathMap = getOption('uniquePathMap');
-      const firstBlockPath = commentsPathMap.get(item.id);
-
-      if (!firstBlockPath || !PathApi.equals(firstBlockPath, blockPath))
-        return false;
+      // A comment across blocks is listed once, by the first of them.
+      const first = api.comment.node({ at: [], id: item.id });
+      if (first?.[1][0] !== blockPath[0]) return false;
 
       return (
         api.comment.has({ id: item.id }) &&

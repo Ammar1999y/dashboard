@@ -3,21 +3,30 @@
 import type { TMediaEmbedElement } from 'platejs';
 import type { PlateElementProps } from 'platejs/react';
 
-import { parseTwitterUrl, parseVideoUrl } from '@platejs/media';
 import { MediaEmbedPlugin, useMediaState } from '@platejs/media/react';
 import { ResizableProvider, useResizableValue } from '@platejs/resizable';
 import { PlateElement, withHOC } from 'platejs/react';
-import LiteYouTubeEmbed from 'react-lite-youtube-embed';
 import { Tweet } from 'react-tweet';
 import { cn } from '@/lib/utils';
 
+import { CAPTION_PLACEHOLDER } from '@/components/editor/labels';
+import {
+  EMBED_FRAME_CLASS,
+  EMBED_URL_PARSERS,
+  embedAspectClass,
+  MEDIA_CLASS,
+} from '@/components/editor/styles';
+
 import { Caption, CaptionTextarea } from './caption';
 import { MediaToolbar } from './media-toolbar';
-import {
-  mediaResizeHandleVariants,
-  Resizable,
-  ResizeHandle,
-} from './resize-handle';
+import { MediaResizeHandles, Resizable } from './resize-handle';
+import { YoutubeEmbed } from './youtube-embed';
+
+const TWEET_MAX_WIDTH = 550;
+const TWEET_MIN_WIDTH = 300;
+const EMBED_MIN_WIDTH = 100;
+
+const SELECTED_RING = 'ring-2 ring-ring ring-offset-2';
 
 export const MediaEmbedElement = withHOC(
   ResizableProvider,
@@ -31,25 +40,13 @@ export const MediaEmbedElement = withHOC(
       isYoutube,
       readOnly,
       selected,
-    } = useMediaState({
-      urlParsers: [parseTwitterUrl, parseVideoUrl],
-    });
+    } = useMediaState({ urlParsers: EMBED_URL_PARSERS });
     const width = useResizableValue('width');
-    const provider = embed?.provider;
-
-    const leftHandleClass = mediaResizeHandleVariants({ direction: 'left' });
-    const rightHandleClass = mediaResizeHandleVariants({ direction: 'right' });
+    const ring = focused && selected && SELECTED_RING;
 
     return (
       <MediaToolbar plugin={MediaEmbedPlugin}>
-        <PlateElement
-          className='py-2.5'
-          {...props}
-          attributes={{
-            ...props.attributes,
-            'data-ltr-element': true,
-          }}
-        >
+        <PlateElement className={MEDIA_CLASS} {...props}>
           <figure
             className='group relative m-0 w-full cursor-default'
             contentEditable={false}
@@ -58,60 +55,26 @@ export const MediaEmbedElement = withHOC(
               align={align}
               options={{
                 align,
-                maxWidth: isTweet ? 550 : '100%',
-                minWidth: isTweet ? 300 : 100,
+                maxWidth: isTweet ? TWEET_MAX_WIDTH : '100%',
+                minWidth: isTweet ? TWEET_MIN_WIDTH : EMBED_MIN_WIDTH,
               }}
             >
-              <ResizeHandle
-                className={leftHandleClass}
-                options={{ direction: 'left' }}
-              />
+              <MediaResizeHandles />
 
-              {isVideo ? (
-                isYoutube ? (
-                  <LiteYouTubeEmbed
-                    id={embed?.id ?? ''}
-                    title='youtube'
-                    wrapperClass={cn(
-                      'rounded-sm',
-                      focused && selected && 'ring-2 ring-ring ring-offset-2',
-                      'relative block cursor-pointer bg-black bg-center bg-cover [contain:content]',
-                      '[&.lyt-activated]:before:absolute [&.lyt-activated]:before:top-0 [&.lyt-activated]:before:h-14 [&.lyt-activated]:before:w-full [&.lyt-activated]:before:bg-top [&.lyt-activated]:before:bg-repeat-x [&.lyt-activated]:before:pb-12 [&.lyt-activated]:before:[transition:all_0.2s_cubic-bezier(0,_0,_0.2,_1)]',
-                      '[&.lyt-activated]:before:bg-[url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAADGCAYAAAAT+OqFAAAAdklEQVQoz42QQQ7AIAgEF/T/D+kbq/RWAlnQyyazA4aoAB4FsBSA/bFjuF1EOL7VbrIrBuusmrt4ZZORfb6ehbWdnRHEIiITaEUKa5EJqUakRSaEYBJSCY2dEstQY7AuxahwXFrvZmWl2rh4JZ07z9dLtesfNj5q0FU3A5ObbwAAAABJRU5ErkJggg==)]',
-                      'after:block after:pb-[var(--aspect-ratio)] after:content-[""]',
-                      '[&_>_iframe]:absolute [&_>_iframe]:top-0 rtl:[&_>_iframe]:left-0 ltr:[&_>_iframe]:right-0 [&_>_iframe]:size-full',
-                      '[&_>_.lty-playbtn]:z-[1] [&_>_.lty-playbtn]:h-11 [&_>_.lty-playbtn]:w-16 [&_>_.lty-playbtn]:rounded-[14%] [&_>_.lty-playbtn]:bg-[#212121] [&_>_.lty-playbtn]:opacity-80 [&_>_.lty-playbtn]:[transition:all_0.2s_cubic-bezier(0,_0,_0.2,_1)]',
-                      '[&:hover_>_.lty-playbtn]:bg-[red] [&:hover_>_.lty-playbtn]:opacity-100',
-                      '[&_>_.lty-playbtn]:before:border-[transparent_transparent_transparent_#fff] [&_>_.lty-playbtn]:before:border-y-3 [&_>_.lty-playbtn]:before:border-s-5 [&_>_.lty-playbtn]:before:border-e-0 [&_>_.lty-playbtn]:before:content-[""]',
-                      '[&_>_.lty-playbtn]:absolute [&_>_.lty-playbtn]:top-1/2 rtl:[&_>_.lty-playbtn]:left-1/2 ltr:[&_>_.lty-playbtn]:right-1/2 [&_>_.lty-playbtn]:[transform:translate3d(-50%,-50%,0)]',
-                      '[&_>_.lty-playbtn]:before:absolute [&_>_.lty-playbtn]:before:top-1/2 rtl:[&_>_.lty-playbtn]:before:left-1/2 ltr:[&_>_.lty-playbtn]:before:right-1/2 [&_>_.lty-playbtn]:before:[transform:translate3d(-50%,-50%,0)]',
-                      '[&.lyt-activated]:cursor-[unset]',
-                      '[&.lyt-activated]:before:pointer-events-none [&.lyt-activated]:before:opacity-0',
-                      '[&.lyt-activated_>_.lty-playbtn]:pointer-events-none [&.lyt-activated_>_.lty-playbtn]:!opacity-0'
-                    )}
+              {isVideo && isYoutube && embed?.id && (
+                <YoutubeEmbed id={embed.id} className={cn(ring)} />
+              )}
+
+              {isVideo && !isYoutube && (
+                <div className={embedAspectClass(embed?.provider)}>
+                  <iframe
+                    allowFullScreen
+                    className={cn(EMBED_FRAME_CLASS, ring)}
+                    src={embed?.url}
+                    title='embed'
                   />
-                ) : (
-                  <div
-                    className={cn(
-                      provider === 'vimeo' && 'pb-[75%]',
-                      provider === 'youku' && 'pb-[56.25%]',
-                      provider === 'dailymotion' && 'pb-[56.0417%]',
-                      provider === 'coub' && 'pb-[51.25%]'
-                    )}
-                  >
-                    <iframe
-                      allowFullScreen
-                      className={cn(
-                        'absolute top-0 size-full rounded-sm ltr:right-0 rtl:left-0',
-                        isVideo && 'border-0',
-                        focused && selected && 'ring-2 ring-ring ring-offset-2'
-                      )}
-                      src={embed?.url}
-                      title='embed'
-                    />
-                  </div>
-                )
-              ) : null}
+                </div>
+              )}
 
               {isTweet && embed?.id && (
                 <div
@@ -125,15 +88,10 @@ export const MediaEmbedElement = withHOC(
                   <Tweet id={embed.id} />
                 </div>
               )}
-
-              <ResizeHandle
-                className={rightHandleClass}
-                options={{ direction: 'right' }}
-              />
             </Resizable>
 
             <Caption align={align} style={{ width }}>
-              <CaptionTextarea placeholder='Write a caption...' />
+              <CaptionTextarea placeholder={CAPTION_PLACEHOLDER} />
             </Caption>
           </figure>
 

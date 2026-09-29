@@ -1,5 +1,7 @@
 import { DASHBOARD_PAGES } from '../permissions/constants';
 
+export const MIB = 1024 * 1024;
+
 /** MiB. The enforced upload ceiling for an image, published in the OpenAPI document. */
 export const MAX_IMAGE_SIZE = 1;
 /** Refuses decompression bombs, checked from the header before any decode. */

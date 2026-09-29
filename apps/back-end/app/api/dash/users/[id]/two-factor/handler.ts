@@ -1,20 +1,13 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
-import {
-  passkeys,
-  roles,
-  twoFactorCredentials,
-  twoFactorMethods,
-  users,
-} from '@/db/schema';
+import { roles, users } from '@/db/schema';
 
 import {
   HTTP_STATUS,
   MSG_NOT_FOUND,
   MSG_UPDATE_ERROR,
 } from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import { twoFactorMsg } from '@/lib/auth/messages';
@@ -22,11 +15,13 @@ import {
   revokeOtherSessions,
   revokePendingProofs,
 } from '@/lib/auth/session/rotation';
+import { clearTwoFactorEnrolment } from '@/lib/auth/two-factor/methods';
 import { requireId } from '@/lib/http/input';
-import { apiSuccess, withApiErrors } from '@/lib/http/response';
+import { apiSuccess, notFoundError, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { validateRolePermissionScope } from '@/lib/permissions/utils';
+import { validateRolePermissionScope } from '@/lib/permissions/scope';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
+import { liveUser } from '@/lib/users/filters';
 import { assertTargetUserVisible } from '@/lib/users/target-user';
 
 /**
@@ -82,10 +77,10 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
     })
     .from(users)
     .leftJoin(roles, eq(users.roleId, roles.id))
-    .where(and(eq(users.id, targetId), isNull(users.deletedAt)))
+    .where(liveUser(eq(users.id, targetId)))
     .limit(1);
 
-  if (!prefilter) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (!prefilter) throw notFoundError();
 
   assertTargetUserVisible({
     isSelf: prefilter.id === actorUserId,
@@ -113,10 +108,10 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
       })
       .from(users)
       .leftJoin(roles, eq(users.roleId, roles.id))
-      .where(and(eq(users.id, targetId), isNull(users.deletedAt)))
+      .where(liveUser(eq(users.id, targetId)))
       .for('update', { of: users });
 
-    if (!target) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    if (!target) throw notFoundError();
 
     const targetRoleId = assertTargetUserVisible({
       isSelf: target.id === actorUserId,
@@ -138,17 +133,7 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
         'reachability'
       );
 
-    await tx
-      .delete(twoFactorMethods)
-      .where(eq(twoFactorMethods.userId, targetId));
-    await tx
-      .delete(twoFactorCredentials)
-      .where(eq(twoFactorCredentials.userId, targetId));
-    await tx.delete(passkeys).where(eq(passkeys.userId, targetId));
-    await tx
-      .update(users)
-      .set({ twoFactorEnabled: false })
-      .where(eq(users.id, targetId));
+    await clearTwoFactorEnrolment(tx, targetId, { deletePasskeys: true });
 
     await revokePendingProofs(tx, targetId);
     // Every session, including the target's own: nothing that predates the

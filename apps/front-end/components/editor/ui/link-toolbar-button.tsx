@@ -6,8 +6,8 @@ import {
   useLinkToolbarButton,
   useLinkToolbarButtonState,
 } from '@platejs/link/react';
-import { Link } from 'lucide-react';
 
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 
 export function LinkToolbarButton(
@@ -18,7 +18,7 @@ export function LinkToolbarButton(
 
   return (
     <ToolbarButton {...props} {...buttonProps} data-plate-focus tooltip='رابط'>
-      <Link />
+      <Icon icon='solar:link-linear' />
     </ToolbarButton>
   );
 }

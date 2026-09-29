@@ -16,7 +16,7 @@ import {
 } from './constants';
 
 export const SortableRootContext =
-  React.createContext<SortableRootContextValue<unknown> | null>(null);
+  React.createContext<SortableRootContextValue | null>(null);
 SortableRootContext.displayName = ROOT_NAME;
 
 type SortableErrorKey =
@@ -37,7 +37,7 @@ SortableContentContext.displayName = CONTENT_NAME;
 export interface SortableItemContextValue {
   id: string;
   attributes: DraggableAttributes;
-  listeners: DraggableSyntheticListeners | undefined;
+  listeners: DraggableSyntheticListeners;
   setActivatorNodeRef: (node: HTMLElement | null) => void;
   isDragging?: boolean;
   disabled?: boolean;

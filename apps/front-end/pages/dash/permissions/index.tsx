@@ -1,16 +1,8 @@
-import PermissionsPage from '@/components/permissions/page';
+import type { Page } from '@/types/page';
 
-export default function Permissions() {
-  return <PermissionsPage />;
-}
+import PermissionsList from '@/components/dash/permissions/list';
 
-export async function getStaticProps() {
-  return {
-    props: {
-      pathname: '/dash/permissions',
-      title: {
-        template: 'الصلاحيات',
-      },
-    },
-  };
-}
+const PermissionsListPage: Page = () => <PermissionsList />;
+PermissionsListPage.title = 'الصلاحيات';
+
+export default PermissionsListPage;

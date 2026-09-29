@@ -1,372 +1,96 @@
-import React from 'react';
+import { useEffect } from 'react';
 
-export type TColor = {
-  isBrightColor: boolean;
-  value: string;
-};
+import { create } from 'zustand';
 
-const CUSTOM_COLORS_STORAGE_KEY = 'plate-editor-custom-colors';
+import { getColorSchema } from '@/utils/validation/rules';
 
+const STORAGE_KEY = 'plate-editor-custom-colors';
+const MAX_CUSTOM_COLORS = 10;
+
+// prettier-ignore
 export const DEFAULT_COLORS = [
-  {
-    isBrightColor: false,
-    value: '#000000',
-  },
-  {
-    isBrightColor: false,
-    value: '#434343',
-  },
-  {
-    isBrightColor: false,
-    value: '#666666',
-  },
-  {
-    isBrightColor: false,
-    value: '#999999',
-  },
-  {
-    isBrightColor: false,
-    value: '#B7B7B7',
-  },
-  {
-    isBrightColor: false,
-    value: '#CCCCCC',
-  },
-  {
-    isBrightColor: false,
-    value: '#D9D9D9',
-  },
-  {
-    isBrightColor: false,
-    value: '#EFEFEF',
-  },
-  {
-    isBrightColor: false,
-    value: '#F3F3F3',
-  },
-  {
-    isBrightColor: true,
-    value: '#FFFFFF',
-  },
-  {
-    isBrightColor: false,
-    value: '#980000',
-  },
-  {
-    isBrightColor: false,
-    value: '#FF0000',
-  },
-  {
-    isBrightColor: false,
-    value: '#FF9900',
-  },
-  {
-    isBrightColor: false,
-    value: '#FFFF00',
-  },
-  {
-    isBrightColor: false,
-    value: '#00FF00',
-  },
-  {
-    isBrightColor: false,
-    value: '#00FFFF',
-  },
-  {
-    isBrightColor: false,
-    value: '#4A86E8',
-  },
-  {
-    isBrightColor: false,
-    value: '#0000FF',
-  },
-  {
-    isBrightColor: false,
-    value: '#9900FF',
-  },
-  {
-    isBrightColor: false,
-    value: '#FF00FF',
-  },
-  {
-    isBrightColor: false,
-    value: '#E6B8AF',
-  },
-  {
-    isBrightColor: false,
-    value: '#F4CCCC',
-  },
-  {
-    isBrightColor: false,
-    value: '#FCE5CD',
-  },
-  {
-    isBrightColor: false,
-    value: '#FFF2CC',
-  },
-  {
-    isBrightColor: false,
-    value: '#D9EAD3',
-  },
-  {
-    isBrightColor: false,
-    value: '#D0E0E3',
-  },
-  {
-    isBrightColor: false,
-    value: '#C9DAF8',
-  },
-  {
-    isBrightColor: false,
-    value: '#CFE2F3',
-  },
-  {
-    isBrightColor: false,
-    value: '#D9D2E9',
-  },
-  {
-    isBrightColor: false,
-    value: '#EAD1DC',
-  },
-  {
-    isBrightColor: false,
-    value: '#DD7E6B',
-  },
-  {
-    isBrightColor: false,
-    value: '#EA9999',
-  },
-  {
-    isBrightColor: false,
-    value: '#F9CB9C',
-  },
-  {
-    isBrightColor: false,
-    value: '#FFE599',
-  },
-  {
-    isBrightColor: false,
-    value: '#B6D7A8',
-  },
-  {
-    isBrightColor: false,
-    value: '#A2C4C9',
-  },
-  {
-    isBrightColor: false,
-    value: '#A4C2F4',
-  },
-  {
-    isBrightColor: false,
-    value: '#9FC5E8',
-  },
-  {
-    isBrightColor: false,
-    value: '#B4A7D6',
-  },
-  {
-    isBrightColor: false,
-    value: '#D5A6BD',
-  },
-  {
-    isBrightColor: false,
-    value: '#CC4125',
-  },
-  {
-    isBrightColor: false,
-    value: '#E06666',
-  },
-  {
-    isBrightColor: false,
-    value: '#F6B26B',
-  },
-  {
-    isBrightColor: false,
-    value: '#FFD966',
-  },
-  {
-    isBrightColor: false,
-    value: '#93C47D',
-  },
-  {
-    isBrightColor: false,
-    value: '#76A5AF',
-  },
-  {
-    isBrightColor: false,
-    value: '#6D9EEB',
-  },
-  {
-    isBrightColor: false,
-    value: '#6FA8DC',
-  },
-  {
-    isBrightColor: false,
-    value: '#8E7CC3',
-  },
-  {
-    isBrightColor: false,
-    value: '#C27BA0',
-  },
-  {
-    isBrightColor: false,
-    value: '#A61C00',
-  },
-  {
-    isBrightColor: false,
-    value: '#CC0000',
-  },
-  {
-    isBrightColor: false,
-    value: '#E69138',
-  },
-  {
-    isBrightColor: false,
-    value: '#F1C232',
-  },
-  {
-    isBrightColor: false,
-    value: '#6AA84F',
-  },
-  {
-    isBrightColor: false,
-    value: '#45818E',
-  },
-  {
-    isBrightColor: false,
-    value: '#3C78D8',
-  },
-  {
-    isBrightColor: false,
-    value: '#3D85C6',
-  },
-  {
-    isBrightColor: false,
-    value: '#674EA7',
-  },
-  {
-    isBrightColor: false,
-    value: '#A64D79',
-  },
-  {
-    isBrightColor: false,
-    value: '#85200C',
-  },
-  {
-    isBrightColor: false,
-    value: '#990000',
-  },
-  {
-    isBrightColor: false,
-    value: '#B45F06',
-  },
-  {
-    isBrightColor: false,
-    value: '#BF9000',
-  },
-  {
-    isBrightColor: false,
-    value: '#38761D',
-  },
-  {
-    isBrightColor: false,
-    value: '#134F5C',
-  },
-  {
-    isBrightColor: false,
-    value: '#1155CC',
-  },
-  {
-    isBrightColor: false,
-    value: '#0B5394',
-  },
-  {
-    isBrightColor: false,
-    value: '#351C75',
-  },
-  {
-    isBrightColor: false,
-    value: '#741B47',
-  },
-  {
-    isBrightColor: false,
-    value: '#5B0F00',
-  },
-  {
-    isBrightColor: false,
-    value: '#660000',
-  },
-  {
-    isBrightColor: false,
-    value: '#783F04',
-  },
-  {
-    isBrightColor: false,
-    value: '#7F6000',
-  },
-  {
-    isBrightColor: false,
-    value: '#274E12',
-  },
-  {
-    isBrightColor: false,
-    value: '#0D343D',
-  },
-  {
-    isBrightColor: false,
-    value: '#1B4487',
-  },
-  {
-    isBrightColor: false,
-    value: '#083763',
-  },
-  {
-    isBrightColor: false,
-    value: '#1F124D',
-  },
-  {
-    isBrightColor: false,
-    value: '#4C1130',
-  },
+  '#000000', '#434343', '#666666', '#999999', '#B7B7B7', '#CCCCCC', '#D9D9D9', '#EFEFEF', '#F3F3F3', '#FFFFFF',
+  '#980000', '#FF0000', '#FF9900', '#FFFF00', '#00FF00', '#00FFFF', '#4A86E8', '#0000FF', '#9900FF', '#FF00FF',
+  '#E6B8AF', '#F4CCCC', '#FCE5CD', '#FFF2CC', '#D9EAD3', '#D0E0E3', '#C9DAF8', '#CFE2F3', '#D9D2E9', '#EAD1DC',
+  '#DD7E6B', '#EA9999', '#F9CB9C', '#FFE599', '#B6D7A8', '#A2C4C9', '#A4C2F4', '#9FC5E8', '#B4A7D6', '#D5A6BD',
+  '#CC4125', '#E06666', '#F6B26B', '#FFD966', '#93C47D', '#76A5AF', '#6D9EEB', '#6FA8DC', '#8E7CC3', '#C27BA0',
+  '#A61C00', '#CC0000', '#E69138', '#F1C232', '#6AA84F', '#45818E', '#3C78D8', '#3D85C6', '#674EA7', '#A64D79',
+  '#85200C', '#990000', '#B45F06', '#BF9000', '#38761D', '#134F5C', '#1155CC', '#0B5394', '#351C75', '#741B47',
+  '#5B0F00', '#660000', '#783F04', '#7F6000', '#274E12', '#0D343D', '#1B4487', '#083763', '#1F124D', '#4C1130',
 ];
 
-// Hook to manage custom colors in localStorage
-export function useCustomColors() {
-  const [customColors, setCustomColors] = React.useState<TColor[]>([]);
+const colorSchema = getColorSchema();
 
-  React.useEffect(() => {
-    const stored = localStorage.getItem(CUSTOM_COLORS_STORAGE_KEY);
-    if (stored) {
-      try {
-        setCustomColors(JSON.parse(stored));
-      } catch {
-        setCustomColors([]);
-      }
+/** Stored entries were `{ value }` objects before they were plain strings. */
+function readStored(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) ?? '[]'
+    );
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((entry: unknown) =>
+        typeof entry === 'object' && entry !== null && 'value' in entry
+          ? entry.value
+          : entry
+      )
+      .flatMap((entry) => {
+        const color = colorSchema.safeParse(entry);
+        return color.success && color.data ? [color.data] : [];
+      })
+      .slice(0, MAX_CUSTOM_COLORS);
+  } catch {
+    return [];
+  }
+}
+
+function writeStored(colors: string[]) {
+  try {
+    if (colors.length === 0) localStorage.removeItem(STORAGE_KEY);
+    else localStorage.setItem(STORAGE_KEY, JSON.stringify(colors));
+  } catch {
+    // Storage is optional: the colors still apply for this session.
+  }
+}
+
+interface CustomColorsState {
+  colors: string[] | null;
+  add: (color: string) => void;
+  clear: () => void;
+}
+
+/** One list for every color menu on the page, read from storage on first use. */
+const useCustomColorsStore = create<CustomColorsState>((set, get) => ({
+  colors: null,
+  add: (color) => {
+    const value = color.toUpperCase();
+    const current = get().colors ?? readStored();
+    if (current.includes(value)) return;
+    const colors = [value, ...current].slice(0, MAX_CUSTOM_COLORS);
+    writeStored(colors);
+    set({ colors });
+  },
+  clear: () => {
+    writeStored([]);
+    set({ colors: [] });
+  },
+}));
+
+const EMPTY: string[] = [];
+
+export function useCustomColors() {
+  const colors = useCustomColorsStore((s) => s.colors);
+
+  useEffect(() => {
+    if (useCustomColorsStore.getState().colors === null) {
+      useCustomColorsStore.setState({ colors: readStored() });
     }
   }, []);
 
-  const addCustomColor = React.useCallback((color: string) => {
-    setCustomColors((prev) => {
-      // Check if color already exists
-      if (prev.some((c) => c.value.toUpperCase() === color.toUpperCase())) {
-        return prev;
-      }
-      const newColors = [
-        { isBrightColor: false, value: color.toUpperCase() },
-        ...prev,
-      ].slice(0, 10); // Limit to 10 custom colors
-      localStorage.setItem(
-        CUSTOM_COLORS_STORAGE_KEY,
-        JSON.stringify(newColors)
-      );
-      return newColors;
-    });
-  }, []);
-
-  const clearCustomColors = React.useCallback(() => {
-    setCustomColors([]);
-    localStorage.removeItem(CUSTOM_COLORS_STORAGE_KEY);
-  }, []);
-
-  return { customColors, addCustomColor, clearCustomColors };
+  const { add, clear } = useCustomColorsStore.getState();
+  return {
+    customColors: colors ?? EMPTY,
+    addCustomColor: add,
+    clearCustomColors: clear,
+  };
 }

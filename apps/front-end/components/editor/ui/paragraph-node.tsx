@@ -3,19 +3,9 @@
 import type { PlateElementProps } from 'platejs/react';
 
 import { PlateElement } from 'platejs/react';
-import { cn } from '@/lib/utils';
+
+import { PARAGRAPH_CLASS } from '@/components/editor/styles';
 
 export function ParagraphElement(props: PlateElementProps) {
-  return (
-    <PlateElement
-      {...props}
-      attributes={{
-        ...props.attributes,
-        'data-ltr-element': true,
-      }}
-      className={cn('m-0 px-0 py-1')}
-    >
-      {props.children}
-    </PlateElement>
-  );
+  return <PlateElement {...props} className={PARAGRAPH_CLASS} />;
 }

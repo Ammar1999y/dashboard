@@ -1,7 +1,4 @@
 import { BaseSuggestionPlugin } from '@platejs/suggestion';
 
-import { SuggestionLeafStatic } from '@/components/editor/ui/static/suggestion-node-static';
-
-export const BaseSuggestionKit = [
-  BaseSuggestionPlugin.withComponent(SuggestionLeafStatic),
-];
+/** For its API only: published.ts rejects every suggestion before a render. */
+export const BaseSuggestionKit = [BaseSuggestionPlugin];

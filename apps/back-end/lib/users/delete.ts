@@ -1,21 +1,14 @@
 import type { AuditMeta } from '@/lib/audit';
-import type { checkUserPermission } from '@/lib/permissions/checker';
+import type { ActorPermissions } from '@/lib/permissions/checker';
+import type { AccessScope } from '@app/shared/permissions/constants';
 import type { EntityID } from '@app/shared/types';
 
 import { eq, sql } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
-import {
-  accounts,
-  rolePermissions,
-  roles,
-  userPreferences,
-  users,
-} from '@/db/schema';
+import { accounts, userPreferences, users } from '@/db/schema';
 
-import { HTTP_STATUS, MSG_NOT_FOUND } from '@app/shared/api-messages';
 import { PHONE_REQUIRED } from '@app/shared/config';
-import { CustomError } from '@app/shared/error-class';
 import {
   CUSTOM_ROLE_VALUE,
   ROLE_SCOPE,
@@ -28,10 +21,10 @@ import {
   revokePendingProofs,
   unlinkGoogle,
 } from '@/lib/auth/session/rotation';
-import {
-  PERMISSION_AUDIT_VERSION,
-  validateRolePermissionScope,
-} from '@/lib/permissions/utils';
+import { notFoundError } from '@/lib/http/response';
+import { destroyCustomRole } from '@/lib/permissions/roles';
+
+import { assertTargetUserReachable } from './target-user';
 
 // `gen_random_uuid()::text` is always 36 characters; the anonymised email keeps
 // within EMAIL_MAX by truncating ahead of the marker and the uuid.
@@ -47,10 +40,8 @@ const DELETED_SUFFIX_LEN = DELETED_EMAIL_SUFFIX.length + UUID_TEXT_LENGTH;
 export async function softDeleteUser(opts: {
   targetId: EntityID;
   actor: { userId: EntityID; email: string };
-  deleteScope: 'all' | 'own' | null;
-  actorPermissions: Awaited<
-    ReturnType<typeof checkUserPermission>
-  >['permissions'];
+  deleteScope: AccessScope | null;
+  actorPermissions: ActorPermissions;
   auditMeta: AuditMeta;
 }): Promise<void> {
   const {
@@ -84,19 +75,17 @@ export async function softDeleteUser(opts: {
       `);
 
     const lockedUser = locked[0];
-    if (!lockedUser?.role_id)
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    if (!lockedUser) throw notFoundError();
 
-    if (deleteScope === 'own' && lockedUser.created_by !== actor.userId)
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-
-    if (actorPermissions)
-      await validateRolePermissionScope(
-        actorPermissions,
-        lockedUser.role_id,
-        tx,
-        'reachability'
-      );
+    await assertTargetUserReachable(tx, {
+      isSelf: false,
+      roleId: lockedUser.role_id,
+      createdBy: lockedUser.created_by,
+      role: { roleName: lockedUser.role_name, scope: lockedUser.role_scope },
+      actorUserId: actor.userId,
+      scope: deleteScope,
+      actorPermissions,
+    });
 
     await tx
       .update(users)
@@ -127,35 +116,14 @@ export async function softDeleteUser(opts: {
     // Explicit, because the FK cascade never fires: this row is soft-deleted
     // and never purged.
     await tx.delete(userPreferences).where(eq(userPreferences.userId, userId));
-    if (lockedUser.role_scope === CUSTOM_ROLE_VALUE) {
-      // The user event records only the role id, and this is the one
-      // custom-role removal with no `roles` event of its own, so the matrix is
-      // captured before the role goes.
-      const deletedRolePerms = await tx
-        .select({
-          pageName: rolePermissions.pageName,
-          permissions: rolePermissions.permissions,
-        })
-        .from(rolePermissions)
-        .where(eq(rolePermissions.roleId, lockedUser.role_id));
-
-      await tx.delete(roles).where(eq(roles.id, lockedUser.role_id));
-
-      await auditLog(tx, {
-        userId: actor.userId,
-        userEmail: actor.email,
-        action: 'DELETE',
-        tableName: 'roles',
-        recordId: lockedUser.role_id,
-        oldData: {
-          auditVersion: PERMISSION_AUDIT_VERSION,
-          scope: CUSTOM_ROLE_VALUE,
-          forUserId: userId,
-          permissions: deletedRolePerms,
-        },
+    if (lockedUser.role_scope === CUSTOM_ROLE_VALUE)
+      await destroyCustomRole(tx, {
+        actorUserId: actor.userId,
+        actorEmail: actor.email,
+        roleId: lockedUser.role_id,
+        forUserId: userId,
         meta: auditMeta,
       });
-    }
 
     await auditLog(tx, {
       userId: actor.userId,

@@ -1,16 +1,8 @@
-import { CategoriesPage } from '@/components/categories/page';
+import type { Page } from '@/types/page';
 
-export default function Categories() {
-  return <CategoriesPage />;
-}
+import CategoriesList from '@/components/dash/categories/list';
 
-export async function getStaticProps() {
-  return {
-    props: {
-      pathname: '/dash/projects/categories',
-      title: {
-        template: 'تصنيفات المشاريع',
-      },
-    },
-  };
-}
+const CategoriesListPage: Page = () => <CategoriesList />;
+CategoriesListPage.title = 'تصنيفات المشاريع';
+
+export default CategoriesListPage;

@@ -5,6 +5,8 @@
  */
 import type { JsonSchema } from './json-schema';
 
+import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
+
 /** Routes whose success status is 201 rather than 200. */
 export const CREATED_ROUTES = new Set([
   'POST /api/dash/permissions',
@@ -290,8 +292,7 @@ export const OPERATION_DOCS: Record<
   },
   'DELETE /api/dash/media/folders/:id': {
     summary: 'Delete a media folder, empty or whole',
-    description:
-      'Without `recursive`, an empty folder only: anything inside — a subfolder, a file in any state — is a 409. With `recursive=true`, the folder and its whole subtree, bounded at 200 DESCENDANTS, subfolders plus their files, not counting the folder being deleted (422 above it), and refused outright (409) while a file inside is still uploading or still being deleted. The files go first, through the same three-phase deletion a file request uses, so a file a record references refuses the whole operation before anything is removed. An `own`-scoped grant (`deleteOwn`) reaches the files as well as the folders: a subfolder someone else created, or a file someone else uploaded, answers 404 and deletes nothing.',
+    description: `Without \`recursive\`, an empty folder only: anything inside — a subfolder, a file in any state — is a 409. With \`recursive=true\`, the folder and its whole subtree, bounded at ${FOLDER_RECURSIVE_DELETE_MAX} DESCENDANTS, subfolders plus their files, not counting the folder being deleted (422 above it), and refused outright (409) while a file inside is still uploading or still being deleted. The files go first, through the same three-phase deletion a file request uses, so a file a record references refuses the whole operation before anything is removed. An \`own\`-scoped grant (\`deleteOwn\`) reaches the files as well as the folders: a subfolder someone else created, or a file someone else uploaded, answers 404 and deletes nothing.`,
     tag: 'Media',
   },
   'POST /api/upload/file': {

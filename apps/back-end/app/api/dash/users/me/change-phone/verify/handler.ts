@@ -1,18 +1,14 @@
-import { withTransaction } from '@/db';
-
-import { HTTP_STATUS, MSG_UPDATE_ERROR } from '@app/shared/api-messages';
-import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@app/shared/config';
-import { CustomError } from '@app/shared/error-class';
+import { MSG_UPDATE_ERROR } from '@app/shared/api-messages';
+import { PHONE_ENABLED } from '@app/shared/config';
 import { changePhoneVerifySchema } from '@app/shared/validation/auth';
 
 import { getAuditMeta } from '@/lib/audit';
-import { otpMsg } from '@/lib/auth/messages';
-import { verifyTurnstileRequest } from '@/lib/captcha';
+import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, requireFeature, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
-import { processOtpVerify } from '@/lib/otp/verify';
+import { verifyOtpOrAutoVerify } from '@/lib/otp/verify';
 import {
   enforceOtpVerifyQuota,
   enforceRateLimit,
@@ -39,9 +35,7 @@ export const POST = withApiErrors(
       failClosed: true,
     });
 
-    const captchaOk = await verifyTurnstileRequest(ctx.headers);
-    if (!captchaOk)
-      throw new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);
+    if (!(await verifyTurnstileRequest(ctx.headers))) throw captchaRefused();
 
     const input = await readJsonBody(ctx, changePhoneVerifySchema);
 
@@ -54,35 +48,25 @@ export const POST = withApiErrors(
       surface: 'contact_change',
     });
 
-    await (OTP_AUTO_VERIFY
-      ? withTransaction((tx) =>
-          commitPhoneChange({
-            tx,
-            userId,
-            newPhoneNumber,
-            keepSessionId: sessionId,
-            auditMeta,
-          })
-        )
-      : processOtpVerify({
+    await verifyOtpOrAutoVerify({
+      userId,
+      userEmail: session.user.email,
+      channel,
+      purpose: 'change_phone',
+      identifier: newPhoneNumber,
+      code: input.code,
+      auditMeta,
+      // The number bound to the proven session, not the request body.
+      onVerified: (tx, matched) =>
+        commitPhoneChange({
+          tx,
           userId,
-          userEmail: session.user.email,
-          channel,
-          purpose: 'change_phone',
-          identifier: newPhoneNumber,
-          code: input.code,
+          newPhoneNumber: matched?.targetIdentifier ?? newPhoneNumber,
+          keepSessionId: sessionId,
+          keepVerificationSessionId: matched?.verificationSessionId,
           auditMeta,
-          // The number bound to the proven session, not the request body.
-          onVerified: (tx, matched) =>
-            commitPhoneChange({
-              tx,
-              userId,
-              newPhoneNumber: matched.targetIdentifier ?? newPhoneNumber,
-              keepSessionId: sessionId,
-              keepVerificationSessionId: matched.verificationSessionId,
-              auditMeta,
-            }),
-        }));
+        }),
+    });
 
     return apiSuccess({
       message: userMsg.phoneChanged,

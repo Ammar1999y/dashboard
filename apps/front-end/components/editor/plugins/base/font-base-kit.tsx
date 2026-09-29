@@ -1,20 +1,19 @@
-import type { SlatePluginConfig } from 'platejs';
-
 import {
   BaseFontBackgroundColorPlugin,
   BaseFontColorPlugin,
   BaseFontFamilyPlugin,
   BaseFontSizePlugin,
 } from '@platejs/basic-styles';
-import { KEYS } from 'platejs';
 
-const options = {
-  inject: { targetPlugins: [KEYS.p] },
-} satisfies SlatePluginConfig;
+import {
+  FONT_BACKGROUND_INJECT,
+  FONT_COLOR_INJECT,
+  FONT_INJECT,
+} from '../config';
 
 export const BaseFontKit = [
-  BaseFontColorPlugin.configure(options),
-  BaseFontBackgroundColorPlugin.configure(options),
-  BaseFontSizePlugin.configure(options),
-  BaseFontFamilyPlugin.configure(options),
+  BaseFontColorPlugin.configure({ inject: FONT_COLOR_INJECT }),
+  BaseFontBackgroundColorPlugin.configure({ inject: FONT_BACKGROUND_INJECT }),
+  BaseFontSizePlugin.configure({ inject: FONT_INJECT }),
+  BaseFontFamilyPlugin.configure({ inject: FONT_INJECT }),
 ];

@@ -2,29 +2,20 @@
 
 import type { MediaType } from '@/components/editor/media-config';
 
-import { useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 
-import {
-  ArrowUpToLineIcon,
-  BaselineIcon,
-  BoldIcon,
-  Code2Icon,
-  ItalicIcon,
-  PaintBucketIcon,
-  StrikethroughIcon,
-  UnderlineIcon,
-} from 'lucide-react';
 import { KEYS } from 'platejs';
 import { useEditorReadOnly } from 'platejs/react';
+import { createDialog } from '@/lib/dialogs';
 
-import { useKeyboardDetection } from '@/hooks/use-keyboard-detection';
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton, ToolbarGroup } from '@/components/ui/toolbar';
 import { mediaConfig } from '@/components/editor/media-config';
-import { AlignToolbarButton } from '@/components/editor/ui/align-toolbar-button';
-import { DirToolbarButton } from '@/components/editor/ui/dir-toolbar-button';
-import { EmojiToolbarButton } from '@/components/editor/ui/emoji-toolbar-button';
 
+import { AlignToolbarButton } from './align-toolbar-button';
 import { ClearFormattingToolbarButton } from './clear-formatting-toolbar-button';
+import { DirToolbarButton } from './dir-toolbar-button';
+import { EmojiToolbarButton } from './emoji-toolbar-button';
 import { ExportToolbarButton } from './export-toolbar-button';
 import { FontColorToolbarButton } from './font-color-toolbar-button';
 import { FontSizeToolbarButton } from './font-size-toolbar-button';
@@ -42,7 +33,7 @@ import {
   NumberedListToolbarButton,
   TodoListToolbarButton,
 } from './list-toolbar-button';
-import { MarkToolbarButton } from './mark-toolbar-button';
+import { BasicMarkButtons } from './mark-toolbar-button';
 import { MediaUploadDialog } from './media-upload-dialog';
 import { ModeToolbarButton } from './mode-toolbar-button';
 import { MoreToolbarButton } from './more-toolbar-button';
@@ -51,7 +42,6 @@ import { TurnIntoToolbarButton } from './turn-into-toolbar-button';
 
 export function FixedToolbarButtons() {
   const readOnly = useEditorReadOnly();
-  const { formatShortcut } = useKeyboardDetection();
 
   return (
     <div className='flex w-full'>
@@ -63,9 +53,7 @@ export function FixedToolbarButtons() {
           </ToolbarGroup>
 
           <ToolbarGroup>
-            <ExportToolbarButton>
-              <ArrowUpToLineIcon />
-            </ExportToolbarButton>
+            <ExportToolbarButton />
 
             <ImportToolbarButton />
           </ToolbarGroup>
@@ -77,51 +65,18 @@ export function FixedToolbarButtons() {
           </ToolbarGroup>
 
           <ToolbarGroup>
-            <MarkToolbarButton
-              nodeType={KEYS.bold}
-              tooltip={formatShortcut('عريض', 'B')}
-            >
-              <BoldIcon />
-            </MarkToolbarButton>
-
-            <MarkToolbarButton
-              nodeType={KEYS.italic}
-              tooltip={formatShortcut('مائل', 'I')}
-            >
-              <ItalicIcon />
-            </MarkToolbarButton>
-
-            <MarkToolbarButton
-              nodeType={KEYS.underline}
-              tooltip={formatShortcut('تحته خط', 'U')}
-            >
-              <UnderlineIcon />
-            </MarkToolbarButton>
-
-            <MarkToolbarButton
-              nodeType={KEYS.strikethrough}
-              tooltip={formatShortcut('يتوسطه خط', 'S')}
-            >
-              <StrikethroughIcon />
-            </MarkToolbarButton>
-
-            <MarkToolbarButton
-              nodeType={KEYS.code}
-              tooltip={formatShortcut('كود', 'E')}
-            >
-              <Code2Icon />
-            </MarkToolbarButton>
+            <BasicMarkButtons />
           </ToolbarGroup>
 
           <ToolbarGroup>
             <FontColorToolbarButton nodeType={KEYS.color} tooltip='لون النص'>
-              <BaselineIcon />
+              <Icon icon='lucide:baseline' />
             </FontColorToolbarButton>
             <FontColorToolbarButton
               nodeType={KEYS.backgroundColor}
               tooltip='لون الخلفية'
             >
-              <PaintBucketIcon />
+              <Icon icon='lucide:paint-bucket' />
             </FontColorToolbarButton>
           </ToolbarGroup>
 
@@ -161,32 +116,42 @@ export function FixedToolbarButtons() {
   );
 }
 
+const ENABLED_MEDIA_TYPES = (Object.keys(mediaConfig) as MediaType[]).filter(
+  (type) => mediaConfig[type].enabled
+);
+
+const MediaToolbarButton = memo(
+  ({
+    type,
+    onOpen,
+  }: {
+    type: MediaType;
+    onOpen: (type: MediaType) => void;
+  }) => {
+    const { label, icon } = mediaConfig[type];
+    const handleClick = useCallback(() => onOpen(type), [onOpen, type]);
+
+    return (
+      <ToolbarButton tooltip={label} onClick={handleClick}>
+        <Icon icon={icon} />
+      </ToolbarButton>
+    );
+  }
+);
+MediaToolbarButton.displayName = 'MediaToolbarButton';
+
 function MediaButtons() {
-  const [dialogType, setDialogType] = useState<MediaType | null>(null);
+  // One per toolbar: a module-level dialog would open in every editor on the page.
+  const [dialog] = useState(() => createDialog<MediaType>());
+
+  if (ENABLED_MEDIA_TYPES.length === 0) return null;
 
   return (
     <>
-      {Object.entries(mediaConfig).map(([type, config]) => {
-        if (!config.enabled) return null;
-        const Icon = config.icon;
-        return (
-          <ToolbarButton
-            key={type}
-            tooltip={config.label}
-            onClick={() => setDialogType(type as MediaType)}
-          >
-            <Icon />
-          </ToolbarButton>
-        );
-      })}
-
-      {dialogType && (
-        <MediaUploadDialog
-          open={!!dialogType}
-          onOpenChange={(open) => !open && setDialogType(null)}
-          type={dialogType}
-        />
-      )}
+      {ENABLED_MEDIA_TYPES.map((type) => (
+        <MediaToolbarButton key={type} type={type} onOpen={dialog.open} />
+      ))}
+      <MediaUploadDialog dialog={dialog} />
     </>
   );
 }

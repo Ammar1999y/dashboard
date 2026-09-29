@@ -14,7 +14,6 @@ import {
   HTTP_STATUS,
   MSG_INVALID_CREDENTIALS,
   MSG_INVALID_INPUT,
-  MSG_LOGIN_REQUIRED,
   MSG_PAGE_NOT_FOUND,
 } from '@app/shared/api-messages';
 import { validID } from '@app/shared/utils';
@@ -26,8 +25,8 @@ import { exceedsCodePoints } from '@/utils/text';
 
 import { BETTER_AUTH_ALLOWED_PATH_SET } from './allowed-paths';
 import { authAuditMeta, bodyRecord } from './context';
-import { CREDENTIAL_PROVIDER_ID } from './credential';
-import { authError, reauthenticationRequired } from './errors';
+import { credentialAccountOf } from './credential-account';
+import { authError, reauthenticationRequired, sessionRequired } from './errors';
 import { LoginRejected, verifyLoginAttempt } from './login-guard';
 import { mintPasswordProof } from './password/proof';
 import { consumeReauthGrant } from './reauth/grant';
@@ -35,10 +34,10 @@ import { verifyReauthPassword } from './reauth/password';
 import { hasAdminReauth } from './reauth/window';
 import { assertLiveSession } from './session/live';
 import { submittedRememberMe } from './session/remember-me';
+import { resolveRequestSession } from './session/request';
 import {
   PLUGIN_VERIFIER_METHOD,
   requireTwoFactorChallenge,
-  resolveRequestSession,
 } from './two-factor/challenge';
 
 /**
@@ -54,21 +53,6 @@ const FIRST_LOGIN_PATHS: ReadonlySet<string> = new Set([
   '/passwordless/verify',
   '/oauth/google/start',
 ]);
-
-/** How a session came to exist, from the endpoint that created it. */
-export const SESSION_METHOD_BY_PATH: Readonly<Record<string, string>> = {
-  '/sign-in/email': 'password',
-  '/passwordless/verify': 'passwordless',
-  '/oauth/google/callback': 'google',
-  // ⚠️ The FIRST factor is not knowable from the path — a challenge completed
-  // here may have followed either route — so these say only that a second
-  // factor finished the login. The chain is on the completion event
-  // `completeTwoFactorChallenge` writes.
-  '/two-factor/verify-totp': 'two_factor',
-  '/two-factor/verify-backup-code': 'two_factor',
-  '/two-factor/otp/verify': 'two_factor',
-  '/two-factor/passkey/verify': 'two_factor',
-};
 
 /**
  * Better Auth paths that verify a password through `validatePassword` /
@@ -206,7 +190,7 @@ export async function enforcePathPolicy(
     ctx.path === SERVER_ONLY_VIRTUAL_PATH &&
     !ctx.request &&
     SERVER_ONLY_OPERATIONS.has(
-      String((ctx as { operationId?: unknown }).operationId ?? '')
+      String(('operationId' in ctx ? ctx.operationId : undefined) ?? '')
     );
   if (
     !internalSchemaGeneration &&
@@ -266,27 +250,19 @@ async function signInContext(ctx: HookContext): Promise<{ context: unknown }> {
     throw e;
   }
 
-  return {
-    context: {
-      ...ctx,
-      body: {
-        email: data.email,
-        password: mintPasswordProof(acceptedHashes),
-        // Explicit rather than left to the merge: it decides a session lifetime
-        // and has to survive into the two-factor challenge's companion record.
-        rememberMe: submittedRememberMe({ rememberMe: data.rememberMe }),
-      },
-    },
-  };
+  return withBody(ctx, {
+    email: data.email,
+    password: mintPasswordProof(acceptedHashes),
+    // Explicit rather than left to the merge: it decides a session lifetime
+    // and has to survive into the two-factor challenge's companion record.
+    rememberMe: submittedRememberMe({ rememberMe: data.rememberMe }),
+  });
 }
 
 /**
  * Everything the 2FA and passkey paths need before Better Auth's own middleware
  * runs: a live session, reauthentication proof, and no client-chosen device
  * trust. One function because all three answers share the session lookup.
- *
- * Returns the modified context when the body had to change, `undefined`
- * otherwise.
  */
 async function enforceTwoFactorPathPolicy(
   ctx: HookContext
@@ -306,13 +282,7 @@ async function enforceTwoFactorPathPolicy(
   if (dualMode || needsGrant) {
     const mode = await resolveRequestSession(ctx);
     if (mode) {
-      // The DATABASE, not the cookie cache: liveness is exactly the question
-      // the cache cannot answer.
-      try {
-        await assertLiveSession(mode.sessionId, mode.userId);
-      } catch {
-        throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
-      }
+      await requireLiveSession(mode.sessionId, mode.userId);
       if (
         needsGrant &&
         !(await consumeReauthGrant(ctx, {
@@ -322,8 +292,7 @@ async function enforceTwoFactorPathPolicy(
         }))
       )
         throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
-    } else if (needsGrant)
-      throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
+    } else if (needsGrant) throw sessionRequired();
   }
 
   if (
@@ -347,20 +316,15 @@ async function enforceTwoFactorPathPolicy(
   };
 
   if (!needsProof && !needsLiveSession)
-    return { context: { ...ctx, body: { ...body, ...patch } } };
+    return withBody(ctx, { ...body, ...patch });
 
   const session = await readRequestSession(ctx);
-  if (!session) throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
+  if (!session) throw sessionRequired();
 
-  if (needsLiveSession) {
-    try {
-      await assertLiveSession(session.sessionId, session.userId);
-    } catch {
-      throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
-    }
-  }
+  if (needsLiveSession)
+    await requireLiveSession(session.sessionId, session.userId);
 
-  if (!needsProof) return { context: { ...ctx, body: { ...body, ...patch } } };
+  if (!needsProof) return withBody(ctx, { ...body, ...patch });
 
   const supplied = body.password;
   if (
@@ -368,23 +332,14 @@ async function enforceTwoFactorPathPolicy(
     (await hasAdminReauth(session.sessionId, session.userId))
   ) {
     const credential = await db.query.accounts.findFirst({
-      where: (accounts, { and, eq }) =>
-        and(
-          eq(accounts.userId, session.userId),
-          eq(accounts.providerId, CREDENTIAL_PROVIDER_ID)
-        ),
+      where: credentialAccountOf(session.userId),
     });
     if (credential?.password)
-      return {
-        context: {
-          ...ctx,
-          body: {
-            ...body,
-            ...patch,
-            password: mintPasswordProof([credential.password]),
-          },
-        },
-      };
+      return withBody(ctx, {
+        ...body,
+        ...patch,
+        password: mintPasswordProof([credential.password]),
+      });
   }
   if (supplied === undefined) throw reauthenticationRequired();
 
@@ -396,12 +351,33 @@ async function enforceTwoFactorPathPolicy(
   if (!acceptedHashes)
     throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
 
-  return {
-    context: {
-      ...ctx,
-      body: { ...body, ...patch, password: mintPasswordProof(acceptedHashes) },
-    },
-  };
+  return withBody(ctx, {
+    ...body,
+    ...patch,
+    password: mintPasswordProof(acceptedHashes),
+  });
+}
+
+function withBody(
+  ctx: HookContext,
+  body: Record<string, unknown>
+): { context: unknown } {
+  return { context: { ...ctx, body } };
+}
+
+/**
+ * The DATABASE, not the cookie cache: liveness is exactly the question the
+ * cache cannot answer.
+ */
+async function requireLiveSession(
+  sessionId: string,
+  userId: EntityID
+): Promise<void> {
+  try {
+    await assertLiveSession(sessionId, userId);
+  } catch {
+    throw sessionRequired();
+  }
 }
 
 /**

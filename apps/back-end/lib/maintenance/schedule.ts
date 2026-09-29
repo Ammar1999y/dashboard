@@ -3,7 +3,7 @@ import { runMaintenanceSweep } from '@/lib/maintenance/sqlite';
 import { reconcileObjectStore } from '@/lib/media/reconcile';
 import { hasUsageSources } from '@/lib/media/usages';
 
-import { errorClassOf } from '@/utils/log';
+import { errorClassOf, logLine } from '@/utils/log';
 
 // Infrastructure schedules must not move with host or business time zones.
 const SCHEDULE_TIMEZONE = 'UTC';
@@ -38,9 +38,7 @@ const JOBS: readonly ScheduledJob[] = [
     expression: '0 4 * * 0',
     run: async () => {
       const report = await reconcileObjectStore();
-      console.log(
-        JSON.stringify({ msg: 'object store reconciled', ...report })
-      );
+      logLine('log', { msg: 'object store reconciled', ...report });
       return {
         status: 'ok',
         // A cut-short listing or an exhausted HEAD budget left rows uncompared.
@@ -57,25 +55,21 @@ function logRun(name: string, outcome: SweepOutcome): void {
   // A degraded run is a FAILURE event: it returned, but a store it was asked
   // to sweep was not swept.
   const degraded = outcome.status === 'degraded';
-  const line = JSON.stringify({
+  logLine(degraded ? 'error' : 'log', {
     msg: degraded ? 'scheduled sweep degraded' : 'scheduled sweep completed',
     job: name,
     status: outcome.status,
     durationMs: outcome.durationMs,
     hasMore: outcome.hasMore,
   });
-  if (degraded) console.error(line);
-  else console.log(line);
 }
 
 function logFailure(name: string, error: unknown): void {
-  console.error(
-    JSON.stringify({
-      msg: 'scheduled sweep failed',
-      job: name,
-      errorClass: errorClassOf(error),
-    })
-  );
+  logLine('error', {
+    msg: 'scheduled sweep failed',
+    job: name,
+    errorClass: errorClassOf(error),
+  });
 }
 
 interface ScheduleHandle {
@@ -130,40 +124,34 @@ export function startSchedule(
   // can neither list nor reap anything; said once so a project built on this
   // kit does not inherit that silently.
   if (!hasUsageSources())
-    console.log(
-      JSON.stringify({
-        msg: 'media.usage-registry is empty',
-        detail:
-          'No owner table is declared in lib/media/usages.ts, so the media API governs library files only and the unfiled scope and its reaper are inert.',
-      })
-    );
+    logLine('log', {
+      msg: 'media.usage-registry is empty',
+      detail:
+        'No owner table is declared in lib/media/usages.ts, so the media API governs library files only and the unfiled scope and its reaper are inert.',
+    });
 
-  console.log(
-    JSON.stringify({
-      msg: 'maintenance schedule started',
-      timezone: SCHEDULE_TIMEZONE,
-      jobs: jobs.map((job) => ({
-        name: job.name,
-        expression: job.expression,
-        nextRun:
-          Bun.cron
-            .parse(job.expression, undefined, { tz: SCHEDULE_TIMEZONE })
-            ?.toISOString() ?? null,
-      })),
-    })
-  );
+  logLine('log', {
+    msg: 'maintenance schedule started',
+    timezone: SCHEDULE_TIMEZONE,
+    jobs: jobs.map((job) => ({
+      name: job.name,
+      expression: job.expression,
+      nextRun:
+        Bun.cron
+          .parse(job.expression, undefined, { tz: SCHEDULE_TIMEZONE })
+          ?.toISOString() ?? null,
+    })),
+  });
 
   return {
     stopAndDrain: async (timeoutMs: number) => {
       for (const handle of handles) handle.stop();
       if (inFlight.size === 0) return true;
 
-      console.log(
-        JSON.stringify({
-          msg: 'waiting for in-flight sweep',
-          jobs: inFlight.size,
-        })
-      );
+      logLine('log', {
+        msg: 'waiting for in-flight sweep',
+        jobs: inFlight.size,
+      });
       const timedOut = Symbol('sweep-drain-timeout');
       const raced = await Promise.race([
         // Each run already contains its own failure; a rejection must not
@@ -172,13 +160,11 @@ export function startSchedule(
         Bun.sleep(timeoutMs).then(() => timedOut),
       ]);
       if (raced === timedOut)
-        console.error(
-          JSON.stringify({
-            msg: 'sweep drain timed out',
-            jobs: inFlight.size,
-            timeoutMs,
-          })
-        );
+        logLine('error', {
+          msg: 'sweep drain timed out',
+          jobs: inFlight.size,
+          timeoutMs,
+        });
       return inFlight.size === 0;
     },
   };

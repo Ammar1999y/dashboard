@@ -8,3 +8,5 @@ bun.lock
 package-lock.json
 .vercel
 .learn
+public/mockServiceWorker.js
+public/js/browser-image-compression.js

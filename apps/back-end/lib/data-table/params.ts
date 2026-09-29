@@ -1,10 +1,10 @@
 import type { FilterColumnSpecs } from './column-specs';
+import type { PaginationMeta } from '@app/shared/types/api';
 import type { ExtendedColumnSort } from '@app/shared/types/data-table';
 import type { SQL, Table } from 'drizzle-orm';
 
 import { and, asc, desc, ilike, or } from 'drizzle-orm';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import {
   DATA_TABLE_PARAM_KEYS,
   isTrigramIndexable,
@@ -15,13 +15,12 @@ import {
   searchTermLength,
   stripControlAndTrim,
 } from '@app/shared/data-table/parsers';
-import { CustomError } from '@app/shared/error-class';
 
 import {
   escapeLike,
   filterColumns,
   getColumn,
-  MSG_INVALID_FILTER,
+  invalidFilter,
 } from './filter-columns';
 
 /** `search` is read here rather than by the parser, so it is added here too. */
@@ -50,12 +49,10 @@ interface DataTableQueryResult {
   /** The quick-search term after normalisation and the length bounds; `''` when there is none. */
   search: string;
   buildPageCount: (total: number) => number;
+  /** The response `meta` for a list of `total` rows. */
+  paginationMeta: (total: number) => PaginationMeta;
 }
 
-/**
- * Parses URL search params and builds Drizzle-compatible
- * where, orderBy, limit, and offset values for data-table queries.
- */
 export function parseDataTableParams<T extends Table>(
   table: T,
   {
@@ -71,8 +68,7 @@ export function parseDataTableParams<T extends Table>(
   // unfiltered 200 that the caller reads as a search result.
   const seen = new Set<string>();
   for (const key of searchParams.keys()) {
-    if (seen.has(key) || !ACCEPTED_PARAM_KEYS.has(key))
-      throw new CustomError(MSG_INVALID_FILTER, HTTP_STATUS.UNPROCESSABLE);
+    if (seen.has(key) || !ACCEPTED_PARAM_KEYS.has(key)) invalidFilter();
     seen.add(key);
   }
 
@@ -89,9 +85,7 @@ export function parseDataTableParams<T extends Table>(
     // sort naming a column outside this map takes the handler's declared
     // ordering with it and leaves only the primary-key tiebreaker.
     sortableColumnIds: Object.keys(filterableColumns),
-    onFilterDropped: () => {
-      throw new CustomError(MSG_INVALID_FILTER, HTTP_STATUS.UNPROCESSABLE);
-    },
+    onFilterDropped: () => invalidFilter(),
   });
 
   const safePerPage = Math.min(parsed.perPage, MAX_PER_PAGE);
@@ -168,6 +162,8 @@ export function parseDataTableParams<T extends Table>(
   }
 
   const offset = (parsed.page - 1) * safePerPage;
+  const buildPageCount = (total: number) =>
+    Math.max(1, Math.ceil(total / safePerPage));
 
   return {
     where,
@@ -177,7 +173,12 @@ export function parseDataTableParams<T extends Table>(
     page: parsed.page,
     perPage: safePerPage,
     search,
-    buildPageCount: (total: number) =>
-      Math.max(1, Math.ceil(total / safePerPage)),
+    buildPageCount,
+    paginationMeta: (total: number) => ({
+      page: parsed.page,
+      perPage: safePerPage,
+      total,
+      pageCount: buildPageCount(total),
+    }),
   };
 }

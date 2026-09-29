@@ -13,11 +13,13 @@ import { iccProfileChunk } from '@app/shared/images/raster-bytes';
 import {
   MAX_IMAGE_EDGE,
   MAX_IMAGE_PIXELS,
+  MIB,
   SERVER_MAX_IMAGE_SIZE,
 } from '@app/shared/validation/constants';
 
+import { logLine } from '@/utils/log';
+
 import { uploadMsg } from '../messages';
-import { MIB } from '../units';
 import { boundedImage } from './bounded';
 
 const UNDECODABLE_CODES = new Set([
@@ -258,16 +260,14 @@ async function optimizeImageWithinSlot(
       // The target is a goal, not the contract: a dense high-detail image that
       // cannot reach it keeps the floor rung, up to a ceiling nothing may exceed.
       const ceiling = Math.max(targetSize, MAX_STORED_IMAGE_BYTES);
-      console.warn(
-        JSON.stringify({
-          msg: 'image.optimize target unreachable',
-          finalBytes: best.size,
-          targetBytes: targetSize,
-          ceilingBytes: ceiling,
-          accepted: best.size <= ceiling,
-          iterations,
-        })
-      );
+      logLine('warn', {
+        msg: 'image.optimize target unreachable',
+        finalBytes: best.size,
+        targetBytes: targetSize,
+        ceilingBytes: ceiling,
+        accepted: best.size <= ceiling,
+        iterations,
+      });
       if (best.size > ceiling)
         throw new CustomError(
           uploadMsg.targetUnreachable,

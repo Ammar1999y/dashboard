@@ -1,11 +1,11 @@
-import * as React from 'react';
+import type * as React from 'react';
 
 import * as SelectPrimitive from '@radix-ui/react-select';
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-import { fieldSurface } from './field-surface';
-import { popoverMotion, popoverSurface } from './popover-surface';
+import { fieldSurface } from '@/components/ui/field-surface';
+import { Icon } from '@/components/ui/icon';
+import { popoverMotion, popoverSurface } from '@/components/ui/popover-surface';
 
 function Select({
   ...props
@@ -41,7 +41,10 @@ function SelectTrigger({
     >
       {children}
       <SelectPrimitive.Icon asChild>
-        <ChevronDownIcon className='size-4 text-muted-foreground opacity-80' />
+        <Icon
+          icon='solar:alt-arrow-down-linear'
+          className='size-4 text-muted-foreground opacity-80'
+        />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
@@ -60,7 +63,7 @@ function SelectContent({
         className={cn(
           popoverSurface,
           popoverMotion,
-          'relative max-h-[--radix-select-content-available-height] min-w-32 origin-[--radix-select-content-transform-origin] overflow-y-auto overflow-x-hidden focus-visible:!ring-0 focus-visible:!ring-transparent',
+          'relative max-h-[--radix-select-content-available-height] min-w-32 origin-[--radix-select-content-transform-origin] overflow-y-auto overflow-x-hidden focus-visible:ring-0',
           position === 'popper' &&
             'data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1',
           className
@@ -93,14 +96,17 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot='select-item'
       className={cn(
-        "relative flex w-full select-none items-center rounded-sm py-1.5 pe-8 ps-2 text-sm space-x-2 hover:bg-accent hover:text-accent-foreground focus-visible:!ring-0 focus-visible:!ring-transparent data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_span:last-of-type]:flex [&_span:last-of-type]:items-center [&_span:last-of-type]:space-x-2 [&_svg:not([class*='size-'])]:size-4",
+        "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pe-8 ps-2 text-sm outline-none space-x-2 focus:bg-accent focus:text-accent-foreground focus-visible:ring-0 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_span:last-of-type]:flex [&_span:last-of-type]:items-center [&_span:last-of-type]:space-x-2 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}
     >
       <span className='absolute flex size-3.5 items-center justify-center ltr:right-2 rtl:left-2'>
         <SelectPrimitive.ItemIndicator>
-          <CheckIcon className='size-4 text-muted-foreground' />
+          <Icon
+            icon='solar:check-read-linear'
+            className='size-4 text-muted-foreground'
+          />
         </SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
@@ -118,7 +124,10 @@ function SelectScrollUpButton({
       className={cn('flex items-center justify-center py-1', className)}
       {...props}
     >
-      <ChevronUpIcon className='size-4 text-muted-foreground' />
+      <Icon
+        icon='solar:alt-arrow-up-linear'
+        className='size-4 text-muted-foreground'
+      />
     </SelectPrimitive.ScrollUpButton>
   );
 }
@@ -133,7 +142,10 @@ function SelectScrollDownButton({
       className={cn('flex items-center justify-center py-1', className)}
       {...props}
     >
-      <ChevronDownIcon className='size-4 text-muted-foreground' />
+      <Icon
+        icon='solar:alt-arrow-down-linear'
+        className='size-4 text-muted-foreground'
+      />
     </SelectPrimitive.ScrollDownButton>
   );
 }

@@ -1,16 +1,9 @@
 'use client';
 
 import { LineHeightPlugin } from '@platejs/basic-styles/react';
-import { KEYS } from 'platejs';
+
+import { LINE_HEIGHT_INJECT } from './config';
 
 export const LineHeightKit = [
-  LineHeightPlugin.configure({
-    inject: {
-      nodeProps: {
-        defaultNodeValue: 'unset',
-        validNodeValues: ['unset', 1, 1.2, 1.5, 2, 3],
-      },
-      targetPlugins: [...KEYS.heading, KEYS.p],
-    },
-  }),
+  LineHeightPlugin.configure({ inject: LINE_HEIGHT_INJECT }),
 ];

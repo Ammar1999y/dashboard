@@ -2,27 +2,22 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
-import { fieldSurface } from './field-surface';
+import { fieldSurface } from '@/components/ui/field-surface';
 
-interface InputProps extends React.ComponentProps<'input'> {
-  ref?: React.Ref<HTMLInputElement>;
-}
-
-const Input = React.memo(({ className, type, ref, ...props }: InputProps) => {
-  return (
+const Input = React.memo(
+  ({ className, disabled, ...props }: React.ComponentProps<'input'>) => (
     <input
-      type={type}
       className={cn(
         fieldSurface,
         'flex h-input w-full min-w-0 px-3 py-1 caret-primary placeholder:text-muted-foreground',
-        props.disabled && 'disabled !cursor-not-allowed',
+        disabled && 'disabled',
         className
       )}
-      ref={ref}
+      disabled={disabled}
       {...props}
     />
-  );
-});
+  )
+);
 Input.displayName = 'Input';
 
 export { Input };

@@ -1,6 +1,6 @@
 /**
  * How a request's client IP is resolved, and how it is turned into a rate-limit
- * key: `getClientIp`/`TRUSTED_IP_HEADERS` in `lib/audit/index.ts`, and `ipBucket` via
+ * key: `getClientIp`/`TRUSTED_IP_HEADERS` in `lib/http/client-ip.ts`, and `ipBucket` via
  * `ipIdentifier` in `lib/rate-limit/index.ts`.
  *
  * Neither had an assertion anywhere under `tests/` before this file, and between
@@ -31,8 +31,7 @@ import {
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
-import { getClientIp } from '@/lib/audit';
-import { TRUSTED_IP_HEADERS } from '@/lib/audit/constants';
+import { getClientIp, TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
 import { ipIdentifier, userIdentifier } from '@/lib/rate-limit';
 
 const TRUSTED_HEADER = TRUSTED_IP_HEADERS[0];

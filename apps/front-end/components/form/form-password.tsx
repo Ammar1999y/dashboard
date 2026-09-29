@@ -2,20 +2,14 @@ import type { ComponentProps } from 'react';
 
 import { memo, useCallback, useState } from 'react';
 
-import { Eye as _Eye, EyeClosed as _EyeClosed } from 'lucide-react';
 import { useFormContext } from 'react-hook-form';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import { Input } from '@/components/ui/input';
 
 import FormField from './form-field';
-
-const Eye = memo(_Eye);
-Eye.displayName = 'Eye';
-
-const EyeClosed = memo(_EyeClosed);
-EyeClosed.displayName = 'EyeClosed';
 
 interface FormPasswordProps extends Omit<
   ComponentProps<'input'>,
@@ -75,7 +69,11 @@ const FormPassword = memo(
             aria-label={visible ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
             className='absolute top-1/2 -translate-y-1/2 py-1 text-muted-foreground ltr:right-3 rtl:right-3'
           >
-            {visible ? <EyeClosed /> : <Eye />}
+            {visible ? (
+              <Icon icon='solar:eye-closed-bold-duotone' />
+            ) : (
+              <Icon icon='solar:eye-bold-duotone' />
+            )}
           </Button>
         </div>
       </FormField>

@@ -6,7 +6,6 @@ import type { PlateElementProps, PlateLeafProps } from 'platejs/react';
 import * as React from 'react';
 
 import { formatCodeBlock, isLangSupported } from '@platejs/code-block';
-import { BracesIcon, Check, CheckIcon, CopyIcon } from 'lucide-react';
 import { NodeApi } from 'platejs';
 import {
   PlateElement,
@@ -17,6 +16,8 @@ import {
 } from 'platejs/react';
 import { cn } from '@/lib/utils';
 
+import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
+
 import { Button } from '@/components/ui/button';
 import {
   Command,
@@ -26,27 +27,28 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import styles from '@/components/editor/ui/editor-elements.module.css';
+import {
+  CODE_BLOCK_CLASS,
+  CODE_BLOCK_PRE_CLASS,
+  CODE_BLOCK_SURFACE_CLASS,
+} from '@/components/editor/styles';
+
+const PLAIN_TEXT = 'plaintext';
+const COPIED_MS = 2000;
 
 export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
   const { editor, element } = props;
 
   return (
-    <PlateElement
-      className={styles.codeBlock}
-      {...props}
-      attributes={{
-        ...props.attributes,
-        'data-ltr-element': true,
-      }}
-    >
-      <div className='relative rounded-md bg-muted/50'>
-        <pre className='overflow-x-auto p-8 pe-4 font-mono text-sm leading-[normal] [tab-size:2] print:break-inside-avoid'>
+    <PlateElement className={CODE_BLOCK_CLASS} {...props}>
+      <div className={CODE_BLOCK_SURFACE_CLASS}>
+        <pre className={CODE_BLOCK_PRE_CLASS}>
           <code>{props.children}</code>
         </pre>
 
@@ -56,13 +58,17 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
         >
           {isLangSupported(element.lang) && (
             <Button
+              aria-label='تنسيق الكود'
               className='size-6 text-xs'
               onClick={() => formatCodeBlock(editor, { element })}
               size='icon'
-              title='Format code'
+              title='تنسيق الكود'
               variant='ghost'
             >
-              <BracesIcon className='!size-3.5 text-muted-foreground' />
+              <Icon
+                icon='solar:braces-linear'
+                className='!size-3.5 text-muted-foreground'
+              />
             </Button>
           )}
 
@@ -70,9 +76,7 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 
           <CopyButton
             className='size-6 gap-1 text-xs text-muted-foreground'
-            size='icon'
-            value={() => NodeApi.string(element)}
-            variant='ghost'
+            getValue={() => NodeApi.string(element)}
           />
         </div>
       </div>
@@ -85,18 +89,17 @@ function CodeBlockCombobox() {
   const readOnly = useReadOnly();
   const editor = useEditorRef();
   const element = useElement<TCodeBlockElement>();
-  const value = element.lang || 'plaintext';
-  const [searchValue, setSearchValue] = React.useState('');
+  const value = element.lang || PLAIN_TEXT;
+  const [search, setSearch] = React.useState('');
 
-  const items = React.useMemo(
-    () =>
-      languages.filter(
-        (language) =>
-          !searchValue ||
-          language.label.toLowerCase().includes(searchValue.toLowerCase())
-      ),
-    [searchValue]
-  );
+  const items = React.useMemo(() => {
+    const query = search.toLowerCase();
+    return query
+      ? LANGUAGES.filter((language) =>
+          language.label.toLowerCase().includes(query)
+        )
+      : LANGUAGES;
+  }, [search]);
 
   if (readOnly) return null;
 
@@ -110,40 +113,40 @@ function CodeBlockCombobox() {
           size='sm'
           variant='ghost'
         >
-          {languages.find((language) => language.value === value)?.label ??
-            'Plain Text'}
+          {LANGUAGES.find((language) => language.value === value)?.label ??
+            value}
         </Button>
       </PopoverTrigger>
       <PopoverContent
         className='w-48 p-0'
-        onCloseAutoFocus={() => setSearchValue('')}
+        onCloseAutoFocus={() => setSearch('')}
       >
         <Command shouldFilter={false}>
           <CommandInput
             className='h-9'
-            onValueChange={(value) => setSearchValue(value)}
+            onValueChange={setSearch}
             placeholder='البحث عن اللغات'
-            value={searchValue}
+            value={search}
           />
-          <CommandEmpty>No language found.</CommandEmpty>
+          <CommandEmpty>{NO_RESULTS_MESSAGE}</CommandEmpty>
 
           <CommandList className='h-80 overflow-y-auto'>
             <CommandGroup>
               {items.map((language) => (
                 <CommandItem
                   className='cursor-pointer'
-                  key={language.label}
-                  onSelect={(value) => {
+                  key={language.value}
+                  onSelect={(lang) => {
                     editor.tf.setNodes<TCodeBlockElement>(
-                      { lang: value },
+                      { lang },
                       { at: element }
                     );
-                    setSearchValue(value);
                     setOpen(false);
                   }}
                   value={language.value}
                 >
-                  <Check
+                  <Icon
+                    icon='solar:check-read-linear'
                     className={cn(
                       value === language.value ? 'opacity-100' : 'opacity-0'
                     )}
@@ -160,59 +163,50 @@ function CodeBlockCombobox() {
 }
 
 function CopyButton({
-  value,
-  ...props
-}: { value: (() => string) | string } & Omit<
-  React.ComponentProps<typeof Button>,
-  'value'
->) {
+  className,
+  getValue,
+}: {
+  className?: string;
+  getValue: () => string;
+}) {
   const [hasCopied, setHasCopied] = React.useState(false);
 
   React.useEffect(() => {
-    setTimeout(() => {
-      setHasCopied(false);
-    }, 2000);
+    if (!hasCopied) return;
+    const timer = setTimeout(() => setHasCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
   }, [hasCopied]);
 
   return (
     <Button
+      aria-label='نسخ'
+      className={className}
       onClick={() => {
-        void navigator.clipboard.writeText(
-          typeof value === 'function' ? value() : value
-        );
-        setHasCopied(true);
+        navigator.clipboard
+          .writeText(getValue())
+          .then(() => setHasCopied(true))
+          .catch(() => setHasCopied(false));
       }}
-      {...props}
+      size='icon'
+      variant='ghost'
     >
-      <span className='sr-only'>نسخ</span>
-      {hasCopied ? (
-        <CheckIcon className='!size-3' />
-      ) : (
-        <CopyIcon className='!size-3' />
-      )}
+      <Icon
+        icon={hasCopied ? 'solar:check-read-linear' : 'solar:copy-linear'}
+        className='!size-3'
+      />
     </Button>
   );
 }
 
 export function CodeLineElement(props: PlateElementProps) {
-  return (
-    <PlateElement
-      {...props}
-      attributes={{
-        ...props.attributes,
-        'data-ltr-element': true,
-      }}
-    />
-  );
+  return <PlateElement {...props} />;
 }
 
 export function CodeSyntaxLeaf(props: PlateLeafProps<TCodeSyntaxLeaf>) {
-  const tokenClassName = props.leaf.className as string;
-
-  return <PlateLeaf className={tokenClassName} {...props} />;
+  return <PlateLeaf className={props.leaf.className} {...props} />;
 }
 
-const languages: { label: string; value: string }[] = [
+const LANGUAGES: { label: string; value: string }[] = [
   { label: 'Auto', value: 'auto' },
   { label: 'Plain Text', value: 'plaintext' },
   { label: 'ABAP', value: 'abap' },
@@ -284,7 +278,6 @@ const languages: { label: string; value: string }[] = [
   { label: 'Reason', value: 'reasonml' },
   { label: 'Ruby', value: 'ruby' },
   { label: 'Rust', value: 'rust' },
-  { label: 'Sass', value: 'scss' },
   { label: 'Scala', value: 'scala' },
   { label: 'Scheme', value: 'scheme' },
   { label: 'SCSS', value: 'scss' },
@@ -298,7 +291,6 @@ const languages: { label: string; value: string }[] = [
   { label: 'VB.Net', value: 'vbnet' },
   { label: 'Verilog', value: 'verilog' },
   { label: 'VHDL', value: 'vhdl' },
-  { label: 'Visual Basic', value: 'vbnet' },
   { label: 'WebAssembly', value: 'wasm' },
   { label: 'XML', value: 'xml' },
   { label: 'YAML', value: 'yaml' },

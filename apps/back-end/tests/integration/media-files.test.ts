@@ -47,10 +47,9 @@ import { attachFiles, linkFiles, promoteForLink } from '@/lib/media/link';
 import { mediaMsg } from '@/lib/media/messages';
 import {
   ORPHAN_DRAIN_BATCH,
-  retryTransitions,
   sweepOrphanedObjects,
-  transitionFile,
-} from '@/lib/media/visibility';
+} from '@/lib/media/orphaned-objects';
+import { retryTransitions, transitionFile } from '@/lib/media/visibility';
 import * as r2 from '@/lib/r2/client';
 
 import { resetTables } from '../helpers/database';

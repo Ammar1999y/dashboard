@@ -1,5 +1,5 @@
 import { withTransaction } from '@/db';
-import { accounts, rolePermissions, roles, users } from '@/db/schema';
+import { rolePermissions, roles, users } from '@/db/schema';
 
 import {
   HTTP_STATUS,
@@ -13,10 +13,7 @@ import {
 } from '@app/shared/permissions/constants';
 import { devSignUpSchema } from '@app/shared/validation/dev';
 
-import {
-  CREDENTIAL_ISSUER,
-  CREDENTIAL_PROVIDER_ID,
-} from '@/lib/auth/credential';
+import { insertCredentialAccount } from '@/lib/auth/credential-account';
 import { hashPassword } from '@/lib/auth/password/hash';
 import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody } from '@/lib/http/input';
@@ -71,15 +68,7 @@ export const POST = withApiErrors(
       if (!newUser)
         throw new CustomError(MSG_CREATE_ERROR, HTTP_STATUS.INTERNAL_ERROR);
 
-      // (issuer, accountId) is the pair Better Auth's sign-in lookup matches
-      // on, as on the users collection POST.
-      await tx.insert(accounts).values({
-        accountId: newUser.id,
-        issuer: CREDENTIAL_ISSUER,
-        providerId: CREDENTIAL_PROVIDER_ID,
-        userId: newUser.id,
-        password: hashedPassword,
-      });
+      await insertCredentialAccount(tx, newUser.id, hashedPassword);
 
       return newUser.id;
     });

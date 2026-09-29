@@ -1,0 +1,138 @@
+/*
+ * Element defaults: the app (pages/_app.tsx, before globals.css) and the
+ * exported editor document (scripts/build-editor-css.ts) both load this file,
+ * so it holds nothing that belongs to the app shell.
+ */
+@tailwind base;
+
+a,
+button,
+input,
+textarea {
+  background: transparent;
+}
+a,
+button {
+  appearance: none;
+}
+img,
+video {
+  max-width: none;
+  height: auto;
+}
+* {
+  @apply border-border outline-ring/50;
+}
+a,
+button,
+input,
+textarea,
+*:focus-visible {
+  @apply outline-none outline-0;
+  @apply focus-visible:z-[1] focus-visible:ring-[3px] focus-visible:ring-ring/50;
+}
+@supports (scrollbar-width: auto) and (not selector(::-webkit-scrollbar)) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.7) transparent;
+  }
+}
+@supports (selector(::-webkit-scrollbar)) {
+  ::-webkit-scrollbar {
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.7);
+    border-radius: 10px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.9);
+  }
+}
+::selection {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+html,
+body {
+  position: relative;
+  background: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+
+  font-family: var(--font-family);
+  scroll-behavior: smooth;
+  @apply text-base;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: clip;
+}
+
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+input[type='password']::-ms-reveal,
+input[type='password']::-ms-clear {
+  visibility: hidden;
+  pointer-events: none;
+  display: none;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  -webkit-appearance: textfield;
+  appearance: textfield;
+}
+
+html[dir='rtl'] input[dir='ltr']::placeholder,
+html[dir='rtl'] textarea[dir='ltr']::placeholder {
+  text-align: end;
+  direction: rtl;
+}
+
+/* Defaults only: in `base` so a utility such as a drag handle's `touch-none` wins. */
+@layer base {
+  .noSelect,
+  a,
+  button,
+  img,
+  label,
+  svg,
+  [role='button'] {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -khtml-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    -ms-touch-action: manipulation;
+    touch-action: manipulation;
+  }
+}
+
+img,
+svg {
+  pointer-events: none;
+}
+
+svg {
+  flex-shrink: 0;
+}
+img {
+  color: transparent;
+}

@@ -1,23 +1,14 @@
 import { BaseListPlugin } from '@platejs/list';
-import { KEYS } from 'platejs';
 
-import { BaseIndentKit } from '@/components/editor/plugins/base/indent-base-kit';
 import { BlockListStatic } from '@/components/editor/ui/static/block-list-static';
+
+import { LIST_INJECT } from '../config';
+import { BaseIndentKit } from './indent-base-kit';
 
 export const BaseListKit = [
   ...BaseIndentKit,
   BaseListPlugin.configure({
-    inject: {
-      targetPlugins: [
-        ...KEYS.heading,
-        KEYS.p,
-        KEYS.blockquote,
-        KEYS.codeBlock,
-        KEYS.toggle,
-      ],
-    },
-    render: {
-      belowNodes: BlockListStatic,
-    },
+    inject: LIST_INJECT,
+    render: { belowNodes: BlockListStatic },
   }),
 ];

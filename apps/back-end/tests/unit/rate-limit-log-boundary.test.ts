@@ -34,8 +34,8 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { ROUTES } from '@/routes';
 
 import { preAuthScope } from '@/lib/http/pre-auth';
+import { describeStoreFailure } from '@/lib/rate-limit/fixed-window';
 import { getRateLimitStore } from '@/lib/rate-limit/store';
-import { describeStoreFailure } from '@/lib/rate-limit/store-failure';
 
 import { serializeForLog } from '@/utils/log';
 

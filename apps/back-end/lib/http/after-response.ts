@@ -2,7 +2,7 @@
  * Framework-independent post-response work. Audit writes remain transactional
  * because losing them after a committed mutation would break the audit trail.
  */
-import { errorClassOf } from '@/utils/log';
+import { errorClassOf, logLine } from '@/utils/log';
 
 type AfterResponseTask = () => void | Promise<void>;
 
@@ -43,13 +43,11 @@ export function runAfterResponse(
       try {
         await task();
       } catch (error) {
-        console.error(
-          JSON.stringify({
-            msg: 'after-response task failed',
-            path: summary.path,
-            errorClass: errorClassOf(error),
-          })
-        );
+        logLine('error', {
+          msg: 'after-response task failed',
+          path: summary.path,
+          errorClass: errorClassOf(error),
+        });
       }
     }
   })();
@@ -60,15 +58,13 @@ export function runAfterResponse(
 
 /** Omits query strings and headers because both can contain user identifiers. */
 function logRequest(summary: RequestSummary): void {
-  console.log(
-    JSON.stringify({
-      msg: 'request',
-      method: summary.method,
-      path: summary.path,
-      status: summary.status,
-      durationMs: Math.round(summary.durationMs),
-    })
-  );
+  logLine('log', {
+    msg: 'request',
+    method: summary.method,
+    path: summary.path,
+    status: summary.status,
+    durationMs: Math.round(summary.durationMs),
+  });
 }
 
 export function pendingAfterResponse(): number {

@@ -31,8 +31,8 @@
  * user id so a credential rotation sweeps it, `recovery-state-<t>` the payload
  * and `recovery-attempts-<t>` the budget.
  */
-import type { AttemptSpend } from '../two-factor/challenge';
 import type { OfferedOption } from '../two-factor/methods';
+import type { AttemptSpend } from '../two-factor/pending-proof';
 import type { Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { ContactKind } from '@app/shared/validation/enums';
@@ -45,11 +45,14 @@ import { verifications } from '@/db/schema';
 import { validID } from '@app/shared/utils';
 
 import {
-  parseAttemptCount,
+  asContactKind,
+  readEnrolmentState,
+  recoveryOptions,
+} from '../two-factor/methods';
+import {
   parseIssuedState,
-  REFUSED_ATTEMPT,
-} from '../two-factor/challenge';
-import { asContactKind } from '../two-factor/methods';
+  spendAttemptBudget,
+} from '../two-factor/pending-proof';
 import {
   expiresIn,
   randomToken,
@@ -122,7 +125,7 @@ function parseState(raw: string): RecoveryGrantState | null {
 }
 
 /** Reads the grant WITHOUT spending it — the send step needs it to survive. */
-export async function readRecoveryGrant(
+async function readRecoveryGrant(
   token: unknown
 ): Promise<RecoveryGrantState | null> {
   if (typeof token !== 'string' || token.length === 0) return null;
@@ -158,50 +161,55 @@ export async function readRecoveryGrant(
 }
 
 /**
- * Spends one of the grant's shared attempts.
+ * The grant and the option `requested` names in it, or `null` when either is
+ * gone.
  *
- * The same consume-and-do-not-write-back protocol the sign-in challenge uses,
- * for the same reason: between the spend and the caller's outcome there must be
- * no row for a concurrent request to read.
+ * The issued set intersected with CURRENT capability. Narrowing only: a method
+ * enrolled since the grant was minted was never challenged, and one removed
+ * since is no factor at all.
  */
-export async function spendRecoveryAttempt(
-  token: string
-): Promise<AttemptSpend> {
+export async function resolveRecoveryOption(
+  token: string,
+  requested: string
+): Promise<{ grant: RecoveryGrantState; option: OfferedOption } | null> {
+  const grant = await readRecoveryGrant(token);
+  if (!grant) return null;
+
+  const state = await readEnrolmentState(grant.userId);
+  const issued = new Set(grant.options);
+  const option = recoveryOptions(state, grant.excludeContactKind).find(
+    (entry) => issued.has(entry.id) && entry.id === requested
+  );
+  return option ? { grant, option } : null;
+}
+
+/**
+ * Spends one of the grant's shared attempts, under the protocol
+ * `spendAttemptBudget` states and the sign-in challenge shares.
+ */
+export function spendRecoveryAttempt(token: string): Promise<AttemptSpend> {
   const identifier = recoveryAttemptsKey(token);
 
-  const consumed = await withTransaction(async (tx) => {
-    const [row] = await tx
-      .delete(verifications)
-      .where(eq(verifications.identifier, identifier))
-      .returning({
-        value: verifications.value,
-        expiresAt: verifications.expiresAt,
-      });
-    return row ?? null;
-  }).catch(() => null);
-  if (!consumed) return REFUSED_ATTEMPT;
-
-  const used = parseAttemptCount(consumed.value, RECOVERY_ALLOWED_ATTEMPTS);
-  if (used >= RECOVERY_ALLOWED_ATTEMPTS) {
-    await invalidateRecoveryGrant(token);
-    return REFUSED_ATTEMPT;
-  }
-
-  const rearm = async (count: number): Promise<void> => {
-    await withTransaction((tx) =>
-      tx.insert(verifications).values({
-        identifier,
-        value: String(count),
-        expiresAt: consumed.expiresAt,
-      })
-    ).catch(() => {});
-  };
-
-  return {
-    ok: true,
-    recordFailure: () => rearm(used + 1),
-    restore: () => rearm(used),
-  };
+  return spendAttemptBudget({
+    allowed: RECOVERY_ALLOWED_ATTEMPTS,
+    consume: () =>
+      withTransaction(async (tx) => {
+        const [row] = await tx
+          .delete(verifications)
+          .where(eq(verifications.identifier, identifier))
+          .returning({
+            value: verifications.value,
+            expiresAt: verifications.expiresAt,
+          });
+        return row ?? null;
+      }).catch(() => null),
+    rearm: async (value, expiresAt) => {
+      await withTransaction((tx) =>
+        tx.insert(verifications).values({ identifier, value, expiresAt })
+      ).catch(() => {});
+    },
+    exhaust: () => invalidateRecoveryGrant(token),
+  });
 }
 
 /**

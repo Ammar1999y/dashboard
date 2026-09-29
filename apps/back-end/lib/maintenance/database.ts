@@ -38,9 +38,11 @@ import {
 } from '@/db/schema';
 
 import { sweepFiles } from '@/lib/media/lifecycle';
-import { retryTransitions, sweepOrphanedObjects } from '@/lib/media/visibility';
+import { sweepOrphanedObjects } from '@/lib/media/orphaned-objects';
+import { retryTransitions } from '@/lib/media/visibility';
 
-import { sanitizeForLog } from '@/utils/log';
+import { yieldToEventLoop } from '@/utils/event-loop';
+import { errorTypeOf, logSanitized } from '@/utils/log';
 
 /**
  * How long a row survives past the point it stopped being useful.
@@ -107,13 +109,11 @@ async function guarded<T>(
   try {
     return await run();
   } catch (error) {
-    console.error(
-      sanitizeForLog({
-        msg: 'sweep step failed',
-        step,
-        errorClass: error instanceof Error ? error.name : typeof error,
-      })
-    );
+    logSanitized('error', {
+      msg: 'sweep step failed',
+      step,
+      errorClass: errorTypeOf(error),
+    });
     return fallback;
   }
 }
@@ -138,11 +138,6 @@ export interface DatabaseSweepResult {
     orphanedObjects: OrphanSweepCount;
   };
   hasMore: boolean;
-}
-
-/** Hands the event loop back so queued requests run between batches. */
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
 }
 
 /**
@@ -287,12 +282,12 @@ function sweepVerificationSessions(): Promise<SweepCount> {
  * long-running delete loops against live traffic instead of one. The whole run
  * is a scheduled background job, so wall-clock is not the thing to optimise.
  *
- * The file half lives in `lib/media/lifecycle.ts` and `lib/media/visibility.ts`,
- * next to the request paths whose unfinished work it completes: abandoned
- * pending uploads, deletes that lost their request between phases, and
- * visibility copies that never flipped or never cleaned up. Those are the only
- * sweeps here that talk to the object store, which is why they alone can report
- * `degraded`.
+ * The file half lives in `lib/media/lifecycle.ts`, `lib/media/visibility.ts` and
+ * `lib/media/orphaned-objects.ts`, next to the request paths whose unfinished
+ * work it completes: abandoned pending uploads, deletes that lost their request
+ * between phases, and visibility copies that never flipped or never cleaned up.
+ * Those are the only sweeps here that talk to the object store, which is why
+ * they alone can report `degraded`.
  */
 export async function runDatabaseSweep(
   startedAt = Date.now()

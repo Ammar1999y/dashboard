@@ -1,6 +1,5 @@
 import type { VariantProps } from 'class-variance-authority';
-
-import * as React from 'react';
+import type * as React from 'react';
 
 import { Slot } from '@radix-ui/react-slot';
 import { cva } from 'class-variance-authority';
@@ -44,22 +43,18 @@ const buttonVariants = cva(
 );
 
 export interface ButtonProps
-  extends
-    React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
-  ref?: React.Ref<HTMLButtonElement>;
+  extends React.ComponentProps<'button'>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
 }
 
-const Button = ({
+function Button({
   className,
   variant,
   size,
   asChild = false,
   disabled = false,
-  ref,
   ...props
-}: ButtonProps) => {
+}: ButtonProps) {
   const composedClassName = cn(
     disabled && 'disabled',
     buttonVariants({ variant, size, className })
@@ -70,7 +65,6 @@ const Button = ({
     return (
       <Slot
         className={composedClassName}
-        ref={ref}
         tabIndex={disabled ? -1 : undefined}
         aria-disabled={disabled || undefined}
         {...props}
@@ -81,13 +75,11 @@ const Button = ({
   return (
     <button
       className={composedClassName}
-      ref={ref}
       type='button'
       disabled={disabled}
       {...props}
     />
   );
-};
-Button.displayName = 'Button';
+}
 
 export { Button, buttonVariants };

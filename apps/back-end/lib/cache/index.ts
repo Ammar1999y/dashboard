@@ -22,6 +22,8 @@ import { CACHE_DB_PATH } from '@/lib/env.server';
 import { lazyStore } from '@/lib/sqlite/store';
 import { sweepInBatches } from '@/lib/sqlite/sweep';
 
+import { logLine } from '@/utils/log';
+
 import { prefixUpperBound } from './prefix';
 
 const MIGRATIONS: readonly Migration[] = [
@@ -110,13 +112,11 @@ export function cacheSet(
     // The driver is synchronous, so a large write blocks the worker's whole
     // event loop; no cache entry is worth that.
     if (encoded.byteLength > MAX_VALUE_BYTES) {
-      console.warn(
-        JSON.stringify({
-          msg: 'cache value rejected: over size cap',
-          bytes: encoded.byteLength,
-          capBytes: MAX_VALUE_BYTES,
-        })
-      );
+      logLine('warn', {
+        msg: 'cache value rejected: over size cap',
+        bytes: encoded.byteLength,
+        capBytes: MAX_VALUE_BYTES,
+      });
       return;
     }
     const now = Date.now();

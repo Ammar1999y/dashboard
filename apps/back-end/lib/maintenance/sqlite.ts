@@ -6,7 +6,7 @@ import {
   rateLimitSweepExpired,
 } from '@/lib/rate-limit/store';
 
-import { errorClassOf } from '@/utils/log';
+import { errorClassOf, logLine } from '@/utils/log';
 
 /** A contained failure carries `error`, so the caller can tell it from a clean run. */
 interface ContainedSweep extends SweepResult {
@@ -59,9 +59,7 @@ async function sweepCacheContained(startedAt: number): Promise<ContainedSweep> {
     return await cacheSweepExpired(startedAt);
   } catch (error) {
     const errorClass = errorClassOf(error);
-    console.error(
-      JSON.stringify({ msg: 'maintenance.cacheSweep failed', errorClass })
-    );
+    logLine('error', { msg: 'maintenance.cacheSweep failed', errorClass });
     return { removed: 0, hasMore: true, error: errorClass };
   }
 }

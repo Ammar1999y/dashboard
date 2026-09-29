@@ -1,26 +1,9 @@
-'use client';
+import { useMediaQuery } from '@/hooks/use-media-query';
 
-import * as React from 'react';
+// The primary pointer, not touch support: a touchscreen laptop driven by a
+// mouse keeps its context menus and shortcut hints.
+const COARSE_POINTER = '(pointer: coarse)';
 
-export function useIsTouchDevice() {
-  const [isTouchDevice, setIsTouchDevice] = React.useState(false);
-
-  React.useEffect(() => {
-    function onResize() {
-      setIsTouchDevice(
-        'ontouchstart' in globalThis ||
-          navigator.maxTouchPoints > 0 ||
-          navigator.maxTouchPoints > 0
-      );
-    }
-
-    window.addEventListener('resize', onResize);
-    onResize();
-
-    return () => {
-      window.removeEventListener('resize', onResize);
-    };
-  }, []);
-
-  return isTouchDevice;
+export function useIsTouchDevice(): boolean {
+  return useMediaQuery(COARSE_POINTER);
 }

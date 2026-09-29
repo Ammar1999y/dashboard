@@ -1,104 +1,97 @@
-import { memo } from 'react';
+import type { ThemeMode } from './types';
+import type { Attribute } from 'next-themes';
+
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 
 import {
   ThemeProvider as NextThemeProvider,
   useTheme as useNextTheme,
 } from 'next-themes';
+import { flushSync } from 'react-dom';
 
-import useIsomorphicLayoutEffect from '@/hooks/use-layout-effect';
-// import './circular-transition.css';
+import { useEditorStore } from './store';
+import { NEXT_THEME_STORAGE_KEY, saveThemeSnapshot } from './theme-snapshot';
+import { applyCssVars, computeRootVars, computeThemeVars } from './theme-vars';
 
-import { useEditorStore } from '@/components/theme-customizer/store/editor-store';
-import { applyThemeToElement } from '@/components/theme-customizer/utils/apply-theme';
+type Point = { x: number; y: number };
 
-type ThemeProviderProps = {
-  children: React.ReactNode;
-};
+const NEXT_THEME_ATTRIBUTES: Attribute[] = ['class', 'data-theme'];
 
-type Coords = { x: number; y: number };
+const isThemeMode = (value: string | undefined): value is ThemeMode =>
+  value === 'light' || value === 'dark';
 
-const ThemeSync = memo(() => {
+const ThemeStyleSync = memo(() => {
   const { resolvedTheme } = useNextTheme();
+  const styles = useEditorStore((s) => s.themeState.styles);
+  const containerStretch = useEditorStore((s) => s.containerStretch);
+  const fontScale = useEditorStore((s) => s.fontScale);
 
-  useIsomorphicLayoutEffect(() => {
-    if (!(
-      resolvedTheme &&
-      (resolvedTheme === 'dark' || resolvedTheme === 'light')
-    )) {
-      return;
-    }
+  const themeVars = useMemo(
+    () => ({
+      light: computeThemeVars(styles, 'light'),
+      dark: computeThemeVars(styles, 'dark'),
+    }),
+    [styles]
+  );
+  const rootVars = useMemo(
+    () => computeRootVars(containerStretch, fontScale),
+    [containerStretch, fontScale]
+  );
 
-    const storeMode = useEditorStore.getState().themeState;
-    if (storeMode.currentMode !== resolvedTheme)
-      useEditorStore.getState().setThemeState({
-        ...useEditorStore.getState().themeState,
-        currentMode: resolvedTheme,
-      });
-  }, [resolvedTheme]);
+  useLayoutEffect(() => {
+    if (isThemeMode(resolvedTheme))
+      applyCssVars(document.documentElement, themeVars[resolvedTheme]);
+  }, [themeVars, resolvedTheme]);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.removeProperty('--container-max-width');
+    applyCssVars(root, rootVars);
+  }, [rootVars]);
+
+  useEffect(() => {
+    saveThemeSnapshot({ ...themeVars, root: rootVars });
+  }, [themeVars, rootVars]);
 
   return null;
 });
+ThemeStyleSync.displayName = 'ThemeStyleSync';
 
-ThemeSync.displayName = 'ThemeSync';
-
-export function ThemeProvider({ children }: ThemeProviderProps) {
-  const { themeState, containerStretch, fontScale } = useEditorStore();
-
-  useIsomorphicLayoutEffect(() => {
-    const root = document.documentElement;
-    if (!root) return;
-    applyThemeToElement(themeState, root);
-  }, [themeState]);
-
-  useIsomorphicLayoutEffect(() => {
-    const root = document.documentElement;
-    if (!root) return;
-    root.style.setProperty(
-      '--container-max-width',
-      containerStretch ? '100%' : '1200px'
-    );
-  }, [containerStretch]);
-
-  useIsomorphicLayoutEffect(() => {
-    const root = document.documentElement;
-    if (!root) return;
-    root.style.setProperty('--font-scale', fontScale.toString());
-  }, [fontScale]);
-
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
   return (
-    <NextThemeProvider attribute={['class', 'data-theme']}>
-      <ThemeSync />
+    <NextThemeProvider
+      attribute={NEXT_THEME_ATTRIBUTES}
+      storageKey={NEXT_THEME_STORAGE_KEY}
+    >
+      <ThemeStyleSync />
       {children}
     </NextThemeProvider>
   );
 }
 
-export const useTheme = () => {
-  const { theme, setTheme, resolvedTheme } = useNextTheme();
+export function useThemeMode() {
+  const { resolvedTheme, setTheme } = useNextTheme();
 
-  const toggleTheme = (coords?: Coords) => {
-    const currentTheme = resolvedTheme || theme;
-    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-
-    if (!document.startViewTransition) {
-      setTheme(newTheme);
-      return;
-    }
-
-    if (coords) {
-      const root = document.documentElement;
-      root.style.setProperty('--x', `${coords.x}px`);
-      root.style.setProperty('--y', `${coords.y}px`);
-    }
-
-    document.startViewTransition(() => {
-      setTheme(newTheme);
-    });
-  };
+  const setMode = useCallback(
+    (mode: ThemeMode, origin?: Point) => {
+      if (!document.startViewTransition) {
+        setTheme(mode);
+        return;
+      }
+      if (origin) {
+        const { style } = document.documentElement;
+        style.setProperty('--x', `${origin.x}px`);
+        style.setProperty('--y', `${origin.y}px`);
+      }
+      // The transition snapshots the DOM when the callback returns, so the
+      // theme must be committed synchronously inside it.
+      document.startViewTransition(() => flushSync(() => setTheme(mode)));
+    },
+    [setTheme]
+  );
 
   return {
-    theme: resolvedTheme,
-    setTheme,
-    toggleTheme,
+    mode: isThemeMode(resolvedTheme) ? resolvedTheme : undefined,
+    setMode,
   };
-};
+}

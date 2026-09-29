@@ -10,9 +10,9 @@ import {
 import { CustomError } from '@app/shared/error-class';
 import { contactKindOf } from '@app/shared/validation/enums';
 
-import { getClientIp } from '@/lib/audit';
+import { getClientIp } from '@/lib/http/client-ip';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { rateLimit } from './fixed-window';
 
@@ -61,19 +61,17 @@ function ipBucket(ip: string): string {
  * loopback there.
  */
 // TODO(proxy-trust): the resolved header is trusted on syntax alone; see the
-// note on TRUSTED_IP_HEADERS in lib/audit/constants.ts.
+// note on TRUSTED_IP_HEADERS in lib/http/client-ip.ts.
 export function ipIdentifier(headers: Headers): string {
   const ip = getClientIp(headers);
   if (!ip) {
-    console.error(
-      sanitizeForLog({
-        msg: 'missing client ip headers',
-        cf: headers.get('cf-connecting-ip'),
-        forwarded: headers.get('x-forwarded-for'),
-        host: headers.get('host'),
-        ua: headers.get('user-agent'),
-      })
-    );
+    logSanitized('error', {
+      msg: 'missing client ip headers',
+      cf: headers.get('cf-connecting-ip'),
+      forwarded: headers.get('x-forwarded-for'),
+      host: headers.get('host'),
+      ua: headers.get('user-agent'),
+    });
     throw new CustomError(
       MSG_MISSING_CLIENT_IP,
       HTTP_STATUS.SERVICE_UNAVAILABLE

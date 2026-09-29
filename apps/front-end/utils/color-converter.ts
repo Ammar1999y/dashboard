@@ -142,8 +142,6 @@ export function hslaToRgba(
   }
 }
 
-// Functions merged from components/theme-customizer/utils/color-converter.ts
-
 const formatNumber = (num?: number) => {
   if (!num) return '0';
   return Number.isSafeInteger(num) ? num : num.toFixed(4);

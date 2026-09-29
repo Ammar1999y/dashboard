@@ -1,78 +1,47 @@
-import type { Heading } from '@platejs/toc';
 import type { SlateEditor, TElement } from 'platejs';
 import type { SlateElementProps } from 'platejs/static';
 
 import { BaseTocPlugin, isHeading } from '@platejs/toc';
-import { NodeApi } from 'platejs';
+import { KEYS, NodeApi } from 'platejs';
 import { SlateElement } from 'platejs/static';
 
-import { Button } from '@/components/ui/button';
+import {
+  TOC_CLASS,
+  tocDepth,
+  tocItemVariants,
+} from '@/components/editor/styles';
+
+const HEADING_DEPTH: Record<string, number> = Object.fromEntries(
+  KEYS.heading.map((type, index) => [type, index + 1])
+);
+
+// Mirrors the unexported `getHeadingList` of `@platejs/toc/react`.
+function getHeadingList(editor: SlateEditor) {
+  const { queryHeading } = editor.getOptions(BaseTocPlugin);
+  if (queryHeading) return queryHeading(editor);
+
+  return [
+    ...editor.api.nodes<TElement>({ at: [], match: (n) => !!isHeading(n) }),
+  ].flatMap(([node, path]) => {
+    const title = NodeApi.string(node);
+    return title ? [{ depth: HEADING_DEPTH[node.type] ?? 1, path, title }] : [];
+  });
+}
 
 export function TocElementStatic(props: SlateElementProps) {
-  const { editor } = props;
-  const headingList = getHeadingList(editor);
-
   return (
-    <SlateElement {...props} className='mb-1 p-0'>
-      <div>
-        {headingList.length > 0 &&
-          headingList.map((item) => (
-            <Button
-              className={
-                'block h-auto w-full cursor-pointer truncate rounded-none px-0.5 py-1.5 text-end font-medium text-muted-foreground underline decoration-[0.5px] underline-offset-4 hover:bg-accent hover:text-muted-foreground'
-              }
-              style={{
-                paddingInlineStart: `${(item.depth - 1) * 26 || 4}px`,
-              }}
-              key={item.title}
-              variant='ghost'
-            >
-              {item.title}
-            </Button>
-          ))}
+    <SlateElement {...props} className={TOC_CLASS}>
+      <div contentEditable={false}>
+        {getHeadingList(props.editor).map((item) => (
+          <div
+            className={tocItemVariants({ depth: tocDepth(item.depth) })}
+            key={item.path.join('.')}
+          >
+            {item.title}
+          </div>
+        ))}
       </div>
       {props.children}
     </SlateElement>
   );
 }
-
-const headingDepth: Record<string, number> = {
-  h1: 1,
-  h2: 2,
-  h3: 3,
-  h4: 4,
-  h5: 5,
-  h6: 6,
-};
-
-const getHeadingList = (editor?: SlateEditor) => {
-  if (!editor) return [];
-
-  const options = editor.getOptions(BaseTocPlugin);
-
-  if (options.queryHeading) {
-    return options.queryHeading(editor);
-  }
-
-  const headingList: Heading[] = [];
-
-  const values = editor.api.nodes<TElement>({
-    at: [],
-    match: (n) => isHeading(n),
-  });
-
-  if (!values) return [];
-
-  for (const [node, path] of values) {
-    const { type } = node;
-    const title = NodeApi.string(node);
-    const depth = headingDepth[type];
-    const id = node.id as string;
-
-    if (title) {
-      headingList.push({ id, depth, path, title, type });
-    }
-  }
-
-  return headingList;
-};

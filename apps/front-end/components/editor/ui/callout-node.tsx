@@ -1,6 +1,6 @@
 'use client';
 
-import type * as React from 'react';
+import type { PlateElementProps } from 'platejs/react';
 
 import { useCalloutEmojiPicker } from '@platejs/callout/react';
 import { useEmojiDropdownMenuState } from '@platejs/emoji/react';
@@ -8,6 +8,12 @@ import { PlateElement } from 'platejs/react';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
+import {
+  CALLOUT_CLASS,
+  CALLOUT_DEFAULT_ICON,
+  calloutStyle,
+  EMOJI_FONT_STYLE,
+} from '@/components/editor/styles';
 
 import { EmojiPicker, EmojiPopover } from './emoji-toolbar-button';
 
@@ -16,28 +22,19 @@ export function CalloutElement({
   children,
   className,
   ...props
-}: React.ComponentProps<typeof PlateElement>) {
+}: PlateElementProps) {
   const { emojiPickerState, isOpen, setIsOpen } = useEmojiDropdownMenuState({
     closeOnSelect: true,
   });
-
   const { emojiToolbarDropdownProps, props: calloutProps } =
-    useCalloutEmojiPicker({
-      isOpen,
-      setIsOpen,
-    });
+    useCalloutEmojiPicker({ isOpen, setIsOpen });
+  const { backgroundColor, icon } = props.element;
 
   return (
     <PlateElement
-      attributes={{
-        ...attributes,
-        'data-plate-open-context-menu': true,
-        'data-ltr-element': true,
-      }}
-      className={cn('my-1 flex rounded-sm bg-muted p-4 ps-3', className)}
-      style={{
-        backgroundColor: props.element.backgroundColor as string | undefined,
-      }}
+      attributes={{ ...attributes, 'data-plate-open-context-menu': true }}
+      className={cn(CALLOUT_CLASS, className)}
+      style={calloutStyle(backgroundColor)}
       {...props}
     >
       <div className='flex w-full gap-2 rounded-md'>
@@ -47,13 +44,10 @@ export function CalloutElement({
             <Button
               className='size-6 select-none p-1 text-lg hover:bg-muted-foreground/15'
               contentEditable={false}
-              style={{
-                fontFamily:
-                  '"Apple Color Emoji", "Segoe UI Emoji", NotoColorEmoji, "Noto Color Emoji", "Segoe UI Symbol", "Android Emoji", EmojiSymbols',
-              }}
+              style={EMOJI_FONT_STYLE}
               variant='ghost'
             >
-              {(props.element.icon as string | undefined) || '💡'}
+              {(typeof icon === 'string' && icon) || CALLOUT_DEFAULT_ICON}
             </Button>
           }
         >

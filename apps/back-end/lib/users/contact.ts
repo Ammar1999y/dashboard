@@ -1,11 +1,17 @@
-import type { OtpChannel, PhoneOtpChannel } from '@app/shared/validation/enums';
+import type {
+  ContactKind,
+  OtpChannel,
+  PhoneOtpChannel,
+} from '@app/shared/validation/enums';
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { users } from '@/db/schema';
 
+import { activeUser } from './filters';
+
 /** The `users` column an OTP channel's identifier is stored in. */
-export function userContactColumn(channel: OtpChannel) {
+function userContactColumn(channel: OtpChannel) {
   return channel === 'email' ? users.email : users.phoneNumber;
 }
 
@@ -20,9 +26,13 @@ export function contactIdentifier(
 
 /** The live account holding this contact, for the anonymous OTP routes. */
 export function activeUserWithContact(channel: OtpChannel, identifier: string) {
-  return and(
-    eq(userContactColumn(channel), identifier),
-    isNull(users.deletedAt),
-    eq(users.isActive, true)
-  );
+  return activeUser(eq(userContactColumn(channel), identifier));
+}
+
+/** The stored destination for a contact kind. */
+export function contactOf(
+  user: { email: string; phoneNumber: string | null },
+  kind: ContactKind
+): string | null {
+  return kind === 'email' ? user.email : user.phoneNumber;
 }

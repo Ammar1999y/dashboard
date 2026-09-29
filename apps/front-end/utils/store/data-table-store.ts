@@ -1,17 +1,22 @@
+import type { TableQuery } from '@/lib/data-table/query';
 import type {
   ExtendedColumnFilter,
   ExtendedColumnSort,
   JoinOperator,
-} from '@/types/data-table';
+} from '@app/shared/types/data-table';
+
+import { useRouter } from 'next/router';
+import { useLayoutEffect } from 'react';
 
 import { create } from 'zustand';
-
+import { useShallow } from 'zustand/shallow';
 import {
+  DEFAULT_PER_PAGE,
   MAX_PAGE,
   MAX_PER_PAGE,
   parseFiltersState,
   parseSortingState,
-} from '@/components/ui/data-table/utils/parsers';
+} from '@app/shared/data-table/parsers';
 
 import { positiveInt } from '..';
 
@@ -24,14 +29,9 @@ export const URL_KEYS = {
   search: 'search',
 } as const;
 
-interface DataTableState {
-  page: number;
-  perPage: number;
-  sort: ExtendedColumnSort<Record<string, unknown>>[];
-  filters: ExtendedColumnFilter<Record<string, unknown>>[];
-  joinOperator: JoinOperator;
-  search: string;
-}
+type Sort = ExtendedColumnSort<Record<string, unknown>>[];
+
+export type DataTableState = TableQuery;
 
 interface DataTableIdentity {
   /** Which table the current state belongs to (`null` before the first mount). */
@@ -42,18 +42,16 @@ interface DataTableActions {
   /**
    * Bind the store to one table and (re)load its state from the URL.
    *
-   * The store is a module singleton, so it is created once per page LOAD, not
-   * once per table. Client-side navigation from one table page to another kept
-   * the previous table's filters, page and search: a users-only `email` filter
-   * was then sent to the permissions endpoint (422 with the new strict column
-   * specs), and a shared id like `isActive`/`createdAt` silently filtered the
-   * next table instead. Called on mount with the table's identity; a different
-   * identity resets to that URL's state.
+   * The store is a module singleton that outlives client-side navigation, so
+   * without this the next table page would inherit this one's filters, page
+   * and search — sending a column the next endpoint rejects, or silently
+   * filtering it on a shared id like `isActive`. A different identity resets
+   * to that page's URL state; the same one is a no-op.
    */
-  initTable: (tableKey: string) => void;
+  initTable: (tableKey: string, defaultSort?: Sort) => void;
   setPage: (page: number) => void;
   setPerPage: (perPage: number) => void;
-  setSorting: (sort: ExtendedColumnSort<Record<string, unknown>>[]) => void;
+  setSorting: (sort: Sort) => void;
   setFilters: (
     filters:
       | ExtendedColumnFilter<Record<string, unknown>>[]
@@ -70,12 +68,12 @@ export interface DataTableStore extends DataTableState, DataTableIdentity {
   actions: DataTableActions;
 }
 
-function parseUrlParams(): DataTableState {
+function parseUrlParams(defaultSort: Sort = []): DataTableState {
   if (typeof window === 'undefined') {
     return {
       page: 1,
-      perPage: 10,
-      sort: [],
+      perPage: DEFAULT_PER_PAGE,
+      sort: defaultSort,
       filters: [],
       joinOperator: 'and',
       search: '',
@@ -85,9 +83,11 @@ function parseUrlParams(): DataTableState {
   const params = new URLSearchParams(location.search);
 
   const page = positiveInt(params.get(URL_KEYS.page), MAX_PAGE) || 1;
-  const perPage = positiveInt(params.get(URL_KEYS.perPage), MAX_PER_PAGE) || 10;
+  const perPage =
+    positiveInt(params.get(URL_KEYS.perPage), MAX_PER_PAGE) || DEFAULT_PER_PAGE;
 
-  const sort = parseSortingState(params.get(URL_KEYS.sort));
+  const parsedSort = parseSortingState(params.get(URL_KEYS.sort));
+  const sort = parsedSort.length > 0 ? parsedSort : defaultSort;
   const filters = parseFiltersState(params.get(URL_KEYS.filters));
   const joinOperatorRaw = params.get(URL_KEYS.joinOperator);
   const joinOperator: JoinOperator = joinOperatorRaw === 'or' ? 'or' : 'and';
@@ -99,45 +99,31 @@ function parseUrlParams(): DataTableState {
   return { page, perPage, sort, filters, joinOperator, search };
 }
 
-/**
- * This table page's own URL state. Exported so a consumer can use it on the
- * first render after a client-side navigation, while the singleton still holds
- * the previous table's state — without that, the first request of the new table
- * carries the old table's filters.
- */
-export function readUrlDataTableState(): DataTableState {
-  return parseUrlParams();
-}
-
 export const useDataTableStore = create<DataTableStore>((set, get) => ({
   ...parseUrlParams(),
   tableKey: null,
 
   actions: {
-    initTable: (tableKey) => {
+    initTable: (tableKey, defaultSort) => {
       if (get().tableKey === tableKey) return;
-      set({ ...parseUrlParams(), tableKey });
+      set({ ...parseUrlParams(defaultSort), tableKey });
     },
     setPage: (page) => set({ page }),
-    setPerPage: (perPage) => set({ perPage }),
-    setSorting: (sort) => set({ sort }),
+    // A new page size or order makes the current page number meaningless.
+    setPerPage: (perPage) => set({ perPage, page: 1 }),
+    setSorting: (sort) => set({ sort, page: 1 }),
     setFilters: (filtersOrUpdater) => {
       if (filtersOrUpdater === null) {
         set({ filters: [], page: 1 });
         return;
       }
-      if (typeof filtersOrUpdater === 'function') {
-        const newFilters = filtersOrUpdater(get().filters);
-        set({
-          filters: newFilters,
-          search: newFilters.length > 0 ? '' : get().search,
-          page: 1,
-        });
-        return;
-      }
+      const filters =
+        typeof filtersOrUpdater === 'function'
+          ? filtersOrUpdater(get().filters)
+          : filtersOrUpdater;
       set({
-        filters: filtersOrUpdater,
-        search: filtersOrUpdater.length > 0 ? '' : get().search,
+        filters,
+        search: filters.length > 0 ? '' : get().search,
         page: 1,
       });
     },
@@ -145,3 +131,30 @@ export const useDataTableStore = create<DataTableStore>((set, get) => ({
     setSearch: (search) => set({ search, filters: [], page: 1 }),
   },
 }));
+
+/**
+ * This table page's URL state, bound to the route. Until `initTable` lands,
+ * the singleton still holds the previous table's state after a client-side
+ * navigation, so the page's own URL is read instead: without that, the first
+ * request of the new table carries the old table's filters.
+ */
+export function useTableUrlState(defaultSort?: Sort): DataTableState {
+  const { pathname } = useRouter();
+  const stored = useDataTableStore(
+    useShallow((s) => ({
+      page: s.page,
+      perPage: s.perPage,
+      sort: s.sort,
+      filters: s.filters,
+      joinOperator: s.joinOperator,
+      search: s.search,
+      tableKey: s.tableKey,
+    }))
+  );
+
+  useLayoutEffect(() => {
+    useDataTableStore.getState().actions.initTable(pathname, defaultSort);
+  }, [pathname, defaultSort]);
+
+  return stored.tableKey === pathname ? stored : parseUrlParams(defaultSort);
+}

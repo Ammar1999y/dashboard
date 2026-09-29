@@ -5,7 +5,7 @@ import { updateFolderSchema } from '@app/shared/validation/media';
 import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { requestActor } from '@/lib/media/actor';
+import { grantedActor } from '@/lib/media/actor';
 import { deleteFolder, updateFolder } from '@/lib/media/folders';
 import { deleteFolderTree } from '@/lib/media/lifecycle';
 import { mediaMsg } from '@/lib/media/messages';
@@ -51,7 +51,7 @@ export const PUT = withApiErrors(mediaMsg.updateError, async (ctx) => {
     folderId,
     name: input.name,
     parentId: input.parentId,
-    actor: requestActor(ctx, caller, caller.scope ?? 'all'),
+    actor: grantedActor(ctx, caller),
   });
 
   return apiSuccess({
@@ -83,7 +83,7 @@ export const DELETE = withApiErrors(mediaMsg.deleteError, async (ctx) => {
   );
   const recursive = requireRecursive(ctx.query);
 
-  const actor = requestActor(ctx, caller, caller.scope ?? 'all');
+  const actor = grantedActor(ctx, caller);
   const outcome = recursive
     ? await deleteFolderTree({
         folderId,

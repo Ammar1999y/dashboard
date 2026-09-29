@@ -1,14 +1,7 @@
 import { BaseLineHeightPlugin } from '@platejs/basic-styles';
-import { KEYS } from 'platejs';
+
+import { LINE_HEIGHT_INJECT } from '../config';
 
 export const BaseLineHeightKit = [
-  BaseLineHeightPlugin.configure({
-    inject: {
-      nodeProps: {
-        defaultNodeValue: 1.5,
-        validNodeValues: [1, 1.2, 1.5, 2, 3],
-      },
-      targetPlugins: [...KEYS.heading, KEYS.p],
-    },
-  }),
+  BaseLineHeightPlugin.configure({ inject: LINE_HEIGHT_INJECT }),
 ];

@@ -17,6 +17,10 @@ import { isJsonSchema } from './json-schema';
  */
 export const OPENAPI_ARTIFACT_PATH = 'build/openapi.json';
 
+export function openApiArtifactFile(): string {
+  return path.resolve(import.meta.dir, '..', '..', '..', OPENAPI_ARTIFACT_PATH);
+}
+
 /**
  * Wraps a manifest getter in a build-once cache; a build failure is cached and
  * rethrown too.
@@ -51,13 +55,7 @@ export function memoiseOpenApiDocument(
  * without a build step.
  */
 function prebuiltDocument(): JsonSchema | null {
-  const file = path.resolve(
-    import.meta.dir,
-    '..',
-    '..',
-    '..',
-    OPENAPI_ARTIFACT_PATH
-  );
+  const file = openApiArtifactFile();
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from this module's own location, never from input
   if (!existsSync(file)) return null;
 

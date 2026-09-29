@@ -1,15 +1,9 @@
-import type { ColumnSort, SortDirection, Table } from '@tanstack/react-table';
+import type { Column, ColumnSort, SortDirection } from '@tanstack/react-table';
+import type { ComponentProps, KeyboardEvent } from 'react';
 
-import * as React from 'react';
+import { memo, useCallback, useId, useMemo, useRef, useState } from 'react';
 
-import {
-  ArrowDownUp,
-  ChevronsUpDown,
-  GripVertical,
-  Plus,
-  Trash2,
-} from 'lucide-react';
-import { useShallow } from 'zustand/shallow';
+import { dataTableConfig } from '@app/shared/data-table/config';
 import { cn } from '@/lib/utils';
 
 import { useDataTableStore } from '@/utils/store/data-table-store';
@@ -24,6 +18,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverContent,
@@ -44,55 +39,57 @@ import {
   SortableOverlay,
 } from '@/components/ui/sortable';
 
-import { dataTableConfig } from './config';
+import {
+  REMOVE_ITEM_SHORTCUTS,
+  usePopoverShortcut,
+} from '../hooks/use-popover-shortcut';
 
 const SORT_SHORTCUT_KEY = 'j';
-// eslint-disable-next-line unicorn/prefer-set-has
-const REMOVE_SORT_SHORTCUTS = ['backspace', 'delete'];
 
-interface DataTableSortListProps<TData> extends React.ComponentProps<
+const getSortItemValue = (item: ColumnSort) => item.id;
+
+interface DataTableSortListProps<TData> extends ComponentProps<
   typeof PopoverContent
 > {
-  table: Table<TData>;
+  columns: Column<TData>[];
+  defaultSort: ColumnSort[];
   disabled?: boolean;
 }
 
 export function DataTableSortList<TData>({
-  table,
+  columns: allColumns,
+  defaultSort,
   disabled,
   ...props
 }: DataTableSortListProps<TData>) {
-  const id = React.useId();
-  const labelId = React.useId();
-  const descriptionId = React.useId();
-  const [open, setOpen] = React.useState(false);
-  const addButtonRef = React.useRef<HTMLButtonElement>(null);
+  const id = useId();
+  const labelId = useId();
+  const descriptionId = useId();
+  const [open, setOpen] = useState(false);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
 
-  const sorting = useDataTableStore(useShallow((s) => s.sort));
+  const sorting = useDataTableStore((s) => s.sort);
 
-  // Draft state: local copy while popover is open
-  const [draftSorting, setDraftSorting] = React.useState<ColumnSort[]>([]);
+  const [draftSorting, setDraftSorting] = useState<ColumnSort[]>([]);
 
-  // Sync draft from store when popover opens
-  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+  const handleOpenChange = useCallback((nextOpen: boolean) => {
     if (nextOpen) {
       setDraftSorting(useDataTableStore.getState().sort);
     }
     setOpen(nextOpen);
   }, []);
 
-  // Apply draft to store
-  const onApply = React.useCallback(() => {
+  const onApply = useCallback(() => {
     useDataTableStore.getState().actions.setSorting(draftSorting);
     setOpen(false);
   }, [draftSorting]);
 
-  const { columnLabels, columns } = React.useMemo(() => {
+  const { columnLabels, columns } = useMemo(() => {
     const labels = new Map<string, string>();
     const sortingIds = new Set(draftSorting.map((s) => s.id));
     const availableColumns: { id: string; label: string }[] = [];
 
-    for (const column of table.getAllColumns()) {
+    for (const column of allColumns) {
       if (!column.getCanSort()) continue;
 
       const label = column.columnDef.meta?.label ?? column.id;
@@ -107,16 +104,16 @@ export function DataTableSortList<TData>({
       columnLabels: labels,
       columns: availableColumns,
     };
-  }, [draftSorting, table]);
+  }, [draftSorting, allColumns]);
 
-  const onSortAdd = React.useCallback(() => {
+  const onSortAdd = useCallback(() => {
     const firstColumn = columns[0];
     if (!firstColumn) return;
 
     setDraftSorting((prev) => [...prev, { id: firstColumn.id, desc: false }]);
   }, [columns]);
 
-  const onSortUpdate = React.useCallback(
+  const onSortUpdate = useCallback(
     (sortId: string, updates: Partial<ColumnSort>) => {
       setDraftSorting((prev) =>
         prev.map((s) => (s.id === sortId ? { ...s, ...updates } : s))
@@ -125,49 +122,22 @@ export function DataTableSortList<TData>({
     []
   );
 
-  const onSortRemove = React.useCallback((sortId: string) => {
+  const onSortRemove = useCallback((sortId: string) => {
     setDraftSorting((prev) => prev.filter((s) => s.id !== sortId));
   }, []);
 
-  const onSortingReset = React.useCallback(
-    () => setDraftSorting(table.initialState.sorting),
-    [table.initialState.sorting]
+  const onSortingReset = useCallback(
+    () => setDraftSorting(defaultSort),
+    [defaultSort]
   );
 
-  const onSortingReorder = React.useCallback((newSorting: ColumnSort[]) => {
-    setDraftSorting(newSorting);
-  }, []);
+  const toggleOpen = useCallback(() => setOpen((prev) => !prev), []);
+  usePopoverShortcut(SORT_SHORTCUT_KEY, toggleOpen);
 
-  React.useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement ||
-        (event.target instanceof HTMLElement &&
-          event.target.contentEditable === 'true')
-      ) {
-        return;
-      }
-
-      if (
-        event.key.toLowerCase() === SORT_SHORTCUT_KEY &&
-        (event.ctrlKey || event.metaKey) &&
-        event.shiftKey
-      ) {
-        event.preventDefault();
-        setOpen((prev) => !prev);
-      }
-    }
-
-    addEventListener('keydown', onKeyDown);
-    return () => removeEventListener('keydown', onKeyDown);
-  }, []);
-
-  const onTriggerKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>) => {
+  const onTriggerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>) => {
       if (!(
-        REMOVE_SORT_SHORTCUTS.includes(event.key.toLowerCase()) &&
-        sorting.length > 0
+        REMOVE_ITEM_SHORTCUTS.has(event.key.toLowerCase()) && sorting.length > 0
       )) {
         return;
       }
@@ -181,8 +151,8 @@ export function DataTableSortList<TData>({
   return (
     <Sortable
       value={draftSorting}
-      onValueChange={onSortingReorder}
-      getItemValue={(item) => item.id}
+      onValueChange={setDraftSorting}
+      getItemValue={getSortItemValue}
     >
       <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
@@ -193,7 +163,10 @@ export function DataTableSortList<TData>({
             onKeyDown={onTriggerKeyDown}
             disabled={disabled}
           >
-            <ArrowDownUp className='size-4 text-muted-foreground' />
+            <Icon
+              icon='solar:sort-vertical-linear'
+              className='size-4 text-muted-foreground'
+            />
             <span>ترتيب</span>
             {sorting.length > 0 && (
               <Badge
@@ -268,7 +241,7 @@ export function DataTableSortList<TData>({
                 onClick={onSortAdd}
                 disabled={columns.length === 0}
               >
-                <Plus className='size-4' />
+                <Icon icon='solar:add-linear' className='size-4' />
                 <span>إضافة ترتيب</span>
               </Button>
               <Button size='sm' className='rounded text-sm' onClick={onApply}>
@@ -290,6 +263,29 @@ export function DataTableSortList<TData>({
   );
 }
 
+interface SortFieldItemProps {
+  columnId: string;
+  label: string;
+  sortId: string;
+  onSortUpdate: (sortId: string, updates: Partial<ColumnSort>) => void;
+}
+
+const SortFieldItem = memo(
+  ({ columnId, label, sortId, onSortUpdate }: SortFieldItemProps) => {
+    const onSelect = useCallback(
+      () => onSortUpdate(sortId, { id: columnId }),
+      [sortId, columnId, onSortUpdate]
+    );
+
+    return (
+      <CommandItem value={columnId} onSelect={onSelect}>
+        <span className='truncate'>{label}</span>
+      </CommandItem>
+    );
+  }
+);
+SortFieldItem.displayName = 'SortFieldItem';
+
 interface DataTableSortItemProps {
   sort: ColumnSort;
   sortItemId: string;
@@ -299,131 +295,145 @@ interface DataTableSortItemProps {
   onSortRemove: (sortId: string) => void;
 }
 
-function DataTableSortItem({
-  sort,
-  sortItemId,
-  columns,
-  columnLabels,
-  onSortUpdate,
-  onSortRemove,
-}: DataTableSortItemProps) {
-  const fieldListboxId = `${sortItemId}-field-listbox`;
-  const fieldTriggerId = `${sortItemId}-field-trigger`;
-  const directionListboxId = `${sortItemId}-direction-listbox`;
+const DataTableSortItem = memo(
+  ({
+    sort,
+    sortItemId,
+    columns,
+    columnLabels,
+    onSortUpdate,
+    onSortRemove,
+  }: DataTableSortItemProps) => {
+    const fieldListboxId = `${sortItemId}-field-listbox`;
+    const fieldTriggerId = `${sortItemId}-field-trigger`;
+    const directionListboxId = `${sortItemId}-direction-listbox`;
 
-  const [showFieldSelector, setShowFieldSelector] = React.useState(false);
-  const [showDirectionSelector, setShowDirectionSelector] =
-    React.useState(false);
+    const [showFieldSelector, setShowFieldSelector] = useState(false);
+    const [showDirectionSelector, setShowDirectionSelector] = useState(false);
 
-  const onItemKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (
-        showFieldSelector ||
-        showDirectionSelector ||
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
+    const onDirectionChange = useCallback(
+      (value: SortDirection) =>
+        onSortUpdate(sort.id, { desc: value === 'desc' }),
+      [sort.id, onSortUpdate]
+    );
 
-      if (REMOVE_SORT_SHORTCUTS.includes(event.key.toLowerCase())) {
-        event.preventDefault();
-        onSortRemove(sort.id);
-      }
-    },
-    [sort.id, showFieldSelector, showDirectionSelector, onSortRemove]
-  );
+    const onRemove = useCallback(
+      () => onSortRemove(sort.id),
+      [sort.id, onSortRemove]
+    );
 
-  return (
-    <SortableItem value={sort.id} asChild>
-      <div
-        role='listitem'
-        id={sortItemId}
-        tabIndex={-1}
-        className='flex items-center gap-2'
-        onKeyDown={onItemKeyDown}
-      >
-        <Popover open={showFieldSelector} onOpenChange={setShowFieldSelector}>
-          <PopoverTrigger asChild>
-            <Button
-              id={fieldTriggerId}
-              aria-controls={fieldListboxId}
-              variant='none'
-              size='none'
-              className='h-8 w-32 min-w-0 justify-between rounded-md border bg-transparent px-3 py-1 text-base font-normal shadow-sm hover:shadow-md dark:bg-input/30 hover:dark:bg-input/45 md:text-sm'
+    const onItemKeyDown = useCallback(
+      (event: KeyboardEvent<HTMLDivElement>) => {
+        if (
+          showFieldSelector ||
+          showDirectionSelector ||
+          event.target instanceof HTMLInputElement ||
+          event.target instanceof HTMLTextAreaElement
+        ) {
+          return;
+        }
+
+        if (REMOVE_ITEM_SHORTCUTS.has(event.key.toLowerCase())) {
+          event.preventDefault();
+          onSortRemove(sort.id);
+        }
+      },
+      [sort.id, showFieldSelector, showDirectionSelector, onSortRemove]
+    );
+
+    return (
+      <SortableItem value={sort.id} asChild>
+        <div
+          role='listitem'
+          id={sortItemId}
+          tabIndex={-1}
+          className='flex items-center gap-2'
+          onKeyDown={onItemKeyDown}
+        >
+          <Popover open={showFieldSelector} onOpenChange={setShowFieldSelector}>
+            <PopoverTrigger asChild>
+              <Button
+                id={fieldTriggerId}
+                aria-controls={fieldListboxId}
+                variant='none'
+                size='none'
+                className='h-8 w-32 min-w-0 justify-between rounded-md border bg-transparent px-3 py-1 text-base font-normal shadow-sm hover:shadow-md dark:bg-input/30 hover:dark:bg-input/45 md:text-sm'
+              >
+                <span className='truncate'>{columnLabels.get(sort.id)}</span>
+                <Icon
+                  icon='lucide:chevrons-up-down'
+                  className='size-4 opacity-40'
+                />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              id={fieldListboxId}
+              className='w-[--radix-popover-trigger-width] p-0'
             >
-              <span className='truncate'>{columnLabels.get(sort.id)}</span>
-              <ChevronsUpDown className='size-4 opacity-40' />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent
-            id={fieldListboxId}
-            className='w-[--radix-popover-trigger-width] p-0'
+              <Command>
+                <CommandInput placeholder='ابحث عن حقل...' />
+                <CommandList>
+                  <CommandEmpty>لا توجد حقول.</CommandEmpty>
+                  <CommandGroup>
+                    {columns.map((column) => (
+                      <SortFieldItem
+                        key={column.id}
+                        columnId={column.id}
+                        label={column.label}
+                        sortId={sort.id}
+                        onSortUpdate={onSortUpdate}
+                      />
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+          <Select
+            open={showDirectionSelector}
+            onOpenChange={setShowDirectionSelector}
+            value={sort.desc ? 'desc' : 'asc'}
+            onValueChange={onDirectionChange}
           >
-            <Command>
-              <CommandInput placeholder='ابحث عن حقل...' />
-              <CommandList>
-                <CommandEmpty>لا توجد حقول.</CommandEmpty>
-                <CommandGroup>
-                  {columns.map((column) => (
-                    <CommandItem
-                      key={column.id}
-                      value={column.id}
-                      onSelect={(value) => onSortUpdate(sort.id, { id: value })}
-                    >
-                      <span className='truncate'>{column.label}</span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
-        <Select
-          open={showDirectionSelector}
-          onOpenChange={setShowDirectionSelector}
-          value={sort.desc ? 'desc' : 'asc'}
-          onValueChange={(value: SortDirection) =>
-            onSortUpdate(sort.id, { desc: value === 'desc' })
-          }
-        >
-          <SelectTrigger
-            aria-controls={directionListboxId}
-            size='sm'
-            className='!h-8 w-24 rounded shadow-sm'
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent
-            id={directionListboxId}
-            className='min-w-[--radix-select-trigger-width]'
-          >
-            {dataTableConfig.sortOrders.map((order) => (
-              <SelectItem key={order.value} value={order.value}>
-                {order.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          aria-controls={sortItemId}
-          variant='destructiveGhost'
-          size='icon'
-          className='size-8 rounded text-muted-foreground hover:text-destructive'
-          onClick={() => onSortRemove(sort.id)}
-        >
-          <Trash2 className='size-4' />
-        </Button>
-        <SortableItemHandle asChild>
+            <SelectTrigger
+              aria-controls={directionListboxId}
+              size='sm'
+              className='!h-8 w-24 rounded shadow-sm'
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              id={directionListboxId}
+              className='min-w-[--radix-select-trigger-width]'
+            >
+              {dataTableConfig.sortOrders.map((order) => (
+                <SelectItem key={order.value} value={order.value}>
+                  {order.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
-            variant='ghost'
+            aria-controls={sortItemId}
+            variant='destructiveGhost'
             size='icon'
-            className='size-8 rounded text-muted-foreground'
+            className='size-8 rounded text-muted-foreground hover:text-destructive'
+            onClick={onRemove}
           >
-            <GripVertical className='size-4' />
+            <Icon icon='solar:trash-bin-trash-linear' className='size-4' />
           </Button>
-        </SortableItemHandle>
-      </div>
-    </SortableItem>
-  );
-}
+          <SortableItemHandle asChild>
+            <Button
+              variant='ghost'
+              size='icon'
+              className='size-8 rounded text-muted-foreground'
+            >
+              <Icon icon='solar:grip-vertical-linear' className='size-4' />
+            </Button>
+          </SortableItemHandle>
+        </div>
+      </SortableItem>
+    );
+  }
+);
+DataTableSortItem.displayName = 'DataTableSortItem';

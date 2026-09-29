@@ -1,4 +1,6 @@
-import { memo } from 'react';
+import type { PresetName } from '../constants';
+
+import { memo, useCallback } from 'react';
 
 import {
   Select,
@@ -8,30 +10,39 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import { PRESETS } from '../constants';
+import { isPresetName, PRESETS } from '../constants';
 
 interface PresetSelectProps {
-  selectedPreset: string | undefined;
-  onPresetSelect: (preset: string) => void;
+  selectedPreset: PresetName | undefined;
+  onPresetSelect: (preset: PresetName) => void;
 }
 
 // Controlled, with `''` for "no preset": the selection follows edits made in
 // the calendar or the inputs, and falls back to the placeholder.
 export const PresetSelect = memo(
-  ({ selectedPreset, onPresetSelect }: PresetSelectProps) => (
-    <Select value={selectedPreset ?? ''} onValueChange={onPresetSelect}>
-      <SelectTrigger className='mx-auto mb-2 mt-3 !h-9 w-44'>
-        <SelectValue placeholder='اختيار سريع' />
-      </SelectTrigger>
-      <SelectContent>
-        {PRESETS.map((preset) => (
-          <SelectItem key={preset.name} value={preset.name}>
-            {preset.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
+  ({ selectedPreset, onPresetSelect }: PresetSelectProps) => {
+    const handleValueChange = useCallback(
+      (value: string) => {
+        if (isPresetName(value)) onPresetSelect(value);
+      },
+      [onPresetSelect]
+    );
+
+    return (
+      <Select value={selectedPreset ?? ''} onValueChange={handleValueChange}>
+        <SelectTrigger className='mx-auto mb-2 mt-3 !h-9 w-44'>
+          <SelectValue placeholder='اختيار سريع' />
+        </SelectTrigger>
+        <SelectContent>
+          {PRESETS.map((preset) => (
+            <SelectItem key={preset.name} value={preset.name}>
+              {preset.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
 );
 
 PresetSelect.displayName = 'PresetSelect';

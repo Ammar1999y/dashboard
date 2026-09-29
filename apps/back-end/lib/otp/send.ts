@@ -14,7 +14,7 @@ import { contactKindOf } from '@app/shared/validation/enums';
 
 import { enforceOtpGlobalSendBudget } from '@/lib/rate-limit';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { deliverOtp, MSG_OTP_SEND_FAILED } from './delivery';
 import { hashOtpCode } from './hash';
@@ -310,12 +310,10 @@ export async function processOtpSend({
       try {
         await refundFailedDelivery(result.sessionId, hashedCode);
       } catch (refundError) {
-        console.error(
-          sanitizeForLog({
-            msg: 'otp.delivery.refundFailed',
-            error: refundError,
-          })
-        );
+        logSanitized('error', {
+          msg: 'otp.delivery.refundFailed',
+          error: refundError,
+        });
       }
       throw error;
     }

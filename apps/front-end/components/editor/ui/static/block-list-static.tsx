@@ -1,82 +1,50 @@
-/* eslint-disable react/display-name */
 import type { RenderStaticNodeWrapper, TListElement } from 'platejs';
 import type { SlateRenderElementProps } from 'platejs/static';
-import type * as React from 'react';
 
 import { isOrderedList } from '@platejs/list';
-import { CheckIcon } from 'lucide-react';
+import { KEYS } from 'platejs';
 import { cn } from '@/lib/utils';
 
-import styles from '@/components/editor/ui/editor-elements.module.css';
-
-const config: Record<
-  string,
-  {
-    Li: React.FC<SlateRenderElementProps>;
-    Marker: React.FC<SlateRenderElementProps>;
-  }
-> = {
-  todo: {
-    Li: TodoLiStatic,
-    Marker: TodoMarkerStatic,
-  },
-};
+import { Icon } from '@/components/ui/icon';
+import {
+  LIST_CLASS,
+  TODO_CHECK_ICON,
+  TODO_MARKER_CLASS,
+  todoItemClass,
+} from '@/components/editor/styles';
 
 export const BlockListStatic: RenderStaticNodeWrapper = (props) => {
   if (!props.element.listStyleType) return;
 
-  return (props) => <List {...props} />;
+  return ListStatic;
 };
 
-function List(props: SlateRenderElementProps) {
+function ListStatic(props: SlateRenderElementProps) {
   const { listStart, listStyleType } = props.element as TListElement;
-  const { Li, Marker } = config[listStyleType] ?? {};
-  const List = isOrderedList(props.element) ? 'ol' : 'ul';
+  const Tag = isOrderedList(props.element) ? 'ol' : 'ul';
+  const isTodo = listStyleType === KEYS.listTodo;
+  const checked = props.element.checked === true;
 
   return (
-    <List
-      className='relative m-0 p-0'
-      start={listStart}
-      style={{ listStyleType }}
-    >
-      {Marker && <Marker {...props} />}
-      {Li ? <Li {...props} /> : <li>{props.children}</li>}
-    </List>
-  );
-}
-
-function TodoMarkerStatic(props: SlateRenderElementProps) {
-  const checked = props.element.checked as boolean;
-
-  return (
-    <div contentEditable={false}>
-      <button
-        className={cn(
-          styles.todoCheckbox,
-          'peer pointer-events-none absolute top-1 size-4 shrink-0 rounded-sm border border-primary bg-background ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground',
-          props.className
-        )}
-        data-state={checked ? 'checked' : 'unchecked'}
-        type='button'
-      >
-        <div className={cn('flex items-center justify-center text-current')}>
-          {checked && <CheckIcon className='size-4' />}
+    <Tag className={LIST_CLASS} start={listStart} style={{ listStyleType }}>
+      {isTodo && (
+        <div contentEditable={false}>
+          <span
+            className={cn(
+              TODO_MARKER_CLASS,
+              'flex size-4 shrink-0 items-center justify-center rounded-sm border border-primary',
+              checked ? 'bg-primary text-primary-foreground' : 'bg-background'
+            )}
+            role='checkbox'
+            aria-checked={checked}
+          >
+            {checked && <Icon icon={TODO_CHECK_ICON} className='size-3.5' />}
+          </span>
         </div>
-      </button>
-    </div>
-  );
-}
-
-function TodoLiStatic(props: SlateRenderElementProps) {
-  return (
-    <li
-      className={cn(
-        'list-none',
-        (props.element.checked as boolean) &&
-          'text-muted-foreground line-through'
       )}
-    >
-      {props.children}
-    </li>
+      <li className={isTodo ? todoItemClass(checked) : undefined}>
+        {props.children}
+      </li>
+    </Tag>
   );
 }

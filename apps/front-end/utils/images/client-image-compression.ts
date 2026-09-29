@@ -1,153 +1,62 @@
-/* eslint-disable unicorn/prefer-add-event-listener */
 import type { Options as CompressionOptions } from 'browser-image-compression';
 
 import imageCompression from 'browser-image-compression';
+import { MAX_IMAGE_SIZE } from '@app/shared/validation/constants';
 
-import { MAX_IMAGE_SIZE } from './config';
+import { CustomError } from '../error-class';
+import { COMPRESSION_LIB_URL } from './config';
 
 enum ImageFormat {
   WEBP = 'image/webp',
   PNG = 'image/png',
 }
 
-export interface CompressionResult {
-  file: File;
-  format: ImageFormat;
-  width?: number;
-  height?: number;
-}
-export class CompressionError extends Error {
-  constructor(message: string) {
-    super(message);
+/** The browser could not decode the image, or could not encode it to WebP or PNG. */
+export class CompressionError extends CustomError {
+  constructor() {
+    super('تعذّرت معالجة الصورة، قد تكون صيغتها غير مدعومة');
     this.name = 'CompressionError';
   }
 }
 
-const CONSTANTS = {
-  DEFAULTS: {
-    maxWidthOrHeight: 2048,
-    maxSizeMB: MAX_IMAGE_SIZE,
-    quality: 0.95,
-    useWebWorker: true,
-  },
-} as const;
+const CONFIG: CompressionOptions = {
+  maxWidthOrHeight: 2048,
+  maxSizeMB: MAX_IMAGE_SIZE,
+  initialQuality: 0.95,
+  useWebWorker: true,
+  libURL: COMPRESSION_LIB_URL,
+};
 
-async function getImageDimensions(
-  file: File
-): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
+function toFile(blob: Blob, originalName: string, format: ImageFormat): File {
+  const extension = format === ImageFormat.WEBP ? 'webp' : 'png';
+  const name = `${originalName.replace(/\.[^.]+$/, '')}.${extension}`;
 
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve({ width: img.width, height: img.height });
-    };
+  if (blob instanceof File && blob.name === name) return blob;
+  return new File([blob], name, { type: format, lastModified: Date.now() });
+}
 
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('فشل تحميل الصورة'));
-    };
-
-    img.src = url;
-  });
+async function encode(file: File, format: ImageFormat): Promise<File | null> {
+  try {
+    const compressed = await imageCompression(file, {
+      ...CONFIG,
+      fileType: format,
+    });
+    return compressed.type === format
+      ? toFile(compressed, file.name, format)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Converts a Blob/File to a proper File with correct name and extension
+ * Re-encodes to WebP, else PNG, under the server's image ceiling. Rejects with
+ * `CompressionError`; callers must not fall back to the original file.
  */
-function toFile(
-  blob: Blob | File,
-  originalName: string,
-  format: ImageFormat
-): File {
-  // Get file extension based on format
-  const extension = format === ImageFormat.WEBP ? 'webp' : 'png';
-
-  // Remove old extension and add new one
-  const nameWithoutExt = originalName.replace(/\.[^.]+$/, '');
-  const newFileName = `${nameWithoutExt}.${extension}`;
-
-  // If it's already a File with correct name, return it
-  if (blob instanceof File && blob.name === newFileName) {
-    return blob;
+export async function compressImage(file: File): Promise<File> {
+  for (const format of [ImageFormat.WEBP, ImageFormat.PNG]) {
+    const compressed = await encode(file, format);
+    if (compressed) return compressed;
   }
-
-  // Convert to proper File object
-  return new File([blob], newFileName, {
-    type: format,
-    lastModified: Date.now(),
-  });
-}
-
-export class ImageCompressionService {
-  static async compress(
-    file: File,
-    options: CompressionOptions = {},
-    withDimensions = false
-  ): Promise<CompressionResult> {
-    try {
-      if (!file) throw new CompressionError('لم يتم توفير ملف');
-
-      const compressed = await this.compressWithFallback(file, {
-        ...options,
-        maxWidthOrHeight:
-          options.maxWidthOrHeight ?? CONSTANTS.DEFAULTS.maxWidthOrHeight,
-        maxSizeMB: options.maxSizeMB ?? CONSTANTS.DEFAULTS.maxSizeMB,
-        useWebWorker: options.useWebWorker ?? CONSTANTS.DEFAULTS.useWebWorker,
-        initialQuality: options.initialQuality ?? CONSTANTS.DEFAULTS.quality,
-        signal: options.signal,
-        libURL: '/js/browser-image-compression.js',
-      });
-
-      const result: CompressionResult = {
-        file: compressed,
-        format: compressed.type as ImageFormat,
-      };
-
-      if (withDimensions) {
-        const compressedDimensions = await getImageDimensions(compressed);
-        result.width = compressedDimensions.width;
-        result.height = compressedDimensions.height;
-      }
-
-      return result;
-    } catch (error) {
-      if (error instanceof CompressionError) throw error;
-
-      throw new CompressionError('خطأ غير متوقع في الضغط');
-    }
-  }
-
-  private static async compressWithFallback(
-    file: File,
-    config: CompressionOptions
-  ): Promise<File> {
-    try {
-      const compressed = await imageCompression(file, {
-        ...config,
-        fileType: ImageFormat.WEBP,
-      });
-
-      if (compressed.type === ImageFormat.WEBP) {
-        return toFile(compressed, file.name, ImageFormat.WEBP);
-      }
-
-      throw new Error('المتصفح لا يدعم صيغة WebP');
-    } catch {
-      if (config.signal?.aborted)
-        throw new CompressionError('تم إلغاء الضغط من قبل المستخدم');
-
-      try {
-        const compressed = await imageCompression(file, {
-          ...config,
-          fileType: ImageFormat.PNG,
-        });
-
-        return toFile(compressed, file.name, ImageFormat.PNG);
-      } catch {
-        throw new CompressionError('فشل رفع الصورة، اعد المحاوله');
-      }
-    }
-  }
+  throw new CompressionError();
 }

@@ -21,7 +21,7 @@ import { resolveActionScope } from '@/lib/permissions/checker';
 import {
   collapseToNotFound,
   validatePermissionScope,
-} from '@/lib/permissions/utils';
+} from '@/lib/permissions/scope';
 
 /**
  * `resolveActionScope` — the two cases its own comment records as previously

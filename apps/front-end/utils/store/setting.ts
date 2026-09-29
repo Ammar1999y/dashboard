@@ -1,8 +1,11 @@
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
-import { useShallow } from 'zustand/shallow';
+import { persist } from 'zustand/middleware';
 
-import { ThemeLayout } from '@/components/theme-customizer/types/enum';
+export enum ThemeLayout {
+  Vertical = 'vertical',
+  Horizontal = 'horizontal',
+  Mini = 'mini',
+}
 
 type SettingsType = {
   themeLayout: ThemeLayout;
@@ -10,8 +13,7 @@ type SettingsType = {
 type SettingStore = {
   settings: SettingsType;
   actions: {
-    setSettings: (settings: SettingsType) => void;
-    clearSettings: () => void;
+    setThemeLayout: (themeLayout: ThemeLayout) => void;
   };
 };
 
@@ -24,22 +26,17 @@ export const useSettingStore = create<SettingStore>()(
         themeLayout: ThemeLayout.Vertical,
       },
       actions: {
-        setSettings: (settings) => {
-          set({ settings });
-        },
-        clearSettings() {
-          useSettingStore.persist.clearStorage();
+        setThemeLayout: (themeLayout) => {
+          set((state) => ({ settings: { ...state.settings, themeLayout } }));
         },
       },
     }),
     {
-      name: STORAGE_KEY, // name of the item in the storage (must be unique)
-      storage: createJSONStorage(() => localStorage), // (optional) by default, 'localStorage' is used
-      partialize: (state) => ({ [STORAGE_KEY]: state.settings }),
+      name: STORAGE_KEY,
+      partialize: (state) => ({ settings: state.settings }),
     }
   )
 );
 
-export const useSettings = () => useSettingStore((state) => state.settings);
-export const useSettingActions = () =>
-  useSettingStore(useShallow((state) => state.actions));
+export const useThemeLayout = () =>
+  useSettingStore((state) => state.settings.themeLayout);

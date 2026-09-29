@@ -2,17 +2,22 @@ import type { Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
 import type { HandlerCookie } from '@/lib/http/contract';
 import type { EntityID } from '@app/shared/types';
+import type { ContactKind, OtpChannel } from '@app/shared/validation/enums';
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
+import { db } from '@/db';
 import { users } from '@/db/schema';
 
-import { HTTP_STATUS, MSG_NOT_FOUND } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { contactKindOf } from '@app/shared/validation/enums';
 
 import { auditLog } from '@/lib/audit';
 import { auth } from '@/lib/auth';
+import { verifyLoginAttempt } from '@/lib/auth/login-guard';
 import { twoFactorMsg } from '@/lib/auth/messages';
+import { requireReauthWindow } from '@/lib/auth/reauth/window';
 import {
   revokeOtherSessions,
   revokePendingProofs,
@@ -22,11 +27,31 @@ import {
   contactChangeStrandsTwoFactor,
   removeMethodIntent,
 } from '@/lib/auth/two-factor/methods';
-import { parseSetCookieHeaders } from '@/lib/http/contract';
+import { parseSetCookieHeaders } from '@/lib/http/cookies';
+import { notFoundError } from '@/lib/http/response';
 import { markContactVerified } from '@/lib/otp/contact';
+import { CONTACT_LABEL } from '@/lib/otp/content';
+import { processOtpSend } from '@/lib/otp/send';
 import { insufficientPermissions } from '@/lib/permissions/checker';
+import { enforceOtpSurfaceSendQuota } from '@/lib/rate-limit';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
+
+import { asCurrentPasswordIncorrect } from './current-password';
+import { activeUser, liveUser } from './filters';
+import { userMsg } from './messages';
+
+export async function assertContactChangeKeepsFactor(
+  tx: Tx,
+  userId: EntityID,
+  contactKinds: readonly ContactKind[]
+): Promise<void> {
+  if (await contactChangeStrandsTwoFactor(userId, contactKinds, tx))
+    throw new CustomError(
+      twoFactorMsg.contactChangeStrands,
+      HTTP_STATUS.CONFLICT
+    );
+}
 
 /**
  * The second-factor half of a contact change, at the boundary BOTH commits pass
@@ -47,13 +72,9 @@ import { sanitizeForLog } from '@/utils/log';
 async function detachTwoFactorFromContact(
   tx: Tx,
   userId: EntityID,
-  contactKind: 'email' | 'phone'
+  contactKind: ContactKind
 ): Promise<void> {
-  if (await contactChangeStrandsTwoFactor(userId, [contactKind], tx))
-    throw new CustomError(
-      twoFactorMsg.contactChangeStrands,
-      HTTP_STATUS.CONFLICT
-    );
+  await assertContactChangeKeepsFactor(tx, userId, [contactKind]);
   await removeMethodIntent(tx, userId, 'otp', contactKind);
 }
 
@@ -73,24 +94,115 @@ export async function refreshSessionCookies(
     const cookies = parseSetCookieHeaders(refreshed.headers.getSetCookie());
     return cookies.length > 0 ? cookies : undefined;
   } catch (e) {
-    console.error(
-      sanitizeForLog({ msg: 'session.cookieRefresh failed', error: e })
-    );
+    logSanitized('error', { msg: 'session.cookieRefresh failed', error: e });
     return undefined;
   }
 }
 
 /**
- * Atomically commits a verified contact change, inside `processOtpVerify`'s
- * transaction or, under OTP_AUTO_VERIFY, a fresh one.
- *
- * Where the verified flag may be set true: alongside a NEW address only in the
- * one `UPDATE` below that writes the address, since splitting them would leave
- * a new address with the old flag; on an UNCHANGED address only through
- * `markContactVerified`. Clearing it is unrestricted.
- *
- * A unique violation (address taken) propagates; the caller maps it to 409.
+ * The caller of a contact change proves it is still them: the supplied current
+ * password, or an open re-authentication window when none is supplied. Run
+ * before the mutation's transaction, so no row lock is held across Argon2.
  */
+async function reauthenticateContactChange(opts: {
+  userId: EntityID;
+  sessionId: EntityID;
+  currentPassword: string | undefined;
+  auditMeta: AuditMeta;
+  purpose: 'reauth_change_email' | 'reauth_change_phone';
+}): Promise<void> {
+  try {
+    if (opts.currentPassword === undefined)
+      await requireReauthWindow(opts.userId, opts.sessionId);
+    else
+      await verifyLoginAttempt({
+        userId: opts.userId,
+        password: opts.currentPassword,
+        // The floor guards anonymous enumeration; this caller holds a session.
+        skipTimingGuard: true,
+        auditMeta: opts.auditMeta,
+        purpose: opts.purpose,
+      });
+  } catch (error) {
+    throw asCurrentPasswordIncorrect(error);
+  }
+}
+
+/**
+ * Every refusal a contact change owes before its code is sent or, under
+ * OTP_AUTO_VERIFY, before it commits.
+ *
+ * A TAKEN value is not refused here: saying so before ownership is proven
+ * would be an enumeration oracle. The unique index decides at commit (409);
+ * only same-as-current, which reveals nothing, is refused.
+ */
+export async function authorizeContactChange(opts: {
+  kind: ContactKind;
+  userId: EntityID;
+  sessionId: EntityID;
+  currentPassword: string | undefined;
+  newValue: string;
+  auditMeta: AuditMeta;
+}): Promise<void> {
+  const isEmail = opts.kind === 'email';
+  await reauthenticateContactChange({
+    userId: opts.userId,
+    sessionId: opts.sessionId,
+    currentPassword: opts.currentPassword,
+    auditMeta: opts.auditMeta,
+    purpose: isEmail ? 'reauth_change_email' : 'reauth_change_phone',
+  });
+
+  const [currentUser] = await db
+    .select({
+      contact: isEmail ? users.email : users.phoneNumber,
+      roleId: users.roleId,
+      isActive: users.isActive,
+    })
+    .from(users)
+    .where(liveUser(eq(users.id, opts.userId)))
+    .limit(1);
+
+  if (!currentUser || !currentUser.isActive) throw notFoundError();
+  if (!currentUser.roleId) throw insufficientPermissions();
+  if (currentUser.contact === opts.newValue)
+    throw new CustomError(
+      isEmail ? userMsg.newEmailSameAsCurrent : userMsg.newPhoneSameAsCurrent,
+      HTTP_STATUS.BAD_REQUEST
+    );
+}
+
+/**
+ * AWAITED, unlike the anonymous surfaces, which defer delivery to keep a
+ * constant-time generic 200. This caller is authenticated and waiting for the
+ * code, so `otpSent: true` must mean the provider accepted it; the provider
+ * calls are bounded, so the wait is too.
+ */
+export async function sendContactChangeCode(
+  userId: EntityID,
+  channel: OtpChannel,
+  destination: string
+): Promise<void> {
+  const kind = contactKindOf(channel);
+  // Keyed on the contact kind: `sms` and `whatsapp` share one per-destination
+  // budget, so switching transport does not double the paid messages one
+  // number can be sent.
+  await enforceOtpSurfaceSendQuota({
+    channel,
+    destination,
+    surface: 'contact_change',
+  });
+  await processOtpSend({
+    userId,
+    identifier: destination,
+    channel,
+    purpose: kind === 'email' ? 'change_email' : 'change_phone',
+    targetIdentifier: destination,
+    sendTo: destination,
+    entityName: CONTACT_LABEL[kind],
+  });
+}
+
 interface CommitContactChangeOpts {
   tx: Tx;
   userId: EntityID;
@@ -112,6 +224,17 @@ interface CommitEmailChangeOpts extends Omit<
   newEmail: string;
 }
 
+/**
+ * Atomically commits a verified contact change, inside `processOtpVerify`'s
+ * transaction or, under OTP_AUTO_VERIFY, a fresh one.
+ *
+ * Where the verified flag may be set true: alongside a NEW address only in the
+ * one `UPDATE` below that writes the address, since splitting them would leave
+ * a new address with the old flag; on an UNCHANGED address only through
+ * `markContactVerified`. Clearing it is unrestricted.
+ *
+ * A unique violation (address taken) propagates; the caller maps it to 409.
+ */
 export async function commitEmailChange({
   tx,
   userId,
@@ -128,16 +251,10 @@ export async function commitEmailChange({
       roleId: users.roleId,
     })
     .from(users)
-    .where(
-      and(
-        eq(users.id, userId),
-        isNull(users.deletedAt),
-        eq(users.isActive, true)
-      )
-    )
+    .where(activeUser(eq(users.id, userId)))
     .for('update');
 
-  if (!current) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (!current) throw notFoundError();
   if (!current.roleId) throw insufficientPermissions();
 
   // Already committed (a duplicate verify after an auto-verify), so only the
@@ -148,7 +265,7 @@ export async function commitEmailChange({
       channel: 'email',
       auditMeta,
       onMissing: () => {
-        throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+        throw notFoundError();
       },
     });
     return;
@@ -197,16 +314,10 @@ export async function commitPhoneChange({
       roleId: users.roleId,
     })
     .from(users)
-    .where(
-      and(
-        eq(users.id, userId),
-        isNull(users.deletedAt),
-        eq(users.isActive, true)
-      )
-    )
+    .where(activeUser(eq(users.id, userId)))
     .for('update');
 
-  if (!current) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (!current) throw notFoundError();
   if (!current.roleId) throw insufficientPermissions();
 
   // Same idempotent branch as the email flow — see `commitEmailChange`.
@@ -218,7 +329,7 @@ export async function commitPhoneChange({
       channel: 'sms',
       auditMeta,
       onMissing: () => {
-        throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+        throw notFoundError();
       },
     });
     return;

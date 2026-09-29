@@ -1,38 +1,38 @@
 import type { Executor } from '@/db';
 import type { HandlerInput } from '@/lib/http/contract';
-import type { PermissionObject } from '@app/shared/permissions/constants';
+import type { ActorPermissions } from '@/lib/permissions/checker';
 import type { EntityID } from '@app/shared/types';
 
-import { and, desc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { roles, sessions, users } from '@/db/schema';
 
 import {
-  HTTP_STATUS,
   MSG_DELETE_ERROR,
   MSG_DELETED,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
-  MSG_NOT_FOUND,
 } from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
 import { deleteSessionsSchema } from '@app/shared/validation/sessions';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import {
-  revokeSessionArtifacts,
+  revokeSessionsWhere,
   revokeTrustedDevices,
 } from '@/lib/auth/session/rotation';
 import { readJsonBody, requireId } from '@/lib/http/input';
-import { apiSuccess, withApiErrors } from '@/lib/http/response';
+import { apiSuccess, notFoundError, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { insufficientPermissions } from '@/lib/permissions/checker';
-import { validateRolePermissionScope } from '@/lib/permissions/utils';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
-import { assertTargetUserVisible } from '@/lib/users/target-user';
-
-import { formatCursor, parseCursor, parseLimit } from './pagination';
+import { liveUser } from '@/lib/users/filters';
+import {
+  parseCursor,
+  parseLimit,
+  readSessionsPage,
+} from '@/lib/users/session-page';
+import { assertTargetUserReachable } from '@/lib/users/target-user';
 
 /**
  * The sessions sub-resource admits the owner, or an actor with `users.edit`
@@ -84,14 +84,17 @@ async function authorizeSessionAccess(
   };
 }
 
-/** Ownership + role-authority check on the target, under a shared lock. */
+/**
+ * `assertTargetUserReachable` over a fresh read of the target; `lock` holds
+ * the row `FOR SHARE` for the caller's transaction.
+ */
 async function assertTargetReachable(
   executor: Executor,
   opts: {
     targetId: EntityID;
     currentUserId: EntityID;
     editScope: 'all' | 'own' | null;
-    actorPermissions: Partial<PermissionObject> | undefined;
+    actorPermissions: ActorPermissions | undefined;
     lock: boolean;
   }
 ): Promise<void> {
@@ -108,40 +111,25 @@ async function assertTargetReachable(
     })
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
-    .where(and(eq(users.id, opts.targetId), isNull(users.deletedAt)));
+    .where(liveUser(eq(users.id, opts.targetId)));
 
   const [targetUser] = await (opts.lock
     ? query.for('share', { of: users })
     : query);
 
-  if (!targetUser?.roleId)
-    throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (!targetUser) throw notFoundError();
 
-  assertTargetUserVisible({
+  await assertTargetUserReachable(executor, {
     isSelf: false,
     roleId: targetUser.roleId,
     createdBy: targetUser.createdBy,
     role: { roleName: targetUser.roleName, scope: targetUser.roleScope },
     actorUserId: opts.currentUserId,
     scope: opts.editScope,
+    actorPermissions: opts.actorPermissions,
   });
-
-  if (opts.actorPermissions)
-    await validateRolePermissionScope(
-      opts.actorPermissions,
-      targetUser.roleId,
-      executor,
-      'reachability'
-    );
 }
 
-/**
- * Cursor-paginated active sessions, newest first.
- *
- * Keyset on `(createdAt, id)` rather than OFFSET: session rows are deleted
- * concurrently by every revocation path, and OFFSET would skip or repeat rows
- * as the set shifts underneath the pages.
- */
 export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   const {
     currentSessionId,
@@ -167,41 +155,16 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   const limit = parseLimit(ctx.query.get('limit'));
   const cursor = parseCursor(ctx.query.get('cursor'));
 
-  const rows = await db
-    .select({
-      id: sessions.id,
-      ipAddress: sessions.ipAddress,
-      userAgent: sessions.userAgent,
-      createdAt: sessions.createdAt,
-    })
-    .from(sessions)
-    .where(
-      and(
-        eq(sessions.userId, targetId),
-        gt(sessions.expiresAt, sql`now()`),
-        cursor
-          ? sql`(${sessions.createdAt}, ${sessions.id}) < (${cursor.createdAt}, ${cursor.id}::uuid)`
-          : undefined
-      )
-    )
-    .orderBy(desc(sessions.createdAt), desc(sessions.id))
-    // One extra row is the cheapest reliable "is there another page" probe.
-    .limit(limit + 1);
-
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
-  const last = page.at(-1);
+  const page = await readSessionsPage({
+    userId: targetId,
+    currentSessionId,
+    limit,
+    cursor,
+  });
 
   return apiSuccess({
     message: MSG_FETCHED,
-    data: {
-      sessions: page.map((s) => ({
-        ...s,
-        isCurrent: s.id === currentSessionId,
-      })),
-      nextCursor:
-        hasMore && last ? formatCursor(last.createdAt, last.id) : null,
-    },
+    data: { sessions: page.sessions, nextCursor: page.nextCursor },
   });
 });
 
@@ -241,24 +204,15 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
     // must still 404 for a target that does not exist.
     if (!revokeAll && idsToDelete.length === 0) return [];
 
-    const deleted = await tx
-      .delete(sessions)
-      .where(
-        and(
-          eq(sessions.userId, targetId),
-          // The acting session is always preserved: "revoke all except
-          // current" must not log the operator out mid-remediation.
-          currentSessionId ? ne(sessions.id, currentSessionId) : undefined,
-          revokeAll ? undefined : inArray(sessions.id, idsToDelete)
-        )
-      )
-      .returning({ id: sessions.id });
-
-    // The revoked sessions' re-authentication windows and two-factor proofs
-    // go with them; nothing can reach those rows once the session is gone.
-    await revokeSessionArtifacts(
+    const deleted = await revokeSessionsWhere(
       tx,
-      deleted.map((s) => s.id)
+      and(
+        eq(sessions.userId, targetId),
+        // The acting session is always preserved: "revoke all except
+        // current" must not log the operator out mid-remediation.
+        currentSessionId ? ne(sessions.id, currentSessionId) : undefined,
+        revokeAll ? undefined : inArray(sessions.id, idsToDelete)
+      )
     );
 
     // "Sign out everywhere" has to mean it: a trusted device skips the second
@@ -275,7 +229,7 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
         tableName: 'sessions',
         recordId: targetId,
         oldData: {
-          sessionIds: deleted.map((s) => s.id),
+          sessionIds: deleted,
           count: deleted.length,
           ...(revokeAll && { revokedAll: true }),
         },
@@ -284,7 +238,7 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
       });
     }
 
-    return deleted.map((row) => row.id);
+    return deleted;
   });
 
   // The set actually revoked, so a request naming only the `isCurrent: true`

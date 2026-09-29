@@ -85,7 +85,7 @@ import { generateUuidV7 } from '@/lib/id';
 import {
   refreshRoleSessions,
   refreshUserSessions,
-} from '@/lib/permissions/utils';
+} from '@/lib/permissions/session-refresh';
 
 import { sanitizeForLog } from '@/utils/log';
 

@@ -14,10 +14,10 @@
  * from the environment: the point is to ask before the environment changes.
  *
  * ⚠️ Everything imported here has to be free of load-time environment reads, or
- * that is not true. `@app/shared/validation/enums` exists for it: importing the two
- * runtime modules instead made the preflight print `twoFactor.disabled` before
- * examining anything, and made a malformed CURRENT value throw — which is
- * exactly the state an operator runs this to get out of.
+ * that is not true. `@app/shared/validation/enums` and `two-factor-lists` exist
+ * for it: `validation/two-factor.ts` parses the CURRENT value at load and
+ * throws on a malformed one — exactly the state an operator runs this to get
+ * out of.
  *
  *   bun scripts/check-two-factor-rollout.ts totp,backup_code
  *   bun scripts/check-two-factor-rollout.ts totp,otp sms
@@ -27,12 +27,11 @@
  * because it has to run against a database this process does not otherwise open.
  */
 import { PHONE_ENABLED } from '@app/shared/config';
+import { isPhoneChannel } from '@app/shared/validation/enums';
 import {
-  isPhoneChannel,
-  OTP_CHANNELS,
-  TWO_FACTOR_METHODS,
-} from '@app/shared/validation/enums';
-import { parseEnumList } from '@app/shared/validation/env-list';
+  parseTwoFactorMethods,
+  parseTwoFactorOtpChannels,
+} from '@app/shared/validation/two-factor-lists';
 
 import { connectPreflightDatabase } from './preflight-database';
 
@@ -45,17 +44,12 @@ if (!methodsArg)
 const sql = connectPreflightDatabase();
 
 /**
- * ⚠️ The RUNTIME's parser and the runtime's lists, never a copy of either. A
- * copy is free to fall behind `TWO_FACTOR_METHODS` and `OTP_CHANNELS`, and to be
- * lenient where the server is not — empty entries and duplicates are a refusal
- * to boot — so this gate would certify a configuration the deployment rejects.
+ * ⚠️ The RUNTIME's parse, never a copy. A copy is free to fall behind the
+ * runtime's lists and to be lenient where the server is not — empty entries
+ * and duplicates are a refusal to boot — so this gate would certify a
+ * configuration the deployment rejects.
  */
-const methods = parseEnumList(methodsArg, {
-  name: 'NEXT_PUBLIC_ENABLED_2FA_METHODS',
-  allowed: TWO_FACTOR_METHODS,
-  noun: 'method',
-  unsetMeans: 'disable two-factor authentication entirely',
-});
+const methods = parseTwoFactorMethods(methodsArg);
 
 /**
  * The EFFECTIVE channel list, after the same `PHONE_ENABLED` filter the runtime
@@ -64,12 +58,7 @@ const methods = parseEnumList(methodsArg, {
  * at sign-in. The dropped entries are reported below rather than swallowed:
  * an operator who typed `sms` has to be told it will not take effect.
  */
-const requestedChannels = parseEnumList(channelsArg, {
-  name: 'NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS',
-  allowed: OTP_CHANNELS,
-  noun: 'channel',
-  unsetMeans: 'disable the OTP second factor',
-});
+const requestedChannels = parseTwoFactorOtpChannels(channelsArg);
 const channels = requestedChannels.filter(
   (channel) => PHONE_ENABLED || !isPhoneChannel(channel)
 );
@@ -123,11 +112,12 @@ try {
     FROM users u
     WHERE u.two_factor_enabled IS TRUE
       AND u.deleted_at IS NULL
-      -- The same eligibility predicate the sign-in path uses
-      -- (lockEligibleAuthUser). A suspended account cannot reach the second
-      -- factor at all, so it cannot be stranded by this change — counting it
-      -- failed the gate over accounts nobody can sign in to, and the
-      -- administrative resets it demanded would have been busywork.
+      -- The user half of the eligibility predicate the sign-in path uses
+      -- (lockEligibleAuthUser); its role check is not repeated, so an account
+      -- whose role refuses login still counts. A suspended account cannot
+      -- reach the second factor at all, so it cannot be stranded by this
+      -- change — counting it failed the gate over accounts nobody can sign in
+      -- to, and the administrative resets it demanded would have been busywork.
       AND u.is_active IS TRUE
       AND u.id NOT IN (SELECT user_id FROM usable)
     ORDER BY u.email

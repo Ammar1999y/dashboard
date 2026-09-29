@@ -1,7 +1,7 @@
-import { and, desc, eq, gt, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { db } from '@/db';
-import { sessions } from '@/db/schema';
+import { users } from '@/db/schema';
 
 import {
   HTTP_STATUS,
@@ -9,12 +9,10 @@ import {
   MSG_DELETED,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
-  MSG_NOT_FOUND,
   MSG_UPDATE_ERROR,
   MSG_UPDATED,
 } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
-import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
 import {
   adminUpdateUserBodySchema,
   selfUpdateUserBodySchema,
@@ -24,19 +22,24 @@ import { SESSIONS_PAGE_SIZE } from '@app/shared/validation/sessions';
 import { getAuditMeta } from '@/lib/audit';
 import { handleUserConstraintViolation } from '@/lib/http/constraint-errors';
 import { parseOrThrow, requireId, requireJsonBody } from '@/lib/http/input';
-import { apiSuccess, withApiErrors } from '@/lib/http/response';
+import { apiSuccess, notFoundError, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { insufficientPermissions } from '@/lib/permissions/checker';
+import {
+  holdsActionOn,
+  insufficientPermissions,
+} from '@/lib/permissions/checker';
+import { toPagePermissions } from '@/lib/permissions/matrix';
+import { publicRoleFields } from '@/lib/permissions/roles';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 import { softDeleteUser } from '@/lib/users/delete';
 import { editUserAsAdmin, renameSelf } from '@/lib/users/edit';
+import { liveUser } from '@/lib/users/filters';
 import { userMsg } from '@/lib/users/messages';
+import { readSessionsPage } from '@/lib/users/session-page';
 import {
   actorCoversTargetRole,
   assertTargetUserVisible,
 } from '@/lib/users/target-user';
-
-import { formatCursor } from './sessions/pagination';
 
 export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   const {
@@ -68,12 +71,8 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   // here would make the cache pointless.
   if (isSelf && !actorRoleId) throw insufficientPermissions();
 
-  const editAll = actorViewPermissions?.users?.edit === true;
-  const editOwn = actorViewPermissions?.users?.editOwn === true;
-
   const userData = await db.query.users.findFirst({
-    where: (users, { eq, and, isNull }) =>
-      and(eq(users.id, targetId), isNull(users.deletedAt)),
+    where: liveUser(eq(users.id, targetId)),
     columns: {
       id: true,
       name: true,
@@ -106,7 +105,7 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
     },
   });
 
-  if (!userData) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (!userData) throw notFoundError();
 
   // The predicate the sessions subresource shares, so parent and child cannot
   // drift.
@@ -122,52 +121,33 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   // Session metadata (IP, user-agent) is gated by the role authority the
   // sessions endpoints require, or page one here would bypass their check.
   const showSessions =
-    (isSelf || editAll || (editOwn && userData.createdBy === userId)) &&
+    (isSelf ||
+      holdsActionOn(
+        actorViewPermissions,
+        'users',
+        'edit',
+        userData.createdBy,
+        userId
+      )) &&
     (isSelf ||
       (await actorCoversTargetRole(actorViewPermissions, targetRoleId, db)));
 
-  const permissions =
-    userData.role?.rolePermissions?.map((p) => ({
-      name: p.pageName,
-      permissions: p.permissions,
-    })) || [];
+  const permissions = userData.role?.rolePermissions
+    ? toPagePermissions(userData.role.rolePermissions)
+    : [];
 
   // Read only after every visibility gate has passed, which needs the user row
   // first — sequential by necessity. First page only; `sessionsHasMore` and the
-  // cursor send the client to GET /dash/users/:id/sessions for the rest.
-  const sessionRows = showSessions
-    ? await db
-        .select({
-          id: sessions.id,
-          ipAddress: sessions.ipAddress,
-          userAgent: sessions.userAgent,
-          createdAt: sessions.createdAt,
-        })
-        .from(sessions)
-        .where(
-          and(eq(sessions.userId, targetId), gt(sessions.expiresAt, sql`now()`))
-        )
-        .orderBy(desc(sessions.createdAt), desc(sessions.id))
-        .limit(SESSIONS_PAGE_SIZE + 1)
+  // cursor send the client to GET /dash/users/:id/sessions for the rest, and
+  // without the cursor that route re-serves page one.
+  const sessionPage = showSessions
+    ? await readSessionsPage({
+        userId: targetId,
+        currentSessionId: sessionId,
+        limit: SESSIONS_PAGE_SIZE,
+        cursor: null,
+      })
     : null;
-
-  const sessionsHasMore =
-    !!sessionRows && sessionRows.length > SESSIONS_PAGE_SIZE;
-
-  const userSessions = sessionRows
-    ? sessionRows.slice(0, SESSIONS_PAGE_SIZE).map((s) => ({
-        ...s,
-        isCurrent: s.id === sessionId,
-      }))
-    : undefined;
-
-  // Page two's cursor in the child route's exact format; without it the child
-  // endpoint re-serves page one.
-  const lastSession = userSessions?.at(-1);
-  const sessionsNextCursor =
-    sessionsHasMore && lastSession
-      ? formatCursor(lastSession.createdAt, lastSession.id)
-      : null;
 
   return apiSuccess({
     message: MSG_FETCHED,
@@ -179,23 +159,14 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
       phoneNumber: userData.phoneNumber,
       phoneNumberVerified: userData.phoneNumberVerified,
       isActive: userData.isActive,
-      roleId:
-        userData.role?.scope === CUSTOM_ROLE_VALUE
-          ? CUSTOM_ROLE_VALUE
-          : userData.roleId,
-      role: userData.role
-        ? {
-            id: userData.role.id,
-            roleName: userData.role.roleName,
-          }
-        : null,
+      ...publicRoleFields(userData.roleId, userData.role),
       createdAt: userData.createdAt,
       updatedAt: userData.updatedAt,
       permissions,
-      ...(userSessions && {
-        sessions: userSessions,
-        sessionsHasMore,
-        sessionsNextCursor,
+      ...(sessionPage && {
+        sessions: sessionPage.sessions,
+        sessionsHasMore: sessionPage.hasMore,
+        sessionsNextCursor: sessionPage.nextCursor,
       }),
     },
   });

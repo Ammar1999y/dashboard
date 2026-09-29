@@ -2,14 +2,17 @@ import type { Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
 import type { EntityID } from '@app/shared/types';
 
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
 
 import { auditLog } from '@/lib/audit';
+import { liveUser } from '@/lib/users/filters';
 
-import { CREDENTIAL_PROVIDER_ID } from './credential';
+import { logLine } from '@/utils/log';
+
+import { credentialAccountOf } from './credential-account';
 import {
   hashPassword,
   runPasswordTimingGuard,
@@ -32,7 +35,7 @@ const PASSWORD_UPGRADE_AUDIT_META = {
  *
  * The event records a PROOF, never a session: gates that can still refuse the
  * request run after it. `loginSuccess` is written once, after issuance, by the
- * `session.create.after` hook in `lib/auth/index.ts`.
+ * `session.create.after` hook in `lib/auth/session/hooks.ts`.
  */
 type PasswordProofPurpose =
   | 'sign_in'
@@ -147,7 +150,7 @@ export async function verifyLoginAttempt(
     if (!identityFilter)
       throw new Error('verifyLoginAttempt requires either email or userId');
 
-    const whereClause = and(identityFilter, isNull(users.deletedAt));
+    const whereClause = liveUser(identityFilter);
 
     const [user] = await tx
       .select({
@@ -170,6 +173,22 @@ export async function verifyLoginAttempt(
       };
     }
 
+    const auditUserRow = (
+      meta: AuditMeta,
+      oldData: Record<string, unknown>,
+      newData: Record<string, unknown>
+    ) =>
+      auditLog(tx, {
+        userId: user.id,
+        userEmail: user.email,
+        action: 'UPDATE',
+        tableName: 'users',
+        recordId: user.id,
+        oldData,
+        newData,
+        meta,
+      });
+
     if (user.lockedUntil) {
       const lockTime = user.lockedUntil.getTime();
       if (lockTime > Date.now()) {
@@ -186,23 +205,18 @@ export async function verifyLoginAttempt(
         });
 
       if (auditMeta) {
-        await auditLog(tx, {
-          userId: user.id,
-          userEmail: user.email,
-          action: 'UPDATE',
-          tableName: 'users',
-          recordId: user.id,
-          oldData: {
+        await auditUserRow(
+          auditMeta,
+          {
             lockedUntil: user.lockedUntil,
             failedLoginAttempts: user.failedLoginAttempts,
           },
-          newData: {
+          {
             lockedUntil: null,
             failedLoginAttempts: 0,
             lockoutCleared: true,
-          },
-          meta: auditMeta,
-        });
+          }
+        );
       }
 
       // `willLock` and both audit payloads below derive from the post-reset row.
@@ -213,12 +227,7 @@ export async function verifyLoginAttempt(
     const [account] = await tx
       .select({ id: accounts.id, password: accounts.password })
       .from(accounts)
-      .where(
-        and(
-          eq(accounts.userId, user.id),
-          eq(accounts.providerId, CREDENTIAL_PROVIDER_ID)
-        )
-      );
+      .where(credentialAccountOf(user.id));
 
     const storedHash = account?.password ?? '';
     const verification = await verifyPasswordDetailed({
@@ -246,23 +255,18 @@ export async function verifyLoginAttempt(
         const lockedUntil = new Date(
           Date.now() + LOCK_DURATION_SECONDS * 1000
         ).toISOString();
-        await auditLog(tx, {
-          userId: user.id,
-          userEmail: user.email,
-          action: 'UPDATE',
-          tableName: 'users',
-          recordId: user.id,
-          oldData: {
+        await auditUserRow(
+          auditMeta,
+          {
             failedLoginAttempts: user.failedLoginAttempts,
             lockedUntil: null,
           },
-          newData: {
+          {
             failedLoginAttempts: user.failedLoginAttempts + 1,
             lockedUntil,
             accountLocked: true,
-          },
-          meta: auditMeta,
-        });
+          }
+        );
       }
 
       return {
@@ -291,25 +295,20 @@ export async function verifyLoginAttempt(
     }
 
     if (auditMeta) {
-      await auditLog(tx, {
-        userId: user.id,
-        userEmail: user.email,
-        action: 'UPDATE',
-        tableName: 'users',
-        recordId: user.id,
-        oldData: {
+      await auditUserRow(
+        auditMeta,
+        {
           failedLoginAttempts: user.failedLoginAttempts,
           lockedUntil: user.lockedUntil,
         },
-        newData: {
+        {
           failedLoginAttempts: eligible ? 0 : user.failedLoginAttempts,
           lockedUntil: eligible ? null : user.lockedUntil,
           // NOT `loginSuccess`: see `PasswordProofPurpose`.
           passwordVerified: true,
           purpose,
-        },
-        meta: auditMeta,
-      });
+        }
+      );
     }
 
     const passwordUpgrade = verification.needsRehash
@@ -355,23 +354,19 @@ export async function verifyLoginAttempt(
         // the proof from a re-read hash instead — the concurrent writer may
         // have been a password CHANGE, and the old password would then mint a
         // session.
-        console.error(
-          JSON.stringify({
-            msg: 'auth.passwordHashUpgrade raceLost',
-            effect:
-              'this login answers 401 on a correct password; a retry succeeds',
-            previousPepperId: result.passwordUpgrade.previousPepperId,
-            activePepperId: result.passwordUpgrade.activePepperId,
-          })
-        );
+        logLine('error', {
+          msg: 'auth.passwordHashUpgrade raceLost',
+          effect:
+            'this login answers 401 on a correct password; a retry succeeds',
+          previousPepperId: result.passwordUpgrade.previousPepperId,
+          activePepperId: result.passwordUpgrade.activePepperId,
+        });
       } catch (error) {
-        console.error(
-          JSON.stringify({
-            msg: 'auth.passwordHashUpgrade failed',
-            // Retried after the next successful verification; nothing is lost.
-            errorClass: error instanceof Error ? error.name : 'UnknownError',
-          })
-        );
+        logLine('error', {
+          msg: 'auth.passwordHashUpgrade failed',
+          // Retried after the next successful verification; nothing is lost.
+          errorClass: error instanceof Error ? error.name : 'UnknownError',
+        });
       }
     }
     return [verifiedHash];

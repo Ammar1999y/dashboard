@@ -1,5 +1,5 @@
 import type { EntityID } from '@/types';
-import type { PaginationMeta } from '@/types/data-table';
+import type { PaginationMeta } from '@app/shared/types/api';
 import type { QueryClient } from '@tanstack/react-query';
 
 /**
@@ -21,7 +21,8 @@ interface Row {
   id: EntityID;
 }
 
-interface ServerPage<T> {
+/** One page of a server-paged table, as `useServerDataTable` caches it. */
+export interface ServerPage<T> {
   data: T[];
   meta: PaginationMeta;
 }

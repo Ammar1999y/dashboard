@@ -25,11 +25,14 @@ import {
   ENABLED_TWO_FACTOR_METHODS,
   isTwoFactorMethodEnabled,
   TWO_FACTOR_ENABLED,
-  TWO_FACTOR_METHODS_VAR,
   TWO_FACTOR_OTP_CHANNELS,
-  TWO_FACTOR_OTP_CHANNELS_VAR,
 } from '@app/shared/validation/two-factor';
+import {
+  TWO_FACTOR_METHODS_VAR,
+  TWO_FACTOR_OTP_CHANNELS_VAR,
+} from '@app/shared/validation/two-factor-lists';
 
+import { logLine } from '@/utils/log';
 import { missingServerEnvMessage } from '@/utils/missing-env';
 
 /** Read at send time in `./delivery.ts`; required here at startup. */
@@ -48,12 +51,10 @@ const CHANNEL_CREDENTIALS: Readonly<Record<OtpChannel, readonly string[]>> = {
  * would let anyone inflate the error stream whenever OTP is intentionally off.
  */
 if (!OTP_ENABLED)
-  console.error(
-    JSON.stringify({
-      msg: 'otp.disabled no channel configured',
-      effect: 'every OTP send and verify surface answers 404',
-    })
-  );
+  logLine('error', {
+    msg: 'otp.disabled no channel configured',
+    effect: 'every OTP send and verify surface answers 404',
+  });
 
 /**
  * Logged once, and it says the part an operator does not expect: an empty list
@@ -62,14 +63,12 @@ if (!OTP_ENABLED)
  * a method is configured again.
  */
 if (!TWO_FACTOR_ENABLED)
-  console.error(
-    JSON.stringify({
-      msg: 'twoFactor.disabled no method configured',
-      effect:
-        'every two-factor and passkey surface answers 404, AND every enrolled ' +
-        'account signs in with its first factor alone',
-    })
-  );
+  logLine('error', {
+    msg: 'twoFactor.disabled no method configured',
+    effect:
+      'every two-factor and passkey surface answers 404, AND every enrolled ' +
+      'account signs in with its first factor alone',
+  });
 
 /**
  * A WARNING, not a refusal. Disjointness is enforced by the authentication
@@ -87,18 +86,16 @@ if (
   TWO_FACTOR_OTP_CHANNELS.length > 0 &&
   overlappingKinds.length === TWO_FACTOR_OTP_CHANNELS.length
 )
-  console.error(
-    JSON.stringify({
-      msg: 'twoFactor.otpOverlapsRecovery',
-      methods: [...ENABLED_TWO_FACTOR_METHODS],
-      otpChannels: [...TWO_FACTOR_OTP_CHANNELS],
-      effect:
-        'every second factor reaches a contact account recovery also reaches, ' +
-        'so password recovery will refuse for these users and the administrative ' +
-        'reset is their only route back',
-      remedy: `add "totp", "backup_code" or "passkey" to ${TWO_FACTOR_METHODS_VAR}, or point ${TWO_FACTOR_OTP_CHANNELS_VAR} at a contact kind recovery does not use`,
-    })
-  );
+  logLine('error', {
+    msg: 'twoFactor.otpOverlapsRecovery',
+    methods: [...ENABLED_TWO_FACTOR_METHODS],
+    otpChannels: [...TWO_FACTOR_OTP_CHANNELS],
+    effect:
+      'every second factor reaches a contact account recovery also reaches, ' +
+      'so password recovery will refuse for these users and the administrative ' +
+      'reset is their only route back',
+    remedy: `add "totp", "backup_code" or "passkey" to ${TWO_FACTOR_METHODS_VAR}, or point ${TWO_FACTOR_OTP_CHANNELS_VAR} at a contact kind recovery does not use`,
+  });
 
 function missingCredentials(
   channels: readonly OtpChannel[],

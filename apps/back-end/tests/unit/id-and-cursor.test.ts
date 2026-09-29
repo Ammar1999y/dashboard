@@ -9,7 +9,7 @@
  * - `reports/should-ignore.md` #50 and #51 both accept a real risk on the
  *   grounds that "`validID` always matches session ID format". That premise is
  *   asserted here instead of assumed.
- * - `pagination.ts` line 46 says "the round trip is asserted in the tests". It
+ * - `session-page.ts` line 46 says "the round trip is asserted in the tests". It
  *   was not asserted anywhere. This file is what makes that sentence true.
  *
  * Inputs may vary in case, but every accepted id leaves this boundary in one
@@ -17,18 +17,17 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import {
-  formatCursor,
-  parseCursor,
-  parseLimit,
-} from '@/app/api/dash/users/[id]/sessions/pagination';
-
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 import { validID } from '@app/shared/utils';
 import { SESSIONS_PAGE_SIZE } from '@app/shared/validation/sessions';
 
 import { generateUuidV7 } from '@/lib/id';
+import {
+  formatCursor,
+  parseCursor,
+  parseLimit,
+} from '@/lib/users/session-page';
 
 /**
  * Fixtures come from the generator the application actually uses and from the
@@ -196,7 +195,7 @@ describe('parseLimit', () => {
    * The cap is read out of the production rejection message rather than
    * restated. `SESSIONS_MAX_PAGE_SIZE` is not exported, and hand-copying `100`
    * would let the message and the enforced bound drift apart — the one thing
-   * `pagination.ts` says must not happen ("the message promises a value between
+   * `session-page.ts` says must not happen ("the message promises a value between
    * 1 and the cap, and silently serving 100 rows for `limit=1000` makes that
    * message a lie the client cannot detect").
    */
@@ -378,7 +377,7 @@ describe('a cursor this module did not emit is refused', () => {
 
 describe('pinned: the round-trip guarantee runs one way only', () => {
   test('formatCursor does not validate the id, so it can emit a 422', () => {
-    // `pagination.ts` line 46 claims "a cursor this function did not produce
+    // `session-page.ts` line 46 claims "a cursor this function did not produce
     // cannot be parsed" — true, and asserted above. The converse is not: nothing
     // checks the id, so a caller handing it a non-v7 value gets a cursor its own
     // parser refuses. Unreachable today (the id comes from a `uuid` column),

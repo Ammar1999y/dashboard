@@ -1,4 +1,6 @@
-export function getCacheControlHeader(params: {
+import type { BucketType, FileKind } from '@app/shared/validation/enums';
+
+function getCacheControlHeader(params: {
   mimeType: string;
   isPublic: boolean;
 }): string {
@@ -69,4 +71,23 @@ export function getContentDisposition(params: {
     `${disposition}; filename="${asciiFallback(filename)}"; ` +
     `filename*=UTF-8''${encodeExtValue(filename)}`
   );
+}
+
+export function objectHeaders(
+  object: { mimeType: string; kind: FileKind; filename: string },
+  bucketType: BucketType
+) {
+  return {
+    contentType: object.mimeType,
+    cacheControl: getCacheControlHeader({
+      mimeType: object.mimeType,
+      isPublic: bucketType === 'public',
+    }),
+    // Documents are never rendered inline: a PDF on the public origin would
+    // otherwise run its scripting on that origin.
+    contentDisposition: getContentDisposition({
+      filename: object.filename,
+      inline: object.kind === 'image',
+    }),
+  };
 }

@@ -1,16 +1,8 @@
-import { ProjectsPage } from '@/components/projects/page';
+import type { Page } from '@/types/page';
 
-export default function Projects() {
-  return <ProjectsPage />;
-}
+import ProjectsList from '@/components/dash/projects/list';
 
-export async function getStaticProps() {
-  return {
-    props: {
-      pathname: '/dash/projects',
-      title: {
-        template: 'المشاريع',
-      },
-    },
-  };
-}
+const ProjectsListPage: Page = () => <ProjectsList />;
+ProjectsListPage.title = 'المشاريع';
+
+export default ProjectsListPage;

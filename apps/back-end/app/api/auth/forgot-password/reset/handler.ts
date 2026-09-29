@@ -1,7 +1,6 @@
 import type { OfferedOption } from '@/lib/auth/two-factor/methods';
-import type { Handler } from '@/lib/http/contract';
 
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { accounts, users } from '@/db/schema';
@@ -12,8 +11,8 @@ import { contactKindOf } from '@app/shared/validation/enums';
 import { OTP_ENABLED, resetPasswordSchema } from '@app/shared/validation/otp';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
-import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth/credential';
-import { ensureMinDelay, otpMsg } from '@/lib/auth/messages';
+import { credentialAccountOf } from '@/lib/auth/credential-account';
+import { otpMsg } from '@/lib/auth/messages';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword } from '@/lib/auth/password/hash';
 import { issueRecoveryGrant } from '@/lib/auth/recovery/grant';
@@ -27,15 +26,19 @@ import {
   recoveryDefeatsTwoFactor,
   recoveryOptions,
 } from '@/lib/auth/two-factor/methods';
-import { verifyTurnstileRequest } from '@/lib/captcha';
+import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import { readJsonBody } from '@/lib/http/input';
 import {
   apiSuccess,
   handleApiError,
   requireFeature,
 } from '@/lib/http/response';
+import { withTimingFloor } from '@/lib/http/timing-floor';
 import { OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
-import { collapseProofThrottle } from '@/lib/otp/throttle';
+import {
+  collapseAnonymousVerifyError,
+  invalidOrExpiredCode,
+} from '@/lib/otp/throttle';
 import { processOtpVerify } from '@/lib/otp/verify';
 import {
   enforceOtpVerifyQuota,
@@ -63,9 +66,9 @@ const RESET_HASH_BUDGET_PER_MINUTE = OTP_MAX_VERIFY_ATTEMPTS * 3;
  * proofs. It mints a short-lived recovery grant instead, and
  * `/forgot-password/complete` writes the password against a proven factor.
  */
-export const POST: Handler = async (ctx) => {
-  const start = Date.now();
-  try {
+export const POST = withTimingFloor(
+  otpMsg.passwordResetError,
+  async (ctx, floor) => {
     requireFeature(OTP_ENABLED);
 
     // Per IP BEFORE the captcha, bounding the siteverify call; pre-lookup, so
@@ -77,11 +80,8 @@ export const POST: Handler = async (ctx) => {
       failClosed: true,
     });
 
-    const captchaOk = await verifyTurnstileRequest(ctx.headers);
-    if (!captchaOk)
-      return handleApiError(
-        new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN)
-      );
+    if (!(await verifyTurnstileRequest(ctx.headers)))
+      return handleApiError(captchaRefused());
 
     const input = await readJsonBody(ctx, resetPasswordSchema, {
       message: otpMsg.invalidInput,
@@ -122,14 +122,15 @@ export const POST: Handler = async (ctx) => {
       .where(activeUserWithContact(channel, identifier))
       .limit(1);
 
-    if (!userData)
-      throw new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
+    if (!userData) throw invalidOrExpiredCode();
 
     const auditMeta = getAuditMeta(ctx);
     const contactKind = contactKindOf(channel);
     // Set inside the proof transaction and acted on after it commits: a failure
     // to mint the grant must not roll back the consumption of a presented code.
-    let pendingSecondFactor: OfferedOption[] | null = null;
+    const pending: { secondFactor: OfferedOption[] | null } = {
+      secondFactor: null,
+    };
 
     await processOtpVerify({
       userId: userData.id,
@@ -155,7 +156,7 @@ export const POST: Handler = async (ctx) => {
         if (state.enabled) {
           const options = recoveryOptions(state, contactKind);
           if (options.length > 0) {
-            pendingSecondFactor = options;
+            pending.secondFactor = options;
             await auditLog(tx, {
               userId: userData.id,
               userEmail: userData.email,
@@ -178,19 +179,10 @@ export const POST: Handler = async (ctx) => {
         const [account] = await tx
           .select({ id: accounts.id })
           .from(accounts)
-          .where(
-            and(
-              eq(accounts.userId, userData.id),
-              eq(accounts.providerId, CREDENTIAL_PROVIDER_ID)
-            )
-          )
+          .where(credentialAccountOf(userData.id))
           .for('update');
 
-        if (!account)
-          throw new CustomError(
-            otpMsg.invalidOrExpired,
-            HTTP_STATUS.BAD_REQUEST
-          );
+        if (!account) throw invalidOrExpiredCode();
 
         await tx
           .update(accounts)
@@ -219,14 +211,14 @@ export const POST: Handler = async (ctx) => {
       },
     });
 
-    if (pendingSecondFactor) {
-      const options = pendingSecondFactor as OfferedOption[];
+    if (pending.secondFactor) {
+      const options = pending.secondFactor;
       const grant = await issueRecoveryGrant({
         userId: userData.id,
         excludeContactKind: contactKind,
         options,
       });
-      await ensureMinDelay(Date.now() - start);
+      await floor();
       return apiSuccess({
         message: otpMsg.recoverySecondFactorRequired,
         data: {
@@ -239,35 +231,16 @@ export const POST: Handler = async (ctx) => {
       });
     }
 
-    await ensureMinDelay(Date.now() - start);
+    await floor();
     return apiSuccess({
       message: otpMsg.passwordResetSuccess,
       data: { reset: true },
     });
-  } catch (caught) {
-    await ensureMinDelay(Date.now() - start);
-    // A proof-state throttle exists only for a real account, so it collapses
-    // BEFORE the status filter, which lets a 429 keep its shape. The pre-lookup
-    // limiters carry no marker and still surface.
-    const error = collapseProofThrottle(caught, otpMsg.invalidOrExpired);
-    // Privacy-sensitive statuses collapse; 429/503/500/422 stay distinct.
-    if (
-      error instanceof CustomError &&
-      error.status !== HTTP_STATUS.TOO_MANY_REQUESTS &&
-      error.status !== HTTP_STATUS.SERVICE_UNAVAILABLE &&
-      error.status !== HTTP_STATUS.INTERNAL_ERROR &&
-      error.status !== HTTP_STATUS.UNPROCESSABLE &&
-      // The two-factor refusal must reach the user, who holds a CORRECT code;
-      // safe because only a valid code reaches it.
-      error.status !== HTTP_STATUS.FORBIDDEN
-    ) {
-      const generic = new CustomError(
-        otpMsg.invalidOrExpired,
-        HTTP_STATUS.BAD_REQUEST
-      );
-      generic.responseHeaders = error.responseHeaders;
-      return handleApiError(generic);
-    }
-    return handleApiError(error, otpMsg.passwordResetError);
-  }
-};
+  },
+  // The two-factor refusal must reach the user, who holds a CORRECT code; safe
+  // because only a valid code reaches it.
+  (error) =>
+    collapseAnonymousVerifyError(error, otpMsg.invalidOrExpired, [
+      HTTP_STATUS.FORBIDDEN,
+    ])
+);

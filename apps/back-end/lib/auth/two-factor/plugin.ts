@@ -3,7 +3,7 @@
  *
  * The plugin's hook matches only the credential sign-in paths, and this
  * deployment must issue the same challenge from `/passwordless/verify`, so the
- * issuer lives in `lib/auth/two-factor/challenge.ts` and is the only one. It is
+ * issuer lives in `lib/auth/two-factor/issue.ts` and is the only one. It is
  * installed by `twoFactorSignInGuard`, which — unlike everything else here — is
  * present in every configuration.
  *
@@ -35,32 +35,27 @@ import {
 
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { sanitizeForLog } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta, bodyRecord } from '../context';
 import { authError } from '../errors';
 import { twoFactorMsg } from '../messages';
 import { RP_ID } from '../passkey-assertion';
 import { submittedRememberMe } from '../session/remember-me';
+import { resolveRequestSession } from '../session/request';
 import { transactionBoundContext } from '../transaction';
+import { spendBackupCode } from './backup-codes';
 import {
   challengeMissingError,
-  issueTwoFactorChallenge,
-  markTwoFactorProven,
   PLUGIN_VERIFIER_METHOD,
   recordPluginCompletion,
   requireTwoFactorChallenge,
-  resolveRequestSession,
   TWO_FACTOR_CHALLENGE_MAX_AGE_S,
-  twoFactorUnavailableError,
   withTwoFactorChallengeTransaction,
 } from './challenge';
-import {
-  recordPasskeyEnrolment,
-  spendBackupCode,
-  TOTP_ISSUER,
-  twoFactorEnrolment,
-} from './enrolment';
+import { TOTP_ISSUER, twoFactorEnrolment } from './enrolment';
+import { issueTwoFactorChallenge, twoFactorUnavailableError } from './issue';
+import { recordPasskeyEnrolment } from './lifecycle';
 import { twoFactorOtp } from './otp';
 import { twoFactorPasskey } from './passkey';
 import {
@@ -68,7 +63,7 @@ import {
   DELEGATED_TOTP_WINDOW,
   readVerifiedTotpSecret,
 } from './totp-replay';
-import { trustedDevice } from './trusted-device';
+import { markTwoFactorProven, trustedDevice } from './trusted-device';
 
 /**
  * The adapter resolves a model as `schema[modelName]`, so this string and the
@@ -404,17 +399,15 @@ const twoFactorAuth = () => {
               ? await recordPasskeyEnrolment(ctx, requestSession, credentialId)
               : 'failed';
             if (outcome === 'recorded') return;
-            console.error(
-              sanitizeForLog({
-                msg: 'twoFactor.enrolPasskey.intentUnrecorded',
-                userId: requestSession.userId,
-                effect: credentialId
-                  ? outcome === 'no-passkey'
-                    ? 'the credential was deleted before it could be enrolled'
-                    : 'the credential exists but is not offered as a factor'
-                  : 'the registration response did not name the credential it wrote',
-              })
-            );
+            logSanitized('error', {
+              msg: 'twoFactor.enrolPasskey.intentUnrecorded',
+              userId: requestSession.userId,
+              effect: credentialId
+                ? outcome === 'no-passkey'
+                  ? 'the credential was deleted before it could be enrolled'
+                  : 'the credential exists but is not offered as a factor'
+                : 'the registration response did not name the credential it wrote',
+            });
             // The registration's own 200 said a second factor was added, and
             // none was. An `APIError` thrown from an `after` hook replaces the
             // response and carries its own status — the endpoint sets none — so

@@ -1,5 +1,7 @@
 import * as argon2 from 'argon2';
 
+import { logLine } from '@/utils/log';
+
 import { KEY_ID_PATTERN } from '../keyring';
 import { getActivePasswordPepper, getPasswordPepper } from './pepper';
 
@@ -80,13 +82,20 @@ export function assertPasswordHashEvaluable(hash: string): void {
   getPasswordPepper(parsed.pepperId);
 }
 
-export async function hashPassword(password: string): Promise<string> {
+async function hashWithActivePepper(
+  password: string
+): Promise<{ pepperId: string; phc: string }> {
   const pepper = getActivePasswordPepper();
   const phc = await argon2.hash(normalizePassword(password), {
     ...ARGON2_OPTIONS,
     secret: pepper.secret,
   });
-  return `${HASH_ENVELOPE_VERSION}:${pepper.id}:${phc}`;
+  return { pepperId: pepper.id, phc };
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const { pepperId, phc } = await hashWithActivePepper(password);
+  return `${HASH_ENVELOPE_VERSION}:${pepperId}:${phc}`;
 }
 
 /**
@@ -115,16 +124,14 @@ export async function verifyPasswordDetailed({
     }
     pepper = getPasswordPepper(parsed.pepperId);
   } catch (error) {
-    console.error(
-      JSON.stringify({
-        msg: 'auth.password.hash unevaluatable',
-        errorClass: error instanceof Error ? error.name : 'UnknownError',
-        // The message names the envelope defect or the missing generation. It
-        // carries no secret: `KeyringConfigurationError` reports the env var and
-        // the rule, never a key, and `PasswordHashFormatError` reports the shape.
-        detail: error instanceof Error ? error.message : null,
-      })
-    );
+    logLine('error', {
+      msg: 'auth.password.hash unevaluatable',
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+      // The message names the envelope defect or the missing generation. It
+      // carries no secret: `KeyringConfigurationError` reports the env var and
+      // the rule, never a key, and `PasswordHashFormatError` reports the shape.
+      detail: error instanceof Error ? error.message : null,
+    });
     return { valid: false, needsRehash: false, costPaid: false };
   }
 
@@ -155,9 +162,5 @@ export async function verifyPassword({
 }
 
 export async function runPasswordTimingGuard(password: string): Promise<void> {
-  const pepper = getActivePasswordPepper();
-  await argon2.hash(normalizePassword(password), {
-    ...ARGON2_OPTIONS,
-    secret: pepper.secret,
-  });
+  await hashWithActivePepper(password);
 }

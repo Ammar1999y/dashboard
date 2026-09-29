@@ -1,6 +1,6 @@
 import { rateLimit } from '@/lib/rate-limit/fixed-window';
 
-import { sanitizeForLog } from '@/utils/log';
+import { errorTypeOf, logLine, logSanitized } from '@/utils/log';
 
 const ZONE_ID = process.env.CLOUDFLARE_ZONE_ID;
 const TOKEN = process.env.CLOUDFLARE_CACHE_PURGE_TOKEN;
@@ -49,14 +49,12 @@ async function reserveApiCall(): Promise<boolean> {
     window: API_CALL_WINDOW_S,
   });
   if (!success)
-    console.error(
-      JSON.stringify({
-        msg: 'media.cache-purge budget exhausted',
-        effect: 'batch deferred to the sweep; rows keep their deleting marker',
-        budget: API_CALL_BUDGET,
-        windowSeconds: API_CALL_WINDOW_S,
-      })
-    );
+    logLine('error', {
+      msg: 'media.cache-purge budget exhausted',
+      effect: 'batch deferred to the sweep; rows keep their deleting marker',
+      budget: API_CALL_BUDGET,
+      windowSeconds: API_CALL_WINDOW_S,
+    });
   return success;
 }
 
@@ -89,26 +87,22 @@ async function purgeBatch(urls: readonly string[]): Promise<boolean> {
       if (response.ok) return true;
       // A 4xx is a configuration problem a retry cannot fix; a 5xx may pass.
       if (attempt === ATTEMPTS || response.status < 500) {
-        console.error(
-          JSON.stringify({
-            msg: 'media.cache-purge failed',
-            status: response.status,
-            count: urls.length,
-          })
-        );
+        logLine('error', {
+          msg: 'media.cache-purge failed',
+          status: response.status,
+          count: urls.length,
+        });
         return false;
       }
     } catch (error) {
       if (attempt === ATTEMPTS) {
         // Class only: the error text can carry the request URL, and with it
         // the zone id.
-        console.error(
-          sanitizeForLog({
-            msg: 'media.cache-purge failed',
-            errorClass: error instanceof Error ? error.name : typeof error,
-            count: urls.length,
-          })
-        );
+        logSanitized('error', {
+          msg: 'media.cache-purge failed',
+          errorClass: errorTypeOf(error),
+          count: urls.length,
+        });
         return false;
       }
     }
@@ -144,13 +138,11 @@ export async function purgeUrls(
     else failed.push(...batch);
   }
   if (abandoned > 0)
-    console.error(
-      JSON.stringify({
-        msg: 'media.cache-purge deadline reached',
-        effect: 'rows keep their deleting marker; the sweep retries them',
-        abandoned,
-        budgetMs: TOTAL_BUDGET_MS,
-      })
-    );
+    logLine('error', {
+      msg: 'media.cache-purge deadline reached',
+      effect: 'rows keep their deleting marker; the sweep retries them',
+      abandoned,
+      budgetMs: TOTAL_BUDGET_MS,
+    });
   return { attempted: urls.length, purged, failed };
 }

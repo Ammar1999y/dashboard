@@ -1,6 +1,5 @@
 'use client';
 
-import type { LucideProps } from 'lucide-react';
 import type { TColumnElement } from 'platejs';
 import type { PlateElementProps } from 'platejs/react';
 
@@ -11,7 +10,6 @@ import { setColumns } from '@platejs/layout';
 import { ResizableProvider } from '@platejs/resizable';
 import { BlockSelectionPlugin } from '@platejs/selection/react';
 import { useComposedRef } from '@udecode/cn';
-import { GripHorizontal, Trash2Icon } from 'lucide-react';
 import { PathApi } from 'platejs';
 import {
   PlateElement,
@@ -28,6 +26,7 @@ import {
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import {
   Popover,
   PopoverAnchor,
@@ -39,6 +38,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  COLUMN_CLASS,
+  COLUMN_CONTENT_CLASS,
+  COLUMN_GROUP_CLASS,
+  COLUMN_ROW_CLASS,
+  COLUMN_WRAPPER_CLASS,
+} from '@/components/editor/styles';
 
 export const ColumnElement = withHOC(
   ResizableProvider,
@@ -63,7 +69,7 @@ export const ColumnElement = withHOC(
     });
 
     return (
-      <div className='group/column relative' style={{ width: width ?? '100%' }}>
+      <div className={COLUMN_WRAPPER_CLASS} style={{ width: width ?? '100%' }}>
         {!readOnly && !isSelectionAreaVisible && (
           <div
             className={cn(
@@ -79,16 +85,12 @@ export const ColumnElement = withHOC(
 
         <PlateElement
           {...props}
-          attributes={{
-            ...props.attributes,
-            'data-ltr-element': true,
-          }}
-          className='h-full px-2 pt-2 group-first/column:ps-0 group-last/column:pe-0'
+          className={COLUMN_CLASS}
           ref={useComposedRef(props.ref, previewRef)}
         >
           <div
             className={cn(
-              'relative h-full border border-transparent p-1.5',
+              COLUMN_CONTENT_CLASS,
               !readOnly && 'rounded-lg border-dashed border-border',
               isDragging && 'opacity-50'
             )}
@@ -108,7 +110,8 @@ const ColumnDragHandle = React.memo(function ColumnDragHandle() {
     <Tooltip>
       <TooltipTrigger asChild>
         <Button className='h-5 !px-1' variant='ghost'>
-          <GripHorizontal
+          <Icon
+            icon='solar:grip-horizontal-linear'
             className='text-muted-foreground'
             onClick={(event) => {
               event.stopPropagation();
@@ -144,16 +147,9 @@ function DropLine() {
 
 export function ColumnGroupElement(props: PlateElementProps) {
   return (
-    <PlateElement
-      className='mb-2'
-      {...props}
-      attributes={{
-        ...props.attributes,
-        'data-ltr-element': true,
-      }}
-    >
+    <PlateElement className={COLUMN_GROUP_CLASS} {...props}>
       <ColumnFloatingToolbar>
-        <div className='flex size-full rounded'>{props.children}</div>
+        <div className={COLUMN_ROW_CLASS}>{props.children}</div>
       </ColumnFloatingToolbar>
     </PlateElement>
   );
@@ -229,7 +225,7 @@ function ColumnFloatingToolbar({ children }: React.PropsWithChildren) {
 
           <Separator className='mx-1 h-6' orientation='vertical' />
           <Button className='size-8' variant='ghost' {...buttonProps}>
-            <Trash2Icon />
+            <Icon icon='solar:trash-bin-trash-linear' />
           </Button>
         </div>
       </PopoverContent>
@@ -237,7 +233,7 @@ function ColumnFloatingToolbar({ children }: React.PropsWithChildren) {
   );
 }
 
-const DoubleColumnOutlined = (props: LucideProps) => (
+const DoubleColumnOutlined = (props: React.ComponentProps<'svg'>) => (
   <svg
     fill='none'
     height='16'
@@ -255,7 +251,7 @@ const DoubleColumnOutlined = (props: LucideProps) => (
   </svg>
 );
 
-const ThreeColumnOutlined = (props: LucideProps) => (
+const ThreeColumnOutlined = (props: React.ComponentProps<'svg'>) => (
   <svg
     fill='none'
     height='16'
@@ -273,7 +269,7 @@ const ThreeColumnOutlined = (props: LucideProps) => (
   </svg>
 );
 
-const RightSideDoubleColumnOutlined = (props: LucideProps) => (
+const RightSideDoubleColumnOutlined = (props: React.ComponentProps<'svg'>) => (
   <svg
     fill='none'
     height='16'
@@ -291,7 +287,7 @@ const RightSideDoubleColumnOutlined = (props: LucideProps) => (
   </svg>
 );
 
-const LeftSideDoubleColumnOutlined = (props: LucideProps) => (
+const LeftSideDoubleColumnOutlined = (props: React.ComponentProps<'svg'>) => (
   <svg
     fill='none'
     height='16'
@@ -309,7 +305,7 @@ const LeftSideDoubleColumnOutlined = (props: LucideProps) => (
   </svg>
 );
 
-const DoubleSideDoubleColumnOutlined = (props: LucideProps) => (
+const DoubleSideDoubleColumnOutlined = (props: React.ComponentProps<'svg'>) => (
   <svg
     fill='none'
     height='16'

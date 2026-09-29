@@ -14,37 +14,27 @@ interface DateRangeInputsProps {
 export const DateRangeInputs = memo(
   ({ range, onRangeChange }: DateRangeInputsProps) => {
     const handleFromChange = useCallback(
-      (date: Date | undefined) => {
-        if (!date) {
-          onRangeChange((prev) => ({ ...prev, from: undefined }));
-          return;
-        }
+      (date: Date | undefined) =>
         onRangeChange((prev) => ({
-          ...prev,
           from: date,
-          ...(range.to && {
-            to: new Date(Math.max(date.getTime(), range.to.getTime())),
-          }),
-        }));
-      },
-      [range.to, onRangeChange]
+          to:
+            date && prev.to
+              ? new Date(Math.max(date.getTime(), prev.to.getTime()))
+              : prev.to,
+        })),
+      [onRangeChange]
     );
 
     const handleToChange = useCallback(
-      (date: Date | undefined) => {
-        if (!date) {
-          onRangeChange((prev) => ({ ...prev, to: undefined }));
-          return;
-        }
+      (date: Date | undefined) =>
         onRangeChange((prev) => ({
-          ...prev,
-          ...(range.from && {
-            from: new Date(Math.min(date.getTime(), range.from.getTime())),
-          }),
-          to: new Date(date),
-        }));
-      },
-      [range.from, onRangeChange]
+          from:
+            date && prev.from
+              ? new Date(Math.min(date.getTime(), prev.from.getTime()))
+              : prev.from,
+          to: date && new Date(date),
+        })),
+      [onRangeChange]
     );
 
     return (

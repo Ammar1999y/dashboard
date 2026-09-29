@@ -3,8 +3,12 @@
 import type { TDateElement } from 'platejs';
 import type { PlateElementProps } from 'platejs/react';
 
+import { useCallback } from 'react';
+
 import { PlateElement, useReadOnly } from 'platejs/react';
 import { cn } from '@/lib/utils';
+
+import { safeDate } from '@/utils/time';
 
 import { Calendar } from '@/components/ui/calendar';
 import {
@@ -12,87 +16,52 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import { formatDateLabel } from '@/components/editor/date';
+import { DATE_CLASS } from '@/components/editor/styles';
 
 export function DateElement(props: PlateElementProps<TDateElement>) {
   const { editor, element } = props;
-
   const readOnly = useReadOnly();
 
-  const trigger = (
+  const handleSelect = useCallback(
+    (date: Date | undefined) => {
+      if (date)
+        editor.tf.setNodes({ date: date.toDateString() }, { at: element });
+    },
+    [editor, element]
+  );
+
+  const label = (
     <span
-      className={cn(
-        'w-fit cursor-pointer rounded-sm bg-muted px-1 text-muted-foreground'
-      )}
+      className={cn(DATE_CLASS, !readOnly && 'cursor-pointer')}
       contentEditable={false}
       draggable
     >
-      {element.date ? (
-        (() => {
-          const today = new Date();
-          const elementDate = new Date(element.date);
-          const isToday =
-            elementDate.getDate() === today.getDate() &&
-            elementDate.getMonth() === today.getMonth() &&
-            elementDate.getFullYear() === today.getFullYear();
-
-          if (isToday) return 'اليوم';
-
-          const isYesterday =
-            new Date(today.setDate(today.getDate() - 1)).toDateString() ===
-            elementDate.toDateString();
-
-          if (isYesterday) return 'أمس';
-
-          const isTomorrow =
-            new Date(today.setDate(today.getDate() + 2)).toDateString() ===
-            elementDate.toDateString();
-
-          if (isTomorrow) return 'غداً';
-
-          return elementDate.toLocaleDateString('en-US', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric',
-          });
-        })()
-      ) : (
-        <span>اختر تاريخ</span>
-      )}
+      {formatDateLabel(element.date)}
     </span>
   );
-
-  if (readOnly) {
-    return trigger;
-  }
 
   return (
     <PlateElement
       {...props}
-      attributes={{
-        ...props.attributes,
-        contentEditable: false,
-        'data-ltr-element': true,
-      }}
+      attributes={{ ...props.attributes, contentEditable: false }}
       className='inline-block'
     >
-      <Popover>
-        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-        <PopoverContent className='w-auto p-0'>
-          <Calendar
-            autoFocus
-            mode='single'
-            onSelect={(date) => {
-              if (!date) return;
-
-              editor.tf.setNodes(
-                { date: date.toDateString() },
-                { at: element }
-              );
-            }}
-            selected={new Date(element.date as string)}
-          />
-        </PopoverContent>
-      </Popover>
+      {readOnly ? (
+        label
+      ) : (
+        <Popover>
+          <PopoverTrigger asChild>{label}</PopoverTrigger>
+          <PopoverContent className='w-auto p-0'>
+            <Calendar
+              autoFocus
+              mode='single'
+              onSelect={handleSelect}
+              selected={safeDate(element.date) ?? undefined}
+            />
+          </PopoverContent>
+        </Popover>
+      )}
       {props.children}
     </PlateElement>
   );

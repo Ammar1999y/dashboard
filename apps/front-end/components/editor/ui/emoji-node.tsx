@@ -8,6 +8,8 @@ import { EmojiInlineIndexSearch, insertEmoji } from '@platejs/emoji';
 import { EmojiPlugin } from '@platejs/emoji/react';
 import { PlateElement, usePluginOption } from 'platejs/react';
 
+import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
+
 import { useDebounce } from '@/hooks/use-debounce';
 
 import {
@@ -37,14 +39,7 @@ export function EmojiInputElement(props: PlateElementProps) {
   }, [data, debouncedValue]);
 
   return (
-    <PlateElement
-      as='span'
-      {...props}
-      attributes={{
-        ...props.attributes,
-        'data-ltr-element': true,
-      }}
-    >
+    <PlateElement as='span' {...props}>
       <InlineCombobox
         element={element}
         filter={false}
@@ -56,7 +51,9 @@ export function EmojiInputElement(props: PlateElementProps) {
         <InlineComboboxInput />
 
         <InlineComboboxContent>
-          {!isPending && <InlineComboboxEmpty>No results</InlineComboboxEmpty>}
+          {!isPending && (
+            <InlineComboboxEmpty>{NO_RESULTS_MESSAGE}</InlineComboboxEmpty>
+          )}
 
           <InlineComboboxGroup>
             {filteredEmojis.map((emoji) => (

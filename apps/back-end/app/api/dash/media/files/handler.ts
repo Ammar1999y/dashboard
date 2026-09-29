@@ -9,18 +9,14 @@ import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { requestActor } from '@/lib/media/actor';
+import { grantedActor, requestActor } from '@/lib/media/actor';
 import { moveFiles, toMediaFile } from '@/lib/media/files';
-import { getFolder } from '@/lib/media/folders';
+import { requireFolder } from '@/lib/media/folders';
 import { deleteFiles } from '@/lib/media/lifecycle';
 import { mediaMsg } from '@/lib/media/messages';
 import { DEFAULT_UPLOAD_PURPOSE } from '@/lib/media/policy';
 import {
-  admitUpload,
-  chargeUploadBodyBudget,
-  chargeUploadBudget,
-  storeUpload,
-  takeSingleFile,
+  acceptUpload,
   UPLOAD_ADMISSION_LIMIT,
   UPLOAD_ADMISSION_SCOPE,
 } from '@/lib/media/upload';
@@ -44,8 +40,7 @@ export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
   // Query, not form field, for the reason `resource` is one on
   // `/api/upload/file`: it is checked before the body is parsed.
   const folderId = requireId(ctx.query.get('folder'));
-  if (!(await getFolder(folderId)))
-    throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
+  await requireFolder(folderId);
 
   if (!isVisibilityEnabled(LIBRARY_UPLOAD_VISIBILITY))
     throw new CustomError(
@@ -60,23 +55,12 @@ export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
     failClosed: true,
   });
 
-  // Charged from `Content-Length` while the body is still a stream: the kind
-  // budgets below can only be charged once it has been buffered.
-  await chargeUploadBodyBudget(caller.userId, ctx.headers);
-
-  const entry = takeSingleFile(await ctx.readFormData(), 'file');
-  const admitted = await admitUpload(entry, DEFAULT_UPLOAD_PURPOSE);
-  await chargeUploadBudget(caller.userId, admitted);
-
-  const row = await storeUpload({
-    admitted,
-    target: {
-      visibility: LIBRARY_UPLOAD_VISIBILITY,
-      kinds: DEFAULT_UPLOAD_PURPOSE.kinds,
-      folderId,
-      activate: true,
-    },
-    actor: requestActor(ctx, caller),
+  const row = await acceptUpload(ctx, requestActor(ctx, caller), {
+    field: 'file',
+    visibility: LIBRARY_UPLOAD_VISIBILITY,
+    kinds: DEFAULT_UPLOAD_PURPOSE.kinds,
+    folderId,
+    activate: true,
   });
 
   return apiSuccess({
@@ -106,7 +90,7 @@ export const PUT = withApiErrors(
     const updatedAt = await moveFiles({
       ids: input.ids,
       folderId: input.folderId,
-      actor: requestActor(ctx, caller, caller.scope ?? 'all'),
+      actor: grantedActor(ctx, caller),
     });
 
     return apiSuccess({
@@ -134,7 +118,7 @@ export const DELETE = withApiErrors(mediaMsg.deleteError, async (ctx) => {
 
   const { deleted, pending } = await deleteFiles({
     ids: input.ids,
-    actor: requestActor(ctx, caller, caller.scope ?? 'all'),
+    actor: grantedActor(ctx, caller),
     viewable: viewablePages(caller.permissions),
   });
 

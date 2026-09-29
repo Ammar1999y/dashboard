@@ -5,18 +5,6 @@ import type { DropdownMenuProps } from '@radix-ui/react-dropdown-menu';
 import * as React from 'react';
 
 import { TablePlugin, useTableMergeState } from '@platejs/table/react';
-import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  Combine,
-  Grid3x3Icon,
-  Table,
-  Trash2Icon,
-  Ungroup,
-  XIcon,
-} from 'lucide-react';
 import { KEYS } from 'platejs';
 import { useEditorPlugin, useEditorSelector } from 'platejs/react';
 import { cn } from '@/lib/utils';
@@ -31,6 +19,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 
 export function TableToolbarButton(props: DropdownMenuProps) {
@@ -47,7 +36,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
     <DropdownMenu modal={false} onOpenChange={setOpen} open={open} {...props}>
       <DropdownMenuTrigger asChild>
         <ToolbarButton isDropdown pressed={open} tooltip='جدول'>
-          <Table />
+          <Icon icon='solar:table-linear' />
         </ToolbarButton>
       </DropdownMenuTrigger>
 
@@ -55,7 +44,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
         <DropdownMenuGroup>
           <DropdownMenuSub>
             <DropdownMenuSubTrigger className='gap-2 data-[disabled]:pointer-events-none data-[disabled]:opacity-50'>
-              <Grid3x3Icon className='size-4' />
+              <Icon icon='solar:table-linear' className='size-4' />
               <span>جدول</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className='m-0 p-0'>
@@ -80,7 +69,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
                   editor.tf.focus();
                 }}
               >
-                <Combine />
+                <Icon icon='lucide:combine' />
                 دمج الخلايا
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -91,7 +80,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
                   editor.tf.focus();
                 }}
               >
-                <Ungroup />
+                <Icon icon='lucide:ungroup' />
                 تقسيم الخلية
               </DropdownMenuItem>
             </DropdownMenuSubContent>
@@ -114,7 +103,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
                   editor.tf.focus();
                 }}
               >
-                <ArrowUp />
+                <Icon icon='solar:arrow-up-linear' />
                 إدراج صف قبل
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -125,7 +114,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
                   editor.tf.focus();
                 }}
               >
-                <ArrowDown />
+                <Icon icon='solar:arrow-down-linear' />
                 إدراج صف بعد
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -136,7 +125,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
                   editor.tf.focus();
                 }}
               >
-                <XIcon />
+                <Icon icon='solar:close-linear' />
                 حذف صف
               </DropdownMenuItem>
             </DropdownMenuSubContent>
@@ -159,7 +148,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
                   editor.tf.focus();
                 }}
               >
-                <ArrowLeft />
+                <Icon icon='solar:arrow-left-linear' />
                 إدراج عمود قبل
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -170,7 +159,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
                   editor.tf.focus();
                 }}
               >
-                <ArrowRight />
+                <Icon icon='solar:arrow-right-linear' />
                 إدراج عمود بعد
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -181,7 +170,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
                   editor.tf.focus();
                 }}
               >
-                <XIcon />
+                <Icon icon='solar:close-linear' />
                 حذف عمود
               </DropdownMenuItem>
             </DropdownMenuSubContent>
@@ -195,7 +184,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
               editor.tf.focus();
             }}
           >
-            <Trash2Icon />
+            <Icon icon='solar:trash-bin-trash-linear' />
             حذف جدول
           </DropdownMenuItem>
         </DropdownMenuGroup>

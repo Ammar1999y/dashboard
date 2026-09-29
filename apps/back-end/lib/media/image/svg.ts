@@ -52,14 +52,10 @@ export function svgOptimizerServer({ data }: { data: string }) {
   return optimized.data;
 }
 
-export function sanitizeSvgServer(
-  svgContent: string,
-  { convertColor = false } = {}
-) {
+export function sanitizeSvgServer(svgContent: string) {
   // `outside-only` is what exposes `DOMParser`/`XMLSerializer` on the window.
   const dom = new JSDOM('', { runScripts: 'outside-only' });
   return sanitizeSvg(svgContent, {
-    convertColor,
     parser: new dom.window.DOMParser(),
     serializer: new dom.window.XMLSerializer(),
   });

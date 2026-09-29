@@ -1,3 +1,5 @@
+import type { ComponentProps } from 'react';
+
 import { memo } from 'react';
 
 import * as SeparatorPrimitive from '@radix-ui/react-separator';
@@ -9,7 +11,7 @@ const Separator = memo(
     orientation = 'horizontal',
     decorative = true,
     ...props
-  }: React.ComponentProps<typeof SeparatorPrimitive.Root>) => {
+  }: ComponentProps<typeof SeparatorPrimitive.Root>) => {
     return (
       <SeparatorPrimitive.Root
         data-slot='separator'

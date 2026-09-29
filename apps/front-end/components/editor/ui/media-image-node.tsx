@@ -9,79 +9,51 @@ import { ResizableProvider, useResizableValue } from '@platejs/resizable';
 import { PlateElement, withHOC } from 'platejs/react';
 import { cn } from '@/lib/utils';
 
+import { CAPTION_PLACEHOLDER } from '@/components/editor/labels';
+import {
+  flipTransform,
+  MEDIA_CLASS,
+  MEDIA_IMAGE_CLASS,
+} from '@/components/editor/styles';
+
 import { Caption, CaptionTextarea } from './caption';
 import { MediaToolbar } from './media-toolbar';
-import {
-  mediaResizeHandleVariants,
-  Resizable,
-  ResizeHandle,
-} from './resize-handle';
+import { MediaResizeHandles, Resizable } from './resize-handle';
 
 export const ImageElement = withHOC(
   ResizableProvider,
   function ImageElement(props: PlateElementProps<TImageElement>) {
     const { align = 'center', focused, readOnly, selected } = useMediaState();
     const width = useResizableValue('width');
-
-    const { isDragging, handleRef } = useDraggable({
-      element: props.element,
-    });
-
-    // Calculate flip transform
-    const flipHorizontal = props.element.flipHorizontal;
-    const flipVertical = props.element.flipVertical;
-    const flipTransform = `scaleX(${flipHorizontal ? -1 : 1}) scaleY(${flipVertical ? -1 : 1})`;
-
-    const leftHandleClass = mediaResizeHandleVariants({ direction: 'left' });
-    const rightHandleClass = mediaResizeHandleVariants({ direction: 'right' });
+    const { isDragging, handleRef } = useDraggable({ element: props.element });
+    const { alt } = props.attributes;
+    const { flipHorizontal, flipVertical } = props.element;
 
     return (
       <MediaToolbar plugin={ImagePlugin}>
-        <PlateElement
-          {...props}
-          attributes={{
-            ...props.attributes,
-            'data-ltr-element': true,
-          }}
-          className='py-2.5'
-        >
+        <PlateElement {...props} className={MEDIA_CLASS}>
           <figure className='group relative m-0' contentEditable={false}>
-            <Resizable
-              align={align}
-              options={{
-                align,
-                readOnly,
-              }}
-            >
-              <ResizeHandle
-                className={leftHandleClass}
-                options={{ direction: 'left' }}
-              />
+            <Resizable align={align} options={{ align, readOnly }}>
+              <MediaResizeHandles />
               <Image
-                alt={props.attributes.alt as string | undefined}
+                alt={typeof alt === 'string' ? alt : ''}
                 className={cn(
-                  'block w-full max-w-full cursor-pointer object-cover px-0',
-                  'rounded-sm',
+                  MEDIA_IMAGE_CLASS,
+                  'cursor-pointer',
                   focused && selected && 'ring-2 ring-ring ring-offset-2',
                   isDragging && 'opacity-50'
                 )}
                 ref={handleRef}
                 style={{
-                  transform: flipTransform,
+                  transform: flipTransform(flipHorizontal, flipVertical),
                 }}
-              />
-              <ResizeHandle
-                className={rightHandleClass}
-                options={{ direction: 'right' }}
               />
             </Resizable>
 
             <Caption align={align} style={{ width }}>
               <CaptionTextarea
-                onFocus={(e) => {
-                  e.preventDefault();
-                }}
-                placeholder='Write a caption...'
+                onFocus={(event) => event.preventDefault()}
+                placeholder={CAPTION_PLACEHOLDER}
                 readOnly={readOnly}
               />
             </Caption>

@@ -2,11 +2,7 @@ import type { SanitizeResult, SvgRejectionReason } from './config';
 
 import { sanitize } from 'isomorphic-dompurify';
 
-import {
-  MAX_IMAGE_EDGE,
-  MAX_IMAGE_PIXELS,
-  SERVER_MAX_IMAGE_SIZE,
-} from '../validation/constants';
+import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS, MIB } from '../validation/constants';
 import {
   ANIMATION_ELEMENTS,
   DANGEROUS_ATTRIBUTES,
@@ -16,6 +12,7 @@ import {
   safeDecodeURI,
   SVG_MAX_ELEMENTS,
   SVG_MAX_RENDERED_NODES,
+  SVG_MAX_SIZE,
 } from './config';
 import {
   isAnimatedRaster,
@@ -497,12 +494,10 @@ export function sanitizeSvg(
 
   if (!trimmed) return rejected('محتوى SVG فارغ');
 
-  const maxSize = SERVER_MAX_IMAGE_SIZE * 2 * 1024 * 1024;
+  const maxSize = SVG_MAX_SIZE * MIB;
   const contentSize = new Blob([trimmed]).size;
   if (contentSize > maxSize)
-    return rejected(
-      `حجم المحتوى كبير جداً (الحد الأقصى ${SERVER_MAX_IMAGE_SIZE * 2}MB)`
-    );
+    return rejected(`حجم المحتوى كبير جداً (الحد الأقصى ${SVG_MAX_SIZE}MB)`);
 
   const withoutComments = stripDelimited(trimmed, '<!--', '-->');
   if (withoutComments !== trimmed) {
@@ -754,7 +749,7 @@ export function sanitizeSvg(
 
     if (new Blob([sanitized]).size > maxSize)
       return rejected(
-        `حجم المحتوى كبير جداً بعد المعالجة (الحد الأقصى ${SERVER_MAX_IMAGE_SIZE * 2}MB)`
+        `حجم المحتوى كبير جداً بعد المعالجة (الحد الأقصى ${SVG_MAX_SIZE}MB)`
       );
 
     return {

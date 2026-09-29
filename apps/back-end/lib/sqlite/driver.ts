@@ -50,14 +50,12 @@ export interface SqliteConnection {
   pragma(statement: string): void;
   pragmaValue(name: string): unknown;
   /**
+   * `BEGIN IMMEDIATE`: takes the write lock before the body runs. Required
+   * wherever two processes could both read the same pre-state and act on it.
+   *
    * Zero-argument by design: a generic argument tuple cannot pass through
    * `better-sqlite3`'s invariant `Transaction<F>` without a cast. Widen only if
    * a caller genuinely needs bound arguments.
-   */
-  transaction(fn: () => void): () => void;
-  /**
-   * `BEGIN IMMEDIATE`: takes the write lock before the body runs. Required
-   * wherever two processes could both read the same pre-state and act on it.
    */
   transactionImmediate(fn: () => void): () => void;
   close(): void;
@@ -96,7 +94,6 @@ export function openConnection(path: string): SqliteConnection {
         statement.finalize();
       }
     },
-    transaction: (fn) => db.transaction(fn),
     transactionImmediate: (fn) => db.transaction(fn).immediate,
     // `true`: `close(false)` (SQLite's `close_v2`) reports success while
     // deferring the real close until every prepared statement is gone, so the

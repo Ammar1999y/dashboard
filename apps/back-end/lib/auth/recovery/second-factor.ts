@@ -11,15 +11,26 @@
  * comparison — no credential, a decrypt failure, an unacknowledged set, a spend
  * lost to a concurrent request — and is refunded.
  */
+import type { OfferedOption } from '../two-factor/methods';
+import type { AuditMeta } from '@/lib/audit';
 import type { EntityID } from '@app/shared/types';
 
 import { and, eq } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { twoFactorCredentials } from '@/db/schema';
-import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
+
+import { contactKindOf } from '@app/shared/validation/enums';
+
+import { invalidOrExpiredCode } from '@/lib/otp/throttle';
+import { processOtpVerify } from '@/lib/otp/verify';
+import { contactOf } from '@/lib/users/contact';
 
 import { auth } from '..';
+import {
+  decodeBackupCodes,
+  encodeBackupCodes,
+} from '../two-factor/backup-codes';
 import {
   consumeTotpCode,
   readVerifiedTotpSecret,
@@ -39,8 +50,38 @@ async function secretKey() {
   return context.secretConfig;
 }
 
+/**
+ * Proves `code` against `option`. An OTP answers `'matched'` or throws, and the
+ * throw is the caller's to classify with `otpGuessWasEvaluated`.
+ */
+export async function verifyRecoveryFactor(
+  option: OfferedOption,
+  user: { id: EntityID; email: string; phoneNumber: string | null },
+  code: string,
+  auditMeta: AuditMeta
+): Promise<RecoveryVerdict> {
+  if (option.method === 'totp') return verifyRecoveryTotp(user.id, code);
+  if (option.method === 'backup_code')
+    return consumeRecoveryBackupCode(user.id, code);
+  if (option.method === 'otp' && option.channel) {
+    const destination = contactOf(user, contactKindOf(option.channel));
+    if (!destination) throw invalidOrExpiredCode();
+    await processOtpVerify({
+      userId: user.id,
+      userEmail: user.email,
+      channel: option.channel,
+      purpose: 'two_factor',
+      identifier: destination,
+      code,
+      auditMeta,
+    });
+    return 'matched';
+  }
+  return 'unavailable';
+}
+
 /** A TOTP code, with the one-period tolerance every other verifier here allows. */
-export async function verifyRecoveryTotp(
+async function verifyRecoveryTotp(
   userId: EntityID,
   code: string
 ): Promise<RecoveryVerdict> {
@@ -63,7 +104,7 @@ export async function verifyRecoveryTotp(
  * spend it — and it is the protocol the plugin's own verifier uses on the same
  * column, so the two cannot disagree about what "spent" means.
  */
-export async function consumeRecoveryBackupCode(
+async function consumeRecoveryBackupCode(
   userId: EntityID,
   code: string
 ): Promise<RecoveryVerdict> {
@@ -86,30 +127,12 @@ export async function consumeRecoveryBackupCode(
   )
     return 'unavailable';
 
-  const decrypted = await symmetricDecrypt({
-    key,
-    data: credential.backupCodes,
-  }).catch(() => null);
-  if (!decrypted) return 'unavailable';
-
-  let codes: unknown;
-  try {
-    codes = JSON.parse(decrypted);
-  } catch {
-    return 'unavailable';
-  }
-  if (
-    !Array.isArray(codes) ||
-    !codes.every((entry) => typeof entry === 'string')
-  )
-    return 'unavailable';
+  const codes = await decodeBackupCodes(key, credential.backupCodes);
+  if (!codes) return 'unavailable';
   if (!codes.includes(code)) return 'rejected';
 
   const remaining = codes.filter((entry) => entry !== code);
-  const reEncrypted = await symmetricEncrypt({
-    key,
-    data: JSON.stringify(remaining),
-  });
+  const reEncrypted = await encodeBackupCodes(key, remaining);
 
   return withTransaction(async (tx) => {
     const [updated] = await tx

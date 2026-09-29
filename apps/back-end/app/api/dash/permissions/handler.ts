@@ -1,5 +1,5 @@
 import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
-import type { PermissionRows } from '@/lib/permissions/utils';
+import type { PermissionRows } from '@/lib/permissions/matrix';
 
 import { and, count, eq, sql } from 'drizzle-orm';
 
@@ -14,7 +14,6 @@ import {
   MSG_FETCHED,
 } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
-import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 import { createPermissionSchema } from '@app/shared/validation/permissions';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
@@ -23,13 +22,16 @@ import { handlePermissionUniqueViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { permissionMsg } from '@/lib/permissions/messages';
+import { PERMISSION_AUDIT_VERSION } from '@/lib/permissions/audit';
+import {
+  diffPermissionMatrices,
+  toPermissionRows,
+} from '@/lib/permissions/matrix';
 import {
   assertStandardRoleName,
-  diffPermissionMatrices,
-  PERMISSION_AUDIT_VERSION,
-  validatePermissionScope,
-} from '@/lib/permissions/utils';
+  standardScopeFilter,
+} from '@/lib/permissions/roles';
+import { validatePermissionScope } from '@/lib/permissions/scope';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 // See USERS_FILTER_COLUMNS for why the scan-only operator is permitted here.
@@ -53,7 +55,7 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
     limit: 60,
   });
 
-  const { where, orderBy, limit, offset, page, perPage, buildPageCount } =
+  const { where, orderBy, limit, offset, paginationMeta } =
     parseDataTableParams(roles, {
       url: ctx.url,
       filterableColumns: PERMISSIONS_FILTER_COLUMNS,
@@ -62,7 +64,7 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
     });
 
   const baseFilter = and(
-    eq(roles.scope, ROLE_SCOPE.STANDARD),
+    standardScopeFilter(),
     scope === 'own' ? eq(roles.createdBy, userId) : undefined,
     where
   );
@@ -94,12 +96,7 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   return apiSuccess({
     message: MSG_FETCHED,
     data: rolesWithCounts,
-    meta: {
-      page,
-      perPage,
-      total,
-      pageCount: buildPageCount(total),
-    },
+    meta: paginationMeta(total),
   });
 });
 
@@ -159,12 +156,7 @@ export const POST = withApiErrors(
           permissions: p.permissions,
         }));
         await tx.insert(rolePermissions).values(permissionsData);
-        newPermissionsForAudit.push(
-          ...permissionsData.map((p) => ({
-            pageName: p.pageName,
-            permissions: p.permissions,
-          }))
-        );
+        newPermissionsForAudit.push(...toPermissionRows(input.permissions));
       }
 
       await auditLog(tx, {
@@ -200,5 +192,5 @@ export const POST = withApiErrors(
       status: HTTP_STATUS.CREATED,
     });
   },
-  (error) => handlePermissionUniqueViolation(error, permissionMsg)
+  handlePermissionUniqueViolation
 );

@@ -2,7 +2,7 @@ import type { PermissionClient } from '@/types/permission';
 
 import { generateUUIDv7 } from '@/utils';
 import { http } from 'msw';
-import { ROLE_SCOPE } from '@/lib/permissions/constants';
+import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 
 import { queryTable } from '../lib/data-table';
 import { now } from '../lib/db';

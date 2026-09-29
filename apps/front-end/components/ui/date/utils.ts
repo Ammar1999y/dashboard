@@ -1,3 +1,4 @@
+import type { PresetName } from './constants';
 import type { DateRange } from './types';
 
 import { calendarDayInZone, safeDate } from '@/utils/time';
@@ -35,13 +36,20 @@ export const tableFormatDate = (date: string | null): string => {
   return calendarDayInZone(parsed);
 };
 
-export const getDateAdjustedForTimezone = (dateInput: Date | string): Date => {
-  if (typeof dateInput === 'string') {
-    const parts = dateInput.split('-').map((part) => Math.trunc(Number(part)));
-    const date = new Date(parts[0], parts[1] - 1, parts[2]);
-    return date;
-  }
-  return dateInput;
+/**
+ * A `YYYY-MM-DD` string is a calendar day, so it becomes local midnight of
+ * that day — `new Date('2026-08-02')` would be UTC midnight, the previous day
+ * west of UTC. Anything else is parsed as an instant; an invalid input is no
+ * date rather than an `Invalid Date`.
+ */
+export const parseInitialDate = (
+  input: Date | string | undefined
+): Date | undefined => {
+  if (!input) return undefined;
+  if (typeof input !== 'string') return input;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input);
+  if (match) return new Date(+match[1], +match[2] - 1, +match[3]);
+  return safeDate(input) ?? undefined;
 };
 
 /**
@@ -57,7 +65,7 @@ const businessToday = (): Date => {
 };
 
 export const getPresetRange = (
-  presetName: string
+  presetName: PresetName
 ): { from: Date; to: Date } => {
   const from = businessToday();
   const to = businessToday();
@@ -111,10 +119,6 @@ export const getPresetRange = (
       to.setDate(0);
       to.setHours(23, 59, 59, 999);
       break;
-    }
-    default: {
-      from.setHours(0, 0, 0, 0);
-      to.setHours(23, 59, 59, 999);
     }
   }
 

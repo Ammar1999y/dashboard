@@ -9,6 +9,8 @@ import { verificationSessions } from '@/db/schema';
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
+import { otpMsg } from '@/lib/auth/messages';
+
 import { OTP_BLOCK_DURATION_HOURS } from './limits';
 
 /** The first rung, and the whole ladder on the anonymous surfaces. */
@@ -30,11 +32,17 @@ export const OTP_BASE_RESEND_DELAY_S = 30;
  * The authenticated surfaces (`/two-factor/otp/send`, the recovery second
  * factor) keep the ladder: they return the row's real `nextAllowedIn`.
  */
-const FLAT_RESEND_PURPOSES: ReadonlySet<OtpPurpose> = new Set([
+const FLAT_RESEND_PURPOSE_LIST = [
   'verify_contact',
   'passwordless_login',
   'forgot_password',
-]);
+] as const satisfies readonly OtpPurpose[];
+
+export type FlatResendPurpose = (typeof FLAT_RESEND_PURPOSE_LIST)[number];
+
+const FLAT_RESEND_PURPOSES: ReadonlySet<OtpPurpose> = new Set(
+  FLAT_RESEND_PURPOSE_LIST
+);
 
 export function calculateNextAllowedAt(
   attemptNumber: number,
@@ -132,4 +140,45 @@ export function collapseProofThrottle(
   if (error instanceof CustomError && error.code === OTP_PROOF_THROTTLE_CODE)
     return new CustomError(genericMessage, HTTP_STATUS.BAD_REQUEST);
   return error;
+}
+
+/**
+ * Statuses an anonymous verify route never collapses: 429 keeps its headers,
+ * 503 surfaces so a fail-closed limiter outage is not masked as a wrong code,
+ * and 500/422 pass through. None depends on whether the account exists.
+ */
+const ANONYMOUS_VERIFY_SURFACED: ReadonlySet<number> = new Set([
+  HTTP_STATUS.TOO_MANY_REQUESTS,
+  HTTP_STATUS.SERVICE_UNAVAILABLE,
+  HTTP_STATUS.INTERNAL_ERROR,
+  HTTP_STATUS.UNPROCESSABLE,
+]);
+
+/**
+ * The status filter at an anonymous verification boundary: unknown user, wrong
+ * code and missing proof answer one generic 400. The proof throttle collapses
+ * BEFORE the filter, so only the pre-lookup limiters keep a 429. `alsoSurface`
+ * is for a refusal only a CORRECT code can reach.
+ */
+export function collapseAnonymousVerifyError(
+  error: unknown,
+  genericMessage: string,
+  alsoSurface: readonly number[] = []
+): unknown {
+  const collapsed = collapseProofThrottle(error, genericMessage);
+  if (!(collapsed instanceof CustomError)) return collapsed;
+  const { status } = collapsed;
+  if (
+    status !== undefined &&
+    (ANONYMOUS_VERIFY_SURFACED.has(status) || alsoSurface.includes(status))
+  )
+    return collapsed;
+  const generic = new CustomError(genericMessage, HTTP_STATUS.BAD_REQUEST);
+  generic.responseHeaders = collapsed.responseHeaders;
+  return generic;
+}
+
+/** The one refusal an anonymous OTP surface gives for every account-revealing failure. */
+export function invalidOrExpiredCode(): CustomError {
+  return new CustomError(otpMsg.invalidOrExpired, HTTP_STATUS.BAD_REQUEST);
 }

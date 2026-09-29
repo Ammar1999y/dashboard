@@ -1,14 +1,6 @@
-import type { PermissionRows } from '@/lib/permissions/utils';
+import type { PermissionRows } from '@/lib/permissions/matrix';
 
-import {
-  and,
-  eq,
-  inArray,
-  isNotNull,
-  isNull,
-  notInArray,
-  sql,
-} from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { rolePermissions, roles, sessions, users } from '@/db/schema';
@@ -19,7 +11,6 @@ import {
   MSG_DELETED,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
-  MSG_NOT_FOUND,
   MSG_UPDATE_ERROR,
   MSG_UPDATED,
 } from '@app/shared/api-messages';
@@ -31,27 +22,42 @@ import {
 import { adminUpdatePermissionBodySchema } from '@app/shared/validation/permissions';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
-import { revokeSessionArtifacts } from '@/lib/auth/session/rotation';
+import { revokeSessionsWhere } from '@/lib/auth/session/rotation';
 import { handlePermissionUniqueViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody, requireId } from '@/lib/http/input';
-import { apiSuccess, withApiErrors } from '@/lib/http/response';
+import { apiSuccess, notFoundError, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { insufficientPermissions } from '@/lib/permissions/checker';
+import {
+  PERMISSION_AUDIT_METADATA_FIELDS,
+  PERMISSION_AUDIT_VERSION,
+} from '@/lib/permissions/audit';
+import {
+  holdsActionOn,
+  insufficientPermissions,
+} from '@/lib/permissions/checker';
+import {
+  diffPermissionMatrices,
+  permissionsEqual,
+  sanitizePermissions,
+  toPagePermissions,
+  toPermissionRows,
+} from '@/lib/permissions/matrix';
 import { permissionMsg } from '@/lib/permissions/messages';
 import {
   assertStandardRoleName,
-  collapseToNotFound,
-  diffPermissionMatrices,
-  PERMISSION_AUDIT_METADATA_FIELDS,
-  PERMISSION_AUDIT_VERSION,
-  permissionsEqual,
-  refreshRoleSessions,
-  sanitizePermissions,
+  lockOwnedStandardRole,
   standardRoleFilter,
+  writeRoleMatrix,
+} from '@/lib/permissions/roles';
+import {
+  assertRowsWithinScope,
+  collapseToNotFound,
   validatePermissionScope,
   validateRolePermissionScope,
-} from '@/lib/permissions/utils';
+} from '@/lib/permissions/scope';
+import { refreshRoleSessions } from '@/lib/permissions/session-refresh';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
+import { liveUser } from '@/lib/users/filters';
 
 export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   const { userId, scope } = await requirePermission(ctx, {
@@ -68,8 +74,7 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   const roleId = requireId(ctx.params.id);
 
   const roleData = await db.query.roles.findFirst({
-    where: (roles, { eq, and }) =>
-      and(eq(roles.id, roleId), eq(roles.scope, ROLE_SCOPE.STANDARD)),
+    where: standardRoleFilter(roleId),
     columns: {
       id: true,
       roleName: true,
@@ -87,10 +92,9 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
     },
   });
 
-  if (!roleData) throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (!roleData) throw notFoundError();
 
-  if (scope === 'own' && roleData.createdBy !== userId)
-    throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  if (scope === 'own' && roleData.createdBy !== userId) throw notFoundError();
 
   return apiSuccess({
     message: MSG_FETCHED,
@@ -99,10 +103,7 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
       roleName: roleData.roleName,
       description: roleData.description,
       isActive: roleData.isActive,
-      permissions: roleData.rolePermissions.map((p) => ({
-        name: p.pageName,
-        permissions: p.permissions,
-      })),
+      permissions: toPagePermissions(roleData.rolePermissions),
     },
   });
 });
@@ -149,23 +150,12 @@ export const PUT = withApiErrors(
     const auditMeta = getAuditMeta(ctx);
 
     const updated = await withTransaction(async (tx) => {
-      const [existingRole] = await tx
-        .select({
-          id: roles.id,
-          isActive: roles.isActive,
-          roleName: roles.roleName,
-          description: roles.description,
-          createdBy: roles.createdBy,
-        })
-        .from(roles)
-        .where(standardRoleFilter(roleId))
-        .for('update');
-
-      if (!existingRole?.id)
-        throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-
-      if (editScope === 'own' && existingRole.createdBy !== actorUserId)
-        throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+      const existingRole = await lockOwnedStandardRole(
+        tx,
+        roleId,
+        editScope,
+        actorUserId
+      );
 
       if (actorPermissions) {
         // Reachability, because this is the role being EDITED: a 403 would tell
@@ -178,10 +168,13 @@ export const PUT = withApiErrors(
         );
       }
 
-      const canDeactivate =
-        actorPermissions?.['permissions']?.['delete'] === true ||
-        (actorPermissions?.['permissions']?.['deleteOwn'] === true &&
-          existingRole.createdBy === actorUserId);
+      const canDeactivate = holdsActionOn(
+        actorPermissions,
+        'permissions',
+        'delete',
+        existingRole.createdBy,
+        actorUserId
+      );
 
       if (!canDeactivate && existingRole.isActive && input.isActive === false)
         throw insufficientPermissions();
@@ -196,19 +189,14 @@ export const PUT = withApiErrors(
         .where(standardRoleFilter(roleId))
         .returning({ id: roles.id, updatedAt: roles.updatedAt });
 
-      if (!roleUpdated)
-        throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+      if (!roleUpdated) throw notFoundError();
 
       let oldPermissionsForAudit: PermissionRows = [];
       let newPermissionsForAudit: PermissionRows = [];
 
       let permissionsChanged = false;
       if (input.permissions?.length) {
-        const permissionsData = input.permissions.map((p) => ({
-          roleId,
-          pageName: p.name,
-          permissions: p.permissions,
-        }));
+        const submitted = toPermissionRows(input.permissions);
 
         const existingPermissions = await tx
           .select({
@@ -218,46 +206,12 @@ export const PUT = withApiErrors(
           .from(rolePermissions)
           .where(eq(rolePermissions.roleId, roleId));
 
-        permissionsChanged = !permissionsEqual(
-          existingPermissions.map((p) => ({
-            pageName: p.pageName,
-            permissions: p.permissions,
-          })),
-          permissionsData.map((p) => ({
-            pageName: p.pageName,
-            permissions: p.permissions,
-          }))
-        );
+        permissionsChanged = !permissionsEqual(existingPermissions, submitted);
 
         if (permissionsChanged) {
-          oldPermissionsForAudit = existingPermissions.map((p) => ({
-            pageName: p.pageName,
-            permissions: p.permissions,
-          }));
-          newPermissionsForAudit = permissionsData.map((p) => ({
-            pageName: p.pageName,
-            permissions: p.permissions,
-          }));
-
-          // Upsert against `ux_role_permissions_role_page`, so unchanged pages
-          // keep their `created_at`; dropped pages go in one statement after.
-          await tx
-            .insert(rolePermissions)
-            .values(permissionsData)
-            .onConflictDoUpdate({
-              target: [rolePermissions.roleId, rolePermissions.pageName],
-              set: { permissions: sql`excluded.permissions` },
-            });
-
-          const newPageNames = permissionsData.map((p) => p.pageName);
-          await tx
-            .delete(rolePermissions)
-            .where(
-              and(
-                eq(rolePermissions.roleId, roleId),
-                notInArray(rolePermissions.pageName, newPageNames)
-              )
-            );
+          oldPermissionsForAudit = existingPermissions;
+          newPermissionsForAudit = submitted;
+          await writeRoleMatrix(tx, roleId, input.permissions, { prune: true });
         }
       }
 
@@ -296,23 +250,15 @@ export const PUT = withApiErrors(
       });
 
       if (existingRole.isActive && input.isActive === false) {
-        const revoked = await tx
-          .delete(sessions)
-          .where(
-            inArray(
-              sessions.userId,
-              tx
-                .select({ id: users.id })
-                .from(users)
-                .where(and(eq(users.roleId, roleId), isNull(users.deletedAt)))
-            )
-          )
-          .returning({ id: sessions.id });
-        // Their re-authentication windows and two-factor proofs are keyed by
-        // session id, so they go with the sessions.
-        await revokeSessionArtifacts(
+        await revokeSessionsWhere(
           tx,
-          revoked.map((session) => session.id)
+          inArray(
+            sessions.userId,
+            tx
+              .select({ id: users.id })
+              .from(users)
+              .where(liveUser(eq(users.roleId, roleId)))
+          )
         );
       } else if (
         permissionsChanged ||
@@ -323,10 +269,7 @@ export const PUT = withApiErrors(
               roleName: input.roleName,
               roleScope: ROLE_SCOPE.STANDARD,
               permissions: sanitizePermissions(
-                input.permissions.map((p) => ({
-                  pageName: p.name,
-                  permissions: p.permissions,
-                }))
+                toPermissionRows(input.permissions)
               ),
             }
           : undefined;
@@ -339,7 +282,7 @@ export const PUT = withApiErrors(
     // The client refreshes its cache from `updatedAt`.
     return apiSuccess({ message: MSG_UPDATED, data: updated });
   },
-  (error) => handlePermissionUniqueViolation(error, permissionMsg)
+  handlePermissionUniqueViolation
 );
 
 export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
@@ -366,22 +309,12 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
   const auditMeta = getAuditMeta(ctx);
 
   await withTransaction(async (tx) => {
-    const [existingRole] = await tx
-      .select({
-        id: roles.id,
-        roleName: roles.roleName,
-        description: roles.description,
-        isActive: roles.isActive,
-        createdBy: roles.createdBy,
-      })
-      .from(roles)
-      .where(standardRoleFilter(roleId))
-      .for('update');
-    if (!existingRole)
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-
-    if (deleteScope === 'own' && existingRole.createdBy !== actorUserId)
-      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    const existingRole = await lockOwnedStandardRole(
+      tx,
+      roleId,
+      deleteScope,
+      actorUserId
+    );
 
     const existingPermissions = await tx
       .select({
@@ -393,12 +326,8 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
       .for('share');
 
     if (actorPermissions) {
-      const targetPerms = existingPermissions.map((p) => ({
-        name: p.pageName,
-        permissions: (p.permissions || {}) as Record<string, boolean>,
-      }));
       try {
-        validatePermissionScope(actorPermissions, targetPerms);
+        assertRowsWithinScope(actorPermissions, existingPermissions);
       } catch (error) {
         // The reachability question PUT asks through
         // `validateRolePermissionScope`: a deletion grants nothing, so "this

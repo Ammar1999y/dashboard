@@ -3,7 +3,10 @@ import type { EntityID } from '@/types';
 
 import { generateUUIDv7 } from '@/utils';
 import { http } from 'msw';
-import { CUSTOM_ROLE_VALUE, ROLE_SCOPE } from '@/lib/permissions/constants';
+import {
+  CUSTOM_ROLE_VALUE,
+  ROLE_SCOPE,
+} from '@app/shared/permissions/constants';
 
 import { queryTable } from '../lib/data-table';
 import { now } from '../lib/db';

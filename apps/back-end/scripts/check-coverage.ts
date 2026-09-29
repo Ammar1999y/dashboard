@@ -19,6 +19,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import { logLine } from '@/utils/log';
+
 import { reportDigest } from '../tests/helpers/coverage';
 
 /**
@@ -69,16 +71,14 @@ interface Provenance {
 function assertProvenance(report: string): void {
   const sidecar = path.resolve(path.dirname(report), 'provenance.json');
   const reject = (reason: string, detail?: Record<string, unknown>): never => {
-    console.error(
-      JSON.stringify({
-        msg: 'coverage report cannot be attributed to this run',
-        reason,
-        expectedTier: EXPECTED_TIER,
-        sidecar,
-        hint: `run: bun run test:${EXPECTED_TIER} -- --coverage`,
-        ...detail,
-      })
-    );
+    logLine('error', {
+      msg: 'coverage report cannot be attributed to this run',
+      reason,
+      expectedTier: EXPECTED_TIER,
+      sidecar,
+      hint: `run: bun run test:${EXPECTED_TIER} -- --coverage`,
+      ...detail,
+    });
     process.exit(1);
   };
 
@@ -204,13 +204,11 @@ if (!existsSync(target)) {
   // A missing report is a FAILURE, not a skip: the whole point is that the gate
   // cannot silently stop measuring. It means the tier ran without `--coverage`,
   // or `bunfig.toml` stopped declaring the `lcov` reporter.
-  console.error(
-    JSON.stringify({
-      msg: 'coverage report missing',
-      expected: target,
-      hint: 'run: bun run test:integration -- --coverage',
-    })
-  );
+  logLine('error', {
+    msg: 'coverage report missing',
+    expected: target,
+    hint: 'run: bun run test:integration -- --coverage',
+  });
   process.exit(1);
 }
 
@@ -219,9 +217,7 @@ assertProvenance(target);
 const totals = readTotals(target);
 
 if (totals.files === 0 || totals.linesFound === 0) {
-  console.error(
-    JSON.stringify({ msg: 'coverage report has no records', report: target })
-  );
+  logLine('error', { msg: 'coverage report has no records', report: target });
   process.exit(1);
 }
 
@@ -245,25 +241,23 @@ const failed = [...belowRate, ...belowMinimum];
 
 const asPercent = (value: number) => `${(value * 100).toFixed(2)}%`;
 
-console.log(
-  JSON.stringify({
-    msg:
-      failed.length === 0
-        ? 'coverage ok'
-        : belowMinimum.length > 0
-          ? 'coverage report shrank: the tier is measuring less than it did'
-          : 'coverage below the floor',
-    files: totals.files,
-    filesMinimum: MINIMUMS.files,
-    lines: asPercent(rates.lines),
-    linesFloor: asPercent(FLOORS.lines),
-    linesFound: totals.linesFound,
-    linesFoundMinimum: MINIMUMS.linesFound,
-    functions: asPercent(rates.functions),
-    functionsFloor: asPercent(FLOORS.functions),
-    functionsFound: totals.functionsFound,
-    functionsFoundMinimum: MINIMUMS.functionsFound,
-  })
-);
+logLine('log', {
+  msg:
+    failed.length === 0
+      ? 'coverage ok'
+      : belowMinimum.length > 0
+        ? 'coverage report shrank: the tier is measuring less than it did'
+        : 'coverage below the floor',
+  files: totals.files,
+  filesMinimum: MINIMUMS.files,
+  lines: asPercent(rates.lines),
+  linesFloor: asPercent(FLOORS.lines),
+  linesFound: totals.linesFound,
+  linesFoundMinimum: MINIMUMS.linesFound,
+  functions: asPercent(rates.functions),
+  functionsFloor: asPercent(FLOORS.functions),
+  functionsFound: totals.functionsFound,
+  functionsFoundMinimum: MINIMUMS.functionsFound,
+});
 
 if (failed.length > 0) process.exit(1);

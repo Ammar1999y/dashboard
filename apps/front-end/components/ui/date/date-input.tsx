@@ -1,4 +1,11 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -14,6 +21,43 @@ const daysInMonth = (y: number, m1to12: number) =>
   new Date(y, m1to12, 0).getDate();
 
 type DParts = { day: string; month: string; year: string };
+type Field = keyof DParts;
+
+// Visual order under `rtl`: day on the right, year on the left.
+const FIELDS = [
+  { field: 'day', maxLength: 2, width: 'w-7', placeholder: 'D', label: 'Day' },
+  {
+    field: 'month',
+    maxLength: 2,
+    width: 'w-6',
+    placeholder: 'M',
+    label: 'Month',
+  },
+  {
+    field: 'year',
+    maxLength: 4,
+    width: 'w-12',
+    placeholder: 'YYYY',
+    label: 'Year',
+  },
+] as const satisfies readonly {
+  field: Field;
+  maxLength: number;
+  width: string;
+  placeholder: string;
+  label: string;
+}[];
+
+const ALLOWED_KEYS = new Set([
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'Delete',
+  'Tab',
+  'Backspace',
+  'Enter',
+]);
 
 // No value is a real state (an open-ended range), never defaulted to today.
 const EMPTY_PARTS: DParts = { day: '', month: '', year: '' };
@@ -57,7 +101,7 @@ const isValidParts = (d: DParts) => {
   return day >= 1 && day <= daysInMonth(year, month);
 };
 
-const adjust = (parts: DParts, field: keyof DParts, step: 1 | -1): DParts => {
+const adjust = (parts: DParts, field: Field, step: 1 | -1): DParts => {
   // Missing parts start from today, so the arrows can also begin an entry.
   const today = new Date();
   const y = Number(parts.year) || today.getFullYear();
@@ -86,6 +130,7 @@ const adjust = (parts: DParts, field: keyof DParts, step: 1 | -1): DParts => {
 
   return toPartsFromDate(dt);
 };
+
 const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
   const [date, setDate] = useState<DParts>(() =>
     value ? toPartsFromDate(new Date(value)) : EMPTY_PARTS
@@ -97,9 +142,10 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
   const lastEmittedRef = useRef<string>(value ? partsKey(date) : CLEARED_KEY);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const dayRef = useRef<HTMLInputElement | null>(null);
-  const monthRef = useRef<HTMLInputElement | null>(null);
-  const yearRef = useRef<HTMLInputElement | null>(null);
+  const focusField = (field: Field) =>
+    containerRef.current
+      ?.querySelectorAll('input')
+      [FIELDS.findIndex((entry) => entry.field === field)]?.focus();
 
   useEffect(() => {
     const next = value ? toPartsFromDate(new Date(value)) : EMPTY_PARTS;
@@ -141,20 +187,20 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
   };
 
   const handleInputChange =
-    (field: keyof DParts) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    (field: Field) => (e: React.ChangeEvent<HTMLInputElement>) => {
       const raw = e.target.value.replace(/\D/g, '');
       const maxLen = field === 'year' ? 4 : 2;
       const next = { ...date, [field]: raw.slice(0, maxLen) };
       setAndMaybeEmit(next);
 
       if (raw.length === maxLen) {
-        if (field === 'day') monthRef.current?.focus();
-        else if (field === 'month') yearRef.current?.focus();
+        if (field === 'day') focusField('month');
+        else if (field === 'month') focusField('year');
       }
     };
 
   const handleBlur =
-    (field: keyof DParts) => (e: React.FocusEvent<HTMLInputElement>) => {
+    (field: Field) => (e: React.FocusEvent<HTMLInputElement>) => {
       // Pads only the field being left: padding empty siblings would fail a
       // partial date's validation and reset it on every day → month move.
       const raw = e.target.value;
@@ -178,20 +224,10 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
     };
 
   const handleKeyDown =
-    (field: keyof DParts) => (e: React.KeyboardEvent<HTMLInputElement>) => {
+    (field: Field) => (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.metaKey || e.ctrlKey) return;
 
-      const allowed = [
-        'ArrowUp',
-        'ArrowDown',
-        'ArrowLeft',
-        'ArrowRight',
-        'Delete',
-        'Tab',
-        'Backspace',
-        'Enter',
-      ];
-      if (!/^\d$/.test(e.key) && !allowed.includes(e.key)) {
+      if (!/^\d$/.test(e.key) && !ALLOWED_KEYS.has(e.key)) {
         e.preventDefault();
         return;
       }
@@ -203,25 +239,24 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
         return;
       }
 
-      const selStart = e.currentTarget.selectionStart ?? 0;
-      const selEnd = e.currentTarget.selectionEnd ?? 0;
+      // Each input is `ltr`, so its caret edges match the arrows; past an
+      // edge, the arrow moves to the neighbouring field on that side.
+      const { selectionStart, selectionEnd, value } = e.currentTarget;
+      const selStart = selectionStart ?? 0;
+      const selEnd = selectionEnd ?? 0;
       if (e.key === 'ArrowRight') {
         if (
-          selStart === e.currentTarget.value.length ||
-          (selStart === 0 && selEnd === e.currentTarget.value.length)
+          selStart === value.length ||
+          (selStart === 0 && selEnd === value.length)
         ) {
           e.preventDefault();
-          if (field === 'month') dayRef.current?.focus();
-          else if (field === 'year') monthRef.current?.focus();
+          if (field === 'month') focusField('day');
+          else if (field === 'year') focusField('month');
         }
-      } else if (
-        e.key === 'ArrowLeft' &&
-        (selStart === 0 ||
-          (selStart === 0 && selEnd === e.currentTarget.value.length))
-      ) {
+      } else if (selStart === 0 && e.key === 'ArrowLeft') {
         e.preventDefault();
-        if (field === 'day') monthRef.current?.focus();
-        else if (field === 'month') yearRef.current?.focus();
+        if (field === 'day') focusField('month');
+        else if (field === 'month') focusField('year');
       }
     };
 
@@ -240,8 +275,7 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
     e.preventDefault();
   }, []);
   const onFocus = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    if (typeof window !== 'undefined' && window.innerWidth > 1024)
-      e.target.select();
+    if (window.innerWidth > 1024) e.target.select();
   }, []);
   return (
     <div
@@ -252,59 +286,30 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
         className
       )}
     >
-      <input
-        type='text'
-        ref={dayRef}
-        inputMode='numeric'
-        pattern='[0-9]*'
-        maxLength={2}
-        value={date.day}
-        onChange={handleInputChange('day')}
-        onKeyDown={handleKeyDown('day')}
-        onFocus={onFocus}
-        onClick={onClick}
-        dir='ltr'
-        onBlur={handleBlur('day')}
-        className='bidi-isolate w-7 border-none p-0 text-center caret-primary outline-none'
-        placeholder='D'
-        aria-label='Day'
-      />
-      <span className='-mx-px opacity-20'>/</span>
-      <input
-        type='text'
-        ref={monthRef}
-        dir='ltr'
-        inputMode='numeric'
-        pattern='[0-9]*'
-        maxLength={2}
-        value={date.month}
-        onChange={handleInputChange('month')}
-        onKeyDown={handleKeyDown('month')}
-        onFocus={onFocus}
-        onClick={onClick}
-        onBlur={handleBlur('month')}
-        className='bidi-isolate w-6 border-none p-0 text-center caret-primary outline-none'
-        placeholder='M'
-        aria-label='Month'
-      />
-      <span className='-mx-px opacity-20'>/</span>
-      <input
-        type='text'
-        dir='ltr'
-        ref={yearRef}
-        inputMode='numeric'
-        pattern='[0-9]*'
-        maxLength={4}
-        value={date.year}
-        onChange={handleInputChange('year')}
-        onKeyDown={handleKeyDown('year')}
-        onFocus={onFocus}
-        onClick={onClick}
-        onBlur={handleBlur('year')}
-        className='bidi-isolate w-12 border-none p-0 text-center caret-primary outline-none'
-        placeholder='YYYY'
-        aria-label='Year'
-      />
+      {FIELDS.map(({ field, maxLength, width, placeholder, label }, index) => (
+        <Fragment key={field}>
+          {index > 0 && <span className='-mx-px opacity-20'>/</span>}
+          <input
+            type='text'
+            dir='ltr'
+            inputMode='numeric'
+            pattern='[0-9]*'
+            maxLength={maxLength}
+            value={date[field]}
+            onChange={handleInputChange(field)}
+            onKeyDown={handleKeyDown(field)}
+            onFocus={onFocus}
+            onClick={onClick}
+            onBlur={handleBlur(field)}
+            className={cn(
+              'bidi-isolate border-none p-0 text-center caret-primary outline-none',
+              width
+            )}
+            placeholder={placeholder}
+            aria-label={label}
+          />
+        </Fragment>
+      ))}
     </div>
   );
 });

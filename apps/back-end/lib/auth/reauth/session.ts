@@ -6,7 +6,7 @@ import { db } from '@/db';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 import { authenticationDenied } from '../errors';
-import { resolveRequestSession } from '../two-factor/challenge';
+import { resolveRequestSession } from '../session/request';
 import { roleAllowsLogin } from '../user-eligibility';
 
 export async function requireReauthSession(ctx: AuthContext) {

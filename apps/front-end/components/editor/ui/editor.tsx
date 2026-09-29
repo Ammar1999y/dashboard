@@ -1,35 +1,32 @@
 'use client';
 
+import type { ContentDir } from '@/components/editor/styles';
 import type { VariantProps } from 'class-variance-authority';
-import type { PlateContentProps, PlateViewProps } from 'platejs/react';
+import type { PlateContentProps } from 'platejs/react';
 
-import * as React from 'react';
+import { memo } from 'react';
 
 import { cva } from 'class-variance-authority';
-import { PlateContainer, PlateContent, PlateView } from 'platejs/react';
+import { PlateContainer, PlateContent } from 'platejs/react';
 import { cn } from '@/lib/utils';
 
-import styles from '@/components/editor/ui/editor-elements.module.css';
+import { fieldSurface } from '@/components/ui/field-surface';
+import { editorVariants } from '@/components/editor/styles';
 
 const editorContainerVariants = cva(
-  'relative w-full cursor-text select-text overflow-y-auto caret-primary selection:bg-primary/25 focus-visible:outline-none [&_.slate-selection-area]:z-50 [&_.slate-selection-area]:border [&_.slate-selection-area]:border-primary/25 [&_.slate-selection-area]:bg-primary/15',
+  'ignore-click-outside/toolbar relative w-full cursor-text select-text overflow-y-auto caret-primary selection:bg-primary/25 focus-visible:outline-none [&_.slate-selection-area]:z-50 [&_.slate-selection-area]:border [&_.slate-selection-area]:border-primary/25 [&_.slate-selection-area]:bg-primary/15',
   {
     defaultVariants: {
       variant: 'default',
     },
     variants: {
       variant: {
-        comment: cn(
-          'flex flex-wrap justify-between gap-1 px-1 py-0.5 text-sm',
-          'rounded-md border-[1.5px] border-transparent bg-transparent',
-          'has-[[data-slate-editor]:focus]:border-primary/50 has-[[data-slate-editor]:focus]:ring-2 has-[[data-slate-editor]:focus]:ring-primary/30',
-          'has-[[aria-disabled]]:border-input has-[[aria-disabled]]:bg-muted'
-        ),
-        default: 'h-full',
-        demo: 'h-[650px]',
-        select: cn(
-          'group rounded-md border border-input ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2',
-          'has-[[data-readonly]]:w-fit has-[[data-readonly]]:cursor-default has-[[data-readonly]]:border-transparent has-[[data-readonly]]:focus-within:[box-shadow:none]'
+        default: 'h-full max-h-[calc(100vh-170px)] rounded-md border',
+        comment: 'flex items-end gap-1 px-1 py-0.5 text-sm',
+        commentField: cn(
+          fieldSurface,
+          'flex max-h-40 min-h-input items-end gap-1 py-1.5 pe-1.5 ps-3',
+          'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50'
         ),
       },
     },
@@ -43,72 +40,32 @@ export function EditorContainer({
 }: React.ComponentProps<'div'> & VariantProps<typeof editorContainerVariants>) {
   return (
     <PlateContainer
-      className={cn(
-        'ignore-click-outside/toolbar max-h-[calc(100vh-170px)] rounded-md border',
-        editorContainerVariants({ variant }),
-        className
-      )}
+      className={cn(editorContainerVariants({ variant }), className)}
       {...props}
     />
   );
 }
 
-const editorVariants = cva(
-  cn(
-    'group/editor',
-    'relative w-full cursor-text select-text overflow-x-hidden whitespace-pre-wrap break-words',
-    'rounded-md ring-offset-background focus-visible:outline-none',
-    'placeholder:text-muted-foreground/80',
-    '[&_strong]:font-bold',
-    styles.editorContainer
-  ),
-  {
-    defaultVariants: {
-      variant: 'default',
-    },
-    variants: {
-      disabled: {
-        true: 'cursor-not-allowed opacity-50',
-      },
-      focused: {
-        true: 'ring-2 ring-ring ring-offset-2',
-      },
-      variant: {
-        aiChat:
-          'max-h-[min(70vh,320px)] w-full max-w-[700px] overflow-y-auto px-3 py-2 text-base md:text-sm',
-        comment: 'rounded-none border-none bg-transparent text-sm',
-        default:
-          'size-full px-14 pt-4 pb-72 text-base sm:px-[max(64px,calc(50%-350px))]',
-        demo: 'size-full px-14 pt-4 pb-72 text-base sm:px-[max(64px,calc(50%-350px))]',
-        fullWidth: 'size-full px-14 pt-4 pb-72 text-base sm:px-24',
-        none: '',
-        select: 'px-3 py-2 text-base data-[readonly]:w-fit',
-      },
-    },
-  }
-);
-
 export type EditorProps = PlateContentProps &
-  VariantProps<typeof editorVariants>;
+  VariantProps<typeof editorVariants> & {
+    /** The document direction; unset, the editor inherits the page's. */
+    dir?: ContentDir;
+    ref?: React.RefObject<HTMLDivElement | null>;
+  };
 
-export const Editor = React.memo(
+export const Editor = memo(
   ({
     className,
+    dir,
     disabled,
     focused,
     variant,
     ref,
     ...props
-  }: EditorProps & { ref?: React.RefObject<HTMLDivElement | null> }) => (
+  }: EditorProps) => (
     <PlateContent
-      className={cn(
-        editorVariants({
-          disabled,
-          focused,
-          variant,
-        }),
-        className
-      )}
+      className={cn(editorVariants({ disabled, focused, variant }), className)}
+      dir={dir}
       disableDefaultStyles
       disabled={disabled}
       ref={ref}
@@ -116,20 +73,4 @@ export const Editor = React.memo(
     />
   )
 );
-
 Editor.displayName = 'Editor';
-
-function EditorView({
-  className,
-  variant,
-  ...props
-}: PlateViewProps & VariantProps<typeof editorVariants>) {
-  return (
-    <PlateView
-      {...props}
-      className={cn(editorVariants({ variant }), className)}
-    />
-  );
-}
-
-EditorView.displayName = 'EditorView';

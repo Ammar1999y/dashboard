@@ -1,9 +1,9 @@
 import { memo } from 'react';
 
-import { CalendarIcon, ChevronDownIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 import { fieldSurface } from '@/components/ui/field-surface';
+import { Icon } from '@/components/ui/icon';
 import { PopoverTrigger } from '@/components/ui/popover';
 
 interface DateTriggerProps {
@@ -21,7 +21,10 @@ export const DateTrigger = memo(
         className={cn('relative flex h-9 items-center', triggerClassName)}
       >
         {showIcon && (
-          <CalendarIcon className='absolute top-1/2 size-4 -translate-y-1/2 text-muted-foreground ltr:left-3 rtl:right-3' />
+          <Icon
+            icon='solar:calendar-linear'
+            className='absolute top-1/2 size-4 -translate-y-1/2 text-muted-foreground ltr:left-3 rtl:right-3'
+          />
         )}
         <div
           className={cn(
@@ -31,7 +34,10 @@ export const DateTrigger = memo(
         >
           <span className='truncate text-start'>{label}</span>
           {!triggerClassName && (
-            <ChevronDownIcon className='ms-2 size-4 opacity-50' />
+            <Icon
+              icon='solar:alt-arrow-down-linear'
+              className='ms-2 size-4 opacity-50'
+            />
           )}
         </div>
       </button>

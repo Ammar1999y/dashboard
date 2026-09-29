@@ -4,10 +4,10 @@ import { db } from '@/db';
 import { roles } from '@/db/schema';
 
 import { MSG_FETCH_ERROR, MSG_FETCHED } from '@app/shared/api-messages';
-import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
+import { standardScopeFilter } from '@/lib/permissions/roles';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
@@ -31,7 +31,7 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
     .where(
       and(
         eq(roles.isActive, true),
-        eq(roles.scope, ROLE_SCOPE.STANDARD),
+        standardScopeFilter(),
         scope === 'own' ? eq(roles.createdBy, userId) : undefined
       )
     )

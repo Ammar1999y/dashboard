@@ -1,5 +1,9 @@
-import ErrorPage from '@/components/error-page';
+import type { Page } from '@/types/page';
 
-export default function Error500() {
-  return <ErrorPage />;
-}
+import ErrorPage from '@/components/app/error-page';
+
+const ServerErrorPage: Page = () => <ErrorPage statusCode={500} />;
+ServerErrorPage.title = 'خطأ في الخادم';
+ServerErrorPage.standalone = true;
+
+export default ServerErrorPage;

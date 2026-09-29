@@ -2,7 +2,7 @@ import type { MockSession, MockUser } from '../store';
 
 import { generateUUIDv7 } from '@/utils';
 import { http, HttpResponse } from 'msw';
-import { ROLE_SCOPE } from '@/lib/permissions/constants';
+import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 
 import { now } from '../lib/db';
 import { api, fail, MSG, ok, readBody } from '../lib/http';

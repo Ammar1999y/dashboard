@@ -3,7 +3,7 @@ import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
 import { and, count, eq, isNull } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
-import { accounts, roles, users } from '@/db/schema';
+import { roles, users } from '@/db/schema';
 
 import {
   HTTP_STATUS,
@@ -19,10 +19,7 @@ import { validID } from '@app/shared/utils';
 import { createUserSchema } from '@app/shared/validation/auth';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
-import {
-  CREDENTIAL_ISSUER,
-  CREDENTIAL_PROVIDER_ID,
-} from '@/lib/auth/credential';
+import { insertCredentialAccount } from '@/lib/auth/credential-account';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword } from '@/lib/auth/password/hash';
 import { parseDataTableParams } from '@/lib/data-table/params';
@@ -30,15 +27,22 @@ import { handleUserConstraintViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import { insufficientPermissions } from '@/lib/permissions/checker';
+import { auditCustomRolePermissions } from '@/lib/permissions/audit';
 import {
-  auditCustomRolePermissions,
+  insufficientPermissions,
+  resolveActionScope,
+} from '@/lib/permissions/checker';
+import { toPermissionRows } from '@/lib/permissions/matrix';
+import {
   createCustomRole,
   nonSystemRoleFilter,
+  publicRoleFields,
   validateAssignableRole,
+} from '@/lib/permissions/roles';
+import {
   validatePermissionScope,
   validateRolePermissionScope,
-} from '@/lib/permissions/utils';
+} from '@/lib/permissions/scope';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 // Server-owned filter contract: keys are the allowlist, and the type decides
@@ -65,7 +69,7 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
     limit: 60,
   });
 
-  const { where, orderBy, limit, offset, page, perPage, buildPageCount } =
+  const { where, orderBy, limit, offset, paginationMeta } =
     parseDataTableParams(users, {
       url: ctx.url,
       filterableColumns: USERS_FILTER_COLUMNS,
@@ -115,15 +119,9 @@ export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
     message: MSG_FETCHED,
     data: dashboardUsers.map(({ role, ...u }) => ({
       ...u,
-      roleId: role?.scope === CUSTOM_ROLE_VALUE ? CUSTOM_ROLE_VALUE : u.roleId,
-      role: role ? { id: role.id, roleName: role.roleName } : null,
+      ...publicRoleFields(u.roleId, role),
     })),
-    meta: {
-      page,
-      perPage,
-      total,
-      pageCount: buildPageCount(total),
-    },
+    meta: paginationMeta(total),
   });
 });
 
@@ -146,7 +144,10 @@ export const POST = withApiErrors(
     const input = await readJsonBody(ctx, createUserSchema);
     const isCustomRole = input.roleId === CUSTOM_ROLE_VALUE;
 
-    if (isCustomRole && actorPermissions?.['permissions']?.['create'] !== true)
+    if (
+      isCustomRole &&
+      !resolveActionScope(actorPermissions, 'permissions', 'create').allowed
+    )
       throw insufficientPermissions();
 
     if (actorPermissions && isCustomRole && input.permissions?.length)
@@ -214,16 +215,7 @@ export const POST = withApiErrors(
 
       const userId = newUser.id;
 
-      // `issuer` is written although the column defaults to it: Better Auth's
-      // sign-in lookup matches on (issuer, accountId), so it decides whether the
-      // user can log in at all.
-      await tx.insert(accounts).values({
-        accountId: userId,
-        issuer: CREDENTIAL_ISSUER,
-        providerId: CREDENTIAL_PROVIDER_ID,
-        userId: userId,
-        password: hashedPassword,
-      });
+      await insertCredentialAccount(tx, userId, hashedPassword);
 
       await auditLog(tx, {
         userId: actorUserId,
@@ -251,10 +243,7 @@ export const POST = withApiErrors(
           actorUserId,
           actorEmail: session.user.email,
           roleId: validID(assignedRoleId),
-          newPermissions: customPermissions.map((p) => ({
-            pageName: p.name,
-            permissions: p.permissions,
-          })),
+          newPermissions: toPermissionRows(customPermissions),
           targetUserId: userId,
           meta: auditMeta,
         });

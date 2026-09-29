@@ -41,8 +41,7 @@ export const contentHandlers = [
     );
   }),
 
-  // Same-origin, unlike the rest: `useUploadFile` posts to the Next app itself.
-  http.post('/api/upload', async ({ request }) => {
+  http.post(api('/api/upload'), async ({ request }) => {
     await delay();
     const form = await request.formData();
     const file = form.get('file');

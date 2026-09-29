@@ -2,8 +2,13 @@
 
 import type { Value } from 'platejs';
 
-import { createPlatePlugin } from 'platejs/react';
+import { memo, useEffect } from 'react';
 
+import { KEYS } from 'platejs';
+import { createPlatePlugin, useEditorRef } from 'platejs/react';
+import { useSession } from '@/lib/auth/use-session';
+
+import { UNKNOWN_USER_NAME } from '@/components/editor/labels';
 import { BlockDiscussion } from '@/components/editor/ui/block-discussion';
 
 export type TComment = {
@@ -24,134 +29,62 @@ export type TDiscussion = {
   documentContent?: string;
 };
 
-const discussionsData: TDiscussion[] = [
-  {
-    id: 'discussion1',
-    comments: [
-      {
-        id: 'comment1',
-        contentRich: [
-          {
-            children: [
-              {
-                text: 'Comments are a great way to provide feedback and discuss changes.',
-              },
-            ],
-            type: 'p',
-          },
-        ],
-        createdAt: new Date(Date.now() - 600_000),
-        discussionId: 'discussion1',
-        isEdited: false,
-        userId: 'charlie',
-      },
-      {
-        id: 'comment2',
-        contentRich: [
-          {
-            children: [
-              {
-                text: 'Agreed The link to the docs makes it easy to learn more.',
-              },
-            ],
-            type: 'p',
-          },
-        ],
-        createdAt: new Date(Date.now() - 500_000),
-        discussionId: 'discussion1',
-        isEdited: false,
-        userId: 'bob',
-      },
-    ],
-    createdAt: new Date(),
-    documentContent: 'comments',
-    isResolved: false,
-    userId: 'charlie',
-  },
-  {
-    id: 'discussion2',
-    comments: [
-      {
-        id: 'comment1',
-        contentRich: [
-          {
-            children: [
-              {
-                text: 'Nice demonstration of overlapping annotations with both comments and suggestions',
-              },
-            ],
-            type: 'p',
-          },
-        ],
-        createdAt: new Date(Date.now() - 300_000),
-        discussionId: 'discussion2',
-        isEdited: false,
-        userId: 'bob',
-      },
-      {
-        id: 'comment2',
-        contentRich: [
-          {
-            children: [
-              {
-                text: 'This helps users understand how powerful the editor can be.',
-              },
-            ],
-            type: 'p',
-          },
-        ],
-        createdAt: new Date(Date.now() - 200_000),
-        discussionId: 'discussion2',
-        isEdited: false,
-        userId: 'charlie',
-      },
-    ],
-    createdAt: new Date(),
-    documentContent: 'overlapping',
-    isResolved: false,
-    userId: 'bob',
-  },
-];
-
-const avatarUrl = (seed: string) =>
-  `https://api.dicebear.com/9.x/glass/svg?seed=${seed}`;
-
-const usersData: Record<
-  string,
-  { id: string; avatarUrl: string; name: string; hue?: number }
-> = {
-  alice: {
-    id: 'alice',
-    avatarUrl: avatarUrl('alice6'),
-    name: 'Alice',
-  },
-  bob: {
-    id: 'bob',
-    avatarUrl: avatarUrl('bob4'),
-    name: 'Bob',
-  },
-  charlie: {
-    id: 'charlie',
-    avatarUrl: avatarUrl('charlie2'),
-    name: 'Charlie',
-  },
+export type TDiscussionUser = {
+  id: string;
+  name: string;
+  avatarUrl?: string | null;
 };
 
-// This plugin is purely UI. It's only used to store the discussions and users data
+/** Stands in for the author until the session resolves. */
+const ANONYMOUS_USER: TDiscussionUser = {
+  id: 'anonymous',
+  name: UNKNOWN_USER_NAME,
+};
+
+/**
+ * Threads live in this plugin's options only: there is no discussions API yet,
+ * so they are gone on reload while the comment marks stay in the document.
+ */
 export const discussionPlugin = createPlatePlugin({
   key: 'discussion',
   options: {
-    currentUserId: 'alice',
-    discussions: discussionsData,
-    users: usersData,
+    currentUserId: ANONYMOUS_USER.id,
+    discussions: [] as TDiscussion[],
+    users: { [ANONYMOUS_USER.id]: ANONYMOUS_USER } as Record<
+      string,
+      TDiscussionUser
+    >,
   },
 })
   .configure({
     render: { aboveNodes: BlockDiscussion },
   })
   .extendSelectors(({ getOption }) => ({
-    currentUser: () => getOption('users')[getOption('currentUserId')],
-    user: (id: string) => getOption('users')[id],
+    currentUser: (): TDiscussionUser =>
+      getOption('users')[getOption('currentUserId')] ?? ANONYMOUS_USER,
+    user: (id: string): TDiscussionUser | undefined => getOption('users')[id],
   }));
 
 export const DiscussionKit = [discussionPlugin];
+
+/** Makes the signed-in user the author of new comments and suggestions. */
+export const CurrentUserSync = memo(() => {
+  const editor = useEditorRef();
+  const user = useSession().data?.user;
+  const id = user?.id;
+  const name = user?.name;
+  const image = user?.image;
+
+  useEffect(() => {
+    if (!id) return;
+    editor.setOption(discussionPlugin, 'users', {
+      ...editor.getOption(discussionPlugin, 'users'),
+      [id]: { id, name: name || UNKNOWN_USER_NAME, avatarUrl: image },
+    });
+    editor.setOption(discussionPlugin, 'currentUserId', id);
+    editor.setOption({ key: KEYS.suggestion }, 'currentUserId', id);
+  }, [editor, id, name, image]);
+
+  return null;
+});
+CurrentUserSync.displayName = 'CurrentUserSync';

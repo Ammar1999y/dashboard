@@ -1,25 +1,26 @@
-'use client';
-
-import type { ExtendedColumnFilter } from '@/types/data-table';
+import type { FilterItemSchema } from '@app/shared/data-table/parsers';
 import type { Column } from '@tanstack/react-table';
+import type { ChangeEvent, ComponentProps } from 'react';
 
-import * as React from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { cn } from '@/lib/utils';
 
 import { Input } from '@/components/ui/input';
 
-interface DataTableRangeFilterProps<TData> extends React.ComponentProps<'div'> {
-  filter: ExtendedColumnFilter<TData>;
+import { genericMemo } from '../utils/generic-memo';
+
+interface DataTableRangeFilterProps<TData> extends ComponentProps<'div'> {
+  filter: FilterItemSchema;
   column: Column<TData>;
   inputId: string;
   onFilterUpdate: (
     filterId: string,
-    updates: Partial<Omit<ExtendedColumnFilter<TData>, 'filterId'>>
+    updates: Partial<Omit<FilterItemSchema, 'filterId'>>
   ) => void;
 }
 
-export function DataTableRangeFilter<TData>({
+function DataTableRangeFilterInner<TData>({
   filter,
   column,
   inputId,
@@ -29,7 +30,7 @@ export function DataTableRangeFilter<TData>({
 }: DataTableRangeFilterProps<TData>) {
   const meta = column.columnDef.meta;
 
-  const [min, max] = React.useMemo(() => {
+  const [min, max] = useMemo(() => {
     const range = column.columnDef.meta?.range;
     if (range) return range;
 
@@ -39,25 +40,22 @@ export function DataTableRangeFilter<TData>({
     return [values[0], values[1]];
   }, [column]);
 
-  const formatValue = React.useCallback(
-    (value: string | number | undefined) => {
-      if (value === undefined || value === '') return '';
-      const numValue = Number(value);
-      return Number.isNaN(numValue)
-        ? ''
-        : numValue.toLocaleString(undefined, {
-            maximumFractionDigits: 0,
-          });
-    },
-    []
-  );
+  const formatValue = useCallback((value: string | number | undefined) => {
+    if (value === undefined || value === '') return '';
+    const numValue = Number(value);
+    return Number.isNaN(numValue)
+      ? ''
+      : numValue.toLocaleString(undefined, {
+          maximumFractionDigits: 0,
+        });
+  }, []);
 
-  const value = React.useMemo(() => {
+  const value = useMemo(() => {
     if (Array.isArray(filter.value)) return filter.value.map(formatValue);
     return [formatValue(filter.value), ''];
   }, [filter.value, formatValue]);
 
-  const onRangeValueChange = React.useCallback(
+  const onRangeValueChange = useCallback(
     (value: string, isMin?: boolean) => {
       const numValue = Number(value);
       const currentValues = Array.isArray(filter.value)
@@ -82,6 +80,18 @@ export function DataTableRangeFilter<TData>({
     [filter.filterId, filter.value, min, max, onFilterUpdate]
   );
 
+  const onMinChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) =>
+      onRangeValueChange(event.target.value, true),
+    [onRangeValueChange]
+  );
+
+  const onMaxChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) =>
+      onRangeValueChange(event.target.value),
+    [onRangeValueChange]
+  );
+
   return (
     <div
       data-slot='range'
@@ -101,7 +111,7 @@ export function DataTableRangeFilter<TData>({
         max={max}
         className='!h-8 w-full rounded bg-transparent shadow-xs hover:shadow-sm'
         defaultValue={value[0]}
-        onChange={(event) => onRangeValueChange(event.target.value, true)}
+        onChange={onMinChange}
       />
       <span className='sr-only shrink-0 text-muted-foreground'>إلى</span>
       <Input
@@ -117,8 +127,15 @@ export function DataTableRangeFilter<TData>({
         max={max}
         className='!h-8 w-full rounded bg-transparent shadow-xs hover:shadow-sm'
         defaultValue={value[1]}
-        onChange={(event) => onRangeValueChange(event.target.value)}
+        onChange={onMaxChange}
       />
     </div>
   );
 }
+
+const DataTableRangeFilter = genericMemo(
+  DataTableRangeFilterInner,
+  'DataTableRangeFilter'
+);
+
+export { DataTableRangeFilter };
