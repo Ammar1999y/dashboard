@@ -18,6 +18,9 @@
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import type { CoverageProvenance } from '../tests/helpers/coverage';
+
+import * as z from 'zod';
 
 import { logLine } from '@/utils/log';
 
@@ -57,12 +60,12 @@ const EXPECTED_TIER = 'integration';
 /** Generous: the integration and process tiers run between the stamp and this gate. */
 const MAX_REPORT_AGE_MS = 60 * 60 * 1000;
 
-interface Provenance {
-  tier?: unknown;
-  startedAt?: unknown;
-  finishedAt?: unknown;
-  digest?: unknown;
-}
+const provenanceSchema = z.object({
+  tier: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string(),
+  digest: z.string(),
+}) satisfies z.ZodType<Omit<CoverageProvenance, 'selection'>>;
 
 /**
  * Refuses a report this gate cannot attribute to a just-finished run of the
@@ -85,21 +88,26 @@ function assertProvenance(report: string): void {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from argv of a developer/CI-invoked script, not from a request
   if (!existsSync(sidecar)) reject('no provenance sidecar beside the report');
 
-  let stamp: Provenance;
+  let raw: unknown;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- same
-    stamp = JSON.parse(readFileSync(sidecar, 'utf8')) as Provenance;
+    raw = JSON.parse(readFileSync(sidecar, 'utf8'));
   } catch {
     return reject('the provenance sidecar is not readable JSON');
   }
+  const parsed = provenanceSchema.safeParse(raw);
+  if (!parsed.success)
+    return reject('the provenance sidecar is not the shape the runner writes', {
+      invalidFields: parsed.error.issues.map((issue) => issue.path.join('.')),
+    });
+  const stamp = parsed.data;
 
   if (stamp.tier !== EXPECTED_TIER)
     reject('the report was produced by a different tier', {
       reportedTier: stamp.tier,
     });
 
-  const finished =
-    typeof stamp.finishedAt === 'string' ? Date.parse(stamp.finishedAt) : NaN;
+  const finished = Date.parse(stamp.finishedAt);
   if (!Number.isFinite(finished))
     reject('the provenance sidecar carries no finish time');
   const ageMs = Date.now() - finished;
@@ -110,8 +118,7 @@ function assertProvenance(report: string): void {
       maxAgeMinutes: MAX_REPORT_AGE_MS / 60_000,
     });
 
-  const started =
-    typeof stamp.startedAt === 'string' ? Date.parse(stamp.startedAt) : NaN;
+  const started = Date.parse(stamp.startedAt);
   if (!Number.isFinite(started))
     reject('the provenance sidecar carries no start time');
   // A stamp whose run finished before it began describes no run at all, so

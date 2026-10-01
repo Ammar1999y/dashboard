@@ -14,7 +14,7 @@ import { and, eq } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { users, verificationSessions } from '@/db/schema';
 import { APIError } from 'better-auth/api';
-import { deleteSessionCookie, expireCookie } from 'better-auth/cookies';
+import { deleteSessionCookie } from 'better-auth/cookies';
 
 import {
   HTTP_STATUS,
@@ -30,6 +30,7 @@ import { auditLog, boundedAuditMeta } from '@/lib/audit';
 import { logSanitized } from '@/utils/log';
 
 import { twoFactorMsg } from '../messages';
+import { expireDontRememberMarker } from '../session/cookie';
 import {
   expiresIn,
   randomToken,
@@ -57,15 +58,11 @@ interface OfferedOptionHint extends OfferedOption {
   nextAllowedIn?: number;
 }
 
-/**
- * Attaches the send throttle each OTP option is under, so a client auto-routing
- * to an `otp` default knows whether to send or to wait without a round trip
- * that answers 429. One indexed read, skipped when nothing is an OTP.
- */
+// Lets a client auto-routing to an `otp` default wait instead of sending into a 429.
 async function withOtpSendHints(
   userId: EntityID,
   options: OfferedOption[],
-  executor: Executor = db
+  executor: Executor
 ): Promise<OfferedOptionHint[]> {
   if (!options.some((option) => option.method === 'otp')) return options;
 
@@ -119,10 +116,7 @@ interface IssueChallengeParams {
 
 interface ChallengeIssued {
   twoFactorRedirect: true;
-  /**
-   * Distinct method names. Documented, and what existing clients read — but two
-   * OTP channels collapse into one entry here, so it cannot drive a choice.
-   */
+  /** Kept for existing clients; OTP channels collapse, so it cannot drive a choice. */
   twoFactorMethods: TwoFactorMethod[];
   /** The ordered, identity-carrying set. This is what a client should render. */
   twoFactorOptions: OfferedOptionHint[];
@@ -131,16 +125,21 @@ interface ChallengeIssued {
 }
 
 /**
- * `refused` is the fail-closed case: 2FA is on and nothing can complete it. The
- * first factor's session is withdrawn rather than kept: a third party can
- * produce an empty offered set through an ordinary contact edit, so granting
- * access on one would make `users.edit` a way to disarm someone else's second
- * factor. The exit for a user in that state is the administrative reset.
+ * `refused` fails closed: a third party can empty the offered set through a
+ * contact edit, so proceeding would let `users.edit` disarm someone else's
+ * second factor. The exit is the administrative reset.
  */
 type ChallengeOutcome =
   | { kind: 'challenge'; body: ChallengeIssued }
   | { kind: 'proceed' }
-  | { kind: 'refused' };
+  | {
+      kind: 'refused';
+      /**
+       * Set under a caller's `transaction`, which the refusal rolls back: the
+       * caller runs it after the rollback, or the refusal goes unaudited.
+       */
+      recordRefusal?: () => Promise<void>;
+    };
 
 /** The refusal every caller raises, so the status and code cannot drift apart. */
 export function twoFactorUnavailableError(): APIError {
@@ -150,27 +149,13 @@ export function twoFactorUnavailableError(): APIError {
   });
 }
 
-/**
- * Withdraws the session the first factor created and puts a challenge in its
- * place, or refuses the login outright when nothing can complete it.
- */
 export async function issueTwoFactorChallenge(
   ctx: AuthContext,
   params: IssueChallengeParams
 ): Promise<ChallengeOutcome> {
-  // ⚠️ Two different questions, answered in separate branches so every
-  // first-factor path agrees about one account:
-  //
-  //   feature off      — the method list is empty, so there is no second factor
-  //                      to enforce anywhere and every path downgrades. This is
-  //                      the operator's intent; it is audited per affected
-  //                      account so the rollback is attributable.
-  //   empty for a user — the list is non-empty and nothing survives the
-  //                      intersection. Fail closed, on every path, and the exit
-  //                      is the administrative reset.
-  //
-  // The reset is therefore NOT gated on the method list: under an empty list it
-  // is the only way back for an account still holding stored 2FA state.
+  // ⚠️ An empty method list is operator intent: every path downgrades, audited
+  // per account. An empty set for one user fails closed below. The
+  // administrative reset must stay ungated by the method list.
   if (!TWO_FACTOR_ENABLED) {
     const [row] = await (params.transaction ?? db)
       .select({ enabled: users.twoFactorEnabled })
@@ -191,48 +176,49 @@ export async function issueTwoFactorChallenge(
   }
 
   const state = await readEnrolmentState(params.userId, params.transaction);
-  // From the database, not the caller's session object: a stale copy would
-  // decide a login in the direction that skips the factor.
+  // From the database: a stale session copy would err toward skipping the factor.
   if (!state.enabled) return { kind: 'proceed' };
 
   const options = offeredMethods(state, params.excludeContactKind);
 
   if (options.length === 0) {
-    // Two causes, one outcome, and only one of them is anybody's fault: a
-    // possession exclusion leaves the user a working password route, capability
-    // loss leaves them needing the operator reset. Alerting and the rollout
-    // preflight both key on the difference, so it is split at the branch where
-    // the discriminator is still in scope.
+    // Alerting and the rollout preflight key on which cause emptied the set.
     const withoutExclusion = params.excludeContactKind
       ? offeredMethods(state)
       : options;
     await withdrawFirstFactorSession(ctx, params.session.token);
-    await recordChallengeEvent(
-      params,
-      { loginSuccess: true },
-      {
-        sessionAbandoned: true,
-        reason:
-          withoutExclusion.length > 0
-            ? 'two_factor_excluded_by_first_factor'
-            : 'two_factor_capability_unavailable',
-        twoFactorRefused: true,
-        enrolled: state.intent.map((entry) => entry.method),
-        serverEnabled: [...ENABLED_TWO_FACTOR_METHODS],
-      }
-    );
+    // Deferred, it runs after the caller's transaction rolled the session back:
+    // there was never a login to abandon.
+    const deferred = params.transaction !== undefined;
+    const recordRefusal = () =>
+      recordChallengeEvent(
+        { ...params, transaction: undefined },
+        deferred ? {} : { loginSuccess: true },
+        {
+          ...(deferred
+            ? { sessionRolledBack: true }
+            : { sessionAbandoned: true }),
+          firstFactor: params.firstFactor,
+          reason:
+            withoutExclusion.length > 0
+              ? 'two_factor_excluded_by_first_factor'
+              : 'two_factor_capability_unavailable',
+          twoFactorRefused: true,
+          enrolled: state.intent.map((entry) => entry.method),
+          serverEnabled: [...ENABLED_TWO_FACTOR_METHODS],
+        }
+      );
+    if (params.transaction) return { kind: 'refused', recordRefusal };
+    await recordRefusal();
     return { kind: 'refused' };
   }
 
-  // AFTER the offered set, never before: a trust row outlives the factor it was
-  // granted against, and the skip has to be a skip of a factor that still
-  // exists.
+  // After the offered set: a trust row outlives the factor it was granted for.
   if (
     params.firstFactor !== 'google' &&
     (await consumeDeviceTrust(ctx, params.userId))
   ) {
-    // The one path that completes a login without a second factor, and the one
-    // an incident review looks for. Nothing else records it.
+    // The only record of a login completed without a second factor.
     await recordChallengeEvent(
       params,
       { loginSuccess: true },
@@ -263,13 +249,9 @@ export async function issueTwoFactorChallenge(
   const expiresAt = expiresIn(TWO_FACTOR_CHALLENGE_MAX_AGE_S);
   const defaultMethod = defaultOption(options);
 
-  // ⚠️ Written BEFORE the challenge, and that order is the whole safety
-  // argument: a state row with no challenge expires harmlessly, while a
-  // challenge with no state row is refused by every verifier. The set issued
-  // here is immutable for the life of the challenge — current capability may
-  // NARROW it at verification and may never widen it — so a capability that
-  // appears mid-flight cannot become a factor the user was not challenged on,
-  // and the issuance-time contact exclusion cannot be recomputed away.
+  // ⚠️ State BEFORE the challenge: an orphan state row expires harmlessly, a
+  // challenge without one is refused. The issued set is immutable; verification
+  // may narrow it, never widen it.
   await ctx.context.internalAdapter.createVerificationValue({
     value: JSON.stringify({
       userId: params.userId,
@@ -308,17 +290,17 @@ export async function issueTwoFactorChallenge(
     body: {
       twoFactorRedirect: true,
       twoFactorMethods: offeredMethodNames(options),
-      twoFactorOptions: await withOtpSendHints(params.userId, options),
+      twoFactorOptions: await withOtpSendHints(
+        params.userId,
+        options,
+        params.transaction ?? db
+      ),
       defaultMethod,
     },
   };
 }
 
-/**
- * Drops the session the first factor created, before anything else. A failure
- * after this point must leave the user signed out and retrying, never signed in
- * without a second factor.
- */
+// First, so a later failure leaves the user signed out, never signed in without a second factor.
 async function withdrawFirstFactorSession(
   ctx: AuthContext,
   token: string
@@ -328,22 +310,17 @@ async function withdrawFirstFactorSession(
   ctx.context.setNewSession(null);
 }
 
-/**
- * Writes the `dont_remember` marker as THIS sign-in submitted it: the plugin's
- * verifiers read that cookie alone to pick the session lifetime, so a marker
- * left by an earlier "do not remember" login would shorten a later remembered
- * one. The same two states `completeTwoFactorChallenge` produces from the
- * companion record.
- */
+// The plugin's verifiers pick the session lifetime from this cookie alone, so a
+// marker left by an earlier login must not survive.
 async function carryRememberChoice(
   ctx: AuthContext,
   rememberMe: boolean
 ): Promise<void> {
-  const marker = ctx.context.authCookies.dontRememberToken;
   if (rememberMe) {
-    expireCookie(ctx, marker);
+    expireDontRememberMarker(ctx);
     return;
   }
+  const marker = ctx.context.authCookies.dontRememberToken;
   await ctx.setSignedCookie(
     marker.name,
     'true',

@@ -11,11 +11,7 @@ import { deleteFromR2, getPublicUrl, hasPublicUrl } from '@/lib/r2/client';
 
 import { errorTypeOf, logSanitized } from '@/utils/log';
 
-/**
- * Orphan demands one drain pass will work through, each an R2 delete and
- * possibly a purge call. The table holds a row only for a leftover whose delete
- * already failed once.
- */
+/** Each demand costs an R2 delete and possibly a purge call. */
 export const ORPHAN_DRAIN_BATCH = 100;
 
 /**
@@ -51,14 +47,9 @@ interface OrphanDemand {
 }
 
 /**
- * Clear one drained demand — and only while it is still the demand this holder
- * read.
- *
- * On the row identity AND on `cleanup_requests`, never on `(r2_key,
- * bucket_type)` alone: another abandoned writer recording its own copy of the
- * same object bumps the counter, and clearing by key would delete the retry that
- * writer is relying on. A refused clear leaves the row for whoever bumped it.
- * See `orphanedObjects.cleanupRequests`.
+ * On the id AND `cleanup_requests`, never the key alone: another abandoned
+ * writer's copy of the same object bumps the counter, and clearing by key would
+ * drop the retry that writer relies on.
  */
 async function clearOrphanDemand(demand: OrphanDemand): Promise<boolean> {
   const cleared = await db
@@ -74,19 +65,10 @@ async function clearOrphanDemand(demand: OrphanDemand): Promise<boolean> {
 }
 
 /**
- * `removeObject`, made durable, for the one caller whose row is already gone.
- *
- * Recorded before the attempt and cleared only after it succeeds: with the file
- * row gone there is no marker, counter or `deleting` row to fall back on, so an
- * unrecorded failure is a leftover nothing will ever retry. See
- * `orphanedObjects`.
- *
- * The enqueue advances `cleanup_requests` on conflict rather than doing nothing,
- * because two abandoned writers can hold a copy of the same key in the same
- * bucket, and the clear has to tell its own demand from a newer one. A writer
- * whose clear is refused has still removed every copy that landed before it —
- * each writer records only after its own copy has landed — so the surviving row
- * is the newer writer's.
+ * `removeObject` made durable for a caller whose file row is gone: recorded
+ * before the attempt and cleared only after it succeeds, since nothing else
+ * would ever retry a failure. A refused clear leaves the row to the newer
+ * writer that bumped it.
  */
 export async function removeOrphanedObject(
   key: string,
@@ -112,23 +94,11 @@ export async function removeOrphanedObject(
 }
 
 /**
- * Finish the deletes recorded by `removeOrphanedObject`.
+ * Only the bucket each row names, unlike `finishDeleting`: the file's own
+ * delete has already swept every bucket.
  *
- * Each row names the exact bucket its leftover is in, so this deletes from that
- * one rather than from every enabled bucket the way `finishDeleting` does: by
- * the time a row lands here the file's own delete has already swept them all.
- * A row survives its own failure and is retried on the next pass; `failed` is
- * what makes the retention sweep report `degraded` until it clears.
- *
- * ⚠️ Least recently touched first, and a failed attempt is restamped. Oldest
- * first starves: once a batch's worth of demands fail for a reason of their own,
- * every later pass selects that same prefix and nothing behind it is attempted.
- * Restamping makes the queue a rotation, so every outstanding demand is reached
- * within ⌈rows / batch⌉ passes.
- *
- * `hasMore` reports work this bounded pass did not settle — rows it never
- * reached, and rows a concurrent writer re-recorded while it was working — which
- * is a backlog rather than a failure and is reported separately from `failed`.
+ * ⚠️ Least recently touched first, and a failure is restamped: oldest-first
+ * starves everything behind one batch of persistent failures.
  */
 export async function sweepOrphanedObjects(): Promise<{
   removed: number;
@@ -152,7 +122,6 @@ export async function sweepOrphanedObjects(): Promise<{
   for (const row of due) {
     if (!(await removeObject(row.r2Key, row.bucketType))) {
       failed += 1;
-      // Yields this row's place in the queue; see the ordering note above.
       await db
         .update(orphanedObjects)
         .set({ updatedAt: sql`now()` })

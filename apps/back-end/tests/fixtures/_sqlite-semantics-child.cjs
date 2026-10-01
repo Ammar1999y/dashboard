@@ -200,6 +200,107 @@ try {
     b.close(false);
   }
 
+  // A stale window never moves the row backwards.
+  // A caller that computed its window before a boundary and committed after a
+  // newer caller rolled the row over (a busy wait in another process, a
+  // backwards clock step) must be charged against the stored window, not
+  // rewrite it: the next current-window caller would otherwise roll over again
+  // and receive a fresh budget.
+  {
+    const db = open('stale.db');
+    db.exec(sql.rateLimitDdl);
+    const consume = db.prepare(sql.consume);
+    const previous = 4000 * WINDOW_MS;
+    const current = previous + WINDOW_MS;
+    const LIMIT = 5;
+    const row = (key) =>
+      db
+        .prepare('SELECT count, window_start FROM rate_limit WHERE key=?')
+        .get(key);
+    const inCurrent = (key) =>
+      consume.get(key, current, 1, current + WINDOW_MS, LIMIT);
+    const stale = (key) =>
+      consume.get(key, previous, 1, previous + WINDOW_MS, LIMIT);
+
+    for (let i = 0; i < LIMIT; i++) inCurrent('full');
+    const staleAtLimit = stale('full');
+    let readmitted = 0;
+    for (let i = 0; i < LIMIT; i++) if (inCurrent('full')) readmitted++;
+    const full = row('full');
+    check(
+      'a stale window is refused at the limit and re-grants nothing',
+      !staleAtLimit &&
+        readmitted === 0 &&
+        Number(full.count) === LIMIT &&
+        Number(full.window_start) === current,
+      `staleAdmitted=${Boolean(staleAtLimit)} readmitted=${readmitted} stored=${full.count}@${full.window_start === current ? 'current' : full.window_start}`
+    );
+
+    inCurrent('partial');
+    inCurrent('partial');
+    const staleUnderLimit = stale('partial');
+    let admitted = 0;
+    for (let i = 0; i < LIMIT; i++) if (inCurrent('partial')) admitted++;
+    const partial = row('partial');
+    check(
+      'a stale window under the limit is charged to the stored window',
+      Boolean(staleUnderLimit) &&
+        Number(staleUnderLimit.window_start) === current &&
+        admitted === LIMIT - 3 &&
+        Number(partial.count) === LIMIT &&
+        Number(partial.window_start) === current,
+      `staleRow=${staleUnderLimit ? `${staleUnderLimit.count}@${staleUnderLimit.window_start === current ? 'current' : staleUnderLimit.window_start}` : 'none'} admittedAfter=${admitted} expected=${LIMIT - 3}`
+    );
+    db.close(false);
+  }
+
+  // ---- a clock that stepped forward past a window and back -----------------
+  // Rows written during the jump hold a future window. A caller exactly one
+  // window behind it is the ordinary stale case and stays charged; one whose
+  // window ended before the stored one began resets the row, or the key would
+  // stay pinned (budget spanning the jump, unsweepable) until the clock caught up.
+  {
+    const db = open('clock-step.db');
+    db.exec(sql.rateLimitDdl);
+    const consume = db.prepare(sql.consume);
+    const future = 9000 * WINDOW_MS;
+    const LIMIT = 5;
+    const row = (key) =>
+      db
+        .prepare(
+          'SELECT count, window_start, expires_at FROM rate_limit WHERE key=?'
+        )
+        .get(key);
+    const at = (key, windowStart) =>
+      consume.get(key, windowStart, 1, windowStart + WINDOW_MS, LIMIT);
+
+    for (let i = 0; i < LIMIT; i++) at('adjacent', future);
+    const adjacent = at('adjacent', future - WINDOW_MS);
+    const pinned = row('adjacent');
+    check(
+      'a caller one window behind a full future window is still refused',
+      !adjacent &&
+        Number(pinned.count) === LIMIT &&
+        Number(pinned.window_start) === future,
+      `admitted=${Boolean(adjacent)} stored=${pinned.count}@${pinned.window_start === future ? 'future' : pinned.window_start}`
+    );
+
+    const past = future - 2 * WINDOW_MS;
+    for (let i = 0; i < LIMIT; i++) at('stepped', future);
+    let admitted = 0;
+    for (let i = 0; i < LIMIT + 1; i++) if (at('stepped', past)) admitted++;
+    const reset = row('stepped');
+    check(
+      'a caller whose window ended before the stored one began resets it',
+      admitted === LIMIT &&
+        Number(reset.count) === LIMIT &&
+        Number(reset.window_start) === past &&
+        Number(reset.expires_at) === past + WINDOW_MS,
+      `admitted=${admitted} expected=${LIMIT} stored=${reset.count}@${reset.window_start === past ? 'past' : reset.window_start} expires=${reset.expires_at === past + WINDOW_MS ? 'past window end' : reset.expires_at}`
+    );
+    db.close(false);
+  }
+
   // ---- P-5 regression: concurrent migration under BEGIN IMMEDIATE ----------
   {
     const dbPath = path.join(dir, 'migrate.db');

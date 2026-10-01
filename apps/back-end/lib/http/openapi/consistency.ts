@@ -12,6 +12,7 @@ import {
 
 import { compareCodeUnits } from '@/utils/text';
 
+import { isSafeMethod } from '../origin';
 import { isDevelopmentOnlyPath } from '../route-manifest';
 import {
   betterAuthDocumentPath,
@@ -23,13 +24,20 @@ import {
   BETTER_AUTH_SUMMARIES,
 } from './better-auth-tables';
 import { COMPONENT_SCHEMAS } from './components';
+import { isJsonSchema } from './json-schema';
 import { MULTIPART_BODIES, OTP_SEND_ROUTES } from './request-bodies';
-import { operationKey, toOpenApiPath } from './route-operations';
 import {
+  operationKey,
+  tableOperation,
+  toOpenApiPath,
+} from './route-operations';
+import {
+  BODY_SCHEMA_REFUSALS,
   BODYLESS_BAD_REQUEST_ROUTES,
   CHANNEL_UNAVAILABLE_ROUTES,
   CONFLICT_ROUTES,
   CREATED_ROUTES,
+  ID_NOT_FOUND_ROUTES,
   NOT_FOUND_ROUTES,
   OPERATION_DOCS,
   PAGINATED_SUCCESS_ROUTES,
@@ -46,6 +54,8 @@ const ROUTE_KEYED_TABLES: readonly (readonly [string, Iterable<string>])[] = [
   ['CONFLICT_ROUTES', CONFLICT_ROUTES],
   ['BODYLESS_BAD_REQUEST_ROUTES', BODYLESS_BAD_REQUEST_ROUTES],
   ['NOT_FOUND_ROUTES', NOT_FOUND_ROUTES],
+  ['ID_NOT_FOUND_ROUTES', ID_NOT_FOUND_ROUTES],
+  ['BODY_SCHEMA_REFUSALS', Object.keys(BODY_SCHEMA_REFUSALS)],
   ['QUERY_VALIDATION_ROUTES', QUERY_VALIDATION_ROUTES],
   ['CHANNEL_UNAVAILABLE_ROUTES', CHANNEL_UNAVAILABLE_ROUTES],
   ['SESSION_COOKIE_ROUTES', SESSION_COOKIE_ROUTES],
@@ -60,10 +70,12 @@ const methodList = (methods: Iterable<string>): string =>
   [...methods].toSorted(compareCodeUnits).join(', ');
 
 export function openApiConsistencyProblems(
-  manifest: readonly RouteManifestEntry[]
+  manifest: readonly RouteManifestEntry[],
+  withheld: readonly RouteManifestEntry[] = []
 ): string[] {
   const problems: string[] = [];
   const keys = new Set(manifest.map(operationKey));
+  const withheldKeys = new Set(withheld.map(operationKey));
 
   for (const entry of manifest) {
     const key = operationKey(entry);
@@ -87,12 +99,38 @@ export function openApiConsistencyProblems(
       problems.push(
         `${key} has a MULTIPART_BODIES entry but declares body: '${entry.body}'`
       );
+    if (ID_NOT_FOUND_ROUTES.has(key) && !entry.path.includes(':'))
+      problems.push(`${key} is in ID_NOT_FOUND_ROUTES but has no path id`);
+    if (ID_NOT_FOUND_ROUTES.has(key) && !NOT_FOUND_ROUTES.has(key))
+      problems.push(
+        `${key} is in ID_NOT_FOUND_ROUTES but not in NOT_FOUND_ROUTES, so the 404 it answers is unpublished`
+      );
+    if (entry.body !== 'json' && key in BODY_SCHEMA_REFUSALS)
+      problems.push(
+        `${key} has a BODY_SCHEMA_REFUSALS entry but declares body: '${entry.body}'`
+      );
+
+    // `toElysiaHandler` answers these ahead of every handler.
+    if (key in OPERATION_DOCS) {
+      const { responses } = tableOperation(entry).operation;
+      const adapterStatuses = [
+        ...(isSafeMethod(entry.method) ? [] : ['403']),
+        ...(entry.preAuth === 'ip-limit' ? ['429', '503'] : []),
+      ];
+      for (const status of adapterStatuses)
+        if (!isJsonSchema(responses) || !(status in responses))
+          problems.push(
+            `${key} does not publish the ${status} its adapter answers`
+          );
+    }
   }
 
-  // A key for a route the production filter withholds is not a leftover: the
-  // route exists, it is only unpublished.
+  // A key for a route the production filter or a switched-off feature
+  // withholds is not a leftover: the route exists, it is only unpublished.
   const isLeftover = (key: string): boolean =>
-    !keys.has(key) && !isDevelopmentOnlyPath(key.slice(key.indexOf(' ') + 1));
+    !keys.has(key) &&
+    !withheldKeys.has(key) &&
+    !isDevelopmentOnlyPath(key.slice(key.indexOf(' ') + 1));
 
   for (const [table, tableKeys] of ROUTE_KEYED_TABLES)
     for (const key of tableKeys)

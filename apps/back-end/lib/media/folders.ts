@@ -30,16 +30,9 @@ interface FolderSummary {
 }
 
 /**
- * What a folder delete removed. One shape for both modes, so a client reads the
- * same answer whether it asked for one folder or a subtree: `folders` is how
- * many folder rows went, and the file half mirrors `DELETE /api/dash/media/files`
- * — `deleted` is gone from both stores, `pending` is committed to deletion and
- * invisible with its object still to remove.
- *
- * `folders: 0` with files in `deleted` is the honest report of a recursive
- * delete whose files went but whose folders could not: something was still in
- * the tree when the folders were about to go (`pending` rows the sweep has yet
- * to finish, or an upload that arrived in the window between the two halves).
+ * One shape for both delete modes; the file half mirrors
+ * `DELETE /api/dash/media/files`. `folders: 0` beside deleted files means the
+ * tree still held something when its folders were due to go.
  */
 export interface FolderDeleteOutcome {
   folders: number;
@@ -58,10 +51,8 @@ interface FolderHit extends FolderSummary {
 }
 
 /**
- * Name matches returned by `scope=all`. A navigation aid beside a paginated
- * file list, not a list of its own, so it is capped rather than paged — and the
- * cap is reported, because a search that silently drops the folder someone is
- * looking for is worse than one that says there are more.
+ * Capped, not paged: a navigation aid beside the paginated file list. The cap
+ * is reported (`truncated`) so a dropped folder is never silent.
  */
 const FOLDER_SEARCH_LIMIT = 20;
 
@@ -112,16 +103,11 @@ function folderNameConflict(error: unknown): CustomError | null {
 }
 
 /**
- * One tree, one lock. Row locks on the moved folder and its destination are not
- * enough: two disjoint moves (`A` under `B1`, `B` under `A1`) each validate
- * against the tree the other is about to change and both commit a cycle. Every
- * structural change takes this transaction-scoped advisory lock FIRST, before
- * any row lock, so two of them serialize instead of deadlocking on each other's
- * rows. Folder mutations are rare administrative actions; one lock is the right
- * size.
- *
- * Exported for `deleteFolderTree` (`./lifecycle.ts`); this module must not
- * import the file lifecycle, or the two would form a cycle.
+ * Row locks cannot stop two disjoint moves (`A` under `B1`, `B` under `A1`)
+ * from both committing a cycle, so every structural change takes this lock
+ * FIRST, before any row lock. One lock for the whole tree is deliberate:
+ * folder mutations are rare. Exported for `./lifecycle.ts`, which this module
+ * must not import, or the two form an import cycle.
  */
 export async function lockTree(tx: Tx): Promise<void> {
   await tx.execute(
@@ -130,8 +116,8 @@ export async function lockTree(tx: Tx): Promise<void> {
 }
 
 /**
- * Root → leaf. Bounded by the depth cap plus one so a cycle that somehow got
- * into the table terminates the query rather than the server.
+ * Root → leaf. Bounded by the depth cap plus one, so a cycle in the table ends
+ * the query rather than the server.
  */
 export async function breadcrumbs(
   folderId: EntityID,
@@ -171,10 +157,8 @@ async function depthOf(
 }
 
 /**
- * The folder and everything under it, DEEPEST FIRST — the order a delete has to
- * use, and the shape a cycle check and a recursive delete both need. Bounded by
- * the depth cap plus one so a cycle that somehow got into the table terminates
- * the query rather than the server.
+ * Itself included, DEEPEST FIRST: `subtreeOf` reads the height off the first
+ * row. Bounded like `breadcrumbs`.
  */
 export async function subtreeFolders(
   executor: Tx,
@@ -253,7 +237,6 @@ async function lockParent(
   return { depth };
 }
 
-/** Exported for `deleteFolderTree`, like `lockTree`. */
 export async function lockFolderFor(
   tx: Tx,
   folderId: EntityID,
@@ -264,8 +247,7 @@ export async function lockFolderFor(
     .from(folders)
     .where(eq(folders.id, folderId))
     .for('update');
-  // Out of scope answers exactly like absent, the way every `own`-scoped gate in
-  // this codebase does.
+  // Out of scope answers exactly like absent.
   if (!folder || !withinScope(actor, folder.createdBy))
     throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
   return folder;
@@ -296,10 +278,8 @@ export async function listSubfolders(
 }
 
 /**
- * Folders whose name contains `term`, by name, each with its path from the
- * root — one statement, so twenty hits do not cost twenty recursive queries.
- * `term` is already normalised by the data-table parser. One row beyond the cap
- * is fetched and dropped, which is what `truncated` reports.
+ * One statement, so twenty hits do not cost twenty recursive queries. `term`
+ * arrives normalised by the data-table parser.
  */
 export async function searchFolders(
   term: string

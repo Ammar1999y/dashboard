@@ -28,7 +28,7 @@ function CommandInput({
   return (
     <div
       data-slot='command-input-wrapper'
-      className='flex h-9 items-center border-b px-3 space-x-2'
+      className='flex h-9 items-center gap-2 border-b px-3'
     >
       <Icon
         icon='solar:magnifer-linear'
@@ -115,7 +115,7 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot='command-item'
       className={cn(
-        "relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm !outline-0 space-x-2 data-[disabled=true]:pointer-events-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[disabled=true]:opacity-50 [&_svg:not([class*='size-'])]:size-4",
+        "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm !outline-0 data-[disabled=true]:pointer-events-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[disabled=true]:opacity-50 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}

@@ -32,7 +32,10 @@ Local 2FA is evaluated on every login. Only the current signature-verified ID
 token's string-array `amr` containing exactly `mfa` permits bypassing local 2FA.
 Missing or malformed evidence uses the existing local challenge, including on a
 trusted device. If an enabled account has no usable local factor, that login is
-denied. When the global 2FA method list is empty, Google follows the same audited
+denied. The email OTP is never offered after Google, because Google just proved
+that mailbox. An account whose only factor is `otp:email` is therefore refused
+on the Google path, and the refusal is audited. Password sign-in still offers
+that factor. When the global 2FA method list is empty, Google follows the same audited
 feature-disabled downgrade as password sign-in, even if old enrollment remains.
 No MFA assurance is saved on the Google link.
 
@@ -69,6 +72,11 @@ claims.
 
 Without `callbackURL`, the callback returns its JSON outcome directly. An invalid
 or unbound callback receives a generic failure rather than an untrusted redirect.
+A callback whose sign-in state is gone (the 5-minute state expired, the callback
+was already used, or the flow started in another browser) cannot read the
+`callbackURL` it carried, so it redirects to `OAUTH_STATE_LOST_PAGE`
+(`@app/shared/validation/oauth`, the sign-in page with `?oauth=expired`) in either
+mode. That page must read `oauth=expired` and show a "start again" message.
 Disabled Google paths return 404, including at the Better Auth handler boundary.
 Generic library social sign-in/linking paths are not enabled.
 

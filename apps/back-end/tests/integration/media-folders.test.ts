@@ -33,6 +33,8 @@ import { mediaValidationMsg } from '@app/shared/validation/media';
 import { updateFolder } from '@/lib/media/folders';
 import { mediaMsg } from '@/lib/media/messages';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';
 
@@ -106,8 +108,6 @@ async function seedFolder(
   if (!row) throw new Error('seedFolder returned no row');
   return row.id;
 }
-
-const byText = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
 
 const sessions: {
   admin?: SignedInSession;
@@ -225,6 +225,33 @@ describe('creating folders', () => {
 
     const empty = await call(admin(), 'POST', '/api/dash/media/folders');
     expect(empty.status).toBe(HTTP_STATUS.BAD_REQUEST);
+  });
+
+  test('an unpaired surrogate is a 422 on create and rename, never a 500 or a U+FFFD name', async () => {
+    const created = await call(admin(), 'POST', '/api/dash/media/folders', {
+      name: 'a\u{D83D}',
+    });
+    expect(created.status).toBe(HTTP_STATUS.UNPROCESSABLE);
+    expect(created.body.message).toBe(mediaValidationMsg.folderNameInvalid);
+
+    const folder = await seedFolder('Surrogate');
+    const renamed = await call(
+      admin(),
+      'PUT',
+      `/api/dash/media/folders/${folder}`,
+      { name: 'b\u{D83D}' }
+    );
+    expect(renamed.status).toBe(HTTP_STATUS.UNPROCESSABLE);
+    const unchanged = await storedFolder(folder);
+    expect(unchanged.name).toBe('Surrogate');
+
+    const paired = createdFolderOf(
+      await call(admin(), 'POST', '/api/dash/media/folders', {
+        name: 'a \u{1F600}',
+      })
+    );
+    const pairedStored = await storedFolder(paired.id);
+    expect(pairedStored.name).toBe('a \u{1F600}');
   });
 
   test('the depth cap is enforced on create', async () => {
@@ -537,7 +564,7 @@ describe('listing', () => {
     expect(rootData.folders.every((folder) => folder.parentId === null)).toBe(
       true
     );
-    expect(rootData.visibilities.toSorted(byText)).toEqual([
+    expect(rootData.visibilities.toSorted(compareCodeUnits)).toEqual([
       'private',
       'public',
     ]);

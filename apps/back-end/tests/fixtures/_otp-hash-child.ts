@@ -45,10 +45,10 @@ switch (mode) {
     break;
   }
 
-  case 'legacy': {
-    // The envelope the previous build wrote: an Argon2id hash under the password
-    // pepper. Produced with the real `hashPassword`, not a fixture, so this
-    // cannot pass against a format that no longer exists.
+  case 'password-envelope': {
+    // An Argon2id `p1:` hash under the password pepper, the envelope OTPs were
+    // stored in before the HMAC cutover. The real `hashPassword`, not a
+    // literal, so the case tracks the format that actually exists.
     const stored = await hashPassword(CODE);
     console.log(
       JSON.stringify({

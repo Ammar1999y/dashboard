@@ -7,7 +7,6 @@ import { accounts } from '@/db/schema';
 
 import { CREDENTIAL_ISSUER, CREDENTIAL_PROVIDER_ID } from './credential';
 
-/** The user's password account. */
 export function credentialAccountOf(userId: EntityID) {
   return and(
     eq(accounts.userId, userId),
@@ -15,11 +14,7 @@ export function credentialAccountOf(userId: EntityID) {
   );
 }
 
-/**
- * `issuer` is written although the column defaults to it: it is half of the
- * pair `CREDENTIAL_ISSUER` describes, so it decides whether the user can log
- * in at all.
- */
+// `issuer` written explicitly despite the column default: it decides whether the user can log in.
 export async function insertCredentialAccount(
   tx: Tx,
   userId: EntityID,

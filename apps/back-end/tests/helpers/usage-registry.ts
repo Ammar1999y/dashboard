@@ -13,12 +13,15 @@
  * later test in the process means.
  */
 import type { Tx } from '@/db';
+import type { UploadPurpose } from '@/lib/media/policy';
 import type { UsageSource } from '@/lib/media/usage-sources';
+import type { DashboardPage } from '@app/shared/permissions/constants';
 
 import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 
+import { UPLOAD_PURPOSES } from '@/lib/media/policy';
 import { USAGE_SOURCES } from '@/lib/media/usage-sources';
 
 /** The referrer shape every owner table in a project must use. */
@@ -70,6 +73,26 @@ export async function withSource<T>(
   } finally {
     const index = registry.indexOf(source);
     if (index !== -1) registry.splice(index, 1);
+  }
+}
+
+/** Declares a purpose the way a project would, for the duration of `run`. */
+export async function withUploadPurpose<T>(
+  resource: DashboardPage,
+  name: string,
+  purpose: UploadPurpose,
+  run: () => Promise<T>
+): Promise<T> {
+  const registry = UPLOAD_PURPOSES as Partial<
+    Record<DashboardPage, Record<string, UploadPurpose>>
+  >;
+  const previous = registry[resource];
+  registry[resource] = { ...previous, [name]: purpose };
+  try {
+    return await run();
+  } finally {
+    if (previous) registry[resource] = previous;
+    else delete registry[resource];
   }
 }
 

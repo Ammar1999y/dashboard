@@ -2,12 +2,14 @@
 import type { RouteManifestEntry, RouteQueryParam } from '../route-manifest';
 import type { JsonSchema } from './json-schema';
 
+import { isSafeMethod } from '../origin';
 import { bodyPolicyCeiling } from '../request';
 import { CAPTCHA_HEADER_PARAMETER, UUID_SCHEMA } from './components';
 import {
   bodyTooLargeResponse,
   errorResponse,
   PRE_AUTH_RESPONSES,
+  RETRY_AFTER_HEADER,
   successEnvelopeSchema,
 } from './envelope';
 import { isJsonSchema, OPENAPI_VERSION } from './json-schema';
@@ -17,11 +19,13 @@ import {
   requestBody,
 } from './request-bodies';
 import {
+  BODY_SCHEMA_REFUSALS,
   BODYLESS_BAD_REQUEST_ROUTES,
   CHANNEL_UNAVAILABLE_ROUTES,
   CONFLICT_ROUTES,
   CONTACT_CHANGE_DESCRIPTIONS,
   CREATED_ROUTES,
+  ID_NOT_FOUND_ROUTES,
   NOT_FOUND_ROUTES,
   OPERATION_DOCS,
   PAGINATED_SUCCESS_ROUTES,
@@ -224,45 +228,74 @@ function commonResponses(entry: RouteManifestEntry): JsonSchema {
       'A unique value or permission assignment already exists.'
     );
 
-  // Not limited to body routes: every route with a path parameter validates it
-  // and answers 422 on a malformed id.
+  const bodyRefusal = BODY_SCHEMA_REFUSALS[key];
+  const pathIdIs422 = entry.path.includes(':') && !ID_NOT_FOUND_ROUTES.has(key);
   if (
-    entry.body === 'json' ||
-    entry.path.includes(':') ||
+    pathIdIs422 ||
+    (!bodyRefusal && entry.body === 'json') ||
     QUERY_VALIDATION_ROUTES.has(key)
   )
     responses['422'] = errorResponse(
-      'Validation failed — a schema field, or a path parameter, was rejected.'
+      pathIdIs422
+        ? 'Validation failed — a schema field, or a path parameter, was rejected.'
+        : 'Validation failed — a schema field was rejected.'
     );
 
   if (entry.auth !== 'public') {
     responses['401'] = errorResponse(
-      'No session, or the session row is no longer live.'
+      entry.reauth
+        ? 'No session, or the session row is no longer live. With code `REAUTH_REQUIRED` the session is fine but the re-authentication window is closed: open it at `POST /api/dash/auth/reauth`, then retry.'
+        : 'No session, or the session row is no longer live.'
     );
   }
 
+  // After the blocks above, one of which owns the status this replaces.
+  if (bodyRefusal)
+    responses[bodyRefusal.status] = errorResponse(bodyRefusal.description);
+
   // A captcha refusal reaches `public` routes no session guards, and the
-  // `/api/dash/users/me/*` routes after their session check passes.
-  if (entry.auth === 'permission' || entry.captcha)
-    responses['403'] = errorResponse(
-      entry.auth === 'permission'
-        ? entry.captcha
-          ? 'The caller lacks the required authority or failed the required captcha.'
-          : 'The caller lacks the grant, scope or role authority this route requires.'
-        : 'The captcha this route requires was absent or rejected.'
-    );
+  // `/api/dash/users/me/*` routes after their session check passes. The origin
+  // refusal is the adapter's (`assertSameOriginWrite`), ahead of the handler.
+  const forbidden = [
+    entry.auth === 'permission'
+      ? entry.captcha
+        ? 'The caller lacks the required authority or failed the required captcha.'
+        : 'The caller lacks the grant, scope or role authority this route requires.'
+      : entry.captcha &&
+        'The captcha this route requires was absent or rejected.',
+    !isSafeMethod(entry.method) &&
+      'A browser sent this write from an origin other than the application’s.',
+  ].filter((reason) => typeof reason === 'string');
+  if (forbidden.length > 0)
+    responses['403'] = errorResponse(forbidden.join(' '));
 
   if (entry.preAuth === 'ip-limit' || entry.handlerRateLimit)
     Object.assign(responses, PRE_AUTH_RESPONSES);
 
   // After the limiter block, which owns the same status and would overwrite it.
-  const throttle = responses['503'];
-  if (CHANNEL_UNAVAILABLE_ROUTES.has(key) && isJsonSchema(throttle))
-    responses['503'] = {
-      ...throttle,
+  const limited = responses['429'];
+  if (entry.checksPassword && isJsonSchema(limited))
+    responses['429'] = {
+      ...limited,
       description:
-        'The admission limiter store is unavailable and fails closed, or no OTP channel able to verify this contact is enabled.',
+        'Per-IP admission limit, or the account is temporarily locked after failed password attempts. See `Retry-After`.',
     };
+
+  // Every handler reaches the database, so every route can answer this 503.
+  responses['503'] = errorResponse(
+    [
+      entry.preAuth === 'ip-limit' || entry.handlerRateLimit
+        ? 'The admission limiter store is unavailable and fails closed.'
+        : '',
+      CHANNEL_UNAVAILABLE_ROUTES.has(key)
+        ? 'No OTP channel able to verify this contact is enabled.'
+        : '',
+      'No database connection came free in time, or a transaction was aborted to break a deadlock.',
+    ]
+      .filter(Boolean)
+      .join(' '),
+    { 'Retry-After': RETRY_AFTER_HEADER }
+  );
 
   return responses;
 }

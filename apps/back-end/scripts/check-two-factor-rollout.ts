@@ -29,6 +29,7 @@
 import { PHONE_ENABLED } from '@app/shared/config';
 import { isPhoneChannel } from '@app/shared/validation/enums';
 import {
+  assertTwoFactorListsCoherent,
   parseTwoFactorMethods,
   parseTwoFactorOtpChannels,
 } from '@app/shared/validation/two-factor-lists';
@@ -65,6 +66,7 @@ const channels = requestedChannels.filter(
 const droppedChannels = requestedChannels.filter(
   (channel) => !channels.includes(channel)
 );
+assertTwoFactorListsCoherent(methods, channels);
 
 /**
  * Bun's SQL driver binds a JS array as a comma-joined STRING, which Postgres

@@ -21,10 +21,14 @@ import {
   revokePendingProofs,
   unlinkGoogle,
 } from '@/lib/auth/session/rotation';
+import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
 import { notFoundError } from '@/lib/http/response';
 import { destroyCustomRole } from '@/lib/permissions/roles';
 
-import { assertTargetUserReachable } from './target-user';
+import {
+  assertTargetUserReachable,
+  assertTargetUserVisibleUnlocked,
+} from './target-user';
 
 // `gen_random_uuid()::text` is always 36 characters; the anonymised email keeps
 // within EMAIL_MAX by truncating ahead of the marker and the uuid.
@@ -32,11 +36,7 @@ const DELETED_EMAIL_SUFFIX = '_del_';
 const UUID_TEXT_LENGTH = 36;
 const DELETED_SUFFIX_LEN = DELETED_EMAIL_SUFFIX.length + UUID_TEXT_LENGTH;
 
-/**
- * Soft-deletes a user: contacts anonymised, credentials and sessions gone, and
- * a custom role destroyed with its matrix recorded first. The most total
- * rotation there is, through the same helpers as every other.
- */
+// The most total rotation, through the same helpers as every other.
 export async function softDeleteUser(opts: {
   targetId: EntityID;
   actor: { userId: EntityID; email: string };
@@ -53,9 +53,14 @@ export async function softDeleteUser(opts: {
   } = opts;
 
   await withTransaction(async (tx) => {
-    // User and role locked together, so another transaction cannot flip the
-    // role's scope or name between the reads.
-    // TODO: test whether `FOR UPDATE OF u FOR SHARE OF r` locks as expected.
+    // The users, then the role: one statement locking both would leave the
+    // order to the plan, and a role DELETE takes users first.
+    await assertTargetUserVisibleUnlocked(tx, {
+      targetId: userId,
+      actorUserId: actor.userId,
+      scope: deleteScope,
+    });
+    await lockTargetAndActor(tx, userId, actor.userId, 'update');
     const locked = await tx.execute<{
       email: string;
       phone_number: string | null;
@@ -70,7 +75,6 @@ export async function softDeleteUser(opts: {
         WHERE u.id = ${userId}
           AND u.deleted_at IS NULL
           AND r.scope <> ${ROLE_SCOPE.SYSTEM}
-        FOR UPDATE OF u
         FOR SHARE OF r
       `);
 
@@ -111,10 +115,9 @@ export async function softDeleteUser(opts: {
 
     await revokeOtherSessions(tx, userId);
     await revokePendingProofs(tx, userId);
-    await unlinkGoogle(tx, userId, auditMeta);
+    await unlinkGoogle(tx, userId, actor, auditMeta);
     await tx.delete(accounts).where(eq(accounts.userId, userId));
-    // Explicit, because the FK cascade never fires: this row is soft-deleted
-    // and never purged.
+    // The FK cascade never fires: the row is soft-deleted, never purged.
     await tx.delete(userPreferences).where(eq(userPreferences.userId, userId));
     if (lockedUser.role_scope === CUSTOM_ROLE_VALUE)
       await destroyCustomRole(tx, {

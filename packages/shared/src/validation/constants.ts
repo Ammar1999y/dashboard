@@ -31,6 +31,7 @@ export const FOLDER_MAX_CHILDREN = 500;
  */
 export const FOLDER_RECURSIVE_DELETE_MAX = 200;
 
+// ⚠️ Existing passwords are held to it too: see `passwordSchema`.
 export const PASSWORD_MIN = 8;
 export const PASSWORD_MAX = 128;
 export const EMAIL_MAX = 150;

@@ -43,6 +43,7 @@ import { clearOutbox, readOutbox } from '@/lib/otp/outbox';
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
 import { settleDelivery } from '../helpers/mailbox';
+import { flooredBudget } from '../helpers/otp';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -207,98 +208,102 @@ describe(`the ${ROW} configuration`, () => {
     expect(rows).toHaveLength(0);
   });
 
-  test('both first-factor paths agree about one enrolled account', async () => {
-    // ⚠️ The finding this whole file exists for. For ONE account holding stored
-    // 2FA state, `/sign-in/email` and `/passwordless/verify` must answer the
-    // same QUESTION. They used to disagree the moment the method list was
-    // emptied: the password path minted a full session with no refusal recorded
-    // while the passwordless path answered 403, because the issuer hook lived
-    // inside a plugin that disappeared with the list.
-    //
-    // The two statuses are not required to be equal — a passwordless login by
-    // email excludes an `otp/email` second factor and a password login does not,
-    // which is the contact-kind rule doing its job. What is required is that
-    // neither path issues a session WITHOUT a second factor while the feature is
-    // on, and that both downgrade when it is off.
-    const user = await seedEnrolled();
+  test(
+    'both first-factor paths agree about one enrolled account',
+    async () => {
+      // ⚠️ The finding this whole file exists for. For ONE account holding stored
+      // 2FA state, `/sign-in/email` and `/passwordless/verify` must answer the
+      // same QUESTION. They used to disagree the moment the method list was
+      // emptied: the password path minted a full session with no refusal recorded
+      // while the passwordless path answered 403, because the issuer hook lived
+      // inside a plugin that disappeared with the list.
+      //
+      // The two statuses are not required to be equal — a passwordless login by
+      // email excludes an `otp/email` second factor and a password login does not,
+      // which is the contact-kind rule doing its job. What is required is that
+      // neither path issues a session WITHOUT a second factor while the feature is
+      // on, and that both downgrade when it is off.
+      const user = await seedEnrolled();
 
-    const password = await call('POST', '/api/auth/sign-in/email', {
-      email: user.email,
-      password: user.password,
-    });
-    const passwordBody = (await password.json()) as {
-      twoFactorRedirect?: boolean;
-    };
-    const passwordSession = cookieHeader(
-      password.headers.getSetCookie()
-    ).includes('session_token');
+      const password = await call('POST', '/api/auth/sign-in/email', {
+        email: user.email,
+        password: user.password,
+      });
+      const passwordBody = (await password.json()) as {
+        twoFactorRedirect?: boolean;
+      };
+      const passwordSession = cookieHeader(
+        password.headers.getSetCookie()
+      ).includes('session_token');
 
-    await call('POST', '/api/auth/passwordless/send', {
-      channel: 'email',
-      email: user.email,
-    });
-    await plantCode(user.userId);
-    const passwordless = await call('POST', '/api/auth/passwordless/verify', {
-      channel: 'email',
-      email: user.email,
-      code: RIGHT_CODE,
-    });
-    const passwordlessBody = (await passwordless.json()) as {
-      twoFactorRedirect?: boolean;
-    };
-    const passwordlessSession = cookieHeader(
-      passwordless.headers.getSetCookie()
-    ).includes('session_token');
+      await call('POST', '/api/auth/passwordless/send', {
+        channel: 'email',
+        email: user.email,
+      });
+      await plantCode(user.userId);
+      const passwordless = await call('POST', '/api/auth/passwordless/verify', {
+        channel: 'email',
+        email: user.email,
+        code: RIGHT_CODE,
+      });
+      const passwordlessBody = (await passwordless.json()) as {
+        twoFactorRedirect?: boolean;
+      };
+      const passwordlessSession = cookieHeader(
+        passwordless.headers.getSetCookie()
+      ).includes('session_token');
 
-    if (!TWO_FACTOR_ENABLED) {
-      // Feature off: no method is configured, so there is no second factor to
-      // enforce and the downgrade is the operator's intent — on EVERY path.
-      expect([password.status, passwordless.status]).toEqual([
-        HTTP_STATUS.OK,
-        HTTP_STATUS.OK,
-      ]);
-      expect([passwordSession, passwordlessSession]).toEqual([true, true]);
-      expect([
-        passwordBody.twoFactorRedirect,
-        passwordlessBody.twoFactorRedirect,
-      ]).toEqual([undefined, undefined]);
+      if (!TWO_FACTOR_ENABLED) {
+        // Feature off: no method is configured, so there is no second factor to
+        // enforce and the downgrade is the operator's intent — on EVERY path.
+        expect([password.status, passwordless.status]).toEqual([
+          HTTP_STATUS.OK,
+          HTTP_STATUS.OK,
+        ]);
+        expect([passwordSession, passwordlessSession]).toEqual([true, true]);
+        expect([
+          passwordBody.twoFactorRedirect,
+          passwordlessBody.twoFactorRedirect,
+        ]).toEqual([undefined, undefined]);
 
-      // ⚠️ And it is RECORDED. A downgrade nobody can see is how an operator
-      // learns about it from a user. The issuer decides this, but it is only
-      // ASKED because `twoFactorSignInGuard` is installed unconditionally —
-      // it used to live inside a plugin that disappeared with the method list,
-      // taking the audit row with it.
-      // Scoped to the PASSWORD path. The passwordless endpoint calls the issuer
-      // directly and always did, so an unscoped query passes with the guard
-      // removed — which is the shape of test this repair pass exists to stop
-      // writing.
-      const downgrades = await db
-        .select({ id: auditLogs.id })
-        .from(auditLogs)
-        .where(
-          and(
-            eq(auditLogs.userId, user.userId),
-            eq(auditLogs.apiPath, '/sign-in/email'),
-            sql`${auditLogs.newData} ->> 'reason' = 'two_factor_downgraded_feature_disabled'`
-          )
-        );
-      expect(downgrades.length).toBeGreaterThan(0);
-      return;
-    }
+        // ⚠️ And it is RECORDED. A downgrade nobody can see is how an operator
+        // learns about it from a user. The issuer decides this, but it is only
+        // ASKED because `twoFactorSignInGuard` is installed unconditionally —
+        // it used to live inside a plugin that disappeared with the method list,
+        // taking the audit row with it.
+        // Scoped to the PASSWORD path. The passwordless endpoint calls the issuer
+        // directly and always did, so an unscoped query passes with the guard
+        // removed — which is the shape of test this repair pass exists to stop
+        // writing.
+        const downgrades = await db
+          .select({ id: auditLogs.id })
+          .from(auditLogs)
+          .where(
+            and(
+              eq(auditLogs.userId, user.userId),
+              eq(auditLogs.apiPath, '/sign-in/email'),
+              sql`${auditLogs.newData} ->> 'reason' = 'two_factor_downgraded_feature_disabled'`
+            )
+          );
+        expect(downgrades.length).toBeGreaterThan(0);
+        return;
+      }
 
-    // Feature on: neither path may complete a login on the first factor alone.
-    // Each is a challenge or a refusal, never a session.
-    expect([passwordSession, passwordlessSession]).toEqual([false, false]);
-    for (const [label, response, body] of [
-      ['password', password, passwordBody],
-      ['passwordless', passwordless, passwordlessBody],
-    ] as const)
-      expect([
-        label,
-        response.status === HTTP_STATUS.FORBIDDEN ||
-          body.twoFactorRedirect === true,
-      ]).toEqual([label, true]);
-  });
+      // Feature on: neither path may complete a login on the first factor alone.
+      // Each is a challenge or a refusal, never a session.
+      expect([passwordSession, passwordlessSession]).toEqual([false, false]);
+      for (const [label, response, body] of [
+        ['password', password, passwordBody],
+        ['passwordless', passwordless, passwordlessBody],
+      ] as const)
+        expect([
+          label,
+          response.status === HTTP_STATUS.FORBIDDEN ||
+            body.twoFactorRedirect === true,
+        ]).toEqual([label, true]);
+    },
+    flooredBudget(2)
+  );
 });
 
 /**
@@ -309,41 +314,45 @@ describe(`the ${ROW} configuration`, () => {
  * is exercised at all.
  */
 describe(`delivery in the ${ROW} configuration`, () => {
-  test('a code says which action it approves', async () => {
-    // A login code, a recovery code and a contact-verification code used to be
-    // byte-identical, which is what an attacker who triggers one and phishes
-    // another relies on.
-    clearOutbox();
-    const user = await seedUser();
-    await call('POST', '/api/auth/forgot-password/send', {
-      channel: 'email',
-      email: user.email,
-    });
-    await call('POST', '/api/auth/passwordless/send', {
-      channel: 'email',
-      email: user.email,
-    });
-    await settleDelivery();
+  test(
+    'a code says which action it approves',
+    async () => {
+      // A login code, a recovery code and a contact-verification code used to be
+      // byte-identical, which is what an attacker who triggers one and phishes
+      // another relies on.
+      clearOutbox();
+      const user = await seedUser();
+      await call('POST', '/api/auth/forgot-password/send', {
+        channel: 'email',
+        email: user.email,
+      });
+      await call('POST', '/api/auth/passwordless/send', {
+        channel: 'email',
+        email: user.email,
+      });
+      await settleDelivery();
 
-    const [recovery] = readOutbox({
-      destination: user.email,
-      purpose: 'forgot_password',
-    });
-    const [login] = readOutbox({
-      destination: user.email,
-      purpose: 'passwordless_login',
-    });
-    expect(recovery).toBeDefined();
-    expect(login).toBeDefined();
-    if (!recovery || !login) return;
+      const [recovery] = readOutbox({
+        destination: user.email,
+        purpose: 'forgot_password',
+      });
+      const [login] = readOutbox({
+        destination: user.email,
+        purpose: 'passwordless_login',
+      });
+      expect(recovery).toBeDefined();
+      expect(login).toBeDefined();
+      if (!recovery || !login) return;
 
-    expect(recovery.channel).toBe('email');
-    expect(recovery.subject).toBe(otpSubjectFor('forgot_password'));
-    expect(recovery.text).toBe(otpTextFor('forgot_password', recovery.code));
-    expect(login.subject).toBe(otpSubjectFor('passwordless_login'));
-    expect(login.text).toBe(otpTextFor('passwordless_login', login.code));
-    expect(recovery.subject).not.toBe(login.subject);
-  });
+      expect(recovery.channel).toBe('email');
+      expect(recovery.subject).toBe(otpSubjectFor('forgot_password'));
+      expect(recovery.text).toBe(otpTextFor('forgot_password', recovery.code));
+      expect(login.subject).toBe(otpSubjectFor('passwordless_login'));
+      expect(login.text).toBe(otpTextFor('passwordless_login', login.code));
+      expect(recovery.subject).not.toBe(login.subject);
+    },
+    flooredBudget(2)
+  );
 
   test.if(TWO_FACTOR_OTP_CHANNELS.length > 0)(
     'a second-factor code reaches every enabled 2FA channel, labelled as one',

@@ -21,6 +21,8 @@ import path from 'node:path';
 
 import { MAX_POOL_CONNECTIONS } from '@/db/limits';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import {
   HARNESS_PREFIX,
   HARNESS_SUFFIX,
@@ -34,6 +36,10 @@ import {
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 const DRIZZLE_DIR = path.join(REPO_ROOT, 'db', 'drizzle');
 const SQL_MIGRATIONS_DIR = path.join(REPO_ROOT, 'db', 'migrations');
+const MIGRATION_RUNNER_FILES = [
+  path.join(REPO_ROOT, 'scripts', 'migrate.ts'),
+  path.join(REPO_ROOT, 'db', 'migration-ledger.ts'),
+];
 
 /**
  * Connections the harness must leave for everything that is not a test worker:
@@ -93,12 +99,13 @@ export function workerUrl(runToken: string, workerId: number): string {
 }
 
 /**
- * A hash over everything `bun run db:migrate` reads.
+ * A hash over everything `bun run db:migrate` reads, and the runner itself.
  *
  * The template is reused across runs, so something has to notice when the
  * migrations on disk have moved past it. Hashing the inputs is that something:
  * the journal alone is not enough, because editing a `.sql` file in place leaves
- * the journal identical.
+ * the journal identical, and a runner change can alter what the same files
+ * produce.
  */
 async function schemaFingerprint(): Promise<string> {
   const hasher = new Bun.CryptoHasher('sha256');
@@ -107,12 +114,16 @@ async function schemaFingerprint(): Promise<string> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- a fixed in-repo path
   hasher.update(await readFile(journal));
 
+  for (const file of MIGRATION_RUNNER_FILES)
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a fixed in-repo path
+    hasher.update(await readFile(file));
+
   for (const dir of [DRIZZLE_DIR, SQL_MIGRATIONS_DIR]) {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- one of two fixed in-repo migration directories
     const found = await readdir(dir);
     const entries = found
       .filter((f) => f.endsWith('.sql'))
-      .toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+      .toSorted(compareCodeUnits);
     for (const entry of entries) {
       hasher.update(entry);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- `entry` comes from readdir of a fixed in-repo directory

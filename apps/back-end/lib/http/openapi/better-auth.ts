@@ -11,14 +11,19 @@ import { roleScope } from '@/db/schema';
 import { BETTER_AUTH_BODIES } from '@app/shared/contract';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
 import { TWO_FACTOR_METHODS } from '@app/shared/validation/enums';
+import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
+import { passkeyGrantSchema } from '@app/shared/validation/two-factor';
 
 import { auth } from '@/lib/auth';
 import { BETTER_AUTH_ROUTE_PREFIX } from '@/lib/auth/allowed-paths';
 import { TWO_FACTOR_COOKIE_NAME } from '@/lib/auth/two-factor/challenge';
+import { TOTP_ENROLMENT_MAX_AGE_S } from '@/lib/auth/two-factor/enrolment';
 
 import { bodyPolicyCeiling } from '../request';
 import {
+  BETTER_AUTH_DATABASE_FAULT_PATHS,
   BETTER_AUTH_LOCAL_THROTTLE_PATHS,
+  BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
   BETTER_AUTH_PATH_STATUSES,
   BETTER_AUTH_STATUS_DESCRIPTIONS,
   BETTER_AUTH_SUMMARIES,
@@ -34,7 +39,7 @@ import {
   UUID_SCHEMA,
 } from './components';
 import { bodyTooLargeResponse, PRE_AUTH_RESPONSES } from './envelope';
-import { isJsonSchema, normalizeOpenApi31 } from './json-schema';
+import { isJsonSchema, normalizeOpenApi31, toJsonSchema } from './json-schema';
 import { requestBody } from './request-bodies';
 import { operationSlug } from './route-operations';
 
@@ -113,6 +118,16 @@ export function generatedBetterAuthResponse(
   return isJsonSchema(normalized) ? normalized : null;
 }
 
+/** What one path adds to a shared status description, keyed by path, then status. */
+const BETTER_AUTH_STATUS_DETAILS: Record<
+  string,
+  Partial<Record<keyof typeof BETTER_AUTH_STATUS_DESCRIPTIONS, string>>
+> = {
+  '/two-factor/totp/confirm': {
+    '400': `So is a confirmation more than ${TOTP_ENROLMENT_MAX_AGE_S / 60} minutes after \`/two-factor/totp/start\`: the enrolment has expired, and the client starts it again.`,
+  },
+};
+
 function isDescribedStatus(
   status: string
 ): status is keyof typeof BETTER_AUTH_STATUS_DESCRIPTIONS {
@@ -134,6 +149,14 @@ const BETTER_AUTH_ERROR_SCHEMA: JsonSchema = {
  * envelope satisfies Better Call's error shape — and exactly-one would then
  * fail on the body the limiter actually sends.
  */
+function withDescription(response: unknown, detail: string): JsonSchema {
+  if (!isJsonSchema(response)) return { description: detail };
+  return {
+    ...response,
+    description: `${String(response.description ?? '')} ${detail}`.trim(),
+  };
+}
+
 function withAlternativeJsonBody(
   response: unknown,
   extra: JsonSchema,
@@ -265,20 +288,43 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
   ];
   const responses: JsonSchema = { ...PRE_AUTH_RESPONSES };
 
-  if (BETTER_AUTH_LOCAL_THROTTLE_PATHS.has(path)) {
+  const localThrottle = BETTER_AUTH_LOCAL_THROTTLE_PATHS.has(path);
+  const passwordLockout = BETTER_AUTH_PASSWORD_LOCKOUT_PATHS.has(path);
+  const databaseFault = BETTER_AUTH_DATABASE_FAULT_PATHS.has(path);
+  if (localThrottle || passwordLockout)
     responses['429'] = withAlternativeJsonBody(
       responses['429'],
       BETTER_AUTH_ERROR_SCHEMA,
-      'The endpoint’s own per-destination verify quota answers here too, in Better Auth’s error shape.',
+      [
+        localThrottle &&
+          'The endpoint’s own per-destination verify quota answers here too, in Better Auth’s error shape.',
+        passwordLockout &&
+          'So does an account temporarily locked after failed password attempts, in Better Auth’s error shape; `Retry-After` is the time left.',
+      ]
+        .filter(Boolean)
+        .join(' '),
       BETTER_AUTH_ERROR_SCHEMA
     );
-    responses['503'] = withAlternativeJsonBody(
-      responses['503'],
-      BETTER_AUTH_ERROR_SCHEMA,
-      'That quota is fail-closed, so a degraded limiter store refuses here in Better Auth’s error shape.',
-      BETTER_AUTH_ERROR_SCHEMA
-    );
-  }
+  const database =
+    'No database connection came free in time, or a transaction was aborted to break a deadlock; retry after `Retry-After`.';
+  // Endpoints that map a failure themselves (`asAuthError`) answer in Better
+  // Auth's shape; every other path's database 503 reaches the envelope.
+  responses['503'] =
+    localThrottle || passwordLockout || databaseFault
+      ? withAlternativeJsonBody(
+          responses['503'],
+          BETTER_AUTH_ERROR_SCHEMA,
+          [
+            localThrottle &&
+              'That quota is fail-closed, so a degraded limiter store refuses here in Better Auth’s error shape.',
+            database,
+            'Either may come in the envelope or in Better Auth’s error shape.',
+          ]
+            .filter(Boolean)
+            .join(' '),
+          BETTER_AUTH_ERROR_SCHEMA
+        )
+      : withDescription(responses['503'], database);
 
   for (const status of statuses) {
     const generated =
@@ -292,7 +338,12 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
     responses[status] = {
       ...generated,
       ...(isDescribedStatus(status) && {
-        description: BETTER_AUTH_STATUS_DESCRIPTIONS[status],
+        description: [
+          BETTER_AUTH_STATUS_DESCRIPTIONS[status],
+          BETTER_AUTH_STATUS_DETAILS[path]?.[status],
+        ]
+          .filter(Boolean)
+          .join(' '),
       }),
     };
   }
@@ -324,8 +375,7 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
 
   if (path === '/oauth/google/callback')
     responses['302'] = {
-      description:
-        'Return to the validated same-origin callbackURL, without codes or tokens. Fetch /api/auth/oauth/result with cookies to consume the result.',
+      description: `Return to the validated same-origin callbackURL, without codes or tokens. Fetch /api/auth/oauth/result with cookies to consume the result. A callback whose sign-in state is gone (expired, already used, or started in another browser) cannot know that callbackURL and goes to ${OAUTH_STATE_LOST_PAGE} instead, whatever mode the flow started in; start a new sign-in from there. A database or server fault answers 500 or 503 instead, with or without a callbackURL.`,
       headers: { Location: { schema: { type: 'string', format: 'uri' } } },
     };
 
@@ -335,6 +385,51 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
 /** The document path of a Better Auth endpoint. */
 export function betterAuthDocumentPath(path: string): string {
   return `${BETTER_AUTH_ROUTE_PREFIX.prefix}${path}`;
+}
+
+/**
+ * The grant's constraints are `passkeyGrantSchema`'s. Each transport describes
+ * itself, so the schema's own description is dropped.
+ */
+function passkeyGrantConstraints(): JsonSchema {
+  const converted = toJsonSchema(passkeyGrantSchema);
+  if (!converted)
+    throw new Error('passkeyGrantSchema has no JSON Schema representation.');
+  const { description: _described, ...constraints } = converted;
+  return constraints;
+}
+
+/**
+ * The library's registration body plus the `grant` `path-policy.ts` spends,
+ * which the library's own schema does not know about.
+ */
+function withGrantField(requestBody: JsonSchema): JsonSchema {
+  const content = isJsonSchema(requestBody.content) ? requestBody.content : {};
+  const json = isJsonSchema(content['application/json'])
+    ? content['application/json']
+    : {};
+  const schema = isJsonSchema(json.schema) ? json.schema : {};
+  const properties = isJsonSchema(schema.properties) ? schema.properties : {};
+  return {
+    ...requestBody,
+    content: {
+      ...content,
+      'application/json': {
+        ...json,
+        schema: {
+          ...schema,
+          properties: {
+            ...properties,
+            grant: {
+              ...passkeyGrantConstraints(),
+              description:
+                'The token POST /two-factor/passkey/grant answered with. Required here or as the `grant` query parameter.',
+            },
+          },
+        },
+      },
+    },
+  };
 }
 
 /** Only the methods the path declares, each a fresh operation with its own id. */
@@ -381,6 +476,15 @@ export function betterAuthPathItem(endpoint: RoutePrefixPath): JsonSchema {
           schema: { type: 'boolean' },
         }
       );
+    if (method === 'POST' && endpoint.path === '/passkey/verify-registration')
+      parameters.push({
+        name: 'grant',
+        in: 'query',
+        required: false,
+        description:
+          'The same grant as the body field, for the stock client, whose `addPasskey` writes this body itself. The body wins when both are sent.',
+        schema: passkeyGrantConstraints(),
+      });
     if (endpoint.captcha) parameters.push(CAPTCHA_HEADER_PARAMETER);
     if (parameters.length > 0) operation.parameters = parameters;
     // A request body is published on POST only; on GET it describes a request
@@ -390,7 +494,11 @@ export function betterAuthPathItem(endpoint: RoutePrefixPath): JsonSchema {
       if (body) operation.requestBody = body;
     } else if (method === 'POST' && isJsonSchema(generated?.requestBody)) {
       const normalized = normalizeOpenApi31(generated.requestBody);
-      if (isJsonSchema(normalized)) operation.requestBody = normalized;
+      if (isJsonSchema(normalized))
+        operation.requestBody =
+          endpoint.path === '/passkey/verify-registration'
+            ? withGrantField(normalized)
+            : normalized;
     }
     return operation;
   };

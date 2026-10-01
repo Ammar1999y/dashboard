@@ -15,7 +15,7 @@ import {
 
 import { auditLog } from '@/lib/audit';
 import { verifyTurnstileRequest } from '@/lib/captcha';
-import { ensureMinDelay } from '@/lib/http/timing-floor';
+import { ensureMinDelay, floorDeadline } from '@/lib/http/timing-floor';
 import { markContactVerified } from '@/lib/otp/contact';
 import {
   collapseProofThrottle,
@@ -39,12 +39,8 @@ import {
   twoFactorUnavailableError,
 } from './two-factor/issue';
 
-/**
- * Passwordless login (verify step). Reuses the project's OTP system and
- * delegates ONLY the session issuance to Better Auth: a signed session cookie
- * and the session-creation database hook exist only inside a Better Auth
- * endpoint context. Listed in `allowed-paths.ts`.
- */
+// A Better Auth endpoint only because the signed session cookie and the
+// session-creation hook exist only in its context.
 export const passwordless = () =>
   ({
     id: 'passwordless',
@@ -68,16 +64,11 @@ export const passwordless = () =>
         },
         async (ctx) => {
           const headers = requestHeaders(ctx);
+          // Set at the lookup: what precedes it is the same for every address.
+          let lookupStarted: number | undefined;
 
-          // Only failures that could reveal whether an account exists pay the
-          // timing floor; universally reachable rejections (captcha, malformed
-          // input, throttling) may return fast.
-          const start = Date.now();
-          let accountRevealing = false;
-
-          // Every limiter call lives INSIDE this boundary. Outside it, a
-          // CustomError (429 throttle, 503 missing-IP / limiter outage) is not
-          // an APIError and Better Call turns it into an empty 500.
+          // ⚠️ Every limiter call stays inside: outside it, a `CustomError` is
+          // not an APIError and Better Call answers an empty 500.
           try {
             if (!OTP_ENABLED || !PASSWORDLESS_ENABLED)
               throw authError(HTTP_STATUS.NOT_FOUND, MSG_PAGE_NOT_FOUND);
@@ -102,7 +93,7 @@ export const passwordless = () =>
               surface: 'passwordless',
             });
 
-            accountRevealing = true;
+            lookupStarted = Date.now();
             const [userData] = await db
               .select({ id: users.id, email: users.email })
               .from(users)
@@ -123,6 +114,7 @@ export const passwordless = () =>
               identifier,
               code,
               auditMeta,
+              deadline: floorDeadline(lookupStarted),
               onVerified: async (tx, matched) => {
                 await markContactVerified(tx, {
                   userId: userData.id,
@@ -133,9 +125,7 @@ export const passwordless = () =>
                   },
                 });
 
-                // The authoritative record, in the SAME transaction as the
-                // proof consumption: it survives a gate that then rejects the
-                // login.
+                // With the proof consumption, so it survives a later gate refusal.
                 await auditLog(tx, {
                   userId: userData.id,
                   userEmail: userData.email,
@@ -167,15 +157,8 @@ export const passwordless = () =>
             );
             if (!session) throw invalidOrExpiredCode();
 
-            // The plugin's own challenge hook matches only the credential
-            // sign-in paths, so without this a 2FA user signs in here with one
-            // code and receives a full session.
-            //
-            // The contact kind just proved is excluded: a second code to the
-            // mailbox this login already read one from proves nothing. When that
-            // leaves nothing to ask, the login is REFUSED, not completed — this
-            // path mints a session outright. The password route still exists
-            // for this population.
+            // No plugin hook covers this path. The proven contact kind is
+            // excluded; if nothing is left the login is refused, not completed.
             const outcome = await issueTwoFactorChallenge(ctx, {
               userId: userData.id,
               userEmail: userData.email,
@@ -186,24 +169,19 @@ export const passwordless = () =>
               auditMeta,
             });
             if (outcome.kind !== 'proceed') {
-              await ensureMinDelay(Date.now() - start);
               if (outcome.kind === 'refused') throw twoFactorUnavailableError();
               return ctx.json(outcome.body);
             }
 
             try {
-              // The submitted choice, on both the row and the cookie, exactly as
-              // `/sign-in/email` applies it.
               await deliverSessionCookie(
                 ctx,
                 { session, user },
                 !dontRememberMe
               );
             } catch (cookieError) {
-              // The row exists but its token was never delivered, so it is
-              // deleted. `session.create.after` has already committed a
-              // `loginSuccess` row for it, and an audit log is append-only: the
-              // compensating event is what keeps that marker honest.
+              // `session.create.after` already logged `loginSuccess`; the
+              // append-only log needs the compensating event.
               await recordAbandonedSession({
                 userId: userData.id,
                 userEmail: userData.email,
@@ -213,9 +191,7 @@ export const passwordless = () =>
               await ctx.context.internalAdapter
                 .deleteSession(session.token)
                 .catch(() => {
-                  // Fixed fields ONLY, never the error: this delete is bound to
-                  // the live session TOKEN, and a driver error embeds its bound
-                  // parameters. `sessionId` is public and enough to find the row.
+                  // ⚠️ Never log the error: it embeds the bound session token.
                   logSanitized('error', {
                     msg: 'passwordless.orphanSessionCleanup.failed',
                     userId: userData.id,
@@ -225,25 +201,21 @@ export const passwordless = () =>
               throw cookieError;
             }
 
-            // No `loginSuccess` row here: `session.create.after` in
-            // `lib/auth/session/hooks.ts` writes the only one.
-            await ensureMinDelay(Date.now() - start);
             return ctx.json({
               success: true,
               message: otpMsg.loginSuccess,
               data: { loggedIn: true },
             });
           } catch (caught) {
-            if (accountRevealing) await ensureMinDelay(Date.now() - start);
-            // Before `toAuthApiError`, which preserves 429 with its headers by
-            // design: a proof-state throttle is account-dependent, so on this
-            // ANONYMOUS endpoint it has to become the same generic 400 an unknown
-            // address gets. The pre-lookup limiter 429s above are unmarked and
-            // still surface.
+            // A proof-state 429 is account-dependent, so on this anonymous
+            // endpoint it collapses to the unknown-address 400.
             throw asAuthError(
               collapseProofThrottle(caught, otpMsg.invalidOrExpired),
               otpMsg.invalidOrExpired
             );
+          } finally {
+            if (lookupStarted !== undefined)
+              await ensureMinDelay(Date.now() - lookupStarted);
           }
         }
       ),

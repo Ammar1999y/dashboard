@@ -59,7 +59,6 @@ function asciiFallback(filename: string): string {
   return out || 'download';
 }
 
-/** Emits an ASCII fallback and the RFC 5987 filename. */
 export function getContentDisposition(params: {
   filename: string;
   inline?: boolean;

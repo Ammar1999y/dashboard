@@ -273,7 +273,7 @@ function resolveSqliteDir(): string {
   return configured;
 }
 
-/** `server.ts` claims this whole DIRECTORY with `acquireWriterLock`. */
+/** `server.ts` elects the sweep owner per DIRECTORY with `tryAcquireWriterLock`. */
 export const SQLITE_DIR = resolveSqliteDir();
 
 /** Rate-limit state: process-crash-safe, must survive deploys (the OTP cap). */

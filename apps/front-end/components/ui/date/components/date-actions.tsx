@@ -8,7 +8,7 @@ interface DateActionsProps {
 }
 
 export const DateActions = memo(({ onCancel, onSave }: DateActionsProps) => (
-  <div className='flex justify-end pb-2 ps-4 pt-4 space-x-2'>
+  <div className='flex justify-end gap-2 pb-2 ps-4 pt-4'>
     <Button onClick={onCancel} variant='ghost'>
       الغاء
     </Button>

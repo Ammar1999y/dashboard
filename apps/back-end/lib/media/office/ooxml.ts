@@ -1,24 +1,14 @@
 /**
- * Office Open XML inspection — `.docx` and `.xlsx` are ZIP packages, and a ZIP
- * signature alone proves nothing about what is inside.
+ * The MAIN part's type in `[Content_Types].xml` is what tells a document from a
+ * spreadsheet, template or macro-enabled variant; a ZIP signature proves nothing.
  *
- * The package's `[Content_Types].xml` names the content type of every part;
- * the MAIN part's type is what distinguishes a document from a spreadsheet, a
- * template, or a macro-enabled variant. Macro-enabled packages
- * (`.docm`/`.xlsm`) declare `…macroEnabled…` types and carry a
- * `vbaProject.bin` part; embedded OLE objects and ActiveX controls live under
- * `embeddings/` and `activeX/`. All of those are refused: they are the payload
- * carriers, and a dashboard has no use for them.
- *
- * Own reader rather than a library. The whole job is the central directory
- * plus ONE inflated entry, and a general-purpose unzipper would inflate on
- * demand what this deliberately never touches. The content-types part is read
- * with a small XML tokenizer rather than a pattern match: an XML parser resolves
- * `&#80;`, so a pattern that does not is bypassed by it; a full parser would add
- * a dependency to read a file that is a flat list of two element kinds. Whatever Office never writes — a DOCTYPE, an entity this
- * tokenizer does not know, a duplicate part, a local header that disagrees with
- * the central directory — makes the package unreadable rather than partly read,
- * because every one of those is also how two readers come to disagree.
+ * Own reader: the job is the central directory plus ONE inflated entry, and a
+ * general unzipper would inflate what this never touches. The manifest is
+ * tokenized, not pattern-matched: a pattern that ignores `&#80;` is bypassed by
+ * the parser that resolves it. Anything Office never writes (a DOCTYPE, an
+ * unknown entity, a duplicate part, a local header disagreeing with the central
+ * directory) makes the package unreadable, since each is how two readers come
+ * to disagree.
  */
 import { inflateRawSync } from 'node:zlib';
 import type { DetectResult, OfficeFamily } from '../detect-result';
@@ -51,10 +41,8 @@ const MAIN_CONTENT_TYPE: Record<OfficeFamily, string> = {
   excel: EXCEL_MAIN_CONTENT_TYPE,
 };
 
-/** Parts that carry executable or foreign content, by path. */
 const PAYLOAD_PART = /(^|\/)(vbaproject\.bin|embeddings\/|activex\/)/;
 
-/** Content types that carry executable or foreign content. */
 const PAYLOAD_CONTENT_TYPE =
   /macroenabled|application\/vnd\.openxmlformats-officedocument\.oleobject|application\/vnd\.ms-office\.activex|application\/vnd\.ms-office\.vbaproject/;
 
@@ -69,9 +57,8 @@ interface ZipEntry {
 const utf8 = new TextDecoder('utf-8');
 
 /**
- * The central directory, or `null` for anything that is not a plain ZIP —
- * including one that names a part twice, which is a package two extractors
- * can read differently.
+ * `null` for anything but a plain ZIP, including one naming a part twice, which
+ * two extractors can read differently.
  */
 function readCentralDirectory(bytes: Uint8Array): ZipEntry[] | null {
   if (bytes.length < EOCD_MIN_SIZE) return null;
@@ -137,11 +124,9 @@ function readCentralDirectory(bytes: Uint8Array): ZipEntry[] | null {
 }
 
 /**
- * Where one entry's data begins, or `null` when its local header is missing or
- * names a different file than the central directory does — an extractor that
- * trusts one and a reader that trusts the other would open different parts, so
- * every admitted entry is checked, not only the one that is inflated. A header
- * read, never an inflate, so the cost stays inside the entry cap.
+ * `null` when the local header is missing or names another file than the
+ * central directory: readers trusting either would open different parts, so
+ * every entry is checked. A header read, never an inflate.
  */
 function localDataStart(bytes: Uint8Array, entry: ZipEntry): number | null {
   const data = dataViewOf(bytes);
@@ -163,10 +148,7 @@ function localDataStart(bytes: Uint8Array, entry: ZipEntry): number | null {
   return nameStart + nameLength + extraLength;
 }
 
-/**
- * One entry's bytes, or `null` when it cannot be read within the caps. Only
- * `stored` and `deflate` are handled — the two methods Office writes.
- */
+/** Only `stored` and `deflate`, the two methods Office writes. */
 function readEntry(bytes: Uint8Array, entry: ZipEntry): Uint8Array | null {
   if (entry.uncompressedSize > CONTENT_TYPES_MAX_BYTES) return null;
   const start = localDataStart(bytes, entry);
@@ -195,14 +177,12 @@ const NAMED_ENTITIES: Record<string, string> = {
   apos: "'",
 };
 
-/**
- * XML's `Char` production: what a character reference is allowed to denote. A
- * conforming parser makes anything else a fatal error, so resolving one here
- * would be this reader disagreeing with the one Office uses — and
- * `String.fromCodePoint` throws above the Unicode range.
- */
 const XML_WHITESPACE = new Set([0x9, 0xa, 0xd]);
 
+/**
+ * XML's `Char` production. A conforming parser refuses a reference outside it,
+ * and `String.fromCodePoint` throws above the Unicode range.
+ */
 function isXmlChar(codePoint: number): boolean {
   if (XML_WHITESPACE.has(codePoint)) return true;
   if (codePoint < 0x20) return false;
@@ -213,10 +193,9 @@ function isXmlChar(codePoint: number): boolean {
 }
 
 /**
- * An attribute value as XML would deliver it: the five predefined entities and
- * numeric character references resolved. Any other reference — a DTD-defined
- * entity, a malformed one, one outside `Char` — is `null`: Office writes none,
- * and an unresolved one is how a value hides from a comparison.
+ * Any reference but the predefined entities and numeric ones inside `Char` is
+ * `null`: Office writes none, and an unresolved one is how a value hides from a
+ * comparison.
  */
 function decodeAttributeValue(raw: string): string | null {
   let out = '';
@@ -282,13 +261,9 @@ const localPart = (qualified: string) =>
   qualified.slice(qualified.lastIndexOf(':') + 1);
 
 /**
- * Attribute names are kept QUALIFIED, and a prefixed one that is not a
- * namespace declaration makes the package unreadable.
- *
- * `x:ContentType` and `ContentType` are two attributes under the namespace
- * rules, so folding them to their local part lets the second overwrite the
- * first and hide a VBA type from this reader. The manifest grammar has no
- * prefixed attributes at all, so refusing one costs nothing.
+ * ⚠️ Names stay QUALIFIED: `x:ContentType` and `ContentType` are two attributes,
+ * and folding them lets the second hide a VBA type. The manifest grammar has no
+ * prefixed attributes, so refusing one costs nothing.
  */
 const isSupportedAttributeName = (name: string) =>
   !name.includes(':') || name.startsWith('xmlns:');
@@ -333,10 +308,8 @@ function readStartTag(
 }
 
 /**
- * The elements of `[Content_Types].xml`, attributes decoded. `null` for
- * anything that is not the flat, prolog-plus-elements XML Office writes: a
- * DOCTYPE (external entities, and Office never emits one), a CDATA section, an
- * unterminated construct, an attribute without quotes, a stray `<`.
+ * `null` for anything but the flat XML Office writes: a DOCTYPE, CDATA, an
+ * unterminated construct, an unquoted attribute, a stray `<`.
  */
 function readElements(xml: string): ContentTypeElement[] | null {
   const elements: ContentTypeElement[] = [];
@@ -372,10 +345,6 @@ function readElements(xml: string): ContentTypeElement[] | null {
   return elements;
 }
 
-/**
- * Is this a plain OOXML package of `family`, free of macros, embedded objects
- * and ActiveX?
- */
 export function detectOoxml(
   bytes: Uint8Array,
   family: OfficeFamily
@@ -427,8 +396,7 @@ export function detectOoxml(
       mainPart = element.attributes.get('PartName')?.trim() ?? null;
   }
 
-  // The main part has to be declared AND present; a declaration alone is a
-  // string in a manifest, not a document.
+  // Declared AND present: a declaration alone is not a document.
   if (mainPart === null) return { ok: false, reason: 'mismatch' };
   return partNames.has(mainPart.replace(/^\//, '').toLowerCase())
     ? { ok: true }

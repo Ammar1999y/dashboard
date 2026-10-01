@@ -38,7 +38,7 @@ export const DateRangeInputs = memo(
     );
 
     return (
-      <div className='flex justify-around space-x-2'>
+      <div className='flex justify-around gap-2'>
         <DateInput value={range.from} onChange={handleFromChange} />
         <DateInput value={range.to} onChange={handleToChange} />
       </div>

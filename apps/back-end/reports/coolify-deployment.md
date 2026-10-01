@@ -11,7 +11,7 @@ Updated: 2026-09-04
 
 One Coolify application on one VPS:
 
-- **Runtime:** Bun 1.4.0 — runtime, package manager and TypeScript loader. No
+- **Runtime:** Bun 1.4.2 — runtime, package manager and TypeScript loader. No
   Node process, no bundle, no `node-gyp`.
 - **Business data:** PostgreSQL via `bun:sql`. One pooled client in
   `db/index.ts`; `withTransaction` runs on it.
@@ -201,6 +201,15 @@ comment; no code reads it.)
   command found it and the deployment can be held while the divergence is
   resolved; do not work around it by editing the ledger without first knowing
   which statements the database actually ran.
+- **The hand-written files in `db/migrations/` have a ledger too**,
+  `drizzle.__sql_migrations` (filename, sha256). Each file runs once; a re-run
+  applies nothing. The first run on a database migrated before the ledger
+  existed re-applies every file once (they are idempotent) and records them.
+  The same refusal applies before anything runs: an applied file that was
+  edited or removed, or a new file that sorts before an applied one. A file
+  using `CONCURRENTLY` whose build fails leaves an INVALID index; the next run
+  refuses and names it instead of skipping it. Drop it with
+  `DROP INDEX CONCURRENTLY` and migrate again.
 - **A file delete now addresses every configured R2 bucket and purges the key's
   public URL**, not only the bucket the row names — a stale visibility transition
   can leave a copy in the other one. Budget for it: one extra `DeleteObjects` per
@@ -243,15 +252,15 @@ broken configuration.
 
 **Configuration > General:**
 
-| Field               | Value                                                                                             |
-| ------------------- | ------------------------------------------------------------------------------------------------- |
-| Build Pack          | `Dockerfile`                                                                                      |
-| Base Directory      | `/` — the repository root, where `bun.lock` and `packages/` are                                   |
-| Dockerfile Location | `/apps/back-end/Dockerfile`                                                                       |
-| Static Site         | Off                                                                                               |
-| Ports Exposes       | `3000`                                                                                            |
-| Port Mappings       | Empty                                                                                             |
-| Watch Paths         | `apps/back-end/**`, `packages/shared/**`, `bun.lock`, `package.json`, `bunfig.toml`, `scripts/**` |
+| Field               | Value                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Build Pack          | `Dockerfile`                                                                                                                          |
+| Base Directory      | `/` — the repository root, where `bun.lock` and `packages/` are                                                                       |
+| Dockerfile Location | `/apps/back-end/Dockerfile`                                                                                                           |
+| Static Site         | Off                                                                                                                                   |
+| Ports Exposes       | `3000`                                                                                                                                |
+| Port Mappings       | Empty                                                                                                                                 |
+| Watch Paths         | `apps/back-end/**`, `packages/shared/**`, `bun.lock`, `package.json`, `bunfig.toml`, `tsconfig.base.json`, `scripts/**`, `patches/**` |
 
 Install, build and start live in the Dockerfile, so the three command fields
 stay empty. The image runs `bun run build` in a `verify` stage — the OpenAPI
@@ -259,10 +268,11 @@ generation plus `tsc --noEmit`, which is the only place a route table
 inconsistent with its request schemas is caught: the production filter withholds
 `/api/dev/*`, and the mismatch it created once made `GET /openapi.json` return
 500 for every authorised caller in production while every development check
-passed — and starts the runtime stage with
-`bun scripts/build-openapi.ts && bun run start`. The generated `build/` artefact
-is served by nothing: the runtime route reads it and still requires a live
-dashboard session, so it must never be exposed as a static directory.
+passed — and its runtime stage's `CMD` is
+`bun scripts/build-openapi.ts && exec bun --bun server.ts`. The generated
+`build/` artefact is served by nothing: the runtime route reads it and still
+requires a live dashboard session, so it must never be exposed as a static
+directory.
 
 **Watch Paths are load-bearing.** A push that touches only `apps/front-end`
 must not rebuild this application, and a push that touches `packages/shared`
@@ -278,14 +288,58 @@ apart on exactly the code that was shared to stop them drifting.
 and the front-end. The front-end bakes them in at **build** time, so changing
 one there means a redeploy, not a restart.
 
+### One origin: front-end at `/`, API at `/api`
+
+Serve both applications from one hostname, `https://example.com`. The
+front-end gets every path, and the back-end gets `/api/*`. Every
+browser write is then `Origin: https://example.com` and
+`Sec-Fetch-Site: same-origin`. That is the only pair the table-route origin
+check accepts (see `PUBLIC_URL` in §3). On an `api.example.com` split, the
+browser sends `same-site` and every dashboard write is refused 403. It also
+removes CORS preflights and makes the session cookie first-party.
+
+| Application | Coolify domain            | Environment                                                                      |
+| ----------- | ------------------------- | -------------------------------------------------------------------------------- |
+| Front-end   | `https://example.com`     | `NEXT_PUBLIC_API_URL=https://example.com`, `NEXT_PUBLIC_URL=https://example.com` |
+| Back-end    | `https://example.com/api` | `PUBLIC_URL=https://example.com` (an origin: no `/api`, no trailing slash)       |
+
+- **`NEXT_PUBLIC_API_URL` is inlined at build.** Set it before the front-end's
+  first build; changing it means a rebuild. Left unset, `lib/env.js` falls back
+  to a hard-coded IP origin, which brings back the cross-origin 403s.
+- **The `/api` prefix must reach the container.** Every back-end route
+  includes `/api`. Coolify may attach a `stripprefix` middleware when a domain
+  carries a path (not verified against the installed Coolify version). After
+  the first deploy, open the back-end's generated Traefik labels. If a
+  `stripprefix` for `/api` is present, remove it, or replace the labels with
+  a router rule of ``Host(`example.com`) && PathPrefix(`/api`)`` and no
+  middleware.
+- **Router priority.** Traefik ranks routers by rule length, so
+  `Host && PathPrefix(/api)` wins over the front-end's bare `Host` rule. If you
+  set explicit `priority` labels, keep the back-end's higher.
+- **The front-end must not own `/api/*`.** It is a Pages-router app with no
+  `pages/api`. Adding one later would be silently shadowed by the back-end
+  router.
+- **Cloudflare:** one proxied record for `example.com`. The §5 rules
+  (`/api/internal/*` block, no caching of `/api/auth/*`) apply unchanged,
+  because they already match on path.
+
+Verify after deploy, from a browser signed in on `https://example.com`:
+any dashboard save must return 2xx, not 403 `MSG_UNTRUSTED_ORIGIN`. Also, in
+DevTools, the request must go to `https://example.com/api/...` with
+`Sec-Fetch-Site: same-origin`. From a shell,
+`curl -s https://example.com/api/health/storage` without the token must return
+the back-end's 401 JSON envelope, not a Next.js 404 page.
+
 The Dockerfile's `FROM oven/bun:1.4.2` is the second home of the Bun pin. Bump
-it with `packageManager`; `scripts/require-bun.mjs` fails the image build when
+it with `packageManager` (Renovate's `bun` group moves both, with the Bun
+types, in one PR); `scripts/require-bun.mjs` fails the image build when
 the image's Bun is older than the pin, and `server.ts` logs when it is newer.
 
-`bun run start` is `NODE_ENV=production bun --bun server.ts`. **If the start
-command is overridden in Coolify, `NODE_ENV=production` must be carried over** —
-HSTS, the production env validation in `lib/env.server.ts`, the
-absolute-`SQLITE_DIR` rule and the dev-only endpoint gates all key off it.
+Leave the start command empty so that `CMD` applies. **An override must keep
+`exec bun --bun server.ts`**, never `bun run start`, which swallows `SIGTERM`
+(§6), **and must carry `NODE_ENV=production` over** — HSTS, the production env
+validation in `lib/env.server.ts`, the absolute-`SQLITE_DIR` rule and the
+dev-only endpoint gates all key off it.
 
 The start command above regenerates OpenAPI using runtime configuration before
 starting the server. Apply this rule to every deployment: all environment-gated
@@ -321,12 +375,12 @@ A container restart-looping with that line is misconfigured, not crashing.
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `NODE_ENV` not exactly `development`/`test`/`production` | Every production guard is an exact string comparison. `NODE_ENV=prodution` previously disabled the Better Auth secret floor, the Turnstile requirement, the absolute-`SQLITE_DIR` rule and HSTS at once, and still served traffic.                                                                                                                                                                                                                                                                                                     |
 | `PORT` not a decimal integer in `1..65535`               | `Number(PORT)` accepted `''` as 0 and `3000abc` as `NaN`; Bun then bound an ephemeral port while the log reported the requested one.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Bun OLDER than the pinned `1.4.0`                        | Both DB drivers are compiled into the Bun binary. Through 1.3.x, a simple-protocol query concurrent with a not-yet-prepared parameterized one could return the **wrong query's rows** — and `withTransaction`'s `BEGIN`/`COMMIT`/`ROLLBACK` are simple-protocol (Bun #32772, fixed in 1.4.0). Also through 1.3.x, `Bun.randomUUIDv7()` wrapped its sub-millisecond counter at 4,096 ids, breaking the time ordering the session keyset cursor depends on. Bun NEWER than the pin boots and logs `bun version ahead of the tested pin`. |
+| Bun OLDER than the pinned `1.4.2`                        | Both DB drivers are compiled into the Bun binary. Through 1.3.x, a simple-protocol query concurrent with a not-yet-prepared parameterized one could return the **wrong query's rows** — and `withTransaction`'s `BEGIN`/`COMMIT`/`ROLLBACK` are simple-protocol (Bun #32772, fixed in 1.4.0). Also through 1.3.x, `Bun.randomUUIDv7()` wrapped its sub-millisecond counter at 4,096 ids, breaking the time ordering the session keyset cursor depends on. Bun NEWER than the pin boots and logs `bun version ahead of the tested pin`. |
 | `packageManager` not `bun@<major>.<minor>.<patch>`       | It is the only source for the pin (below). A malformed field is treated as a missing runtime contract, not as "no pin".                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `sqlite_version()` below `3.51.3`                        | The WAL-reset floor (§6), now asserted rather than eyeballed in the build log.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 So the Bun version check is a **floor**, enforced rather than advisory: anything
-below 1.4.0 refuses to start, anything above it boots with a warning line. It
+below the pin refuses to start, anything above it boots with a warning line. It
 used to reject a differing minor in either direction, which turned a forward
 image bump into an outage; the floor is what the transaction defect actually
 requires.
@@ -375,7 +429,7 @@ Two things the operator must know about it:
   "port": 3000,
   "hostname": "localhost",
   "env": "production",
-  "bun": "1.4.0",
+  "bun": "1.4.2",
   "idleTimeoutSeconds": 60,
   "maxRouteTimeoutSeconds": 120,
   "maxRequestBodyBytes": 8388608,
@@ -407,23 +461,23 @@ or image history shows Coolify fell back to `--build-arg`.
 
 ### Required
 
-| Variable                               | Secret | Notes                                                                                                                                                                                                                                                                                |
-| -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `NODE_ENV=production`                  | No     | Enforced at boot — see §2.                                                                                                                                                                                                                                                           |
-| `TZ=UTC`                               | No     | Optional hygiene, not a control. It was load-bearing until the `timestamptz` columns dropped `mode: 'string'` (gate 1); no security decision reads the host zone now. Unrelated to `NEXT_PUBLIC_BUSINESS_TIMEZONE`, which is display only.                                           |
-| `PUBLIC_URL=https://<domain>`          | No     | Absolute origin: scheme required, no path/query/fragment/credentials, HTTPS in production. Used for both CORS and Better Auth's `baseURL`. `NEXT_PUBLIC_URL` is a legacy alias; setting both to different values is a boot failure.                                                  |
-| `DATABASE_URL`                         | Yes    | PostgreSQL connection string for `bun:sql`. Put `sslmode` in the URL — see §3.1.                                                                                                                                                                                                     |
-| `BETTER_AUTH_SECRET`                   | Yes    | ≥32 chars, no surrounding whitespace.                                                                                                                                                                                                                                                |
-| `PASSWORD_PEPPER_ACTIVE_ID`            | Yes    | Must name a key in the keyring.                                                                                                                                                                                                                                                      |
-| `PASSWORD_PEPPER_KEYRING`              | Yes    | One-line JSON; retain old keys still referenced by stored hashes.                                                                                                                                                                                                                    |
-| `OTP_HMAC_ACTIVE_ID`                   | Yes    | Must name a key in `OTP_HMAC_KEYRING`.                                                                                                                                                                                                                                               |
-| `OTP_HMAC_KEYRING`                     | Yes    | Same shape as the pepper keyring: `{"<id>":{"generation":1,"secret":"<32 bytes, unpadded base64url>"}}`. Generate with `openssl rand -base64 32 \| tr '+/' '-_' \| tr -d '='`. Malformed is a **boot** failure.                                                                      |
-| `TURNSTILE_SECRET_KEY`                 | Yes    | Production Cloudflare secret.                                                                                                                                                                                                                                                        |
-| `SQLITE_DIR=/app/data`                 | No     | Absolute; no production default — the app refuses to boot without it.                                                                                                                                                                                                                |
-| `SQLITE_MAINTENANCE_TOKEN`             | Yes    | Gates the WHOLE of `GET /api/health/storage`, and nothing else. `openssl rand -hex 32`. **At least 32 characters** — a shorter value refuses to boot, and so does an absent one in production, because the health check cannot pass without it. Failed attempts are logged by class. |
-| `NEXT_PUBLIC_ENABLED_OTP_CHANNELS`     | No     | Comma list: `email`, `sms`, `whatsapp`.                                                                                                                                                                                                                                              |
-| `NEXT_PUBLIC_ENABLED_2FA_METHODS`      | No     | Comma list: `totp`, `otp`, `backup_code`, `passkey`. Unset disables two-factor entirely and every `/two-factor/*` and `/passkey/*` path answers 404. Parsed strictly — an unknown name, a duplicate or a trailing comma is a **boot** failure.                                       |
-| `NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS` | No     | Comma list from the same set as the OTP channels, and deliberately a SEPARATE variable. Where the second-factor codes go. Required when `otp` is in the methods list; a missing provider credential for an enabled channel is a boot failure in production.                          |
+| Variable                               | Secret | Notes                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV=production`                  | No     | Enforced at boot — see §2.                                                                                                                                                                                                                                                                                                                                                         |
+| `TZ=UTC`                               | No     | Optional hygiene, not a control. It was load-bearing until the `timestamptz` columns dropped `mode: 'string'` (gate 1); no security decision reads the host zone now. Unrelated to `NEXT_PUBLIC_BUSINESS_TIMEZONE`, which is display only.                                                                                                                                         |
+| `PUBLIC_URL=https://<domain>`          | No     | Absolute origin: scheme required, no path/query/fragment/credentials, HTTPS in production. Used for CORS, Better Auth's `baseURL`, and the origin check on every table-route write: a browser write whose `Origin` differs, or that is not `Sec-Fetch-Site: same-origin`, is refused 403. `NEXT_PUBLIC_URL` is a legacy alias; setting both to different values is a boot failure. |
+| `DATABASE_URL`                         | Yes    | PostgreSQL connection string for `bun:sql`. Put `sslmode` in the URL — see §3.1.                                                                                                                                                                                                                                                                                                   |
+| `BETTER_AUTH_SECRET`                   | Yes    | ≥32 chars, no surrounding whitespace.                                                                                                                                                                                                                                                                                                                                              |
+| `PASSWORD_PEPPER_ACTIVE_ID`            | Yes    | Must name a key in the keyring.                                                                                                                                                                                                                                                                                                                                                    |
+| `PASSWORD_PEPPER_KEYRING`              | Yes    | One-line JSON; retain old keys still referenced by stored hashes.                                                                                                                                                                                                                                                                                                                  |
+| `OTP_HMAC_ACTIVE_ID`                   | Yes    | Must name a key in `OTP_HMAC_KEYRING`.                                                                                                                                                                                                                                                                                                                                             |
+| `OTP_HMAC_KEYRING`                     | Yes    | Same shape as the pepper keyring: `{"<id>":{"generation":1,"secret":"<32 bytes, unpadded base64url>"}}`. Generate with `openssl rand -base64 32 \| tr '+/' '-_' \| tr -d '='`. Malformed is a **boot** failure.                                                                                                                                                                    |
+| `TURNSTILE_SECRET_KEY`                 | Yes    | Production Cloudflare secret.                                                                                                                                                                                                                                                                                                                                                      |
+| `SQLITE_DIR=/app/data`                 | No     | Absolute; no production default — the app refuses to boot without it.                                                                                                                                                                                                                                                                                                              |
+| `SQLITE_MAINTENANCE_TOKEN`             | Yes    | Gates the WHOLE of `GET /api/health/storage`, and nothing else. `openssl rand -hex 32`. **At least 32 characters** — a shorter value refuses to boot, and so does an absent one in production, because the health check cannot pass without it. Failed attempts are logged by class.                                                                                               |
+| `NEXT_PUBLIC_ENABLED_OTP_CHANNELS`     | No     | Comma list: `email`, `sms`, `whatsapp`.                                                                                                                                                                                                                                                                                                                                            |
+| `NEXT_PUBLIC_ENABLED_2FA_METHODS`      | No     | Comma list: `totp`, `otp`, `backup_code`, `passkey`. Unset disables two-factor entirely and every `/two-factor/*` and `/passkey/*` path answers 404. Parsed strictly — an unknown name, a duplicate or a trailing comma is a **boot** failure.                                                                                                                                     |
+| `NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS` | No     | Comma list from the same set as the OTP channels, and deliberately a SEPARATE variable. Where the second-factor codes go. Required when `otp` is in the methods list; a missing provider credential for an enabled channel is a boot failure in production.                                                                                                                        |
 
 ### Two-factor configuration
 
@@ -590,17 +644,25 @@ TLS now fails rather than silently connecting in plaintext. Same-host over the
 Docker network: decide deliberately. Remote: `require` or stricter.
 
 **c. Pool size against `max_connections`.** `MAX_POOL_CONNECTIONS` in
-`db/index.ts` is 10. That is the number of concurrent **transactions**, not a
+`db/limits.ts` is 10. That is the number of concurrent **transactions**, not a
 throughput knob — `withTransaction` reserves a connection for the whole block.
 `processOtpSend` commits before it calls the provider, so delivery latency holds
 no connection; a failed delivery opens a short refund transaction afterwards.
-Callers beyond 10 queue **with no time limit**: Bun's `connectionTimeout` bounds
-only opening a new connection, not waiting for a free pool slot. Measured on Bun
-1.4.2: a `max: 1, connectionTimeout: 2` pool with its connection reserved left a
-second query pending for 6 s without error. A pool that fills with transactions
-waiting on something that never comes stays stuck until a restart; audit 2FA-3
-is one such trigger. §3.3's `idle_in_transaction_session_timeout` is the
-server-side bound. Confirm the server's `max_connections` leaves headroom for a
+Bun's `connectionTimeout` bounds only opening a new connection, not waiting for
+a free pool slot. Measured on Bun 1.4.2: a `max: 1, connectionTimeout: 2` pool
+with its connection reserved left a second query pending for 6 s without error.
+`withTransaction` therefore bounds its own wait: a transaction that gets no
+connection within `POOL_ACQUIRE_TIMEOUT_MS` (10 s, `db/limits.ts`) answers 503
+and logs `postgres connection not acquired in time`. The bound also covers
+opening a connection, so a run of that line is pool exhaustion OR an unreachable
+database: check that the database answers before hunting for leaked
+transactions. Plain `db` queries outside a transaction still queue without a
+limit. A pool that fills with transactions waiting on something that never
+comes stays full until each holder ends; a pool query issued from inside a
+transaction, which waits for a second connection while holding the first, is
+one such trigger.
+§3.3's `idle_in_transaction_session_timeout` is the server-side bound that ends
+them. Confirm the server's `max_connections` leaves headroom for a
 migration run and a `psql` session on top of the app's 10.
 
 **d. `prepare: true` is the default and is correct only here.** Bun creates
@@ -668,14 +730,14 @@ regression (see verification below).
 Size from the RAM you give PostgreSQL, not the VPS total: Coolify, Traefik and
 the Bun app share the box. Give PostgreSQL about half of RAM.
 
-| Setting                | VPS 4 GB (PG ≈ 2 GB) | VPS 8 GB (PG ≈ 4 GB) | Why                                                                                                                                                                                                                                                                              |
-| ---------------------- | -------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `shared_buffers`       | `512MB`              | `1GB`                | 25 % of PostgreSQL's share. Needs a restart.                                                                                                                                                                                                                                     |
-| `effective_cache_size` | `1GB`                | `3GB`                | Planner hint only, allocates nothing: what the OS page cache can realistically hold for PostgreSQL.                                                                                                                                                                              |
-| `work_mem`             | `4MB`                | `4MB`                | Default. Per sort/hash node, per query; the data-table queries sort under `LIMIT`. Raise only on evidence (`log_temp_files`).                                                                                                                                                    |
-| `maintenance_work_mem` | `128MB`              | `256MB`              | `CREATE INDEX` on the trigram GIN indexes (`db/migrations/`) and vacuum.                                                                                                                                                                                                         |
-| `random_page_cost`     | `1.1`                | `1.1`                | SSD/NVMe only. Check `lsblk -d -o name,rota` on the host: `0` = SSD. On spinning disk keep `4`.                                                                                                                                                                                  |
-| `max_connections`      | `50`                 | `50`                 | Today's need is 11 per app process + 1 per migration run + admin sessions. 50 covers 3 app processes (the multi-process target) with headroom. Do not raise it to hide pool exhaustion: exhaustion here has been a code bug (audit 2FA-3), and more slots would not have helped. |
+| Setting                | VPS 4 GB (PG ≈ 2 GB) | VPS 8 GB (PG ≈ 4 GB) | Why                                                                                                                                                                                                                                                                                                                        |
+| ---------------------- | -------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shared_buffers`       | `512MB`              | `1GB`                | 25 % of PostgreSQL's share. Needs a restart.                                                                                                                                                                                                                                                                               |
+| `effective_cache_size` | `1GB`                | `3GB`                | Planner hint only, allocates nothing: what the OS page cache can realistically hold for PostgreSQL.                                                                                                                                                                                                                        |
+| `work_mem`             | `4MB`                | `4MB`                | Default. Per sort/hash node, per query; the data-table queries sort under `LIMIT`. Raise only on evidence (`log_temp_files`).                                                                                                                                                                                              |
+| `maintenance_work_mem` | `128MB`              | `256MB`              | `CREATE INDEX` on the trigram GIN indexes (`db/migrations/`) and vacuum.                                                                                                                                                                                                                                                   |
+| `random_page_cost`     | `1.1`                | `1.1`                | SSD/NVMe only. Check `lsblk -d -o name,rota` on the host: `0` = SSD. On spinning disk keep `4`.                                                                                                                                                                                                                            |
+| `max_connections`      | `50`                 | `50`                 | Today's need is 11 per app process + 1 per migration run + admin sessions. 50 covers 3 app processes (the multi-process target) with headroom. Do not raise it to hide pool exhaustion: exhaustion here has been a code bug (a transaction asking the pool for a second connection), and more slots would not have helped. |
 
 Leave the PostgreSQL 18 defaults for `io_method` (`worker`),
 `effective_io_concurrency` (`16`), `max_wal_size` (`1GB`) and
@@ -693,8 +755,9 @@ shared_preload_libraries = 'pg_stat_statements'
 
 Then, once, as a superuser: `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;`.
 Known issue #2 (`statement_timeout`) is deferred until p99 query durations are
-measured, and this is how they are measured. `log_lock_waits` makes the
-known user-delete ↔ role-delete deadlock (#57) visible.
+measured, and this is how they are measured. `log_lock_waits` makes a writer
+that misses the users → roles lock order visible before it deadlocks (the app
+answers a detected deadlock 503).
 
 #### Timeouts, on the application role
 
@@ -708,8 +771,9 @@ ALTER ROLE app_user SET idle_in_transaction_session_timeout = '10s';
 It applies to new sessions, so restart the app afterwards. What it does, measured
 on the harness database (Bun 1.4.2, PostgreSQL 18.6):
 
-- **It ends a pool deadlock.** 12 concurrent Google sign-ins with an OTP option
-  (audit 2FA-3) left all 10 pooled connections `idle in transaction` forever
+- **It ends a pool deadlock.** 12 concurrent Google sign-ins with an OTP option,
+  while that challenge read the pool from inside its transaction, left all 10
+  pooled connections `idle in transaction` forever
   without it: still stuck at 125 s, with `select 1` never answering. With it, all
   12 requests failed at 10.3 s, Bun replaced the terminated connections, and the
   next query answered in 213 ms, then 0–1 ms. Sign-in and a new Google sign-in
@@ -718,7 +782,7 @@ on the harness database (Bun 1.4.2, PostgreSQL 18.6):
 - **It did not break legitimate paths.** `credential-concurrency.test.ts` (3/3)
   and `media-files.test.ts` (50/50) passed with it. The longest legitimate idle
   gap measured was **4.58 s**, typically about 1 s: password sign-in holds its
-  transaction open while Argon2 runs (audit AUTH-6), and 20 concurrent sign-ins
+  transaction open while Argon2 runs, and 20 concurrent sign-ins
   queue on the CPU. That gap grows with CPU load, so on a VPS with fewer cores
   than the 8 measured here, check `pg_stat_activity` under a sign-in burst before
   shortening the value, and never set it below a few seconds.
@@ -840,9 +904,13 @@ Practical rules that follow:
   800 denied) — correct arithmetic, bought with exactly the writer contention
   above on every request.
 
-Startup acquires an OS-backed ownership lock under `SQLITE_DIR`. A second
-cooperating app process fails before serving traffic. External SQLite tools do
-not honor this lock, so maintenance procedure still forbids them while live.
+Startup claims an OS-backed ownership lock under `SQLITE_DIR`, and only its
+holder registers the scheduled sweeps. A second cooperating app process on the
+same directory boots and serves without them
+(`{"msg":"maintenance schedule not started"}`), retrying the claim every
+minute, so it takes the schedule over once the owner exits. External SQLite
+tools do not honor this lock, so maintenance procedure still forbids them while
+live.
 
 ### Permissions check
 
@@ -854,9 +922,26 @@ stat -c '%U:%G %a %n' /app/data
 test -w /app/data
 ```
 
+**The runtime UID is 1000, not root.** The runtime stage ends with `USER bun`,
+the uid 1000 / gid 1000 account `oven/bun` ships; `id` must print
+`uid=1000(bun) gid=1000(bun)`. The image creates `/app/data` as `bun:bun` mode
+`0700`, and a **new** named volume inherits that. Two cases do not:
+
+- **A bind mount**: set host ownership to `1000:1000` — never `chmod 777`.
+- **A volume created while the image ran as root** (every deploy before the
+  runtime stage gained `USER bun`): its files are `root`-owned and the first non-root boot cannot open
+  them. Once, with the app stopped, over SSH on the VPS:
+
+  ```sh
+  docker run --rm --user 0 --entrypoint sh -v <volume>:/app/data <image> \
+    -c 'chown -R 1000:1000 /app/data && chmod 0700 /app/data && find /app/data -type f -exec chmod 0600 {} +'
+  ```
+
+  `<volume>` is the exact Coolify volume name (resolve it as §10 Restore says;
+  never guess from a prefix) and `<image>` the newly built one.
+
 The directory must be writable by the runtime UID, because WAL creates sidecars
-there. For a bind mount, set host ownership to the numeric UID from `id` — never
-`chmod 777`. Because the files hold raw identifiers, restrict the directory to
+there. Because the files hold raw identifiers, restrict the directory to
 the runtime identity (`0700`) after verifying ownership; that mode also protects
 newly created DB/WAL/SHM files. If the runtime identity cannot enforce it, fix
 ownership or the startup umask before production.
@@ -865,7 +950,9 @@ ownership or the startup umask before production.
 
 ### Ingress
 
-1. Add the domain in Coolify; do not publish a host port.
+1. Add the domain in Coolify; do not publish a host port. The back-end takes
+   `https://example.com/api` and the front-end takes `https://example.com`
+   (§2, "One origin").
 2. Create a **proxied** (orange-cloud) DNS record.
 3. Use **Full (strict)** TLS with a valid Coolify origin certificate.
 4. **Rules > Transform Rules > Managed Transforms:** keep _Remove visitor IP
@@ -1289,9 +1376,13 @@ empty for `AFTER_RESPONSE_SETTLE_MS`_ (policy table above) rather than checking 
 
 ### Rolling updates
 
-Do not overlap releases that share `SQLITE_DIR`. Startup ownership rejects the
-new process while the old process holds the directory. Use stop-first deployment
-until SQLite state moves to a store designed for multi-process ownership.
+Do not overlap releases that share `SQLITE_DIR`. Startup no longer refuses the
+new process: it serves without the schedule while the old process holds the
+directory, and takes the schedule over within a minute of the old one exiting
+(`maintenance schedule started` then appears in the new container's log). Stop-first
+remains the policy because a start-first overlap has not been exercised against
+Coolify, and until SQLite state moves to a store designed for multi-process
+ownership.
 
 SQLite WAL supports same-host processes but only one writer at a time. Use
 **3.51.3 or newer** as the floor for the WAL-reset race (the fix was backported
@@ -1442,7 +1533,7 @@ bun --version
 bun -e 'const {Database}=require("bun:sqlite");const d=new Database(":memory:");console.log(d.query("select sqlite_version() as v").get());d.close(false)'
 ```
 
-Expect Bun 1.4.0 and SQLite ≥ 3.51.3. **Record the SQLite version** — it is a
+Expect Bun 1.4.2 and SQLite ≥ 3.51.3. **Record the SQLite version** — it is a
 property of the Bun build, as are the WebP/PNG codecs and the image resampler.
 
 No native addon is on the request path: `bun:sqlite` replaced `better-sqlite3`
@@ -1560,11 +1651,12 @@ Windows with no Docker and no WSL distribution, so these were proven only as far
 as that allows. Run them once on the VPS, or on any Ubuntu 24 host with Docker,
 and record the output next to the release commit.
 
-**a. The image builds (audit OPS-1).** Every stage `extends`
-`../../tsconfig.base.json`, which the `manifests` stage does not copy, so the
-`verify` stage's `tsc --noEmit` is expected to fail with `TS5083: Cannot read
-file '/app/tsconfig.base.json'` until the Dockerfile copies it. From the
-repository root:
+**a. The image builds.** Every workspace `tsconfig.json`
+`extends` `../../tsconfig.base.json`, which the `manifests` stage did not copy,
+so the `verify` stage's `tsc --noEmit` failed with `TS5083: Cannot read file
+'/app/tsconfig.base.json'`. The stage copies it now, and CI's `image` job runs
+the second command below, which builds `verify` on the way, on every push. From
+the repository root:
 
 ```sh
 docker build -f apps/back-end/Dockerfile --target verify -t back-end:verify .
@@ -1572,20 +1664,20 @@ docker build -f apps/back-end/Dockerfile -t back-end:check .
 ```
 
 Both must exit 0. A failure at `RUN bun run build` naming `tsconfig.base.json`
-confirms OPS-1. Coolify would fail the same way on every deploy. A file-for-file
-simulation of the two stages on Windows (only the `COPY`d files, `.dockerignore`
-honoured, the stage's `ENV`) already failed exactly so: `TS5083` plus 176
-cascading errors, exit 2. The same tree with `tsconfig.base.json` added exited 0.
+means the copy regressed; Coolify would fail the same way on every deploy. A
+file-for-file simulation of the two stages on Windows (only the `COPY`d files,
+`.dockerignore` honoured, the stage's `ENV`) failed exactly so before the fix:
+`TS5083` plus 176 cascading errors, exit 2. The same tree with
+`tsconfig.base.json` added exited 0, and still does after the fix.
 
-**b. The process is not root (audit OPS-2).** The runtime stage has no `USER`
-line today, so this is expected to print `0`. §4's `0700` ownership rule assumes
-a non-root runtime UID:
+**b. The process is not root.** The runtime stage ends with
+`USER bun`, so this must print `1000`, the UID §4's ownership rules name:
 
 ```sh
 docker run --rm --entrypoint id back-end:check -u
 ```
 
-**c. A crafted `.xls` asks the parser for 4 GiB (audit MEDIA-3, latent).**
+**c. A crafted `.xls` asks the parser for 4 GiB (latent).**
 `.doc`/`.xls` are disabled uploads today (`DISABLED_FILE_TYPES`), so this
 matters before either is re-enabled. On Windows, a 2 048-byte file whose
 `Workbook` entry claims `0xFFFFFFF0` bytes made `detectCompoundFile` construct
@@ -1624,6 +1716,23 @@ Windows result for comparison:
 process (exit 137, no output) means one upload restarts the container. The fix
 is `Math.min(entry.size, limit, bytes.length)` in `readStream`; after it,
 `largestAllocation` must be `2048`.
+
+**d. The anonymous OTP floor still hides a known account under SQLite
+contention.** `MINIMUM_RESPONSE_MS` is `BUSY_TIMEOUT_MS` plus 500 ms for the rest
+of a known account's branch, counted from the account lookup. On the Windows
+harness, the global-budget charge under a held writer lock took 2301 ms, which
+leaves about 200 ms of margin. Run the suite's contention case on a host sized
+like the VPS, against a throwaway PostgreSQL of the same version. Never run it
+against the production server: the harness creates and drops databases, which
+is why `TEST_DATABASE_URL` must be absent there (§3).
+
+```sh
+bun run test:integration otp-timing-oracle
+```
+
+It must pass. If "stays under the floor" fails, a known identifier answers
+measurably later than an unknown one on this host: raise `KNOWN_BRANCH_WORK_MS`
+in `lib/http/timing-floor.ts` until it passes.
 
 ## 9. Scheduled tasks
 
@@ -1682,16 +1791,21 @@ The zone is passed explicitly. Bun 1.4 changed `Bun.cron` to interpret
 expressions in **local** time (it was UTC before), and nothing pins this
 container's zone — an inherited schedule would move with the host.
 
-### Shutdown, and why one process is an invariant
+### Shutdown, and who runs each job
 
 `stop()` on a cron handle prevents future firings but does not cancel an active
 callback. Shutdown stops both handles and drains active work within its common
 deadline. If work cannot drain, forced process exit occurs without closing stores
 under the callback. Keep Coolify stop grace above `shutdownTimeoutMs`.
 
-**One app process is a scheduling invariant.** Startup ownership prevents a
-second cooperating process from reaching scheduler registration. Scaling past
-one replica requires per-replica stores or a shared store plus elected scheduler.
+**One runner per firing, across replicas.** Only the process owning
+`SQLITE_DIR` registers the schedule (§4). The jobs acting on PostgreSQL or R2
+(`database-retention-sweep`, `object-store-reconcile`) are elected again per
+firing with a PostgreSQL session advisory lock, so replicas on separate volumes
+do not both run them; the loser logs `scheduled sweep skipped`. The SQLite sweep
+runs once per volume, which is all it needs. While a shared job runs, its lock
+holds one of the pool's `MAX_POOL_CONNECTIONS`. This makes the schedule safe to
+scale; the limiter is still per-volume (§4).
 
 ### What to alert on
 
@@ -1712,10 +1826,19 @@ replacement is the log stream. One line per run:
   be exactly full.
 - **Absence of `scheduled sweep completed` for a job over its period** — alert.
   This is the case an external scheduler reported for free and an in-process one
-  does not.
+  does not. With more than one replica, aggregate across them: the line comes
+  from whichever replica won the firing.
+- **`scheduled job lock lost`** — alert on any occurrence. The session holding a
+  job's PostgreSQL lock ended mid-run, so another replica may have run the job
+  at the same time.
+- **`writer lock claim failed`** — alert. A process waiting to take the schedule
+  over cannot open the SQLite directory.
 
-`maintenance schedule started` is logged once at boot with each job's next fire
-time; it is the fastest confirmation that the deploy actually scheduled anything.
+`maintenance schedule started` is logged once by the owning process, at boot or
+at takeover, with each job's next fire time; it is the fastest confirmation that
+the deploy actually scheduled anything. A process that logs `maintenance
+schedule not started` is serving without it, which is expected only while
+another process owns the directory.
 
 ### Why `hasMore` matters, and the ceiling behind it
 
@@ -1933,7 +2056,7 @@ a partial Docker volume name.
 2. Archive the current `rate-limit.db`, `-wal` and `-shm` **together**. Do not
    leave stale sidecars beside the replacement.
 3. Verify the backup with `quick_check`, place it as `/app/data/rate-limit.db`,
-   and apply runtime UID ownership plus mode `0600`.
+   and apply runtime UID ownership (`1000:1000`) plus mode `0600`.
 4. Do not restore the cache database.
 5. Start one container, run health and `quick_check`, verify `user_version`,
    then reopen traffic.
@@ -2099,16 +2222,11 @@ The grant file also patches the permission copy that live sessions carry in
 administrator signed in before the migration sees the `media` page once their
 five-minute session cookie cache refreshes, rather than after a re-login.
 
-`002_media_trgm_indexes.sql` REPLACES an index rather than only adding one: it
-drops `idx_files_display_name_trgm` and creates
-`idx_files_display_name_active_trgm` in its place, because the old predicate
-excluded the rows the `unfiled` scope searches. On a database that already has
-the old index this is a `DROP INDEX` plus a GIN build, neither of them
-`CONCURRENTLY` (phase-2 files run as one implicit transaction), so `files` is
-write-locked for the build. It is a non-event on a `files` table of any size
-this deployment has now; if it ever runs against a large one, take the brief
-write pause into account or run the two statements by hand with
-`DROP INDEX CONCURRENTLY` / `CREATE INDEX CONCURRENTLY` before deploying.
+`002_media_trgm_indexes.sql` builds its GIN indexes without `CONCURRENTLY`
+(each phase-2 file runs in one transaction), so `files` is write-locked for the
+build. It is a non-event on a `files` table of any size this deployment has now;
+if it ever runs against a large one, take the brief write pause into account or
+run the statements by hand with `CREATE INDEX CONCURRENTLY` before deploying.
 
 ### 13.4a `0013`–`0019`: the one release that must not serve between migrate and swap
 
@@ -2172,13 +2290,18 @@ bucket CORS rule in the Cloudflare console — the API token cannot (measured
 ## Final checklist
 
 - [ ] Release committed, pushed, CI green.
-- [ ] Bun 1.4.0 in the build log; SQLite version recorded (§8).
-- [ ] Build `bun run build`, start `bun scripts/build-openapi.ts && bun run start`, `NODE_ENV=production` set as
-      a runtime variable; `--no-env-file` decided (§2).
+- [ ] Bun 1.4.2 in the build log; SQLite version recorded (§8).
+- [ ] Install, build and start command fields empty, so the image's `verify`
+      stage and `CMD` apply; `NODE_ENV=production` set as a runtime variable;
+      `--no-env-file` decided (§2).
 - [ ] Google project, only when `ENABLED_OAUTH_PROVIDERS` includes `google`:
       publishing status **In production**, redirect URI registered for the
       canonical origin, and, if the local-2FA bypass is wanted, **Authentication
       strength claims** enabled with verification status **Verified** (§14).
+- [ ] One origin: front-end on `https://example.com`, back-end on
+      `https://example.com/api` with no `stripprefix`. `PUBLIC_URL` and
+      `NEXT_PUBLIC_API_URL` are both `https://example.com`, and a dashboard
+      save returns 2xx (§2).
 - [ ] Every secret scoped **runtime-only**; nothing in the "Must be absent"
       table present, especially `TEST_DATABASE_URL`.
 - [ ] `SQLITE_MAINTENANCE_TOKEN` generated with `openssl rand -hex 32`.
@@ -2195,7 +2318,8 @@ bucket CORS rule in the Cloudflare console — the API token cannot (measured
       frequency in `lib/maintenance/schedule.ts` rather than waiting for the disk alert (§9).
 - [ ] Pepper keyring and active id understood as a **two-variable** rollback
       (§3.2).
-- [ ] Named volume at `/app/data`; `SQLITE_DIR=/app/data`; directory `0700`.
+- [ ] Named volume at `/app/data`; `SQLITE_DIR=/app/data`; directory owned by
+      uid 1000 and `0700`; a volume from a root-run image `chown`ed once (§4).
 - [ ] One replica, one Bun process; no second writer on the volume, and the
       replica-scaling decision recorded if more than one is ever wanted (§4).
 - [ ] Cloudflare proxied, Full (strict), visitor-IP removal off, Pseudo IPv4 not

@@ -1,35 +1,12 @@
 /**
- * The bridge between proving a recovery contact and rewriting a password, for
- * accounts that hold a second factor.
+ * ⚠️ No single possession may satisfy both the recovery proof and the second
+ * factor. A grant, not a check in `processOtpVerify`, because proving the
+ * second factor needs a round trip that no row lock may be held across.
  *
- * ⚠️ The property it exists for: **no single possession may satisfy both the
- * recovery proof and the second-factor proof in one authentication chain.**
- * Checking that SOME factor survives the contact-kind exclusion is not enough;
- * that factor has to be proven before the password is written.
- *
- * It is a grant rather than a check inside `processOtpVerify` because the second
- * factor cannot be proven inside that transaction: an OTP to the other contact
- * needs a round trip, and holding a row lock across it is not an option. So the
- * code verification commits, and the proof plus the password write happen
- * against the grant in a later request.
- *
- * Constraints, and every one of them is load-bearing:
- *
- *   - single-use, short-lived, bound to ONE user;
- *   - bound to the excluded contact kind, so the second factor can never be a
- *     code to the contact the recovery code already arrived on;
- *   - **not sufficient alone** — possession of the grant plus nothing else
- *     fails, because completion still verifies a factor;
- *   - invalidated when the enrolled method set changes between the two
- *     requests, through a fingerprint of the offered options;
- *   - its own attempt budget, so the grant window is not a free brute-force
- *     window against a six-digit code;
- *   - trusted devices are NOT honoured. A device trusted earlier is not a
- *     second factor for someone who has just proven only a mailbox.
- *
- * Stored in the shape the sign-in challenge uses: `recovery-<t>` carries the
- * user id so a credential rotation sweeps it, `recovery-state-<t>` the payload
- * and `recovery-attempts-<t>` the budget.
+ * The grant alone is never sufficient, is bound to the excluded contact kind,
+ * only narrows when the enrolled set changes, and has its own attempt budget.
+ * Trusted devices are NOT honoured. `recovery-<t>` holds the user id so a
+ * credential rotation sweeps it.
  */
 import type { OfferedOption } from '../two-factor/methods';
 import type { AttemptSpend } from '../two-factor/pending-proof';
@@ -73,7 +50,6 @@ interface RecoveryGrantState {
   userId: EntityID;
   /** The contact the recovery code arrived on. Never a second factor here. */
   excludeContactKind: ContactKind;
-  /** The option identities offered at issuance, in order. */
   options: string[];
 }
 
@@ -155,19 +131,12 @@ async function readRecoveryGrant(
   if (!state) return null;
 
   const parsed = parseState(state.value);
-  // Both rows must agree: a state row whose user differs from the holder row is
-  // either corruption or a rotation caught mid-flight, and neither is a grant.
+  // A user mismatch is corruption or a rotation caught mid-flight.
   return parsed && parsed.userId === validID(holder.value) ? parsed : null;
 }
 
-/**
- * The grant and the option `requested` names in it, or `null` when either is
- * gone.
- *
- * The issued set intersected with CURRENT capability. Narrowing only: a method
- * enrolled since the grant was minted was never challenged, and one removed
- * since is no factor at all.
- */
+// Issued set ∩ current capability: a method enrolled since issuance was never
+// challenged, and one removed since is no factor.
 export async function resolveRecoveryOption(
   token: string,
   requested: string
@@ -183,10 +152,6 @@ export async function resolveRecoveryOption(
   return option ? { grant, option } : null;
 }
 
-/**
- * Spends one of the grant's shared attempts, under the protocol
- * `spendAttemptBudget` states and the sign-in challenge shares.
- */
 export function spendRecoveryAttempt(token: string): Promise<AttemptSpend> {
   const identifier = recoveryAttemptsKey(token);
 
@@ -212,14 +177,8 @@ export function spendRecoveryAttempt(token: string): Promise<AttemptSpend> {
   });
 }
 
-/**
- * Spends the grant, inside the caller's transaction so the password write and
- * the consumption commit together.
- *
- * Returns `false` when the row was already gone, which is what makes it
- * single-use under concurrency: the DELETE returns the row to exactly one of two
- * racing callers.
- */
+// In the caller's transaction, so it commits with the password write. The
+// DELETE returns the row to exactly one of two racing callers.
 export async function consumeRecoveryGrant(
   tx: Tx,
   token: string,

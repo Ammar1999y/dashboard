@@ -36,3 +36,24 @@ export function parseTwoFactorOtpChannels(
     unsetMeans: 'disable the OTP second factor',
   });
 }
+
+/**
+ * The coherence rule between the two lists: `otp` with no channel would be
+ * advertised in settings, enabled by users, and then fail to deliver at their
+ * next sign-in, with no session left to fix it from.
+ *
+ * ⚠️ `channels` is the list AFTER the `PHONE_ENABLED` filter; checked before it,
+ * `sms` alone on a deployment without phones passes and the server then refuses
+ * to boot.
+ */
+export function assertTwoFactorListsCoherent(
+  methods: readonly TwoFactorMethod[],
+  channels: readonly OtpChannel[]
+): void {
+  if (methods.includes('otp') && channels.length === 0)
+    throw new Error(
+      `${TWO_FACTOR_METHODS_VAR} enables "otp" but ${TWO_FACTOR_OTP_CHANNELS_VAR} names no channel. ` +
+        `Set ${TWO_FACTOR_OTP_CHANNELS_VAR} to a comma-separated list of ${OTP_CHANNELS.join(', ')}, ` +
+        `or remove "otp" from ${TWO_FACTOR_METHODS_VAR}.`
+    );
+}

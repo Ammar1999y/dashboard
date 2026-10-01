@@ -8,32 +8,32 @@ import { CustomError } from '@app/shared/error-class';
 import { adminReauthSchema } from '@app/shared/validation/auth';
 
 import { getAuditMeta } from '@/lib/audit';
-import { verifyReauthPassword } from '@/lib/auth/reauth/password';
+import { verifySessionPassword } from '@/lib/auth/reauth/password';
+import { enforceReauthAttemptLimit } from '@/lib/auth/reauth/session';
 import { mintAdminReauth } from '@/lib/auth/reauth/window';
 import { authenticationStartedAt } from '@/lib/auth/session/authentication-time';
 import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
-import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
   const startedAt = await authenticationStartedAt();
   const { userId, sessionId } = await requireSession(ctx);
 
-  // Per user, not per IP: the budget that matters is guesses per account.
-  await enforceRateLimit({
-    scope: 'dash.reauth',
-    identifier: userIdentifier(userId),
-    limit: 10,
-    failClosed: true,
-  });
+  await enforceReauthAttemptLimit(userId);
 
   const input = await readJsonBody(ctx, adminReauthSchema, {
     message: MSG_INVALID_CREDENTIALS,
     status: HTTP_STATUS.UNAUTHORIZED,
   });
 
-  if (!(await verifyReauthPassword(userId, input.password, getAuditMeta(ctx))))
+  const accepted = await verifySessionPassword(
+    userId,
+    input.password,
+    getAuditMeta(ctx),
+    'reauth_admin'
+  );
+  if (!accepted)
     throw new CustomError(MSG_INVALID_CREDENTIALS, HTTP_STATUS.UNAUTHORIZED);
 
   const { expiresIn } = await mintAdminReauth(userId, sessionId, {

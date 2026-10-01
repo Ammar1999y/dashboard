@@ -57,6 +57,47 @@ function call(path: string, cookie: string, body: object, method = 'POST') {
   );
 }
 
+test("soft-deleting a Google-linked user audits the unlink as the administrator's", async () => {
+  const owner = await seedUser();
+  const linked = await startGoogle({
+    sub: 'deleted-owner',
+    email: owner.email,
+  });
+  const linkedIn = await linked.callback();
+  expect(linkedIn.status).toBe(200);
+  const administrator = await seedUser({ roleScope: 'system' });
+  const admin = await signIn(administrator);
+  await expect(
+    call('/api/dash/auth/reauth', admin.cookie, {
+      password: administrator.password,
+    })
+  ).resolves.toHaveProperty('status', 200);
+
+  await expect(
+    call(`/api/dash/users/${owner.userId}`, admin.cookie, {}, 'DELETE')
+  ).resolves.toHaveProperty('status', 200);
+
+  // The owner's email is anonymised before the unlink, so only the actor
+  // fields can say who did it.
+  const unlinks = await db
+    .select()
+    .from(auditLogs)
+    .where(
+      and(eq(auditLogs.tableName, 'accounts'), eq(auditLogs.action, 'DELETE'))
+    );
+  expect(
+    unlinks.filter((row) =>
+      JSON.stringify(row.newData).includes('google_identity_unlinked')
+    )
+  ).toMatchObject([
+    {
+      userId: administrator.userId,
+      userEmail: administrator.email,
+      newData: { forUserId: owner.userId },
+    },
+  ]);
+});
+
 test.each(['self-service', 'administrator'])(
   '%s email change unlinks Google and revokes sessions, reauthentication and pending exchanges',
   async (mode) => {
@@ -89,6 +130,7 @@ test.each(['self-service', 'administrator'])(
       sub: 'new-email-owner',
       email: newEmail,
     });
+    let actor = owner;
     if (mode === 'self-service') {
       await expect(
         call('/api/dash/users/me/change-email', cookie, { newEmail })
@@ -115,6 +157,7 @@ test.each(['self-service', 'administrator'])(
       ).resolves.toHaveProperty('status', 200);
     } else {
       const administrator = await seedUser({ roleScope: 'system' });
+      actor = administrator;
       const admin = await signIn(administrator);
       await expect(
         call('/api/dash/auth/reauth', admin.cookie, {
@@ -141,20 +184,22 @@ test.each(['self-service', 'administrator'])(
       .where(eq(users.id, owner.userId));
     expect(user?.email).toBe(newEmail);
     expect(user?.authRevokedAt).toBeInstanceOf(Date);
+    // The actor is whoever changed the email; the owner is the record's.
     const unlinks = await db
       .select()
       .from(auditLogs)
       .where(
-        and(
-          eq(auditLogs.userId, owner.userId),
-          eq(auditLogs.tableName, 'accounts'),
-          eq(auditLogs.action, 'DELETE')
-        )
+        and(eq(auditLogs.tableName, 'accounts'), eq(auditLogs.action, 'DELETE'))
       );
     expect(unlinks).toHaveLength(1);
-    expect(unlinks[0]?.newData).toMatchObject({
-      identityLinked: false,
-      reason: 'google_identity_unlinked',
+    expect(unlinks[0]).toMatchObject({
+      userId: actor.userId,
+      userEmail: mode === 'self-service' ? newEmail : actor.email,
+      newData: {
+        identityLinked: false,
+        reason: 'google_identity_unlinked',
+        forUserId: owner.userId,
+      },
     });
     expect(
       await db

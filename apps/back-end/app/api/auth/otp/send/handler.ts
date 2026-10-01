@@ -60,8 +60,7 @@ function autoVerifyContact(
       channel,
       auditMeta: getAuditMeta(ctx),
       onMissing: () => {
-        // The user vanished or was deactivated mid-flow; logged apart from
-        // other failures, answered with the generic message.
+        // User vanished mid-flow: logged apart, answered generically.
         logSanitized('error', {
           msg: 'otp.send.autoVerify.userVanished',
           userId,
@@ -73,34 +72,39 @@ function autoVerifyContact(
   );
 }
 
-export const POST = withTimingFloor(otpMsg.sendError, async (ctx, floor) => {
-  requireFeature(OTP_ENABLED);
+export const POST = withTimingFloor(
+  otpMsg.sendError,
+  async (ctx, startFloor) => {
+    requireFeature(OTP_ENABLED);
 
-  // Per IP BEFORE the captcha siteverify call: bounds that outbound request
-  // and stops one IP rotating identifiers to pump delivery cost. It runs
-  // before any lookup, so its 429 reveals nothing and propagates as-is.
-  await enforceRateLimit({
-    scope: 'otp.send.ip',
-    identifier: ipIdentifier(ctx.headers),
-    limit: 60,
-    failClosed: true,
-  });
+    // Before the captcha, bounding siteverify and identifier rotation;
+    // pre-lookup, so its 429 reveals nothing.
+    await enforceRateLimit({
+      scope: 'otp.send.ip',
+      identifier: ipIdentifier(ctx.headers),
+      limit: 60,
+      failClosed: true,
+    });
 
-  if (!(await verifyTurnstileRequest(ctx.headers)))
-    return handleApiError(captchaRefused());
+    if (!(await verifyTurnstileRequest(ctx.headers)))
+      return handleApiError(captchaRefused());
 
-  await sendAnonymousOtp(ctx, {
-    surface: 'verify_contact',
-    purpose: 'verify_contact',
-    failureLog: OTP_AUTO_VERIFY
-      ? 'otp.autoVerify.failed'
-      : 'otp.send.deliveryFailed',
-    findRecipient: findUnverifiedRecipient,
-    issue: OTP_AUTO_VERIFY
-      ? (target) => autoVerifyContact(ctx, target)
-      : undefined,
-  });
+    await sendAnonymousOtp(ctx, {
+      startFloor,
+      surface: 'verify_contact',
+      purpose: 'verify_contact',
+      failureLog: OTP_AUTO_VERIFY
+        ? 'otp.autoVerify.failed'
+        : 'otp.send.deliveryFailed',
+      findRecipient: findUnverifiedRecipient,
+      issue: OTP_AUTO_VERIFY
+        ? (target) => autoVerifyContact(ctx, target)
+        : undefined,
+    });
 
-  await floor();
-  return apiSuccess({ message: otpMsg.sendSuccess, data: ANONYMOUS_SEND_DATA });
-});
+    return apiSuccess({
+      message: otpMsg.sendSuccess,
+      data: ANONYMOUS_SEND_DATA,
+    });
+  }
+);

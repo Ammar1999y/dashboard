@@ -1,29 +1,17 @@
 /**
- * The second factor's own lifecycle — enable, confirm, add, remove, disable —
- * owned end to end rather than compensated after the library's.
- *
- * ⚠️ Why these are not the plugin's endpoints. Every invariant this deployment
- * adds (method intent, capability, backup-code acknowledgement, session
- * rotation, trust revocation) lives OUTSIDE the transitions the plugin performs,
- * and no hook after the fact makes them atomic with it. The plugin's
- * `/two-factor/enable` can also only produce TOTP here, which would leave
- * backup-code-only and passkey-only configurations no route to a first enable.
- *
- * So `/two-factor/enable` is not served, and `/two-factor/disable` and
- * `/two-factor/generate-backup-codes` are these. The plugin's `verify-totp` and
- * `verify-backup-code` stay, in SIGN-IN mode only: they are verifiers, not
- * transitions.
- *
- * Every mutation here is one transaction over `users`, `two_factor_credentials`
- * and `two_factor_methods`, taken in the canonical lock order.
+ * ⚠️ Replaces the plugin's lifecycle endpoints: this deployment's invariants
+ * (method intent, capability, backup-code acknowledgement, session rotation,
+ * trust revocation) cannot be made atomic with the plugin's writes from a hook.
+ * Every mutation takes the user lock first, in the canonical lock order.
  */
 import type { AuthContext } from '../context';
 import type { Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { TwoFactorMethod } from '@app/shared/validation/enums';
 import type { BetterAuthPlugin } from 'better-auth';
+import type { SymmetricEncryptOptions } from 'better-auth/crypto';
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import {
@@ -31,6 +19,7 @@ import {
   twoFactorCredentials,
   twoFactorMethods,
   users,
+  verifications,
 } from '@/db/schema';
 import { createOTP } from '@better-auth/utils/otp';
 import { createAuthEndpoint } from 'better-auth/api';
@@ -59,6 +48,11 @@ import { mintReauthGrant, requireReauthPassword } from '../reauth/grant';
 import { resolveRequestSession } from '../session/request';
 import { revokeTwoFactorState } from '../session/rotation';
 import { lockUser } from '../user-eligibility';
+import {
+  expiresIn,
+  replaceVerification,
+  totpEnrolmentKey,
+} from '../verifications';
 import { encodeBackupCodes, generateBackupCodes } from './backup-codes';
 import { challengeMissingError } from './challenge';
 import { auditLifecycle, enableMethod } from './lifecycle';
@@ -76,14 +70,24 @@ import { sessionGetOptions, sessionPostOptions } from './session-endpoint';
 import { consumeTotpCode } from './totp-replay';
 import { markTwoFactorProven } from './trusted-device';
 
-/** The plugin's TOTP secret length. Changing it re-enrols every authenticator. */
+/** The plugin's TOTP secret length; applies to new enrolments only. */
 const TOTP_SECRET_LENGTH = 32;
 
-/**
- * Baked into every enrolled authenticator, so changing it later means
- * re-enrolling every user.
- */
+/** Baked into every enrolled authenticator; changing it re-enrols every user. */
 export const TOTP_ISSUER = 'Dashboard';
+
+export const TOTP_ENROLMENT_MAX_AGE_S = 600;
+
+// No authenticator holds it, but a code can still match, so
+// `/two-factor/totp/confirm` also requires the pending `totpEnrolmentKey` row.
+function placeholderTotpSecret(
+  key: SymmetricEncryptOptions['key']
+): Promise<string> {
+  return symmetricEncrypt({
+    key,
+    data: generateRandomString(TOTP_SECRET_LENGTH),
+  });
+}
 
 function methodNotFound() {
   return authError(HTTP_STATUS.NOT_FOUND, twoFactorMsg.methodUnavailable);
@@ -101,11 +105,8 @@ export const twoFactorEnrolment = () =>
   ({
     id: 'two-factor-enrolment',
     endpoints: {
-      /**
-       * Step one of TOTP enrolment: a secret, and nothing else.
-       * `two_factor_enabled` is deliberately NOT set here: an abandoned setup
-       * must leave the account exactly as it was.
-       */
+      // `two_factor_enabled` is deliberately NOT set here: an abandoned setup
+      // must leave the account as it was.
       startTotpEnrolment: createAuthEndpoint(
         '/two-factor/totp/start',
         sessionPostOptions('A TOTP secret to enrol.', {
@@ -158,15 +159,20 @@ export const twoFactorEnrolment = () =>
               await tx.insert(twoFactorCredentials).values({
                 userId,
                 secret: encrypted,
-                // Not generated here: backup codes are their own method with
-                // their own acknowledgement, and a set minted as a side effect
-                // would be advertised unacknowledged.
+                // Not generated here: a set minted as a side effect would be
+                // advertised unacknowledged.
                 backupCodes: await encodeBackupCodes(
                   ctx.context.secretConfig,
                   []
                 ),
                 verified: false,
               });
+            await replaceVerification(
+              tx,
+              totpEnrolmentKey(userId),
+              userId,
+              expiresIn(TOTP_ENROLMENT_MAX_AGE_S)
+            );
             await auditLifecycle(tx, ctx, session, {
               totpEnrolmentStarted: true,
             });
@@ -181,11 +187,7 @@ export const twoFactorEnrolment = () =>
         }
       ),
 
-      /**
-       * Step two, and the ONLY writer that turns TOTP on. One transaction: the
-       * credential becomes verified, the intent row appears, the flag flips and
-       * the other sessions go.
-       */
+      /** The ONLY writer that turns TOTP on. */
       confirmTotpEnrolment: createAuthEndpoint(
         '/two-factor/totp/confirm',
         sessionPostOptions('TOTP is enrolled and enabled.'),
@@ -198,14 +200,25 @@ export const twoFactorEnrolment = () =>
             twoFactorMsg.invalidCode
           );
 
-          // Read, decrypt, verify and activate all UNDER THE USER LOCK, and
-          // guard the activation on the exact secret. `/two-factor/totp/start`
-          // writes into this row, so a secret verified before the lock can be a
-          // different secret by the time it is marked — TOTP enabled against
-          // something no authenticator holds. `/two-factor/methods/disable` is
-          // the mirror case.
+          // ⚠️ All under the user lock: `/two-factor/totp/start` rewrites this
+          // row, so a secret verified before the lock may not be the one marked.
           await withTransaction(async (tx) => {
             await lockUser(tx, session.userId);
+
+            const pendingStart = and(
+              eq(verifications.identifier, totpEnrolmentKey(session.userId)),
+              eq(verifications.value, session.userId)
+            );
+            const [pending] = await tx
+              .select({ id: verifications.id })
+              .from(verifications)
+              .where(and(pendingStart, gt(verifications.expiresAt, new Date())))
+              .limit(1);
+            if (!pending)
+              throw authError(
+                HTTP_STATUS.BAD_REQUEST,
+                twoFactorMsg.totpEnrolmentExpired
+              );
 
             const [credential] = await tx
               .select({
@@ -229,11 +242,8 @@ export const twoFactorEnrolment = () =>
             }).catch(() => null);
             if (!secret) throw methodNotFound();
 
-            // The same one-period tolerance the plugin's verifier allows, so a
-            // clock a few seconds out does not fail enrolment and then work at
-            // every later sign-in — and the same reservation, so the code that
-            // completes enrolment cannot then be replayed at the sign-in that
-            // follows it seconds later.
+            // The sign-in verifier's window and reservation, so the enrolling
+            // code cannot be replayed at the sign-in that follows.
             if (
               (await consumeTotpCode(session.userId, secret, code, {
                 executor: tx,
@@ -244,10 +254,8 @@ export const twoFactorEnrolment = () =>
                 twoFactorMsg.invalidCode
               );
 
-            // Guarded on the exact secret that was just proven, and on the row
-            // still being unverified. Under the lock this cannot fail; it is
-            // here so that a future edit moving work back outside the lock
-            // fails loudly instead of activating an unproven credential.
+            // Cannot fail under the lock; the guard makes an edit that moves
+            // work outside it fail loudly instead of activating an unproven secret.
             const activated = await tx
               .update(twoFactorCredentials)
               .set({ verified: true })
@@ -265,15 +273,12 @@ export const twoFactorEnrolment = () =>
                 twoFactorMsg.invalidCode
               );
 
-            // On confirmation, not on setup: an abandoned enrolment logs nobody
-            // out.
+            await tx.delete(verifications).where(pendingStart);
             await enableMethod(tx, ctx, session, 'totp');
           });
 
-          // A TOTP code WAS just proven on this session, so "remember this
-          // device" is redeemable from here — the same rule as a sign-in
-          // completion, and the reason trust is bound to a proof rather than to
-          // holding a session.
+          // A code was just proven on this session, so device trust is
+          // redeemable — trust binds to a proof, not to holding a session.
           await markTwoFactorProven(ctx, session.sessionId);
 
           return ctx.json({
@@ -284,13 +289,8 @@ export const twoFactorEnrolment = () =>
         }
       ),
 
-      /**
-       * A new set of backup codes, which INVALIDATES the previous one.
-       *
-       * The new set id is what unbinds the old acknowledgement: until the user
-       * confirms the new set, `backup_code` stops being offered, so one
-       * acknowledgement cannot advertise whatever set exists later.
-       */
+      // The new set id unbinds the old acknowledgement, so `backup_code` is not
+      // offered until the new set is acknowledged.
       generateBackupCodes: createAuthEndpoint(
         '/two-factor/generate-backup-codes',
         sessionPostOptions(
@@ -337,14 +337,10 @@ export const twoFactorEnrolment = () =>
                 .where(eq(twoFactorCredentials.id, existing.id));
             else
               // A backup-code-only deployment has no TOTP secret to hang this
-              // off, and `secret` is NOT NULL — so the row carries an unverified
-              // placeholder. `verified` stays false, so it is never a factor.
+              // off, and `secret` is NOT NULL.
               await tx.insert(twoFactorCredentials).values({
                 userId,
-                secret: await symmetricEncrypt({
-                  key: ctx.context.secretConfig,
-                  data: generateRandomString(TOTP_SECRET_LENGTH),
-                }),
+                secret: await placeholderTotpSecret(ctx.context.secretConfig),
                 backupCodes: encoded,
                 verified: false,
                 backupCodesSetId: setId,
@@ -357,13 +353,10 @@ export const twoFactorEnrolment = () =>
               backupCodesSetId: setId,
             });
 
-            // The intent row is deliberately left alone: the user's choice of
-            // method survives a regeneration, and `backupCodesReady` already
-            // answers false until the new set is acknowledged.
+            // The intent row is deliberately kept; `backupCodesReady` answers
+            // false until the new set is acknowledged.
           });
 
-          // The id travels WITH the codes, because it is the only thing that
-          // identifies which ten strings the user is about to write down.
           return ctx.json({
             success: true,
             data: { backupCodes: codes, setId },
@@ -371,10 +364,6 @@ export const twoFactorEnrolment = () =>
         }
       ),
 
-      /**
-       * Binds the acknowledgement to the set that exists NOW, and is the writer
-       * that turns backup codes into an offered method.
-       */
       acknowledgeBackupCodes: createAuthEndpoint(
         '/two-factor/backup-codes/acknowledge',
         sessionPostOptions(
@@ -383,18 +372,15 @@ export const twoFactorEnrolment = () =>
         async (ctx) => {
           const session = await requireSession(ctx, 'backup_code');
 
-          // Before the proof, not after: `requireReauthPassword` is an Argon2id
-          // verification, and a malformed body must not be able to buy one.
+          // Before the proof, so a malformed body cannot buy an Argon2id run.
           const { setId } = parseAuthBody(
             ctx,
             twoFactorBackupAcknowledgeSchema,
             otpMsg.invalidInput
           );
 
-          // It flips the flag and revokes the caller's other sessions, so it
-          // takes the proof every other transition that does either takes: a
-          // hijacked session must not be able to turn the feature on and sign
-          // the owner out of every device with one unauthenticated call.
+          // It flips the flag and revokes other sessions, so it needs the same
+          // proof as every other transition that does.
           await requireReauthPassword(ctx, session.userId);
 
           const acknowledged = await withTransaction(async (tx) => {
@@ -409,9 +395,7 @@ export const twoFactorEnrolment = () =>
               .where(eq(twoFactorCredentials.userId, session.userId))
               .limit(1);
             if (!credential?.setId || credential.remaining === 0) return false;
-            // The set the caller SAW, read under the same lock that writes the
-            // acknowledgement: acknowledging whichever set is current would
-            // enable the method for codes the user never saw.
+            // The set the caller saw, not whichever is current.
             if (credential.setId !== setId) return 'stale';
 
             await tx
@@ -454,17 +438,10 @@ export const twoFactorEnrolment = () =>
       ),
 
       /**
-       * Removes ONE enrolment.
-       *
-       * ⚠️ The enrolled set is read INSIDE the transaction that deletes, under
-       * the user lock: read through the pool, two concurrent removals both see
-       * two methods and both succeed, leaving an account 2FA-on with nothing.
-       *
-       * Two refusals. The sole intent row cannot be removed at all — "disable"
-       * is the route for that. And a removal that would leave nothing a
-       * challenge OFFERS is refused even when other rows exist, because a row
-       * whose channel, contact or backup set is gone is not a factor; see
-       * `removalStrandsTwoFactor`.
+       * ⚠️ The enrolled set is read under the user lock in the deleting
+       * transaction; otherwise two concurrent removals both see two methods and
+       * leave 2FA on with nothing. A removal leaving nothing a challenge offers
+       * is refused too — see `removalStrandsTwoFactor`.
        */
       disableTwoFactorMethod: createAuthEndpoint(
         '/two-factor/methods/disable',
@@ -491,8 +468,6 @@ export const twoFactorEnrolment = () =>
           );
 
           const removed = await withTransaction(async (tx) => {
-            // Before the read, so a concurrent removal cannot decide "not the
-            // last method" against a stale list.
             await lockUser(tx, userId);
             const enrolled = await listEnrolledMethods(userId, tx);
             // `contactKind` is required for `otp` by the schema, so this names
@@ -509,20 +484,21 @@ export const twoFactorEnrolment = () =>
 
             const removedOption = optionId(method, target.contactKind);
             await removeMethodIntent(tx, userId, method, target.contactKind);
-            await clearCapabilityFor(tx, userId, method);
+            await clearCapabilityFor(
+              tx,
+              userId,
+              method,
+              ctx.context.secretConfig
+            );
             await auditLifecycle(tx, ctx, session, {
               twoFactorMethodRemoved: removedOption,
               remaining: enrolled.length - 1,
             });
-            // Removing a factor keeps the caller's sessions and drops every
-            // standing skip of it: a trust row granted against the factor being
-            // removed is a bypass of a factor that no longer exists.
+            // Trust granted against the removed factor would bypass it.
             await revokeTwoFactorState(tx, userId);
             return removedOption;
           });
 
-          // The option is named back: the caller sent a method and a contact
-          // kind, and a bare success cannot show WHICH possession is gone.
           return ctx.json({
             success: true,
             message: twoFactorMsg.disabled,
@@ -547,9 +523,7 @@ export const twoFactorEnrolment = () =>
           const defaultMethod = await withTransaction(async (tx) => {
             await lockUser(tx, userId);
             const enrolled = await listEnrolledMethods(userId, tx);
-            // Only ever a REORDER within the issued set: naming something the
-            // user has not enrolled would produce a default that is never
-            // offered, which is the empty-set branch by another route.
+            // Only a reorder: a default the user has not enrolled is never offered.
             const target = enrolled.find((entry) =>
               matchesEnrolment(entry, method, contactKind)
             );
@@ -575,15 +549,9 @@ export const twoFactorEnrolment = () =>
       ),
 
       /**
-       * Deletes ONE credential, and with the last one the `passkey` method.
-       *
-       * Served here rather than by the passkey plugin because a credential can
-       * be a second factor: the plugin's endpoint deletes the row and nothing
-       * else, leaving the intent row, the flag and every trusted device — a
-       * locked-out account with a standing skip of the factor it just lost.
-       * The last-method rule and the trust revocation are the ones
-       * `/two-factor/methods/disable` applies; the password proof arrives as
-       * the enrolment grant, consumed in `lib/auth/path-policy.ts`.
+       * Replaces the plugin's endpoint, which deletes only the row and leaves
+       * intent, flag and trusted devices behind. The password proof arrives as
+       * the enrolment grant, consumed in `path-policy.ts`.
        */
       deletePasskey: createAuthEndpoint(
         '/passkey/delete-passkey',
@@ -604,8 +572,7 @@ export const twoFactorEnrolment = () =>
 
           await withTransaction(async (tx) => {
             await lockUser(tx, userId);
-            // Ownership is in the WHERE, so another user's id and a missing one
-            // answer identically.
+            // Another user's id and a missing one answer identically.
             const owned = await tx
               .select({ id: passkeys.id })
               .from(passkeys)
@@ -651,14 +618,8 @@ export const twoFactorEnrolment = () =>
         }
       ),
 
-      /**
-       * Turns the whole feature off for the caller.
-       *
-       * Replaces the plugin's `/two-factor/disable`, which touches the flag, the
-       * credential row, the caller's session and its own trust cookie, and
-       * leaves intent rows, this deployment's trusted devices and any live
-       * challenge behind.
-       */
+      // Replaces the plugin's `/two-factor/disable`, which leaves intent rows,
+      // trusted devices and live challenges behind.
       disableTwoFactor: createAuthEndpoint(
         '/two-factor/disable',
         sessionPostOptions('Two-factor authentication is off.'),
@@ -669,10 +630,8 @@ export const twoFactorEnrolment = () =>
 
           await withTransaction(async (tx) => {
             await lockUser(tx, userId);
-            // Registered passkeys are deliberately KEPT: they are named
-            // credentials the user manages at `/passkey/*`, and with no intent
-            // row none of them is a second factor. Deleting them here would
-            // make "turn 2FA off" quietly destroy hardware enrolments.
+            // Passkeys are deliberately kept: with no intent row they are not a
+            // factor, and turning 2FA off must not destroy hardware enrolments.
             await clearTwoFactorEnrolment(tx, userId, {
               deletePasskeys: false,
             });
@@ -687,14 +646,8 @@ export const twoFactorEnrolment = () =>
         }
       ),
 
-      /**
-       * The re-authentication in front of a WebAuthn ceremony.
-       *
-       * The ceremony endpoints are the library's, take the library's bodies and
-       * span two requests, so the password cannot ride on them. It is proven
-       * here once and spent by `/passkey/verify-registration` and
-       * `/passkey/delete-passkey` — the two that add and remove a factor.
-       */
+      // The library's ceremony bodies cannot carry a password, so it is proven
+      // here and spent by `/passkey/verify-registration` and `/passkey/delete-passkey`.
       passkeyEnrolmentGrant: createAuthEndpoint(
         '/two-factor/passkey/grant',
         sessionPostOptions('A single-use enrolment grant.', {
@@ -720,22 +673,22 @@ export const twoFactorEnrolment = () =>
   }) satisfies BetterAuthPlugin;
 
 /**
- * Removing a method removes what made it usable, or the method could be re-added
- * by an intent write alone and be live again with no proof.
+ * Otherwise an intent write alone would revive the method with no proof.
+ * `passkey` credentials are deliberately kept.
  *
- * `passkey` is the exception and it is deliberate: the credentials stay, because
- * a user removing "passkey as a second factor" has not asked for their hardware
- * keys to be destroyed. With no intent row they are not offered.
+ * ⚠️ TOTP loses its secret, not only `verified`: `/two-factor/totp/confirm`
+ * takes no password, so a leftover secret is re-enabled by the old authenticator.
  */
 async function clearCapabilityFor(
   tx: Tx,
   userId: EntityID,
-  method: TwoFactorMethod
+  method: TwoFactorMethod,
+  key: SymmetricEncryptOptions['key']
 ): Promise<void> {
   if (method === 'totp')
     await tx
       .update(twoFactorCredentials)
-      .set({ verified: false })
+      .set({ secret: await placeholderTotpSecret(key), verified: false })
       .where(eq(twoFactorCredentials.userId, userId));
   else if (method === 'backup_code')
     await tx

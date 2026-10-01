@@ -1,5 +1,7 @@
 import type { HookContext } from './context';
 
+import { isDeadlock } from '@/db/errors';
+import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import { APIError, isAPIError } from 'better-auth/api';
 
 import {
@@ -9,6 +11,7 @@ import {
   MSG_INVALID_INPUT,
   MSG_LOGIN_REQUIRED,
   MSG_REAUTH_REQUIRED,
+  MSG_SERVICE_UNAVAILABLE,
   PHONE_NOT_VERIFIED_CODE,
   REAUTH_REQUIRED_CODE,
 } from '@app/shared/api-messages';
@@ -16,19 +19,12 @@ import { CustomError } from '@app/shared/error-class';
 
 import { logSanitized } from '@/utils/log';
 
-/**
- * The `code` on every error this codebase raises through Better Auth, so the
- * `after` hook can tell them from the library's own codes and leave their
- * already-localised message alone.
- */
+/** Tells the `after` hook to leave the already-localised message alone. */
 export const CUSTOM_AUTH_CODE = '__' as const;
 
 type AuthErrorStatus = NonNullable<ConstructorParameters<typeof APIError>[0]>;
 
-/**
- * Better Call serialises the body object as built, so its key order is part of
- * the response: sites that publish `{ code, message }` use `authErrorCodeFirst`.
- */
+// Key order is part of the response: `{ code, message }` sites use `authErrorCodeFirst`.
 export function authError(
   status: AuthErrorStatus,
   message: string,
@@ -42,6 +38,18 @@ export function authErrorCodeFirst(
   message: string
 ): APIError {
   return new APIError(status, { code: CUSTOM_AUTH_CODE, message });
+}
+
+/**
+ * `handleApiError`'s deadlock answer, in Better Auth's shape. Logged here: a 5xx
+ * `APIError` is not logged again downstream, and the deadlock is the lock-order
+ * bug this exists to expose.
+ */
+export function databaseContended(cause: unknown): APIError {
+  logSanitized('error', cause);
+  return authError(HTTP_STATUS.SERVICE_UNAVAILABLE, MSG_SERVICE_UNAVAILABLE, {
+    'Retry-After': String(DATABASE_RETRY_AFTER_S),
+  });
 }
 
 export function authenticationDenied(): APIError {
@@ -60,15 +68,9 @@ export function reauthenticationRequired(): APIError {
 }
 
 /**
- * Translate a project `CustomError` into Better Auth's error type.
- *
- * Better Call only understands `APIError`; any other throw escapes its
- * boundary as a generic, empty 500. Throttles (429) and limiter outages (503)
- * keep their status AND their `Retry-After` / `X-RateLimit-*` headers, so
- * clients can back off and monitoring does not read throttling as failure.
- *
- * `genericMessage` answers every remaining status, which is how
- * account-revealing failures stay collapsed into one response.
+ * Any non-`APIError` throw escapes `auth.handler` to `app.ts`. 429 and 503 keep
+ * their headers; `genericMessage` answers every other status, collapsing
+ * account-revealing failures.
  */
 export function toAuthApiError(
   error: CustomError,
@@ -111,10 +113,11 @@ export function asAuthError(caught: unknown, genericMessage: string): unknown {
   if (caught instanceof APIError) return caught;
   if (caught instanceof CustomError)
     return toAuthApiError(caught, genericMessage);
+  if (isDeadlock(caught)) return databaseContended(caught);
   return caught;
 }
 
-const MSG_UNTRUSTED_ORIGIN =
+export const MSG_UNTRUSTED_ORIGIN =
   'تعذر إكمال الطلب من هذا الموقع. أعد تحميل الصفحة من الرابط الرسمي ثم حاول مرة أخرى.';
 
 /** Better Auth's own error codes, localised by the `after` hook and by `app.ts`. */
@@ -152,11 +155,8 @@ export const BASE_ERROR_CODES: Record<string, string> = {
   SESSION_NOT_FRESH: 'مضى وقت طويل على تسجيل دخولك، قم بتسجيل الدخول مرة أخرى',
   ACCOUNT_NOT_FOUND: 'الحساب غير موجود',
 
-  // Origin / CSRF rejections on `/sign-in/email`: one message, since none
-  // reveals anything about an account. ⚠️ `trustedOrigins` is unset, so Better
-  // Auth trusts `baseURL` alone: a front-end served from another origin gets 403
-  // on every sign-in even though `app.ts`'s `CORS_POLICY` admits its preflight.
-  // Set `trustedOrigins` from the same value if the front-end goes cross-origin.
+  // ⚠️ `trustedOrigins` is unset, so a cross-origin front-end gets 403 on every
+  // sign-in despite `CORS_POLICY`; set it if the front-end moves origin.
   INVALID_ORIGIN: MSG_UNTRUSTED_ORIGIN,
   MISSING_OR_NULL_ORIGIN: MSG_UNTRUSTED_ORIGIN,
   CROSS_SITE_NAVIGATION_LOGIN_BLOCKED: MSG_UNTRUSTED_ORIGIN,
@@ -171,8 +171,6 @@ export const BASE_ERROR_CODES: Record<string, string> = {
 
   ux_users_phone_number: 'رقم الهاتف موجود من قبل، استخدم رقم هاتف اخر',
 
-  // The library's request-shape rejections, the only unmapped codes the mounted
-  // endpoints can produce; unmapped, they put raw English internals on the wire.
   // `tests/integration/auth-error-localisation.test.ts` fails if another
   // unmapped code becomes reachable.
   VALIDATION_ERROR: MSG_INVALID_INPUT,
@@ -185,11 +183,7 @@ export const BASE_ERROR_CODES: Record<string, string> = {
   UNKNOWN_ERROR: 'حاول مجددا، او اعد تحميل الصفحة',
 };
 
-/**
- * An own-property read, not `BASE_ERROR_CODES[code]`: the code is
- * framework-supplied text, and `constructor` or `toString` would resolve to an
- * inherited function where the message belongs.
- */
+// Own-property read: `constructor` would resolve to an inherited function.
 export function localisedAuthMessage(code: unknown): string | undefined {
   return typeof code === 'string' && Object.hasOwn(BASE_ERROR_CODES, code)
     ? BASE_ERROR_CODES[code]
@@ -198,9 +192,7 @@ export function localisedAuthMessage(code: unknown): string | undefined {
 
 /** Better Auth's `after` hook. */
 export async function localiseAuthErrors(ctx: HookContext): Promise<void> {
-  // Better Auth's own predicate, not `instanceof`: it also accepts an
-  // APIError that crossed a module-instance boundary, which is the same
-  // value the dispatcher itself treats as the failure.
+  // Not `instanceof`: an APIError may cross a module-instance boundary.
   const returned = ctx.context?.returned;
   const failure = isAPIError(returned) ? returned : undefined;
   const errorCode = failure?.body?.code;

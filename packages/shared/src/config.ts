@@ -46,7 +46,7 @@ export type PhoneNumberMode = 'required' | 'optional' | 'disabled';
  *   `phone_number_verified` is unused, and the change-phone endpoints 404.
  *
  * ⚠️ Toggling this requires a new migration (`bun drizzle-kit generate`): it
- * gates the `chk_phone_required` / `chk_phone_verified_requires_phone` CHECK
+ * gates the `chk_phone_disabled` / `chk_phone_verified_requires_phone` CHECK
  * constraints and the `phone_number` nullability on the users table.
  */
 export const PHONE_NUMBER_MODE = 'optional' as PhoneNumberMode;

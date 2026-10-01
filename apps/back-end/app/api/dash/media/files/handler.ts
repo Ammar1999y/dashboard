@@ -25,9 +25,8 @@ import { isVisibilityEnabled } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 /**
- * Library uploads land PRIVATE and only there: nothing done at upload time
- * makes a file public, and a deployment with no private bucket answers 422
- * rather than publishing what `media.create` alone may not publish.
+ * Nothing done at upload time makes a file public: with no private bucket this
+ * answers 422 rather than publish what `media.create` alone may not.
  */
 const LIBRARY_UPLOAD_VISIBILITY = 'private';
 
@@ -37,8 +36,7 @@ export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
     action: 'create',
   });
 
-  // Query, not form field, for the reason `resource` is one on
-  // `/api/upload/file`: it is checked before the body is parsed.
+  // Query, not form field: it is checked before the body is parsed.
   const folderId = requireId(ctx.query.get('folder'));
   await requireFolder(folderId);
 

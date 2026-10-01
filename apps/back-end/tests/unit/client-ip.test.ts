@@ -32,6 +32,7 @@ import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
 import { getClientIp, TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
+import { handleApiError } from '@/lib/http/response';
 import { ipIdentifier, userIdentifier } from '@/lib/rate-limit';
 
 const TRUSTED_HEADER = TRUSTED_IP_HEADERS[0];
@@ -225,7 +226,8 @@ describe('the refusal is 503, not 400', () => {
       'x-forwarded-for': '198.51.100.9',
       host: 'origin.invalid',
     });
-    rejection(() => ipIdentifier(headers));
+    // Logged where every caller answers it, with the 503.
+    handleApiError(rejection(() => ipIdentifier(headers)));
 
     expect(consoleErrorCalls).toHaveLength(1);
     const line = String(consoleErrorCalls[0]?.[0]);

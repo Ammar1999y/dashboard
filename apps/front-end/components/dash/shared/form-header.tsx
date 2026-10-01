@@ -23,7 +23,7 @@ export const FormHeader = memo(
       )}
     >
       <h1 className='text-lg font-bold md:text-xl lg:text-2xl'>{title}</h1>
-      <div className='flex items-center self-end space-x-4'>
+      <div className='flex items-center gap-4 self-end'>
         <Link href={cancelHref} variant='ghost'>
           إلغاء
         </Link>

@@ -42,7 +42,7 @@ MiniItemContent.displayName = 'MiniItemContent';
 
 const MINI: FlyoutNavVariant = {
   navClassName: 'flex flex-col',
-  listClassName: 'flex flex-col space-y-1',
+  listClassName: 'flex flex-col gap-1',
   itemClassName: 'relative min-h-12 flex-col px-1 pb-1.5 pt-2',
   menuSide: 'inline-end',
   Content: MiniItemContent,

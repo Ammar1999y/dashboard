@@ -1,7 +1,9 @@
 import type { Handler, HandlerCookie, HandlerOutput } from './contract';
 import type { PaginationMeta } from '@app/shared/types/api';
 
-import { isInvalidTextEncoding } from '@/db/errors';
+import { isDeadlock, isInvalidTextEncoding } from '@/db/errors';
+import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
+import { isAPIError } from 'better-auth/api';
 
 import {
   HTTP_STATUS,
@@ -9,10 +11,11 @@ import {
   MSG_INVALID_INPUT,
   MSG_NOT_FOUND,
   MSG_PAGE_NOT_FOUND,
+  MSG_SERVICE_UNAVAILABLE,
 } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
 
-import { logSanitized } from '@/utils/log';
+import { errorClassOf, logSanitized } from '@/utils/log';
 
 import { responsePayload } from './contract';
 import { serializeSetCookie } from './cookies';
@@ -101,6 +104,14 @@ export function handleApiError(
   extraHeaders?: Record<string, string>
 ): HandlerOutput<null> {
   if (error instanceof CustomError) {
+    if (error.status !== undefined && error.status >= 500)
+      logSanitized('error', {
+        msg: 'server error response',
+        status: error.status,
+        message: error.message,
+        errorClass: errorClassOf(error),
+        cause: error.cause,
+      });
     const errorHeaders = error.responseHeaders;
     const headers =
       errorHeaders || extraHeaders
@@ -121,7 +132,23 @@ export function handleApiError(
       ...(extraHeaders && { headers: extraHeaders }),
     });
 
-  logSanitized('error', error);
+  // The backstop for a writer that misses the users → roles lock order.
+  if (isDeadlock(error)) {
+    logSanitized('error', error);
+    return apiError({
+      message: MSG_SERVICE_UNAVAILABLE,
+      status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+      headers: {
+        ...extraHeaders,
+        'Retry-After': String(DATABASE_RETRY_AFTER_S),
+      },
+    });
+  }
+
+  // A 5xx `APIError` is logged where it is raised: Better Auth's through
+  // `auth`'s logger, ours beside each `authError`.
+  if (!(isAPIError(error) && error.statusCode >= HTTP_STATUS.INTERNAL_ERROR))
+    logSanitized('error', error);
   return apiError({
     message: fallbackMessage ?? MSG_INTERNAL_ERROR,
     status: HTTP_STATUS.INTERNAL_ERROR,
@@ -145,6 +172,13 @@ export function withApiErrors(
       return mapError?.(error) ?? handleApiError(error, fallbackMessage);
     }
   };
+}
+
+/** A 500 carrying the fault as `cause`, which `handleApiError` logs with it. */
+export function serverFault(message: string, cause: unknown): CustomError {
+  const failure = new CustomError(message, HTTP_STATUS.INTERNAL_ERROR);
+  failure.cause = cause;
+  return failure;
 }
 
 export function notFoundError(): CustomError {

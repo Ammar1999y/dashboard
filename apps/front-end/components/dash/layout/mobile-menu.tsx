@@ -35,7 +35,7 @@ export const MobileMenu = memo(() => (
       side='right'
       className='w-72 px-2'
     >
-      <div className='flex h-[--layout-header-height] items-center pb-4 pe-2 ps-6 pt-[--layout-header-padding-top] space-x-4'>
+      <div className='flex h-[--layout-header-height] items-center gap-4 pb-4 pe-2 ps-6 pt-[--layout-header-padding-top]'>
         <Logo className='h-full max-w-12' />
         <DialogTitle className='text-xl font-bold'>{APP_NAME}</DialogTitle>
         <div className='flex flex-1'>

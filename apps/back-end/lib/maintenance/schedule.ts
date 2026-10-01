@@ -1,4 +1,5 @@
 import { runDatabaseSweep } from '@/lib/maintenance/database';
+import { runElected } from '@/lib/maintenance/election';
 import { runMaintenanceSweep } from '@/lib/maintenance/sqlite';
 import { reconcileObjectStore } from '@/lib/media/reconcile';
 import { hasUsageSources } from '@/lib/media/usages';
@@ -17,6 +18,11 @@ interface SweepOutcome {
 interface ScheduledJob {
   readonly name: string;
   readonly expression: string;
+  /**
+   * Acts on PostgreSQL or R2, which every container shares, so each firing
+   * runs only where it wins `runElected`.
+   */
+  readonly shared: boolean;
   readonly run: () => Promise<SweepOutcome>;
 }
 
@@ -24,11 +30,13 @@ const JOBS: readonly ScheduledJob[] = [
   {
     name: 'sqlite-expiry-sweep',
     expression: '*/15 * * * *',
+    shared: false,
     run: runMaintenanceSweep,
   },
   {
     name: 'database-retention-sweep',
     expression: '30 3 * * *',
+    shared: true,
     run: runDatabaseSweep,
   },
   // Read-only and weekly, because it pages the whole bucket. The report is
@@ -36,6 +44,7 @@ const JOBS: readonly ScheduledJob[] = [
   {
     name: 'object-store-reconcile',
     expression: '0 4 * * 0',
+    shared: true,
     run: async () => {
       const report = await reconcileObjectStore();
       logLine('log', { msg: 'object store reconciled', ...report });
@@ -64,6 +73,14 @@ function logRun(name: string, outcome: SweepOutcome): void {
   });
 }
 
+function logSkipped(name: string): void {
+  logLine('log', {
+    msg: 'scheduled sweep skipped',
+    job: name,
+    reason: 'running in another instance',
+  });
+}
+
 function logFailure(name: string, error: unknown): void {
   logLine('error', {
     msg: 'scheduled sweep failed',
@@ -72,7 +89,7 @@ function logFailure(name: string, error: unknown): void {
   });
 }
 
-interface ScheduleHandle {
+export interface ScheduleHandle {
   /**
    * Prevents further firings AND waits up to `timeoutMs` for a callback
    * already running; `true` when nothing is still in flight. Stopping the cron
@@ -86,10 +103,11 @@ interface ScheduleHandle {
  * Registration stays explicit so importing application modules cannot start
  * timers.
  *
- * ⚠️ Every job is registered in EVERY process that calls this, and none is
- * safe to run twice concurrently. The single owner is elected by
- * `acquireWriterLock(SQLITE_DIR)` in `server.ts`, which runs first and fails a
- * second instance's startup; a change to either has to account for the other.
+ * ⚠️ Started only in the process that owns `SQLITE_DIR` (`scheduleWhenOwner`),
+ * and a `shared` job is elected again per firing, because containers on
+ * separate volumes each own theirs. Measured running twice at once: the
+ * PostgreSQL deletes removed each row once, but the orphaned-object sweep
+ * repeated its R2 deletes and over-reported `removed`.
  *
  * `jobs` is a parameter only for `tests/process/schedule-drain.test.ts`.
  */
@@ -99,6 +117,7 @@ export function startSchedule(
   // `Bun.cron` never overlaps a job with ITSELF, but says nothing about a
   // callback still running when the process is asked to stop.
   const inFlight = new Set<Promise<void>>();
+  const stopping = new AbortController();
 
   const handles = jobs.map((job) =>
     Bun.cron(
@@ -106,7 +125,17 @@ export function startSchedule(
       () => {
         const run = (async () => {
           try {
-            logRun(job.name, await job.run());
+            if (!job.shared) {
+              logRun(job.name, await job.run());
+              return;
+            }
+            const election = await runElected(
+              job.name,
+              job.run,
+              stopping.signal
+            );
+            if (election.elected) logRun(job.name, election.result);
+            else logSkipped(job.name);
           } catch (error) {
             logFailure(job.name, error);
           }
@@ -136,6 +165,7 @@ export function startSchedule(
     jobs: jobs.map((job) => ({
       name: job.name,
       expression: job.expression,
+      shared: job.shared,
       nextRun:
         Bun.cron
           .parse(job.expression, undefined, { tz: SCHEDULE_TIMEZONE })
@@ -146,6 +176,9 @@ export function startSchedule(
   return {
     stopAndDrain: async (timeoutMs: number) => {
       for (const handle of handles) handle.stop();
+      // A firing still waiting for its lock connection must not start a whole
+      // sweep after shutdown began.
+      stopping.abort();
       if (inFlight.size === 0) return true;
 
       logLine('log', {

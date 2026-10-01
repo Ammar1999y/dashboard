@@ -8,8 +8,8 @@ import type { SQL } from 'drizzle-orm';
 
 import { eq, sql } from 'drizzle-orm';
 
-import { db } from '@/db';
-import { users } from '@/db/schema';
+import { db, withTransaction } from '@/db';
+import { roles, users } from '@/db/schema';
 
 import { liveUser } from '@/lib/users/filters';
 
@@ -121,4 +121,28 @@ export async function refreshUserSessions(
     },
     sql`user_id = ${userId}`
   );
+}
+
+/**
+ * `refreshUserSessions` for a caller holding no lock. The user and role rows
+ * are share-locked first (users → roles, the canonical order), so a user or
+ * role edit in flight commits before the read, and this write cannot land a
+ * snapshot older than the edit's own refresh.
+ */
+export async function resyncUserSessions(userId: EntityID): Promise<void> {
+  await withTransaction(async (tx) => {
+    const [user] = await tx
+      .select({ roleId: users.roleId })
+      .from(users)
+      .where(eq(users.id, userId))
+      .for('share');
+    if (user?.roleId)
+      await tx
+        .select({ id: roles.id })
+        .from(roles)
+        .where(eq(roles.id, user.roleId))
+        .for('share');
+
+    await refreshUserSessions(userId, tx);
+  });
 }

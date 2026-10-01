@@ -1,4 +1,4 @@
-import type { HandlerCookie } from './contract';
+import type { HandlerCookie, HandlerOutput } from './contract';
 
 /**
  * Outgoing cookie options. `extraFlags` and `extra` carry attributes the
@@ -131,4 +131,37 @@ export function serializeSetCookie(cookie: HandlerCookie): string {
   for (const [key, value] of extraAttributes) parts.push(`${key}=${value}`);
 
   return parts.join('; ');
+}
+
+/**
+ * `Set-Cookie`s produced below the handler — Better Auth's session reads —
+ * which the adapter adds to every response for the request, error ones
+ * included. ⚠️ Keyed by identity: the `Headers` object `HandlerInput.headers`
+ * carries, never a copy of it.
+ */
+const queuedCookies = new WeakMap<Headers, Map<string, HandlerCookie>>();
+
+/** Last write per name wins, so repeated session reads emit each cookie once. */
+export function queueResponseCookies(
+  requestHeaders: Headers,
+  cookies: readonly HandlerCookie[]
+): void {
+  if (cookies.length === 0) return;
+  const queue = queuedCookies.get(requestHeaders) ?? new Map();
+  for (const cookie of cookies) queue.set(cookie.name, cookie);
+  queuedCookies.set(requestHeaders, queue);
+}
+
+/** The handler's own cookie wins a name clash: it was set after the read. */
+export function withQueuedCookies(
+  output: HandlerOutput,
+  requestHeaders: Headers
+): HandlerOutput {
+  const queue = queuedCookies.get(requestHeaders);
+  queuedCookies.delete(requestHeaders);
+  if (!queue) return output;
+
+  const own = output.cookies ?? [];
+  for (const cookie of own) queue.delete(cookie.name);
+  return { ...output, cookies: [...queue.values(), ...own] };
 }

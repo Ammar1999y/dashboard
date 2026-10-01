@@ -1,18 +1,7 @@
 /**
- * One TOTP code, once — the reservation RFC 6238 §5.2 requires and the
- * verifiers do not perform.
- *
- * `createOTP(secret).verify(code, { window: 1 })` answers "is this code
- * acceptable right now", and stays true for the whole period plus the period
- * either side, so without a reservation an observed code opens a second session
- * for roughly 90 seconds after its owner used it. Three verifiers share the same
- * secret and the same window — the library's sign-in endpoint, enrolment
- * confirmation, and password recovery — so the reservation lives here rather
- * than in any one of them.
- *
- * The claim is a guarded UPDATE, not a read-then-write: two requests presenting
- * the same code race on `last_totp_step < step`, and PostgreSQL lets exactly one
- * of them through.
+ * The single-use reservation RFC 6238 §5.2 requires and the library's verifier
+ * does not perform. Shared by sign-in, enrolment confirmation and password
+ * recovery, which verify against the same secret.
  */
 import type { Executor } from '@/db';
 import type { EntityID } from '@app/shared/types';
@@ -25,35 +14,22 @@ import { twoFactorCredentials } from '@/db/schema';
 import { createOTP } from '@better-auth/utils/otp';
 import { symmetricDecrypt } from 'better-auth/crypto';
 
-/** The library's defaults, and therefore this application's. */
+/** Must match the library's defaults, which its verifier uses. */
 const TOTP_PERIOD_S = 30;
 const TOTP_WINDOW = 1;
 
 /**
- * The window to reserve over when the accept/reject decision belongs to ANOTHER
- * verifier — the library's `/two-factor/verify-totp`, which re-reads the clock
- * and re-verifies after this reservation has run.
- *
- * ⚠️ Not a wider tolerance. Reserving a step only marks it spent; the delegate
- * still decides. What the extra period buys is the guarantee the delegation
- * needs: every step the delegate can accept is a step this looked at. Its window
- * is `[L-1, L+1]` around ITS clock reading, ours `[C-w, C+w]` around an earlier
- * one, so at `w = 1` a step boundary crossed between the two reads leaves `L+1`
- * unreserved — a code accepted, a session issued, and the code still replayable.
- * At `w = 2` that holds for any clock movement smaller than one period inside a
- * single request, and `./plugin.ts` refuses the completion outright if it ever
- * does not.
+ * For when the library's `/two-factor/verify-totp` decides, re-reading the
+ * clock after this reservation. ⚠️ Not a wider tolerance: the extra period
+ * covers a step boundary crossed between the two reads, so every step the
+ * library can accept was looked at here.
  */
 export const DELEGATED_TOTP_WINDOW = TOTP_WINDOW + 1;
 
 export type TotpVerdict = 'matched' | 'rejected' | 'replayed';
 
-/**
- * `constantTimeEqualOTP` from `@better-auth/utils/otp`, which is not exported.
- *
- * On sign-in this comparison runs BEFORE the library's, so it is the one an
- * attacker measures; `===` returns at the first differing digit.
- */
+// `@better-auth/utils/otp`'s `constantTimeEqualOTP`, which is not exported. On
+// sign-in this runs before the library's comparison, so it is the one measured.
 function constantTimeEqual(input: string, expected: string): boolean {
   let difference = input.length ^ expected.length;
   for (let index = 0; index < expected.length; index++)
@@ -73,10 +49,8 @@ async function matchedStep(
   const current = Math.floor(Date.now() / (TOTP_PERIOD_S * 1000));
   const otp = createOTP(secret, { period: TOTP_PERIOD_S });
   let found: number | null = null;
-  // Every candidate is generated AND compared even after a hit, so neither the
-  // work nor the timing depends on which step matched. The window is walked
-  // newest-first so the highest matching step wins, which is the one worth
-  // reserving.
+  // No early exit, so timing does not depend on which step matched. Newest
+  // first, so the highest matching step is the one reserved.
   for (let offset = window; offset >= -window; offset--) {
     const step = current + offset;
     const matches = constantTimeEqual(code, await otp.hotp(step));
@@ -85,13 +59,8 @@ async function matchedStep(
   return found;
 }
 
-/**
- * Reserve `step` for this user's credential.
- *
- * `false` means some earlier request already claimed this step or a later one —
- * that is, the code has been spent. A user with no credential row also gets
- * `false`; there is nothing to verify against.
- */
+// A guarded UPDATE, not read-then-write, so exactly one concurrent request
+// wins. `false` also covers a user with no credential row.
 async function claimStep(
   userId: EntityID,
   step: number,
@@ -114,17 +83,12 @@ async function claimStep(
 }
 
 /**
- * Verify a TOTP code AND spend it, in that order.
+ * `'replayed'` exists for logging only: both it and `'rejected'` must reach the
+ * user as the same invalid-code answer.
  *
- * `'replayed'` is deliberately distinct from `'rejected'` so a caller can log
- * the difference; both must reach the user as the same invalid-code answer,
- * because "that code was already used" tells an attacker their capture was
- * good.
- *
- * ⚠️ `executor` is not an optimisation. A caller inside a transaction must hand
- * its own over: the default reaches for a second connection out of
- * `MAX_POOL_CONNECTIONS`, and a request that holds one while waiting for another
- * is how the whole pool deadlocks under concurrency.
+ * ⚠️ A caller inside a transaction must pass its `executor`: the default takes
+ * a second pool connection while the first is held, which deadlocks the pool
+ * under concurrency.
  */
 export async function consumeTotpCode(
   userId: EntityID,
@@ -139,10 +103,6 @@ export async function consumeTotpCode(
     : 'replayed';
 }
 
-/**
- * The secret of the user's VERIFIED authenticator, or `null` when there is none
- * or it does not decrypt.
- */
 export async function readVerifiedTotpSecret(
   userId: EntityID,
   key: SymmetricDecryptOptions['key']

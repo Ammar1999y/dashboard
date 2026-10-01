@@ -23,6 +23,7 @@ import { adminUpdatePermissionBodySchema } from '@app/shared/validation/permissi
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import { revokeSessionsWhere } from '@/lib/auth/session/rotation';
+import { lockActor } from '@/lib/auth/user-eligibility';
 import { handlePermissionUniqueViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, notFoundError, withApiErrors } from '@/lib/http/response';
@@ -44,6 +45,7 @@ import {
 } from '@/lib/permissions/matrix';
 import { permissionMsg } from '@/lib/permissions/messages';
 import {
+  assertOwnedStandardRole,
   assertStandardRoleName,
   lockOwnedStandardRole,
   standardRoleFilter,
@@ -144,12 +146,13 @@ export const PUT = withApiErrors(
 
     assertStandardRoleName(input.roleName);
 
-    if (actorPermissions && input.permissions?.length)
+    if (input.permissions?.length)
       validatePermissionScope(actorPermissions, input.permissions);
 
     const auditMeta = getAuditMeta(ctx);
 
     const updated = await withTransaction(async (tx) => {
+      await lockActor(tx, actorUserId);
       const existingRole = await lockOwnedStandardRole(
         tx,
         roleId,
@@ -157,16 +160,14 @@ export const PUT = withApiErrors(
         actorUserId
       );
 
-      if (actorPermissions) {
-        // Reachability, because this is the role being EDITED: a 403 would tell
-        // an actor without `permissions.view` which roles outrank them.
-        await validateRolePermissionScope(
-          actorPermissions,
-          roleId,
-          tx,
-          'reachability'
-        );
-      }
+      // Reachability, because this is the role being EDITED: a 403 would tell
+      // an actor without `permissions.view` which roles outrank them.
+      await validateRolePermissionScope(
+        actorPermissions,
+        roleId,
+        tx,
+        'reachability'
+      );
 
       const canDeactivate = holdsActionOn(
         actorPermissions,
@@ -309,6 +310,46 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
   const auditMeta = getAuditMeta(ctx);
 
   await withTransaction(async (tx) => {
+    await lockActor(tx, actorUserId);
+    const permissionRows = (lock: boolean) => {
+      const query = tx
+        .select({
+          pageName: rolePermissions.pageName,
+          permissions: rolePermissions.permissions,
+        })
+        .from(rolePermissions)
+        .where(eq(rolePermissions.roleId, roleId));
+      return lock ? query.for('share') : query;
+    };
+    // The reachability question PUT asks through `validateRolePermissionScope`:
+    // a deletion grants nothing, so "this role outranks me" answers 404 like
+    // every unreachable-target gate.
+    const assertReachable = (rows: PermissionRows) => {
+      try {
+        assertRowsWithinScope(actorPermissions, rows);
+      } catch (error) {
+        collapseToNotFound(error);
+      }
+    };
+
+    // Unlocked, before the member locks, so a caller the role is out of reach
+    // of gets its 404 without holding anyone's row. Repeated under the locks.
+    await assertOwnedStandardRole(tx, roleId, deleteScope, actorUserId);
+    assertReachable(await permissionRows(false));
+
+    // Users before the role, the order every writer of a user's role takes
+    // (`lockUser`). Held against a restore committing between the unpin and
+    // the NOT EXISTS check below, which would trip the FK or leave the restored
+    // user with no role. `NO KEY UPDATE`: an audit row's foreign key takes a
+    // key-share lock on its actor, and a full `UPDATE` lock would make any
+    // member writing one while holding this role a deadlock.
+    await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.roleId, roleId))
+      .orderBy(users.id)
+      .for('no key update');
+
     const existingRole = await lockOwnedStandardRole(
       tx,
       roleId,
@@ -316,46 +357,17 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
       actorUserId
     );
 
-    const existingPermissions = await tx
-      .select({
-        pageName: rolePermissions.pageName,
-        permissions: rolePermissions.permissions,
-      })
-      .from(rolePermissions)
-      .where(eq(rolePermissions.roleId, roleId))
-      .for('share');
-
-    if (actorPermissions) {
-      try {
-        assertRowsWithinScope(actorPermissions, existingPermissions);
-      } catch (error) {
-        // The reachability question PUT asks through
-        // `validateRolePermissionScope`: a deletion grants nothing, so "this
-        // role outranks me" answers 404 like every unreachable-target gate.
-        // Inline because the rows above are already read `FOR SHARE`.
-        collapseToNotFound(error);
-      }
-    }
+    const existingPermissions = await permissionRows(true);
+    assertReachable(existingPermissions);
 
     // With REQUIRE_ROLE_FOR_LOGIN the FK is RESTRICT, so soft-deleted users
     // still pinning `role_id` would block the DELETE; they are unpinned first.
     // Without it the FK is `set null`.
-    //
-    // Every pinning user is locked first: under READ COMMITTED a concurrent
-    // restore committing between the unpin and the NOT EXISTS check would trip
-    // the FK or leave the restored user with no role.
-    if (REQUIRE_ROLE_FOR_LOGIN) {
-      await tx
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.roleId, roleId))
-        .for('update');
-
+    if (REQUIRE_ROLE_FOR_LOGIN)
       await tx
         .update(users)
         .set({ roleId: null })
         .where(and(eq(users.roleId, roleId), isNotNull(users.deletedAt)));
-    }
 
     // The scope condition mirrors `standardRoleFilter()`.
     const deleted = await tx.execute(sql`

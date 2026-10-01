@@ -16,7 +16,6 @@ import { withTimingFloor } from '@/lib/http/timing-floor';
 import { markContactVerified } from '@/lib/otp/contact';
 import {
   collapseAnonymousVerifyError,
-  collapseProofThrottle,
   invalidOrExpiredCode,
 } from '@/lib/otp/throttle';
 import { verifyOtpOrAutoVerify } from '@/lib/otp/verify';
@@ -31,11 +30,10 @@ import { logSanitized } from '@/utils/log';
 
 export const POST = withTimingFloor(
   otpMsg.verifyError,
-  async (ctx, floor) => {
+  async (ctx, startFloor) => {
     requireFeature(OTP_ENABLED);
 
-    // Per IP BEFORE the captcha, bounding the siteverify call and stopping one
-    // IP spraying codes across identifiers past the per-identifier cap.
+    // Before the captcha, bounding siteverify and code spraying across identifiers.
     await enforceRateLimit({
       scope: 'otp.verify.ip',
       identifier: ipIdentifier(ctx.headers),
@@ -59,20 +57,19 @@ export const POST = withTimingFloor(
       surface: 'verify_contact',
     });
 
+    const deadline = startFloor();
     const [userData] = await db
       .select({ id: users.id, email: users.email })
       .from(users)
       .where(activeUserWithContact(channel, identifier))
       .limit(1);
 
-    // Thrown, so the floor pads it like the real path.
     if (!userData) throw invalidOrExpiredCode();
 
     const auditMeta = getAuditMeta(ctx);
 
     const onMissing = (): never => {
-      // The user vanished or was deactivated mid-flow: logged apart from a
-      // wrong code, answered with the same generic error.
+      // User vanished mid-flow: logged apart, answered generically.
       logSanitized('error', {
         msg: 'otp.verify.userVanished',
         userId: userData.id,
@@ -81,33 +78,25 @@ export const POST = withTimingFloor(
       throw invalidOrExpiredCode();
     };
 
-    // OTP_AUTO_VERIFY flips the flag without a code, so a client that still
-    // calls verify succeeds idempotently. Otherwise the flag flips inside the
-    // verify transaction, after a real match, under the user row lock.
-    try {
-      await verifyOtpOrAutoVerify({
-        userId: userData.id,
-        userEmail: userData.email,
-        channel,
-        purpose: 'verify_contact',
-        identifier,
-        code,
-        auditMeta,
-        onVerified: (tx) =>
-          markContactVerified(tx, {
-            userId: userData.id,
-            channel,
-            auditMeta,
-            onMissing,
-          }),
-      });
-    } catch (error) {
-      // Proof-row state is account-dependent: only the pre-lookup limiters may
-      // expose a 429 and Retry-After on this anonymous endpoint.
-      throw collapseProofThrottle(error, otpMsg.invalidOrExpired);
-    }
+    // Under OTP_AUTO_VERIFY a client that still calls verify succeeds idempotently.
+    await verifyOtpOrAutoVerify({
+      userId: userData.id,
+      userEmail: userData.email,
+      channel,
+      purpose: 'verify_contact',
+      identifier,
+      code,
+      auditMeta,
+      deadline,
+      onVerified: (tx) =>
+        markContactVerified(tx, {
+          userId: userData.id,
+          channel,
+          auditMeta,
+          onMissing,
+        }),
+    });
 
-    await floor();
     return apiSuccess({
       message: otpMsg.verifySuccess(channel),
       data: { verified: true },

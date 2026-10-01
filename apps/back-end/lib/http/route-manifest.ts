@@ -87,12 +87,28 @@ export interface RouteDefinition {
    * ceiling stays a per-route contract. Only meaningful with `body: 'json'`.
    */
   maxJsonBodyBytes?: number;
+  /**
+   * `false` while the build-time feature behind the route is off: the row is
+   * then neither registered nor published, so the path answers the
+   * unknown-path 404 like a switched-off Better Auth endpoint. Omitted means
+   * always on.
+   */
+  enabled?: boolean;
+  /**
+   * Can answer 401 `REAUTH_REQUIRED`: the handler asks for the
+   * re-authentication window, through `requirePermission`'s `reauth` or a
+   * function that calls `requireReauthWindow`. Omitted means never;
+   * `tests/unit/route-auth-flags.test.ts` holds each route to its handler.
+   */
+  reauth?: boolean;
+  /** Checks the account password, so a locked account answers 429. Omitted means never. */
+  checksPassword?: boolean;
 }
 
 /** The policy half of a route — what the document is built from. */
 export type RouteManifestEntry = Omit<
   RouteDefinition,
-  'handler' | 'timeoutSeconds'
+  'handler' | 'timeoutSeconds' | 'enabled'
 >;
 
 /** One sub-path of a prefix, with the methods that path actually answers. */
@@ -155,7 +171,12 @@ export function toManifest(
   routes: readonly RouteDefinition[]
 ): RouteManifestEntry[] {
   return routes.map(
-    ({ handler: _handler, timeoutSeconds: _timeout, ...entry }) => entry
+    ({
+      handler: _handler,
+      timeoutSeconds: _timeout,
+      enabled: _enabled,
+      ...entry
+    }) => entry
   );
 }
 
@@ -184,8 +205,11 @@ export function toRegisteredRoutes(
   routes: readonly RouteDefinition[],
   development = process.env.NODE_ENV === 'development'
 ): readonly RouteDefinition[] {
-  if (development) return routes;
-  return routes.filter((route) => !isDevelopmentOnlyPath(route.path));
+  return routes.filter(
+    (route) =>
+      route.enabled !== false &&
+      (development || !isDevelopmentOnlyPath(route.path))
+  );
 }
 
 /**
@@ -198,9 +222,24 @@ export function toPublishedManifest(
   routes: readonly RouteDefinition[],
   production = process.env.NODE_ENV === 'production'
 ): RouteManifestEntry[] {
-  const manifest = toManifest(routes);
-  if (!production) return manifest;
-  return manifest.filter((entry) => !isDevelopmentOnlyPath(entry.path));
+  return toManifest(
+    routes.filter(
+      (route) =>
+        route.enabled !== false &&
+        (!production || !isDevelopmentOnlyPath(route.path))
+    )
+  );
+}
+
+/**
+ * The rows `enabled: false` withholds from both lists above. The document's
+ * consistency check reads them, so a table entry for a switched-off route is
+ * not reported as a leftover.
+ */
+export function toWithheldManifest(
+  routes: readonly RouteDefinition[]
+): RouteManifestEntry[] {
+  return toManifest(routes.filter((route) => route.enabled === false));
 }
 
 /**

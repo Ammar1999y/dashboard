@@ -58,8 +58,8 @@ const DataTablePagination = memo(({ pageCount }: { pageCount: number }) => {
   const handleNext = useCallback(() => goTo(currentPage + 1), [currentPage]);
 
   return (
-    <div className='flex items-center justify-between px-2 py-1 space-x-3'>
-      <div className='flex items-center space-x-2'>
+    <div className='flex items-center justify-between gap-3 px-2 py-1'>
+      <div className='flex items-center gap-2'>
         <Button
           size='icon'
           variant='ghost'

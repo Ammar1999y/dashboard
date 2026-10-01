@@ -1,5 +1,7 @@
 import * as argon2 from 'argon2';
 
+import { normalizePasswordInput } from '@app/shared/validation/rules';
+
 import { logLine } from '@/utils/log';
 
 import { KEY_ID_PATTERN } from '../keyring';
@@ -37,10 +39,6 @@ class PasswordHashFormatError extends Error {
     super(message);
     this.name = 'PasswordHashFormatError';
   }
-}
-
-function normalizePassword(password: string): string {
-  return password.normalize('NFKC');
 }
 
 function parsePasswordHash(hash: string): ParsedPasswordHash | null {
@@ -86,7 +84,7 @@ async function hashWithActivePepper(
   password: string
 ): Promise<{ pepperId: string; phc: string }> {
   const pepper = getActivePasswordPepper();
-  const phc = await argon2.hash(normalizePassword(password), {
+  const phc = await argon2.hash(normalizePasswordInput(password), {
     ...ARGON2_OPTIONS,
     secret: pepper.secret,
   });
@@ -99,14 +97,9 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 /**
- * The single credential-verification entry point, so the only place that
- * decides what an UNEVALUATABLE stored hash means: a malformed or unsupported
- * envelope, or a pepper id the keyring no longer holds.
- *
- * Both answer `valid: false`, indistinguishable from a wrong password, and reach
- * the operator through the log. A thrown fault would answer differently from an
- * unknown email — an unauthenticated account-existence oracle. `costPaid: false`
- * because no Argon2 work was done, so the caller still owes the timing guard.
+ * An unevaluatable stored hash answers `valid: false` and logs: a throw would
+ * answer differently from an unknown email, an account-existence oracle.
+ * `costPaid: false` means the caller still owes the timing guard.
  */
 export async function verifyPasswordDetailed({
   hash,
@@ -127,17 +120,25 @@ export async function verifyPasswordDetailed({
     logLine('error', {
       msg: 'auth.password.hash unevaluatable',
       errorClass: error instanceof Error ? error.name : 'UnknownError',
-      // The message names the envelope defect or the missing generation. It
-      // carries no secret: `KeyringConfigurationError` reports the env var and
-      // the rule, never a key, and `PasswordHashFormatError` reports the shape.
+      // Safe to log: neither error class puts a key or hash in its message.
       detail: error instanceof Error ? error.message : null,
     });
     return { valid: false, needsRehash: false, costPaid: false };
   }
 
-  const valid = await argon2.verify(parsed.phc, normalizePassword(password), {
-    secret: pepper.secret,
-  });
+  let valid: boolean;
+  try {
+    valid = await argon2.verify(parsed.phc, normalizePasswordInput(password), {
+      secret: pepper.secret,
+    });
+  } catch (error) {
+    // No `detail`: the PHC parser can echo fragments of the stored value.
+    logLine('error', {
+      msg: 'auth.password.hash unevaluatable',
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+    return { valid: false, needsRehash: false, costPaid: false };
+  }
   if (!valid) return { valid: false, needsRehash: false, costPaid: true };
 
   const activePepper = getActivePasswordPepper();

@@ -1065,11 +1065,15 @@ export const verificationCodesRelations = relations(
   })
 );
 
-export const usersRelations = relations(users, ({ one }) => ({
+// `users` (on sessions and accounts) and `accountss` are the keys Better Auth's
+// Drizzle adapter derives for its native joins; renaming one fails every
+// sign-in and session read.
+export const usersRelations = relations(users, ({ one, many }) => ({
   role: one(roles, {
     fields: [users.roleId],
     references: [roles.id],
   }),
+  accountss: many(accounts),
 }));
 
 export const rolesRelations = relations(roles, ({ many }) => ({
@@ -1088,14 +1092,14 @@ export const rolePermissionsRelations = relations(
 );
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
-  user: one(users, {
+  users: one(users, {
     fields: [sessions.userId],
     references: [users.id],
   }),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
-  user: one(users, {
+  users: one(users, {
     fields: [accounts.userId],
     references: [users.id],
   }),

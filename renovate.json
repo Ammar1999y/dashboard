@@ -35,12 +35,6 @@
       "labels": ["dependencies", "needs-migration"]
     },
     {
-      "description": "Upgrade Bun types with the pinned Bun runtime.",
-      "matchPackageNames": ["@types/bun", "bun-types"],
-      "dependencyDashboardApproval": true,
-      "groupName": "bun types"
-    },
-    {
       "description": "Group all non-major dev tooling into a single PR instead of flooding.",
       "matchDepTypes": ["devDependencies"],
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
@@ -75,6 +69,13 @@
       "description": "Scanner binaries move together and are never grouped with app deps.",
       "matchManagers": ["mise"],
       "groupName": "scanner toolchain"
+    },
+    {
+      "description": "The Bun pin lives in packageManager, the Dockerfile's oven/bun tag and the Bun types; a split bump fails the image build or boots with a version warning. Last, so no broader group claims a member, and one release age for all four, which the npm-only preset would not give the Docker tag.",
+      "matchPackageNames": ["bun", "oven/bun", "@types/bun", "bun-types"],
+      "minimumReleaseAge": "3 days",
+      "dependencyDashboardApproval": true,
+      "groupName": "bun"
     }
   ]
 }

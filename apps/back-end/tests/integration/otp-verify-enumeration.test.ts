@@ -23,7 +23,7 @@
  * Each block below drives the real address to its threshold and then compares
  * exactly one crossing attempt against one unknown-address attempt. That is what
  * the finding is about, and it keeps the cost bounded: every request here pays
- * the endpoint's 1.5 s timing floor.
+ * the endpoint's `MINIMUM_RESPONSE_MS` timing floor.
  */
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { SeedOptions } from '../helpers/session';

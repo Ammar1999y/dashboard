@@ -55,6 +55,8 @@ import { startSchedule } from '@/lib/maintenance/schedule';
 import { ORPHAN_DRAIN_BATCH } from '@/lib/media/orphaned-objects';
 import { TRANSITION_RETRY_BATCH } from '@/lib/media/visibility';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import { resetTables } from '../helpers/database';
 import {
   failObjectStore,
@@ -99,13 +101,6 @@ const IDENTIFIER = {
   expiredDevice: 'trust-device-sweep-expired',
   liveDevice: 'trust-device-sweep-live',
 } as const;
-
-/**
- * `unicorn/require-array-sort-compare` wants the comparison stated. Same shape as
- * `schemaTableNames()` in `../helpers/database`, for the same reason: these are
- * ASCII keys and tokens, so a locale-aware collation would be the surprise.
- */
-const byText = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
 
 interface Pass {
   swept: DatabaseSweepResult;
@@ -157,12 +152,12 @@ function partial(): Pass {
 
 async function survivingSessionTokens(): Promise<string[]> {
   const rows = await db.select({ token: sessions.token }).from(sessions);
-  return rows.map((row) => row.token).toSorted(byText);
+  return rows.map((row) => row.token).toSorted(compareCodeUnits);
 }
 
 async function survivingFileKeys(): Promise<string[]> {
   const rows = await db.select({ r2Key: files.r2Key }).from(files);
-  return rows.map((row) => row.r2Key).toSorted(byText);
+  return rows.map((row) => row.r2Key).toSorted(compareCodeUnits);
 }
 
 async function proofExists(id: string): Promise<boolean> {
@@ -188,7 +183,7 @@ async function survivingIdentifiers(
       ? verifications.identifier
       : trustedDevices.trustIdentifier;
   const rows = await db.select({ identifier: column }).from(table);
-  return rows.map((row) => row.identifier).toSorted(byText);
+  return rows.map((row) => row.identifier).toSorted(compareCodeUnits);
 }
 
 async function codeCount(sessionId: string): Promise<number> {
@@ -215,7 +210,7 @@ function deletedObjectKeys(ops: readonly StoreOp[]): string[] {
             : []
       )
     ),
-  ].toSorted(byText);
+  ].toSorted(compareCodeUnits);
 }
 
 /** The buckets a pass swept, sorted — one batched call each, not one per row. */
@@ -224,14 +219,14 @@ function deletedBuckets(ops: readonly StoreOp[]): string[] {
     .flatMap((op) =>
       op.kind === 'DeleteObjects' && op.bucket !== undefined ? [op.bucket] : []
     )
-    .toSorted(byText);
+    .toSorted(compareCodeUnits);
 }
 
 /** Both configured buckets, which is what every delete has to address. */
 const BOTH_BUCKETS = [
   process.env.R2_PUBLIC_BUCKET ?? '',
   process.env.R2_PRIVATE_BUCKET ?? '',
-].toSorted(byText);
+].toSorted(compareCodeUnits);
 
 /** One sweep, with the operations it performed isolated from every other pass. */
 async function sweepAndRecord(): Promise<Pass> {
@@ -526,7 +521,9 @@ describe('a pass with a healthy object store', () => {
 
   test('an expired session past the grace window is removed; one inside it stays', async () => {
     expect(await survivingSessionTokens()).toEqual(
-      [TOKEN.insideGrace, TOKEN.edgeOfGrace, TOKEN.unexpired].toSorted(byText)
+      [TOKEN.insideGrace, TOKEN.edgeOfGrace, TOKEN.unexpired].toSorted(
+        compareCodeUnits
+      )
     );
   });
 
@@ -568,13 +565,13 @@ describe('a pass with a healthy object store', () => {
 
   test('the pending file past its TTL and the orphaned deleting row lose their objects and then their rows; the recent, near-boundary and active rows keep both', async () => {
     expect(await survivingFileKeys()).toEqual(
-      [KEY.edgeOfTtl, KEY.fresh, KEY.permanent].toSorted(byText)
+      [KEY.edgeOfTtl, KEY.fresh, KEY.permanent].toSorted(compareCodeUnits)
     );
     // Rows alone cannot see the inverse failure: a sweep that deleted the wrong
     // OBJECT and left its row reads as "untouched" in `files` while the image is
     // gone from the bucket.
     expect(deletedObjectKeys(healthy().ops)).toEqual(
-      [KEY.pastTtl, KEY.orphanDeleting].toSorted(byText)
+      [KEY.pastTtl, KEY.orphanDeleting].toSorted(compareCodeUnits)
     );
     // One batched call per bucket, not one round trip per row — and EVERY
     // bucket, not the one the row names: a stale visibility transition can have
@@ -626,7 +623,7 @@ describe('a pass whose object-store delete fails', () => {
         KEY.fresh,
         KEY.permanent,
         KEY.orphanDeleting,
-      ].toSorted(byText)
+      ].toSorted(compareCodeUnits)
     );
     expect(r2Down().swept.removed.files.removed).toBe(0);
   });
@@ -664,7 +661,7 @@ describe('a pass whose object-store delete fails', () => {
     // that must never be addressed would still be absent — so one equality
     // carries both halves.
     expect(deletedObjectKeys(r2Down().ops)).toEqual(
-      [KEY.pastTtl, KEY.orphanDeleting].toSorted(byText)
+      [KEY.pastTtl, KEY.orphanDeleting].toSorted(compareCodeUnits)
     );
     expect(deletedBuckets(r2Down().ops)).toEqual(BOTH_BUCKETS);
   });
@@ -710,7 +707,9 @@ describe('a pass where one object fails and its sibling succeeds', () => {
 
   test('the sibling and the orphan are swept and the failed row is kept', async () => {
     expect(await survivingFileKeys()).toEqual(
-      [KEY.pastTtl, KEY.edgeOfTtl, KEY.fresh, KEY.permanent].toSorted(byText)
+      [KEY.pastTtl, KEY.edgeOfTtl, KEY.fresh, KEY.permanent].toSorted(
+        compareCodeUnits
+      )
     );
     // Exactly two, not zero and not three: zero would mean one bad object
     // stalled the batch, three would mean a row went without its object.
@@ -729,7 +728,9 @@ describe('a pass where one object fails and its sibling succeeds', () => {
 
   test('all three objects were addressed in one call, and nothing else was', () => {
     expect(deletedObjectKeys(partial().ops)).toEqual(
-      [KEY.pastTtl, KEY.siblingPastTtl, KEY.orphanDeleting].toSorted(byText)
+      [KEY.pastTtl, KEY.siblingPastTtl, KEY.orphanDeleting].toSorted(
+        compareCodeUnits
+      )
     );
     expect(deletedBuckets(partial().ops)).toEqual(BOTH_BUCKETS);
   });
@@ -880,13 +881,13 @@ describe('unfiled files', () => {
       .select({ r2Key: files.r2Key, unfiledAt: files.unfiledAt })
       .from(files);
     const stamps = new Map(rows.map((row) => [row.r2Key, row.unfiledAt]));
-    expect(stamps.keys().toArray().toSorted(byText)).toEqual(
+    expect(stamps.keys().toArray().toSorted(compareCodeUnits)).toEqual(
       [
         UNFILED.fresh,
         UNFILED.inside,
         UNFILED.refiled,
         UNFILED.library,
-      ].toSorted(byText)
+      ].toSorted(compareCodeUnits)
     );
     expect(stamps.get(UNFILED.fresh)).toBeInstanceOf(Date);
     expect(stamps.get(UNFILED.inside)).toBeInstanceOf(Date);
@@ -954,6 +955,8 @@ describe('a bounded pass that leaves work behind', () => {
     expect(await db.$count(orphanedObjects)).toBe(1);
   });
 
+  // A batch of sequential claim-and-remove sagas, which a loaded parallel run
+  // stretches past Bun's default timeout.
   test('a stale-transition backlog one row deeper than its batch reports the same', async () => {
     await resetTables();
     const { userId } = await seedUser();
@@ -983,5 +986,5 @@ describe('a bounded pass that leaves work behind', () => {
     expect(await db.$count(files, sql`${files.transition} is not null`)).toBe(
       1
     );
-  });
+  }, 30_000);
 });

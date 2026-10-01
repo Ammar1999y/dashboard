@@ -1,11 +1,7 @@
 /**
- * The OTP second factor, on this project's OTP system rather than the plugin's.
- *
- * Both endpoints serve two modes, discriminated the way the plugin's own
- * verifiers discriminate: a resolved session is an enrolment, and only its
- * absence falls through to the challenge cookie. Neither takes a contact from
- * the request — the address is read from the user row, so nothing can redirect
- * its own second factor.
+ * A resolved session means enrolment; only its absence falls through to the
+ * challenge cookie, as in the plugin's verifiers. The contact is always read
+ * from the user row, never the request.
  */
 import type { AuthContext } from '../context';
 import type { RequestSession } from '../session/request';
@@ -66,12 +62,8 @@ interface OtpTarget {
   destination: string;
 }
 
-/**
- * Where an enrolling user's codes would go. The verified-contact requirement is
- * the point: an unverified address would let a typo lock the account at the next
- * sign-in, and would let a brief session holder aim the factor at their own
- * contact.
- */
+// Verified contacts only: otherwise a typo locks the account, or a brief session
+// holder aims the factor at their own contact.
 async function enrolmentTarget(
   userId: EntityID,
   channel: OtpChannel
@@ -84,8 +76,7 @@ async function enrolmentTarget(
       phoneNumberVerified: users.phoneNumberVerified,
     })
     .from(users)
-    // `isActive` as well as `deletedAt`: this is a WRITE path, and a suspended
-    // account must not be able to add a factor to itself.
+    // A write path: a suspended account must not add a factor to itself.
     .where(
       and(
         eq(users.id, userId),
@@ -107,10 +98,7 @@ async function enrolmentTarget(
   return { userId, userEmail: user.email, channel, destination };
 }
 
-/**
- * A second-factor code to a contact already resolved from the user row, under
- * the per-destination budget of the surface asking for it.
- */
+/** `destination` must already be resolved from the user row. */
 export async function sendTwoFactorCode(params: {
   userId: EntityID;
   channel: OtpChannel;
@@ -143,12 +131,8 @@ export const twoFactorOtp = () =>
   ({
     id: 'two-factor-otp',
     endpoints: {
-      /**
-       * No captcha, deliberately: reaching this needs a session or a challenge
-       * cookie, and a challenge cookie follows a verified password, so the gate
-       * in front is stronger than one. Cost stays bounded by the per-destination
-       * surface quota and the app-wide daily breaker.
-       */
+      // No captcha, deliberately: a session or a challenge cookie (which follows
+      // a verified password) is a stronger gate.
       twoFactorOtpSend: createAuthEndpoint(
         '/two-factor/otp/send',
         {
@@ -157,9 +141,8 @@ export const twoFactorOtp = () =>
           metadata: {
             openapi: envelopeResponse('A second-factor code was sent.', {
               type: 'object',
-              // The row's own exponential delay, not the anonymous surfaces'
-              // constant: this endpoint is behind a session or a challenge
-              // cookie, so there is nothing here for a countdown to leak.
+              // The real delay, unlike anonymous surfaces: behind a session or
+              // challenge cookie a countdown leaks nothing.
               properties: {
                 nextAllowedIn: {
                   type: 'integer',
@@ -173,19 +156,11 @@ export const twoFactorOtp = () =>
         async (ctx) => {
           assertOtpAvailable();
           try {
-            // Session first, challenge second — the library's own order, shared
-            // with `verify` through `resolveRequestSession`.
             const requestSession = await resolveRequestSession(ctx);
             if (requestSession)
-              // ⚠️ The ENROLMENT branch only, and at the START of the flow.
-              // Adding a second factor is a security-state change: on a session
-              // alone, a hijacked session could enrol OTP to a contact it
-              // already controls and from there make password recovery refuse
-              // permanently. `verify` takes no password: it is
-              // the second half of a flow this call already gated, and the code
-              // it needs went to the user's own contact. The sign-in branch
-              // takes none either — the caller holds a challenge cookie, which
-              // follows a verified password.
+              // ⚠️ Enrolment only, at the start: a hijacked session could enrol
+              // a contact it controls and make password recovery refuse
+              // permanently. `verify` needs none; this call gated the flow.
               await requireReauthPassword(ctx, requestSession.userId);
 
             const target = requestSession
@@ -195,9 +170,7 @@ export const twoFactorOtp = () =>
                   bodyRecord(ctx).option
                 );
 
-            // Both modes, at the one boundary that reaches a provider: an
-            // enrolment row outlives the channel list that admitted it, so a
-            // channel the deployment has since dropped must not still deliver.
+            // An enrolment row outlives the channel list that admitted it.
             if (!isTwoFactorOtpChannelEnabled(target.channel))
               throw authError(
                 HTTP_STATUS.BAD_REQUEST,
@@ -252,14 +225,6 @@ export const twoFactorOtp = () =>
     },
   }) satisfies BetterAuthPlugin;
 
-/**
- * Sign-in mode: the destination comes from the enrolment the CHALLENGE offers.
- *
- * `option` names which one, because a user may hold an OTP enrolment per contact
- * kind and they are different possessions — the same reason the passwordless
- * exclusion is by kind. An unnamed option falls back to the challenge's default,
- * and an option the challenge does not offer is refused rather than resolved.
- */
 function signInTarget(
   challenge: ResolvedChallenge,
   option: unknown
@@ -298,9 +263,8 @@ async function verifyForSignIn(
 ) {
   const target = signInTarget(challenge, bodyRecord(ctx).option);
 
-  // Charged BEFORE the challenge budget: a quota rejection produced no verdict,
-  // and `spendChallengeAttempt` does not write the counter back, so spending
-  // first and then throwing here would destroy the challenge.
+  // Before the challenge budget: `spendChallengeAttempt` does not write the
+  // counter back, so a quota throw after it would destroy the challenge.
   const auditMeta = authAuditMeta(ctx, '/two-factor/otp/verify');
   await enforceOtpVerifyQuota({
     channel: target.channel,
@@ -323,20 +287,15 @@ async function verifyForSignIn(
       auditMeta,
     });
   } catch (caught) {
-    // ⚠️ Exactly one of the two, and which one is not "did it throw". The
-    // challenge budget is five GUESSES; `processOtpVerify` also throws when no
-    // proof row exists, when no live code exists, when the proof row is already
-    // blocked and when the database faults, and none of those compared a code.
-    // Charging them would let a user who submits before pressing send — or five
-    // transient faults — exhaust a challenge without ever guessing.
+    // ⚠️ The budget counts guesses, not throws: `processOtpVerify` also throws
+    // with no live code or on a database fault, which compared nothing.
     await (otpGuessWasEvaluated(caught)
       ? attempt.recordFailure()
       : attempt.restore());
     throw asAuthError(caught, twoFactorMsg.invalidCode);
   }
 
-  // Past this point the code is spent and the verdict was "correct". A restore
-  // would re-arm a counter whose challenge is about to be consumed.
+  // No restore: the challenge is about to be consumed.
   const completed = await completeTwoFactorChallenge(
     ctx,
     challenge,
@@ -374,9 +333,7 @@ async function verifyForEnrolment(
       identifier: target.destination,
       code,
       auditMeta,
-      // `enableMethod`'s transition (`./lifecycle.ts`), inside the proof
-      // transaction so the enrolment and the eviction of every other session
-      // commit together — the caller's own session kept.
+      // Mirrors `enableMethod` (`./lifecycle.ts`) inside the proof transaction.
       onVerified: async (tx) => {
         await recordEnabledMethod(tx, {
           userId: target.userId,

@@ -1,16 +1,9 @@
 /**
- * A versioned keyring of 32-byte server secrets, read from two environment
- * variables and validated at first use: an active key id, the retained keys,
- * and generation ordering so a consumer can tell "hashed under an older key"
- * from "hashed under the current one". Every keyring binds to this one parser,
- * so no copy of the rules can quietly accept what another rejects.
+ * Every keyring binds to this one parser, so no copy of the rules can accept
+ * what another rejects.
  *
- * Parameterised by env var NAMES, so a failure names the variable an operator
- * has to fix.
- *
- * **No secret, and no slice of one, may appear in an error message here**:
- * startup logs are widely readable. Errors name the key ID, which every hash
- * envelope stores anyway.
+ * ⚠️ No secret, nor any slice of one, may appear in an error message: startup
+ * logs are widely readable. Name the key ID instead.
  */
 
 /** Key IDs travel inside hash envelopes, so they must stay envelope-safe. */
@@ -37,7 +30,6 @@ interface KeyringConfiguration {
   keys: ReadonlyMap<string, KeyMaterial>;
 }
 
-/** One class for every keyring: a fatal misconfiguration nothing catches by type. */
 class KeyringConfigurationError extends Error {
   constructor(message: string) {
     super(message);
@@ -46,18 +38,13 @@ class KeyringConfigurationError extends Error {
 }
 
 interface KeyringSpec {
-  /** Env var holding the active key ID. */
   activeIdEnv: string;
-  /** Env var holding the JSON keyring. */
   keyringEnv: string;
-  /** Human-readable name for error messages, e.g. `password pepper`. */
+  /** For error messages, e.g. `password pepper`. */
   label: string;
 }
 
-/**
- * A lazily-parsed keyring. `validate()` exists so `lib/env.server.ts` can force
- * the parse at startup instead of letting the first request discover the problem.
- */
+/** `validate()` lets `lib/env.server.ts` force the lazy parse at startup. */
 interface Keyring {
   validate: () => void;
   active: () => KeyringKey;
@@ -160,8 +147,7 @@ export function defineKeyring(spec: KeyringSpec): Keyring {
         fail(`key ID "${id}" must match ${KEY_ID_PATTERN.source}`);
 
       const material = parseMaterial(id, value);
-      // Generation decides "is this hash stale", so two keys sharing one makes
-      // that question unanswerable.
+      // Generation decides staleness; a shared one makes it unanswerable.
       const owner = generations.get(material.generation);
       if (owner)
         fail(
@@ -177,8 +163,7 @@ export function defineKeyring(spec: KeyringSpec): Keyring {
         `${spec.activeIdEnv} must identify a key present in ${spec.keyringEnv}`
       );
 
-    // `generation` is read as staleness (`needsRehash` in `password/hash.ts`),
-    // so the active key must own the highest one.
+    // `needsRehash` (`password/hash.ts`) reads generation as staleness.
     const activeGeneration = keys.get(activeId)?.generation ?? 0;
     const newest = Math.max(
       ...keys.values().map((material) => material.generation)

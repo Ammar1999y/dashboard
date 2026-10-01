@@ -42,9 +42,12 @@ import {
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { PRE_AUTH_LIMIT } from '@/lib/http/pre-auth';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import { resetTables } from '../helpers/database';
 import { egressCallsTo, scriptEgress } from '../helpers/egress';
 import { seedOtpProof } from '../helpers/otp';
+import { dropMockedClockWindows } from '../helpers/rate-limit';
 import { baseHeaders, seedUser, signIn, TEST_IP } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -167,6 +170,7 @@ afterEach(() => {
   // is not a top-level `bun:test` export (checked in `bun-types/test.d.ts`); it
   // exists only under the `jest`/`vi` compatibility namespaces.
   setSystemTime();
+  dropMockedClockWindows();
 });
 
 /**
@@ -587,7 +591,7 @@ describe('the cookie sign-in sets', () => {
     // NEW cookie on this response — anything carrying session state to the
     // browser — has to be looked at rather than inherited silently.
     const names = fixture.cookies.map((cookie) => cookie.name);
-    expect(names.toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1))).toEqual([
+    expect(names.toSorted(compareCodeUnits)).toEqual([
       'better-auth.session_data',
       'better-auth.session_token',
     ]);

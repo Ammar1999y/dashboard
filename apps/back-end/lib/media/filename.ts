@@ -1,10 +1,6 @@
 /**
- * A display-safe name: the extension removed, `..` and every character outside
- * the allowlist stripped, whitespace collapsed.
- *
- * `maxLength` counts CODE POINTS, so the cut never splits a surrogate pair into
- * a lone surrogate, which `encodeURIComponent` throws on; the trim runs after
- * the cut, so the cut cannot leave a trailing space.
+ * `maxLength` counts CODE POINTS: a lone surrogate from a split pair makes
+ * `encodeURIComponent` throw.
  */
 export function sanitizeFilename(filename: string, maxLength = 50): string {
   if (!filename || typeof filename !== 'string') return 'unnamed';

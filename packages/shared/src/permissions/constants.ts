@@ -82,7 +82,8 @@ export const PERMISSION_ACTIONS = {
    * bucket changes who on the internet can read it, which `edit` (a rename, a
    * move between folders) never does — so it is its own grant, like
    * `resetTwoFactor`, and `validatePermissionScope` refuses to confer it to a
-   * role whose creator does not hold it.
+   * role whose creator does not hold it. Every path into the public bucket
+   * takes it, including a link or an upload to a public purpose.
    */
   publish: 'نشر',
 } as const;

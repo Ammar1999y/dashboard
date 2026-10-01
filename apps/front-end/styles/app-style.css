@@ -79,3 +79,13 @@ html[dir='rtl'] body[data-scroll-locked] .header {
   padding-right: 2rem;
   padding-bottom: 3.5rem;
 }
+
+.overflow-y-clip-safe {
+  overflow: hidden;
+}
+@supports (overflow-y: clip) {
+  .overflow-y-clip-safe {
+    overflow-x: visible;
+    overflow-y: clip;
+  }
+}

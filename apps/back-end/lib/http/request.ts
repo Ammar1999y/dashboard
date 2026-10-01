@@ -2,6 +2,7 @@ import type { BodyPolicy, HandlerInput, HandlerRequestMeta } from './contract';
 
 import { HTTP_STATUS, MSG_BODY_TOO_LARGE } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { normalizeMimeType } from '@app/shared/validation/media-types';
 
 import { getClientIp } from './client-ip';
 
@@ -68,7 +69,11 @@ export function withBodyPolicy(
 ): HandlerInput {
   const request = meta.rawRequest;
   const canHaveBody = methodCanHaveBody(meta.method);
-  const essence = mediaTypeEssence(request.headers.get('content-type'));
+  // ⚠️ Case-insensitive matching only agrees with `Request.formData()` at or
+  // above the runtime floor `server.ts` asserts;
+  // `tests/unit/request-body-policy.test.ts` holds the cases that fail if that
+  // floor is lowered.
+  const essence = normalizeMimeType(request.headers.get('content-type') ?? '');
 
   const jsonAllowed = policy === 'json' && canHaveBody && essence === JSON_TYPE;
   const multipartAllowed =
@@ -104,21 +109,6 @@ function memoise<T>(
 function methodCanHaveBody(method: string): boolean {
   const upper = method.toUpperCase();
   return upper !== 'GET' && upper !== 'HEAD';
-}
-
-/**
- * The media type's essence: type/subtype, lowercased (RFC 9110 §8.3),
- * parameters stripped. The caller compares it for equality, never substring.
- *
- * ⚠️ Case-insensitive matching only agrees with `Request.formData()` at or
- * above the runtime floor `server.ts` asserts;
- * `tests/unit/request-body-policy.test.ts` holds the cases that fail if that
- * floor is lowered.
- */
-function mediaTypeEssence(contentType: string | null): string {
-  if (!contentType) return '';
-  const [essence] = contentType.split(';', 1);
-  return essence?.trim().toLowerCase() ?? '';
 }
 
 export function bodyTooLarge(): CustomError {

@@ -69,6 +69,21 @@ describe('folder names', () => {
   });
 });
 
+describe('an unpaired UTF-16 surrogate', () => {
+  // PostgreSQL stored it as U+FFFD in `varchar`, so the name kept was not the
+  // one validated, and refused it in the `jsonb` audit insert, a 500.
+  test.each([
+    ['folder', folderNameSchema],
+    ['display', displayNameSchema],
+  ] as const)('is refused in a %s name, at either end', (_name, schema) => {
+    for (const bad of ['a\u{D83D}', '\u{DE00}b', 'a\u{DE00}\u{D83D}b'])
+      expect(firstMessage(schema.safeParse(bad)), JSON.stringify(bad)).toBe(
+        mediaValidationMsg.folderNameInvalid
+      );
+    expect(schema.parse('a \u{1F600}')).toBe('a \u{1F600}');
+  });
+});
+
 describe('display names', () => {
   test('keep dots (an extension is fine) but refuse separators', () => {
     expect(displayNameSchema.parse(' report.final.pdf ')).toBe(

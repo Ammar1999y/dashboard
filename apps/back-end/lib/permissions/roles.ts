@@ -54,12 +54,14 @@ export function standardRoleFilter(roleId: EntityID) {
   return and(eq(roles.id, roleId), standardScopeFilter());
 }
 
-/** The `custom-` prefix names the roles `createCustomRole` mints. */
+/** `chk_custom_prefix_scope` ties this prefix to the custom scope. */
+export const CUSTOM_ROLE_NAME_PREFIX = `${CUSTOM_ROLE_VALUE}-`;
+
+/** The custom prefix names the roles `createCustomRole` mints. */
 export function assertStandardRoleName(roleName: string): void {
-  const reserved = `${CUSTOM_ROLE_VALUE}-`;
-  if (roleName.toLowerCase().startsWith(reserved))
+  if (roleName.toLowerCase().startsWith(CUSTOM_ROLE_NAME_PREFIX))
     throw new CustomError(
-      permissionMsg.customPrefixForbidden(reserved),
+      permissionMsg.customPrefixForbidden(CUSTOM_ROLE_NAME_PREFIX),
       HTTP_STATUS.BAD_REQUEST
     );
 }
@@ -132,7 +134,7 @@ export async function createCustomRole(
     const [customRole] = await tx
       .insert(roles)
       .values({
-        roleName: `custom-${generateUuidV7()}`,
+        roleName: `${CUSTOM_ROLE_NAME_PREFIX}${generateUuidV7()}`,
         scope: CUSTOM_ROLE_VALUE,
         isActive: true,
         createdBy: createdBy ?? null,
@@ -207,14 +209,8 @@ export async function validateAssignableRole(
   if (!role) throw notFoundError();
 }
 
-/** The standard role `roleId` names, `FOR UPDATE`, or 404 when `scope` does not reach it. */
-export async function lockOwnedStandardRole(
-  tx: Tx,
-  roleId: EntityID,
-  scope: AccessScope | null,
-  actorUserId: EntityID
-) {
-  const [role] = await tx
+function ownedStandardRoleQuery(executor: Executor, roleId: EntityID) {
+  return executor
     .select({
       id: roles.id,
       roleName: roles.roleName,
@@ -223,12 +219,42 @@ export async function lockOwnedStandardRole(
       createdBy: roles.createdBy,
     })
     .from(roles)
-    .where(standardRoleFilter(roleId))
-    .for('update');
+    .where(standardRoleFilter(roleId));
+}
 
+function assertReaches(
+  role: { createdBy: EntityID | null } | undefined,
+  scope: AccessScope | null,
+  actorUserId: EntityID
+): asserts role {
   if (!role) throw notFoundError();
   if (scope === 'own' && role.createdBy !== actorUserId) throw notFoundError();
+}
+
+/** The standard role `roleId` names, `FOR UPDATE`, or 404 when `scope` does not reach it. */
+export async function lockOwnedStandardRole(
+  tx: Tx,
+  roleId: EntityID,
+  scope: AccessScope | null,
+  actorUserId: EntityID
+) {
+  const [role] = await ownedStandardRoleQuery(tx, roleId).for('update');
+  assertReaches(role, scope, actorUserId);
   return role;
+}
+
+/**
+ * `lockOwnedStandardRole`'s 404, without the lock: for a caller that must lock
+ * rows ordered BEFORE the role, and so first proves it may touch them.
+ */
+export async function assertOwnedStandardRole(
+  executor: Executor,
+  roleId: EntityID,
+  scope: AccessScope | null,
+  actorUserId: EntityID
+): Promise<void> {
+  const [role] = await ownedStandardRoleQuery(executor, roleId);
+  assertReaches(role, scope, actorUserId);
 }
 
 /** A user's role as the API publishes it: a custom role's id is masked. */

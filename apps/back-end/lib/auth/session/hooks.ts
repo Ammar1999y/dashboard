@@ -24,7 +24,7 @@ import {
   PHONE_OTP_AVAILABLE,
 } from '@app/shared/validation/otp';
 
-import { auditLog, boundedAuditMeta } from '@/lib/audit';
+import { auditLog, boundedAuditMeta, boundedUserAgent } from '@/lib/audit';
 import { sanitizePermissions } from '@/lib/permissions/matrix';
 
 import { logSanitized } from '@/utils/log';
@@ -34,15 +34,12 @@ import { authDatabase } from '../transaction';
 import { roleAllowsLogin } from '../user-eligibility';
 import { revokeSessionArtifacts } from './rotation';
 
-/** How a session came to exist, from the endpoint that created it. */
 const SESSION_METHOD_BY_PATH: Readonly<Record<string, string>> = {
   '/sign-in/email': 'password',
   '/passwordless/verify': 'passwordless',
   '/oauth/google/callback': 'google',
-  // ⚠️ The FIRST factor is not knowable from the path — a challenge completed
-  // here may have followed either route — so these say only that a second
-  // factor finished the login. The chain is on the completion event
-  // `completeTwoFactorChallenge` writes.
+  // The first factor is not knowable from these paths; the chain is on
+  // `completeTwoFactorChallenge`'s completion event.
   '/two-factor/verify-totp': 'two_factor',
   '/two-factor/verify-backup-code': 'two_factor',
   '/two-factor/otp/verify': 'two_factor',
@@ -87,15 +84,9 @@ export const sessionDatabaseHooks = {
         throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
       }
 
-      // Verification gates. They run after the password was verified, so
-      // the distinct code leaks nothing to someone who does not know it;
-      // every other failure above is the generic 401. The front-end keys on
-      // the code to start the OTP flow.
-      //
-      // Enforced only while an OTP channel can verify the contact: the flag
-      // always reflects reality and is never auto-flipped, so with OTP off
-      // the gate is inert, and turning OTP on makes unverified users verify
-      // at their next login.
+      // After the first factor, so the distinct code leaks nothing; the
+      // front-end keys on it. Inert while no OTP channel can verify the contact:
+      // enabling one makes every unverified user verify at their next login.
       if (
         REQUIRE_EMAIL_VERIFICATION &&
         EMAIL_OTP_AVAILABLE &&
@@ -118,10 +109,14 @@ export const sessionDatabaseHooks = {
         });
       }
 
+      // Better Auth copies the header verbatim.
+      const userAgent = boundedUserAgent(session.userAgent);
+
       if (!userData.roleId || !userData.role) {
         return {
           data: {
             ...session,
+            userAgent,
             metadata: {},
           },
         };
@@ -130,6 +125,7 @@ export const sessionDatabaseHooks = {
       return {
         data: {
           ...session,
+          userAgent,
           metadata: {
             roleId: userData.roleId,
             roleName: userData.role.roleName,
@@ -140,20 +136,9 @@ export const sessionDatabaseHooks = {
       };
     },
     /**
-     * The ONE place `loginSuccess` is written, for every method that issues
-     * a session: it runs only after the session row exists. Password proofs
-     * are a different event (`passwordVerified`), written by
-     * `verifyLoginAttempt`.
-     *
-     * Best-effort: the session is already created and the cookie on its
-     * way, so failing the request now would log the user in and tell them
-     * it did not work.
-     *
-     * `SESSION_METHOD_BY_PATH` is best-effort labelling, not the factor
-     * chain: a first-factor session is logged before a challenge withdraws
-     * it, and a trusted-device skip is not represented. The authoritative
-     * records are the in-transaction proof events and the completion event
-     * `completeTwoFactorChallenge` writes.
+     * The one place `loginSuccess` is written. Best-effort: the session
+     * already exists. The method label is not the factor chain — a
+     * first-factor session is logged before a challenge withdraws it.
      */
     after: async (session, context) => {
       try {
@@ -165,8 +150,7 @@ export const sessionDatabaseHooks = {
           .from(users)
           .where(eq(users.id, userId))
           .limit(1);
-        // `audit_logs.user_email` is NOT NULL, so there is nothing to write
-        // without it.
+        // `audit_logs.user_email` is NOT NULL.
         if (!user) return;
 
         const path = context?.path ?? null;
@@ -183,8 +167,6 @@ export const sessionDatabaseHooks = {
               method: SESSION_METHOD_BY_PATH[path ?? ''] ?? 'unknown',
               authPath: path,
             },
-            // The values Better Auth resolved for the session row itself,
-            // so the audit row and the session agree by construction.
             meta: boundedAuditMeta(
               session.ipAddress ?? null,
               session.userAgent,
@@ -199,15 +181,10 @@ export const sessionDatabaseHooks = {
   },
   delete: {
     /**
-     * The library side of `revokeSessionArtifacts`'s invariant. Every
-     * library-side delete — `/sign-out`, a revoked session, a user
-     * deletion, a reaped row — goes through `deleteWithHooks` /
-     * `deleteManyWithHooks`, which fire this once PER row, so this is the
-     * one boundary that covers them all.
-     *
-     * Best-effort: it runs after the library's transaction committed, so
-     * failing would report a sign-out that happened as an error. The rows
-     * expire on their own, and a session id is never reused.
+     * Every library-side delete fires this once per row, so it is the one
+     * boundary for `revokeSessionArtifacts`. Best-effort: it runs after the
+     * library committed, the rows expire on their own, and a session id is
+     * never reused.
      */
     after: async (session) => {
       try {

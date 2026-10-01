@@ -15,19 +15,13 @@ import type { OtpChannel, TwoFactorMethod } from './enums';
 import * as z from 'zod';
 
 import { PHONE_ENABLED } from '../config';
-import {
-  CONTACT_KINDS,
-  isPhoneChannel,
-  OTP_CHANNELS,
-  TWO_FACTOR_METHODS,
-} from './enums';
+import { CONTACT_KINDS, isPhoneChannel, TWO_FACTOR_METHODS } from './enums';
 import { MSG_CHANNEL_DISABLED, otpCodeSchema } from './otp';
 import { idSchema, reauthPasswordSchema } from './rules';
 import {
+  assertTwoFactorListsCoherent,
   parseTwoFactorMethods,
   parseTwoFactorOtpChannels,
-  TWO_FACTOR_METHODS_VAR,
-  TWO_FACTOR_OTP_CHANNELS_VAR,
 } from './two-factor-lists';
 
 /**
@@ -65,16 +59,11 @@ export const TWO_FACTOR_OTP_AVAILABLE =
 
 export const TWO_FACTOR_OTP_CHANNELS = ENABLED_TWO_FACTOR_OTP_CHANNELS;
 
-// A coherence rule between the two public variables, refused wherever they are
-// parsed: the method would be advertised in settings, enabled by users, and
-// then fail to deliver at their next sign-in — with no session left to fix it
-// from.
-if (METHOD_SET.has('otp') && ENABLED_TWO_FACTOR_OTP_CHANNELS.length === 0)
-  throw new Error(
-    `${TWO_FACTOR_METHODS_VAR} enables "otp" but ${TWO_FACTOR_OTP_CHANNELS_VAR} names no channel. ` +
-      `Set ${TWO_FACTOR_OTP_CHANNELS_VAR} to a comma-separated list of ${OTP_CHANNELS.join(', ')}, ` +
-      `or remove "otp" from ${TWO_FACTOR_METHODS_VAR}.`
-  );
+// eslint-disable-next-line unicorn/no-top-level-side-effects -- refusing to load is this gate's contract; see the root CLAUDE.md
+assertTwoFactorListsCoherent(
+  ENABLED_TWO_FACTOR_METHODS,
+  ENABLED_TWO_FACTOR_OTP_CHANNELS
+);
 
 // The 2FA surfaces take no identifier from the client: the user is known from
 // the session when enrolling and from the challenge cookie when signing in.
@@ -171,3 +160,16 @@ export const twoFactorPasskeyVerifySchema = z.object({
 
 /** A row this schema stores by UUID: a trusted device, a passkey. */
 export const ownedRowSchema = z.object({ id: idSchema });
+
+/** What `/two-factor/passkey/grant` answers with; single use, and bound to the session. */
+export const passkeyGrantSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .describe(
+    'The token POST /two-factor/passkey/grant answered with. Single use, bound to this session, valid for 10 minutes.'
+  );
+
+export const passkeyDeleteSchema = ownedRowSchema.extend({
+  grant: passkeyGrantSchema,
+});

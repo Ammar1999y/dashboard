@@ -20,6 +20,13 @@ const SITEVERIFY_URL =
 
 const SITEVERIFY_TIMEOUT_MS = 3000;
 
+/** The one Turnstile secret choice, shared with Better Auth's captcha plugin. */
+export function turnstileSecretKey(): string | undefined {
+  return process.env.NODE_ENV === 'development'
+    ? TEST_SECRET_KEY
+    : process.env.TURNSTILE_SECRET_KEY;
+}
+
 /** Fails closed on any error. */
 async function verifyTurnstileToken(
   token: string,
@@ -27,10 +34,7 @@ async function verifyTurnstileToken(
 ): Promise<boolean> {
   if (!token || token.length > CAPTCHA_TOKEN_MAX_LENGTH) return false;
 
-  const secretKey =
-    process.env.NODE_ENV === 'development'
-      ? TEST_SECRET_KEY
-      : process.env.TURNSTILE_SECRET_KEY;
+  const secretKey = turnstileSecretKey();
 
   if (!secretKey) {
     logLine('error', {
@@ -80,7 +84,8 @@ export async function verifyTurnstileRequest(
 /**
  * A failed `verifyTurnstileRequest`. It reveals nothing about an account, so
  * the anonymous OTP handlers RETURN it through `handleApiError` rather than
- * throw it: their timing floor and status collapse never apply to it.
+ * throw it: their status collapse never applies to it. It precedes the lookup,
+ * so it answers without the timing floor.
  */
 export function captchaRefused(): CustomError {
   return new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);

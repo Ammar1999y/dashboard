@@ -27,6 +27,7 @@ import {
   unlinkGoogle,
 } from '@/lib/auth/session/rotation';
 import { removeMethodIntent } from '@/lib/auth/two-factor/methods';
+import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
 import { notFoundError } from '@/lib/http/response';
 import { auditCustomRolePermissions } from '@/lib/permissions/audit';
 import {
@@ -52,20 +53,17 @@ import { userMsg } from './messages';
 import {
   assertTargetUserReachable,
   assertTargetUserVisible,
+  assertTargetUserVisibleUnlocked,
 } from './target-user';
 
 interface EditActor {
   userId: EntityID;
-  sessionId: EntityID | null;
+  sessionId: EntityID;
   userEmail: string;
 }
 
-/**
- * A user renaming themselves, in one round trip: the CTE hands the UPDATE the
- * pre-update name for the audit row. No `FOR UPDATE` — a user cannot usefully
- * race themselves, and the WHERE refuses a concurrently deactivated or deleted
- * row.
- */
+// No `FOR UPDATE`: a user cannot usefully race themselves, and the WHERE refuses
+// a concurrently deactivated or deleted row.
 export async function renameSelf(
   actor: { userId: EntityID; userEmail: string },
   name: string,
@@ -108,12 +106,8 @@ export async function renameSelf(
 }
 
 /**
- * Every unreachable-target gate, read WITHOUT a lock, answering the same 404
- * the locked gates answer. A deliberate copy: it exists to refuse before the
- * HIBP request and the Argon2 hash, and a row lock taken to decide whether to
- * do that work would defeat it. Role AUTHORITY is one of the gates — without
- * it an actor with broad edit scope still paid for both against a target that
- * outranks them.
+ * A deliberate unlocked copy of the locked gates, answering the same 404, so the
+ * HIBP request and Argon2 hash can be refused early. Not authoritative.
  */
 async function assertTargetEditable(opts: {
   targetId: EntityID;
@@ -146,23 +140,15 @@ async function assertTargetEditable(opts: {
   });
 }
 
-/**
- * The `D12` window for an actor whose session id came from the permission
- * read. A `null` id cannot own a window, so it is refused rather than skipped.
- */
 async function requireAdminReauth(
   actor: EditActor,
   executor?: Tx
 ): Promise<void> {
-  await requireReauthWindow(actor.userId, actor.sessionId ?? '', executor);
+  await requireReauthWindow(actor.userId, actor.sessionId, executor);
 }
 
-/**
- * An administrator's edit of another user. The contract is a total object —
- * a rename restates the current email, role and active flag — so every
- * authority and re-authentication decision is taken on the actual change,
- * against the row locked below.
- */
+// The body is total (a rename restates everything), so every decision is taken
+// on the actual change against the locked row.
 export async function editUserAsAdmin(opts: {
   actor: EditActor;
   actorPermissions: ActorPermissions;
@@ -177,12 +163,9 @@ export async function editUserAsAdmin(opts: {
 
   const password = input.password;
   if (password) {
-    // Before the HIBP request and the Argon2 hash: a supplied password is the
-    // one `D12` change knowable from the request alone.
+    // Before the HIBP request and hash: the one `D12` change knowable from the
+    // request alone.
     await requireAdminReauth(actor);
-    // ADDITIVE, never authoritative: the locked transaction re-runs every gate
-    // and decides; this can only refuse earlier, and only when there is
-    // expensive work to refuse.
     await assertTargetEditable({
       targetId,
       actorUserId: actor.userId,
@@ -194,6 +177,12 @@ export async function editUserAsAdmin(opts: {
   const hashedPassword = password ? await hashPassword(password) : null;
 
   return withTransaction(async (tx) => {
+    await assertTargetUserVisibleUnlocked(tx, {
+      targetId,
+      actorUserId: actor.userId,
+      scope: editScope,
+    });
+    await lockTargetAndActor(tx, targetId, actor.userId, 'update');
     const [lockedUser] = await tx
       .select({
         id: users.id,
@@ -229,35 +218,37 @@ export async function editUserAsAdmin(opts: {
 
     const isCurrentlyCustom = lockedUser.roleScope === CUSTOM_ROLE_VALUE;
 
-    if (!isCustomRole) await validateAssignableRole(input.roleId, tx);
+    const assignsStandardRole =
+      !isCustomRole && input.roleId !== lockedUser.roleId;
 
-    if (actorPermissions) {
-      // Reachability on the target's CURRENT role: a 403 here would tell
-      // "this account exists and outranks me" apart from the neighbouring 404s.
+    // Only on a change: a deactivated role keeps its members, and an edit that
+    // restates it must still reach them. A custom role is restated as
+    // `'custom'`, never by its id, which is no standard role.
+    if (assignsStandardRole || (!isCustomRole && isCurrentlyCustom))
+      await validateAssignableRole(input.roleId, tx);
+
+    // A 403 here would reveal "exists and outranks me" beside the 404s.
+    await validateRolePermissionScope(
+      actorPermissions,
+      lockedUser.roleId,
+      tx,
+      'reachability'
+    );
+
+    if (isCustomRole && input.permissions?.length) {
+      validatePermissionScope(actorPermissions, input.permissions);
+    } else if (assignsStandardRole) {
+      // The caller named this role, so 403 reveals nothing.
       await validateRolePermissionScope(
         actorPermissions,
-        lockedUser.roleId,
+        input.roleId,
         tx,
-        'reachability'
+        'grant'
       );
-
-      if (isCustomRole && input.permissions?.length) {
-        validatePermissionScope(actorPermissions, input.permissions);
-      } else if (!isCustomRole && input.roleId !== lockedUser.roleId) {
-        // Grant on the role being ASSIGNED: the caller named it, so its
-        // existence is no secret and 403 is the useful answer.
-        await validateRolePermissionScope(
-          actorPermissions,
-          input.roleId,
-          tx,
-          'grant'
-        );
-      }
     }
 
-    // Diffed BEFORE the authority gate below, which depends on it: a supplied
-    // matrix is a permission mutation only if it differs from the stored one,
-    // so renaming a custom-role user needs no `permissions.edit`.
+    // Diffed before the authority gate: renaming a custom-role user restates
+    // the matrix and must need no `permissions.edit`.
     const suppliedMatrix = input.permissions?.length ? input.permissions : null;
     const newPermsForAudit: PermissionRows | null =
       isCustomRole && suppliedMatrix ? toPermissionRows(suppliedMatrix) : null;
@@ -282,7 +273,6 @@ export async function editUserAsAdmin(opts: {
 
     if (isCustomRole) {
       if (!isCurrentlyCustom) {
-        // Switching TO custom mints a role.
         if (
           !resolveActionScope(actorPermissions, 'permissions', 'create').allowed
         )
@@ -307,13 +297,11 @@ export async function editUserAsAdmin(opts: {
 
     if (newPermsForAudit && suppliedMatrix) {
       if (isCurrentlyCustom) {
-        // An unchanged matrix is not rewritten, which would reset `created_at`.
         assignedRoleId = customPermsChanged
           ? await createCustomRole(tx, suppliedMatrix, lockedUser.roleId)
           : lockedUser.roleId;
 
-        // An in-place custom edit keeps the role id, so the user audit row
-        // shows no change; the matrix is recorded on its own.
+        // The user audit row shows no change, so the matrix is recorded separately.
         if (customPermsChanged) {
           const roleIdForAudit = assignedRoleId;
           const oldPermissions = oldPermsForAudit ?? [];
@@ -348,8 +336,7 @@ export async function editUserAsAdmin(opts: {
           });
       }
     } else if (isCustomRole) {
-      // No matrix means "keep the current one" — the client sends it only when
-      // it changed. Switching TO custom has nothing to keep.
+      // No matrix means "keep the current one".
       if (!isCurrentlyCustom)
         throw new CustomError(
           userMsg.customRoleNeedsPermissions,
@@ -361,9 +348,7 @@ export async function editUserAsAdmin(opts: {
     }
 
     const emailChanged = lockedUser.email !== input.email;
-    // An omitted key keeps the number; only an explicit null/'' clears it.
-    // Presence comes from the PARSED value, so a stripped typo cannot read as
-    // "not supplied".
+    // Omitted keeps the number; only an explicit null/'' clears it.
     const phoneProvided = input.phoneNumber !== undefined;
     const newPhoneNumber = input.phoneNumber ?? null;
     const phoneChanged =
@@ -371,10 +356,8 @@ export async function editUserAsAdmin(opts: {
       phoneProvided &&
       lockedUser.phoneNumber !== newPhoneNumber;
 
-    // `D12` is the CHANGE, not the grant, decided from the LOCKED row: a window
-    // skipped on a stale comparison is a security decision made against a row
-    // somebody else has since changed. Nothing is written yet, so an unproven
-    // session costs a rollback.
+    // Decided from the locked row, never a stale comparison. Nothing is written
+    // yet, so an unproven session costs only a rollback.
     const roleChanged = lockedUser.roleId !== assignedRoleId;
     if (
       emailChanged ||
@@ -385,12 +368,15 @@ export async function editUserAsAdmin(opts: {
     )
       await requireAdminReauth(actor, tx);
 
-    if (emailChanged) await unlinkGoogle(tx, targetId, auditMeta);
+    if (emailChanged)
+      await unlinkGoogle(
+        tx,
+        targetId,
+        { userId: actor.userId, email: actor.userEmail },
+        auditMeta
+      );
 
-    // A contact change takes the OTP factor bound to it out of the offered set.
-    // When that is the target's last usable factor the edit is refused and the
-    // operator is pointed at `resetTwoFactor`, the permission that exists for
-    // disarming 2FA. One question over BOTH changed kinds.
+    // One question over both kinds; disarming 2FA is `resetTwoFactor`'s job.
     const changedContactKinds = [
       ...(emailChanged ? (['email'] as const) : []),
       ...(phoneChanged ? (['phone'] as const) : []),
@@ -404,15 +390,13 @@ export async function editUserAsAdmin(opts: {
         email: input.email,
         isActive: input.isActive,
         roleId: assignedRoleId,
-        // An admin-set address is unproven: the flag resets until the owner
-        // re-proves it by OTP.
+        // An admin-set address is unproven.
         ...(emailChanged && { emailVerified: false }),
         ...(phoneChanged && {
           phoneNumber: newPhoneNumber,
           phoneNumberVerified: false,
         }),
-        // The admin reset is the recovery path for a locked-out user, so the
-        // brute-force counters clear with the password.
+        // The admin reset is how a locked-out user recovers.
         ...(password && { failedLoginAttempts: 0, lockedUntil: null }),
       })
       .where(liveUser(eq(users.id, targetId)))
@@ -420,9 +404,8 @@ export async function editUserAsAdmin(opts: {
 
     if (!userUpdated) throw notFoundError();
 
-    // ⚠️ The OTP enrolment does NOT follow a contact to its new address, and
-    // `two_factor_enabled` is left alone: clearing it would make `users.edit` a
-    // 2FA disarm. The refusal above keeps this from stranding anyone.
+    // ⚠️ `two_factor_enabled` is left alone: clearing it would make `users.edit`
+    // a 2FA disarm.
     for (const kind of changedContactKinds)
       await removeMethodIntent(tx, targetId, 'otp', kind);
 
@@ -435,8 +418,7 @@ export async function editUserAsAdmin(opts: {
         meta: auditMeta,
       });
 
-    // Any credential or identity change ends existing sessions. Phone counts:
-    // it is a passwordless login factor, as in the self-service flow.
+    // Phone counts: it is a passwordless factor.
     const shouldDeleteAllSessions =
       !!password ||
       emailChanged ||
@@ -461,16 +443,14 @@ export async function editUserAsAdmin(opts: {
         );
     }
 
-    // Sequential: the statements share the transaction's one connection, and an
-    // explicit order decides which failure surfaces.
     await auditLog(tx, {
       userId: actor.userId,
       userEmail: actor.userEmail,
       action: 'UPDATE',
       tableName: 'users',
       recordId: targetId,
-      // Both sides of every mutated field, so the change is reconstructable
-      // from this event alone.
+      // Both sides of every mutated field, a field added later included, so
+      // the change is reconstructable from this event alone.
       oldData: {
         name: lockedUser.name,
         email: lockedUser.email,
@@ -494,9 +474,7 @@ export async function editUserAsAdmin(opts: {
         }),
         ...(password && { passwordChanged: true }),
       },
-      // A matrix-only edit changes nothing on the user row; the roles event is
-      // the change, and an empty users UPDATE beside it would read as a
-      // genuine no-change write.
+      // A matrix-only edit is recorded by the roles event alone.
       skipIfUnchanged: true,
       meta: auditMeta,
     });

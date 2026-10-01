@@ -1,16 +1,24 @@
 import type { AuthContext } from '../context';
 import type { BetterAuthPlugin } from 'better-auth';
+import type { APIError } from 'better-auth/api';
 
+import { isDeadlock } from '@/db/errors';
 import { createAuthEndpoint, isAPIError } from 'better-auth/api';
 import { deleteSessionCookie, expireCookie } from 'better-auth/cookies';
 import { generateState, parseState } from 'better-auth/oauth2';
-import { google, verifyGoogleIdToken } from 'better-auth/social-providers';
+import { google } from 'better-auth/social-providers';
 import * as z from 'zod';
 
-import { HTTP_STATUS, MSG_INVALID_INPUT } from '@app/shared/api-messages';
+import {
+  HTTP_STATUS,
+  MSG_INTERNAL_ERROR,
+  MSG_INVALID_INPUT,
+} from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
 import {
   googleStartSchema,
   OAUTH_PROVIDERS,
+  OAUTH_STATE_LOST_PAGE,
 } from '@app/shared/validation/oauth';
 import { TWO_FACTOR_ENABLED } from '@app/shared/validation/two-factor';
 
@@ -18,10 +26,16 @@ import { auditLog } from '@/lib/audit';
 import { verifyTurnstileRequest } from '@/lib/captcha';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { logSanitized } from '@/utils/log';
+import { errorClassOf, logSanitized } from '@/utils/log';
 
 import { authAuditMeta, requestHeaders } from '../context';
-import { authenticationDenied, authErrorCodeFirst } from '../errors';
+import {
+  authenticationDenied,
+  authError,
+  authErrorCodeFirst,
+  databaseContended,
+  toAuthApiError,
+} from '../errors';
 import { BASE64URL_32_BYTES_PATTERN } from '../keyring';
 import { envelopeResponse } from '../plugin-openapi';
 import { recordAbandonedSession } from '../session/audit';
@@ -31,7 +45,7 @@ import { assertLiveSession } from '../session/live';
 import { submittedRememberMe } from '../session/remember-me';
 import { withAuthTransaction } from '../transaction';
 import { issueTwoFactorChallenge } from '../two-factor/issue';
-import { readEnrolmentState as readEnrollmentState } from '../two-factor/methods';
+import { readEnrolmentState } from '../two-factor/methods';
 import {
   expiresIn,
   oauthOnceKey,
@@ -44,6 +58,7 @@ import {
   GOOGLE_CREDENTIALS,
   GOOGLE_ENABLED,
 } from './config';
+import { GoogleProviderFault, verifyGoogleIdToken } from './id-token';
 import {
   GOOGLE_ISSUER,
   googleIdentity,
@@ -51,10 +66,13 @@ import {
   resolveGoogleIdentity,
 } from './identity';
 
+/** `generateState`'s token: 32 of `generateRandomString`'s `a-z0-9A-Z-_`. */
+const OAUTH_STATE_PATTERN = /^[\w-]{32}$/;
+
 const GOOGLE_REDIRECT_URI = `${PUBLIC_ORIGIN}/api/auth/oauth/google/callback`;
 
-/** The authorization round trip the one-shot state marker has to outlive. */
-const OAUTH_STATE_MAX_AGE_S = 600;
+/** The lifetime of the signed state cookie `generateState` sets, which bounds the round trip. */
+const OAUTH_STATE_MAX_AGE_S = 300;
 
 /** The redirect result, retrieved once by the page the callback lands on. */
 const OAUTH_RESULT_MAX_AGE_S = 60;
@@ -83,6 +101,91 @@ const googleProvider = GOOGLE_CREDENTIALS
     })
   : null;
 
+/**
+ * `parseState` answers every failure with a redirect whose `error` names it. A
+ * database fault is not a lost state, so it is not sent to "start again".
+ */
+function isLostState(error: unknown): boolean {
+  if (!isAPIError(error)) return false;
+  const location = new Headers(error.headers).get('location');
+  const code = location ? URL.parse(location)?.searchParams.get('error') : null;
+  return typeof code === 'string' && code !== 'internal_server_error';
+}
+
+/**
+ * The answer for a fault that says nothing about the credentials, or undefined
+ * when the failure is a refusal. A refusal is `GoogleIdentityDenied` or an
+ * `APIError` below 500; everything else is infrastructure and must not read as
+ * "sign-in refused", with or without a callbackURL to redirect to.
+ */
+function serverFailure(
+  error: unknown,
+  readingState: boolean
+): APIError | undefined {
+  if (error instanceof GoogleIdentityDenied) return undefined;
+  if (isDeadlock(error)) return databaseContended(error);
+  if (error instanceof CustomError) {
+    const status = error.status ?? HTTP_STATUS.INTERNAL_ERROR;
+    return status === HTTP_STATUS.SERVICE_UNAVAILABLE
+      ? toAuthApiError(error, MSG_INTERNAL_ERROR)
+      : status >= HTTP_STATUS.INTERNAL_ERROR
+        ? authError(HTTP_STATUS.INTERNAL_ERROR, MSG_INTERNAL_ERROR)
+        : undefined;
+  }
+  if (isAPIError(error)) {
+    if (error.statusCode >= HTTP_STATUS.INTERNAL_ERROR) return error;
+    return readingState && !isLostState(error)
+      ? authError(HTTP_STATUS.INTERNAL_ERROR, MSG_INTERNAL_ERROR)
+      : undefined;
+  }
+  return authError(HTTP_STATUS.INTERNAL_ERROR, MSG_INTERNAL_ERROR);
+}
+
+/** RFC 6749 section 5.2 codes, the only provider text safe to log: free-text fields can carry anything. */
+const TOKEN_ERROR_CODES = new Set([
+  'invalid_request',
+  'invalid_client',
+  'invalid_grant',
+  'unauthorized_client',
+  'unsupported_grant_type',
+  'invalid_scope',
+]);
+
+/**
+ * Better Auth throws the token endpoint's 4xx answer as betterFetch's plain
+ * `{ ...body, status, statusText }` object, not an `Error`.
+ */
+function tokenEndpointErrorCode(error: unknown): string | undefined {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    error instanceof Error ||
+    !('error' in error) ||
+    typeof error.error !== 'string' ||
+    !TOKEN_ERROR_CODES.has(error.error)
+  )
+    return undefined;
+  return error.error;
+}
+
+/**
+ * Only `invalid_grant` blames the code the user presented (expired, replayed,
+ * PKCE mismatch: RFC 6749 section 5.2, Google's token endpoint table). Every
+ * other code, an absent one, a 5xx and a thrown `Error` describe this server's
+ * client configuration or the provider, and must not read as a refused sign-in.
+ */
+function isTokenEndpointRefusal(error: unknown): boolean {
+  return (
+    tokenEndpointErrorCode(error) === 'invalid_grant' &&
+    typeof error === 'object' &&
+    error !== null &&
+    'status' in error &&
+    typeof error.status === 'number' &&
+    error.status >= HTTP_STATUS.BAD_REQUEST &&
+    error.status < HTTP_STATUS.INTERNAL_ERROR
+  );
+}
+
 function returnURL(input: string | undefined) {
   if (!input) return null;
   const url = URL.parse(input, PUBLIC_ORIGIN);
@@ -98,7 +201,7 @@ function returnURL(input: string | undefined) {
 }
 
 /**
- * Everything `POST /oauth/google/callback` may hand to `GET /oauth/result`.
+ * Everything `GET /oauth/google/callback` may hand to `GET /oauth/result`.
  *
  * A closed union, and validated on the way OUT rather than trusted: the value
  * round-trips through a `verification` row as JSON, so this is the boundary that
@@ -110,6 +213,7 @@ function returnURL(input: string | undefined) {
 const oauthResultSchema = z.union([
   z.looseObject({ success: z.literal(true) }),
   z.looseObject({ twoFactorRedirect: z.literal(true) }),
+  z.looseObject({ success: z.literal(false) }),
 ]);
 
 async function completeResponse(
@@ -238,7 +342,9 @@ export const oauth = () =>
             method: 'GET',
             query: z.object({
               code: z.string().min(1).max(4096).optional(),
-              state: z.string().min(1).max(128),
+              // `generateState`'s own shape, so the lookup it drives can never
+              // name one of this application's verification rows.
+              state: z.string().regex(OAUTH_STATE_PATTERN),
               error: z.string().max(256).optional(),
               iss: z.string().max(255).optional(),
             }),
@@ -252,50 +358,56 @@ export const oauth = () =>
           async (ctx) => {
             let destination: string | null = null;
             let stage = 'state';
+            let readingState = false;
             try {
               if (!googleProvider || !GOOGLE_CREDENTIALS)
                 throw authenticationDenied();
+              readingState = true;
               const state = await parseState(ctx);
+              readingState = false;
               const flow = flowSchema.parse(state.flow);
               destination = returnURL(flow.returnURL ?? undefined);
               const once =
                 await ctx.context.internalAdapter.consumeVerificationValue(
                   oauthOnceKey(ctx.query.state)
                 );
-              if (
-                !once ||
-                !ctx.query.code ||
-                ctx.query.error ||
-                !state.idTokenNonce ||
-                (ctx.query.iss && ctx.query.iss !== GOOGLE_ISSUER)
-              )
-                throw authenticationDenied();
+              // Everything a caller can produce by hand is a refusal named for the log; none of it is a fault of this server.
+              if (!once) throw new GoogleIdentityDenied('state_replayed');
+              if (ctx.query.error)
+                throw new GoogleIdentityDenied(
+                  ctx.query.error === 'access_denied'
+                    ? 'user_cancelled'
+                    : 'authorization_error'
+                );
+              if (ctx.query.iss && ctx.query.iss !== GOOGLE_ISSUER)
+                throw new GoogleIdentityDenied('issuer_mismatch');
+              if (!ctx.query.code)
+                throw new GoogleIdentityDenied('code_missing');
+              if (!state.idTokenNonce) throw authenticationDenied();
               stage = 'token_exchange';
-              const tokens = await googleProvider.validateAuthorizationCode({
-                code: ctx.query.code,
-                codeVerifier: state.codeVerifier,
-                redirectURI: GOOGLE_REDIRECT_URI,
-              });
-              if (!tokens.idToken) throw authenticationDenied();
+              const tokens = await googleProvider
+                .validateAuthorizationCode({
+                  code: ctx.query.code,
+                  codeVerifier: state.codeVerifier,
+                  redirectURI: GOOGLE_REDIRECT_URI,
+                })
+                .catch((error: unknown) => {
+                  throw isTokenEndpointRefusal(error)
+                    ? new GoogleIdentityDenied('token_exchange_refused')
+                    : error;
+                });
+              if (typeof tokens.idToken !== 'string' || !tokens.idToken)
+                throw new GoogleProviderFault('token_response_malformed');
               stage = 'token_verification';
               const claims = await verifyGoogleIdToken({
                 token: tokens.idToken,
                 audience: GOOGLE_CREDENTIALS.clientId,
                 nonce: state.idTokenNonce,
               });
-              // The verifier validates exp when present, but does not require the claim.
-              if (
-                !claims ||
-                typeof claims.exp !== 'number' ||
-                !Number.isSafeInteger(claims.exp) ||
-                claims.exp <= Math.floor(Date.now() / 1000) ||
-                (claims.azp !== undefined &&
-                  claims.azp !== GOOGLE_CREDENTIALS.clientId)
-              )
-                throw authenticationDenied();
               stage = 'identity';
               const identity = googleIdentity(claims);
               const meta = authAuditMeta(ctx);
+              let recordRefusal: (() => Promise<void>) | undefined;
               const result = await withAuthTransaction(ctx, async (tx) => {
                 const user = await resolveGoogleIdentity(
                   tx,
@@ -305,7 +417,7 @@ export const oauth = () =>
                 );
                 const bypassTwoFactor = TWO_FACTOR_ENABLED && identity.mfa;
                 const enrolled = bypassTwoFactor
-                  ? await readEnrollmentState(user.id, tx)
+                  ? await readEnrolmentState(user.id, tx)
                   : null;
                 const session = await ctx.context.internalAdapter.createSession(
                   user.id,
@@ -335,11 +447,19 @@ export const oauth = () =>
                       session,
                       firstFactor: 'google',
                       transaction: tx,
+                      // Google is admitted only as the authority for this mailbox, so a code sent there proves nothing more.
+                      excludeContactKind: 'email',
                       rememberMe: flow.rememberMe,
                       auditMeta: meta,
                     });
-                if (outcome?.kind === 'refused') throw authenticationDenied();
+                if (outcome?.kind === 'refused') {
+                  recordRefusal = outcome.recordRefusal;
+                  throw authenticationDenied();
+                }
                 return { user, session, outcome };
+              }).catch(async (error: unknown) => {
+                await recordRefusal?.();
+                throw error;
               });
               const session = result.session;
               if (!session) throw authenticationDenied();
@@ -396,16 +516,36 @@ export const oauth = () =>
                 throw error;
               }
             } catch (error) {
+              const failure = serverFailure(error, readingState);
+              if (failure) {
+                // `parseState` redirects into these headers; its `Location` would otherwise ride on the 5xx.
+                ctx.responseHeaders?.delete('location');
+                logSanitized('error', {
+                  msg: 'oauth.signIn.failed',
+                  provider: 'google',
+                  stage,
+                  reason: readingState
+                    ? 'state_unavailable'
+                    : error instanceof GoogleProviderFault
+                      ? error.kind
+                      : 'unexpected_failure',
+                  // The class only: a provider or driver message can carry credentials or SQL parameters.
+                  errorClass: errorClassOf(error),
+                  providerError: tokenEndpointErrorCode(error),
+                });
+                throw failure;
+              }
               const denial = error instanceof GoogleIdentityDenied;
-              logSanitized(denial ? 'warn' : 'error', {
+              const stateLost = readingState && isLostState(error);
+              logSanitized(denial || stateLost ? 'warn' : 'error', {
                 msg: 'oauth.signIn.failed',
                 provider: 'google',
                 stage,
                 reason: denial
                   ? error.reason
-                  : isAPIError(error)
-                    ? 'authentication_denied'
-                    : 'unexpected_failure',
+                  : stateLost
+                    ? 'state_lost'
+                    : 'authentication_denied',
               });
               if (destination)
                 return completeResponse(
@@ -414,6 +554,11 @@ export const oauth = () =>
                   destination,
                   '-'
                 );
+              if (stateLost)
+                return ctx.redirect(`${PUBLIC_ORIGIN}${OAUTH_STATE_LOST_PAGE}`);
+              // `parseState` answers with a redirect into these headers, and
+              // its `Location` would otherwise ride on the 401.
+              ctx.responseHeaders?.delete('location');
               throw authenticationDenied();
             }
           }
@@ -450,12 +595,14 @@ export const oauth = () =>
             const parsed = oauthResultSchema.safeParse(
               JSON.parse(result.value)
             );
-            // Both records were consumed above, so a rejection here is
-            // unrecoverable — the user cannot retry, only sign in again. Every
-            // envelope the callback can store has to be a branch of the union,
-            // including the two-factor challenge, which carries
-            // `twoFactorRedirect` and no `success`.
-            if (!parsed.success) throw authenticationDenied();
+            // Both records are consumed, so a rejection is unrecoverable: every
+            // envelope the callback stores has to be a branch of the union.
+            if (!parsed.success) {
+              logSanitized('error', { msg: 'oauth.result.unrecognised' });
+              throw authenticationDenied();
+            }
+            // The same denial the direct callback answers, so both modes share one failure envelope.
+            if (parsed.data.success === false) throw authenticationDenied();
             return ctx.json(parsed.data);
           }
         ),

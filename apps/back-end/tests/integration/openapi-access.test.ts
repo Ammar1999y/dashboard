@@ -95,6 +95,56 @@ describe('cost', () => {
   });
 });
 
+describe('the statuses it publishes are the ones the routes answer', () => {
+  type Operation = {
+    responses: Record<string, { description?: string } | undefined>;
+  };
+  type Document = { paths: Record<string, Record<string, Operation>> };
+
+  async function operation(path: string, method: string): Promise<Operation> {
+    const response = await app.handle(authedRequest(admin(), URL_PATH));
+    const document = (await response.json()) as Document;
+    const found = document.paths[path]?.[method];
+    if (!found) throw new Error(`${method} ${path} is not in the document`);
+    return found;
+  }
+
+  test('a route that answers a malformed id with 404 publishes no 422', async () => {
+    for (const [method, url, path] of [
+      ['GET', '/api/dash/media/files/nope', '/api/dash/media/files/{id}'],
+      [
+        'POST',
+        '/api/dash/users/nope/two-factor/reset',
+        '/api/dash/users/{id}/two-factor/reset',
+      ],
+    ] as const) {
+      const response = await app.handle(
+        authedRequest(admin(), url, { method })
+      );
+
+      expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
+      const published = await operation(path, method.toLowerCase());
+      expect(Object.keys(published.responses)).toContain('404');
+      expect(Object.keys(published.responses)).not.toContain('422');
+    }
+  });
+
+  test('re-auth answers a failed body schema with the 401 it publishes for a wrong password', async () => {
+    const response = await app.handle(
+      authedRequest(admin(), '/api/dash/auth/reauth', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: '' }),
+      })
+    );
+
+    expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+    const published = await operation('/api/dash/auth/reauth', 'post');
+    expect(Object.keys(published.responses)).not.toContain('422');
+    expect(published.responses['401']?.description).toContain('password');
+  });
+});
+
 describe('what the document names', () => {
   test('it does not name the routes that no longer exist', async () => {
     const body = await bodyOf(

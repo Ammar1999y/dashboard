@@ -28,6 +28,13 @@ export class GoogleIdentityDenied extends APIError {
       | 'link_removed'
       | 'subject_collision'
       | 'link_failed'
+      | 'token_exchange_refused'
+      | 'id_token_invalid'
+      | 'user_cancelled'
+      | 'authorization_error'
+      | 'issuer_mismatch'
+      | 'state_replayed'
+      | 'code_missing'
   ) {
     super(HTTP_STATUS.UNAUTHORIZED, {
       code: CUSTOM_AUTH_CODE,

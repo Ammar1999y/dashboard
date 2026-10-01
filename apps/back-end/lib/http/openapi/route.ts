@@ -31,14 +31,15 @@ export function openApiArtifactFile(): string {
  * `ROUTES` is still being built.
  */
 export function memoiseOpenApiDocument(
-  getManifest: () => readonly RouteManifestEntry[]
+  getManifest: () => readonly RouteManifestEntry[],
+  getWithheld: () => readonly RouteManifestEntry[] = () => []
 ): () => JsonSchema {
   let built: { document: JsonSchema } | { error: unknown } | null = null;
 
   return () => {
     built ??= (() => {
       try {
-        return { document: openApiDocument(getManifest()) };
+        return { document: openApiDocument(getManifest(), getWithheld()) };
       } catch (error) {
         return { error };
       }
@@ -49,11 +50,6 @@ export function memoiseOpenApiDocument(
   };
 }
 
-/**
- * The build artefact, or `null` when there is none — normal in development and
- * under test, where regenerating from the live table makes an edit visible
- * without a build step.
- */
 function prebuiltDocument(): JsonSchema | null {
   const file = openApiArtifactFile();
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from this module's own location, never from input
@@ -66,15 +62,19 @@ function prebuiltDocument(): JsonSchema | null {
   return parsed;
 }
 
+/**
+ * Outside production the artefact is never read: one left behind by an earlier
+ * build would otherwise hide every later route and schema edit.
+ */
 export function resolveOpenApiDocument(
-  prebuilt: JsonSchema | null,
+  readPrebuilt: () => JsonSchema | null,
   generate: () => JsonSchema,
   production = process.env.NODE_ENV === 'production'
 ): JsonSchema {
+  if (!production) return generate();
+  const prebuilt = readPrebuilt();
   if (prebuilt) return prebuilt;
-  if (production)
-    throw new Error(`${OPENAPI_ARTIFACT_PATH} is required in production.`);
-  return generate();
+  throw new Error(`${OPENAPI_ARTIFACT_PATH} is required in production.`);
 }
 
 /**
@@ -89,12 +89,11 @@ export function resolveOpenApiDocument(
  * the spec.
  */
 export function openApiRouteHandler(
-  getManifest: () => readonly RouteManifestEntry[]
+  getManifest: () => readonly RouteManifestEntry[],
+  getWithheld: () => readonly RouteManifestEntry[] = () => []
 ): Handler {
-  const generate = memoiseOpenApiDocument(getManifest);
-  // Not `??=` on the document: "no artefact" is a legitimate resolution, and a
-  // nullish assignment would re-stat the filesystem on every request.
-  let resolved: { document: JsonSchema } | null = null;
+  const generate = memoiseOpenApiDocument(getManifest, getWithheld);
+  let resolved: JsonSchema | null = null;
 
   return async (ctx) => {
     // The document maps every path, method and parameter this server serves,
@@ -102,9 +101,7 @@ export function openApiRouteHandler(
     // resolved, so a refused caller costs a session lookup and nothing else.
     await requireDashboardAccess(ctx);
 
-    resolved ??= {
-      document: resolveOpenApiDocument(prebuiltDocument(), generate),
-    };
-    return apiRaw({ body: resolved.document });
+    resolved ??= resolveOpenApiDocument(prebuiltDocument, generate);
+    return apiRaw({ body: resolved });
   };
 }

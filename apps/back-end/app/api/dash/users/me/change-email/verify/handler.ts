@@ -8,15 +8,13 @@ import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
 import { verifyOtpOrAutoVerify } from '@/lib/otp/verify';
+import { refreshSessionCookies } from '@/lib/permissions/checker';
 import {
   enforceOtpVerifyQuota,
   enforceRateLimit,
   userIdentifier,
 } from '@/lib/rate-limit';
-import {
-  commitEmailChange,
-  refreshSessionCookies,
-} from '@/lib/users/contact-change';
+import { commitEmailChange } from '@/lib/users/contact-change';
 import { userMsg } from '@/lib/users/messages';
 
 /**

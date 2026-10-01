@@ -20,6 +20,8 @@
  *    `SQLITE_ENABLE_UPDATE_DELETE_LIMIT`. Without it, rewrite as
  *    `DELETE FROM t WHERE key IN (SELECT key FROM t WHERE ... LIMIT ?)`.
  * 8. `close(true)` finalizes outstanding statements; see `close` below.
+ * 9. A lock conflict throws an error whose `code` starts `SQLITE_BUSY`
+ *    (`isSqliteBusy`).
  *
  * Callers use anonymous `?` placeholders, never `?1`: `better-sqlite3` rejects
  * numbered placeholders bound positionally, so they would pin this driver.
@@ -59,6 +61,17 @@ export interface SqliteConnection {
    */
   transactionImmediate(fn: () => void): () => void;
   close(): void;
+}
+
+/** A lock conflict: another connection holds what the statement needs. */
+export function isSqliteBusy(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    /^SQLITE_BUSY(?:_|$)/.test(error.code)
+  );
 }
 
 export function openConnection(path: string): SqliteConnection {

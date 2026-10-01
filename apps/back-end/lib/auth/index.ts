@@ -9,8 +9,11 @@ import {
   USER_ADDITIONAL_FIELDS,
 } from '@app/shared/auth-fields';
 
+import { turnstileSecretKey } from '@/lib/captcha';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
+
+import { logSanitized } from '@/utils/log';
 
 import { localiseAuthErrors } from './errors';
 import { oauth } from './oauth/plugin';
@@ -19,9 +22,53 @@ import { consumePasswordProof } from './password/proof';
 import { passwordless } from './passwordless';
 import { enforcePathPolicy } from './path-policy';
 import { reauthentication } from './reauth/plugin';
+import { sessionCookieCache } from './session/cookie-cache';
 import { sessionDatabaseHooks } from './session/hooks';
 import { authAdapterOptions } from './transaction';
 import { twoFactorPlugins } from './two-factor/plugin';
+
+/**
+ * Refusals the library logs at `error` with the caller's text and no code, so
+ * only the prefix identifies them: the origin and CSRF checks
+ * (`better-auth/dist/api/middlewares/origin-check.mjs`).
+ */
+const CLIENT_REFUSAL_PREFIXES = [
+  'Invalid origin:',
+  'Invalid callbackURL:',
+  'Invalid redirectURL:',
+  'Invalid errorCallbackURL:',
+  'Invalid newUserCallbackURL:',
+  'Blocked cross-site navigation login attempt',
+] as const;
+
+/**
+ * `parseState` logs this for every failure, expired and replayed callbacks and
+ * database exceptions alike. Only a `StateError` is a client refusal, and the
+ * class is not exported, so it is recognised by the codes it throws
+ * (`better-auth/dist/state.mjs`); `state_generation_error` is a fault.
+ */
+const STATE_PARSE_FAILURE_PREFIX = 'Failed to parse state';
+const STATE_REFUSAL_CODES: ReadonlySet<unknown> = new Set([
+  'state_not_found',
+  'state_mismatch',
+  'state_invalid',
+  'state_security_mismatch',
+]);
+
+function isStateRefusal(logged: unknown): boolean {
+  return (
+    typeof logged === 'object' &&
+    logged !== null &&
+    STATE_REFUSAL_CODES.has(Reflect.get(logged, 'code'))
+  );
+}
+
+function isClientRefusal(message: string, args: readonly unknown[]): boolean {
+  return (
+    CLIENT_REFUSAL_PREFIXES.some((prefix) => message.startsWith(prefix)) ||
+    (message.startsWith(STATE_PARSE_FAILURE_PREFIX) && isStateRefusal(args[0]))
+  );
+}
 
 export const auth = betterAuth({
   // The parsed value, not the environment variable: the CORS allow-list entry
@@ -33,10 +80,8 @@ export const auth = betterAuth({
     autoSignIn: false,
     password: {
       hash: hashPassword,
-      // NOT a password check — the before hook already ran the real one. This
-      // only confirms that it did, for THIS request and THIS account row.
-      // `PASSWORD_PROOF_PATHS` must cover every exposed library password check;
-      // an omitted path fails closed because no accepted proof is minted.
+      // NOT a password check: it confirms the `before` hook ran the real one
+      // for this request and account row. See `PASSWORD_PROOF_PATHS`.
       verify: async ({ hash, password }) =>
         consumePasswordProof(hash, password),
     },
@@ -50,15 +95,14 @@ export const auth = betterAuth({
   advanced: {
     database: {
       generateId: false,
+      // Without it the adapter's fallback join `console.error`s a failed query
+      // raw, bound parameters included. Needs the relation keys in `db/schema.ts`.
+      joins: true,
       // Custom OAuth stores identities only; unused generic token and image columns are absent.
       validateSchema: false,
     },
-    // Better Auth otherwise resolves the client IP from `x-forwarded-for`,
-    // which is client-controllable whenever the origin is directly reachable.
-    // Pinned to the trusted edge headers the rest of the app uses, so the IP in
-    // session metadata cannot be forged. IPv6 is bucketed by /64, matching
-    // `ipBucket`. The development fallback in `getClientIp` does NOT apply:
-    // Better Auth reads the headers itself, so it resolves no IP locally.
+    // Otherwise `x-forwarded-for`, which a client controls. The subnet matches
+    // `ipBucket`; `getClientIp`'s development fallback does not apply here.
     //
     // TODO(proxy-trust): the header is trusted on syntax alone — see
     // `TRUSTED_IP_HEADERS` in `lib/http/client-ip.ts`.
@@ -69,7 +113,24 @@ export const auth = betterAuth({
   },
 
   logger: {
-    disabled: true,
+    // `warn` is per-request client-failure chatter (`User not found`,
+    // `Invalid password`), not faults.
+    level: 'error',
+    log: (level, message, ...args: unknown[]) => {
+      logSanitized(
+        level === 'debug' || level === 'info'
+          ? 'log'
+          : isClientRefusal(message, args)
+            ? 'warn'
+            : level,
+        { msg: 'betterAuth', message, args }
+      );
+    },
+  },
+  // Anything but an `APIError` reaches `app.ts`'s catch and `logSanitized`;
+  // Better Call would otherwise print it raw, bound query parameters included.
+  onAPIError: {
+    throw: true,
   },
 
   session: {
@@ -99,8 +160,7 @@ export const auth = betterAuth({
     modelName: 'accounts',
     accountLinking: { enabled: false },
   },
-  // The adapter resolves a model as `schema[modelName]`, so this string and the
-  // export in `db/schema.ts` must stay identical.
+  // Must equal the `db/schema.ts` export name: the adapter resolves `schema[modelName]`.
   verification: {
     modelName: 'verifications',
   },
@@ -108,13 +168,8 @@ export const auth = betterAuth({
   plugins: [
     captcha({
       provider: 'cloudflare-turnstile',
-      secretKey:
-        process.env.NODE_ENV === 'development'
-          ? '1x0000000000000000000000000000000AA'
-          : (process.env.TURNSTILE_SECRET_KEY ?? ''),
-      // Matched EXACTLY against the path with the base path stripped: an entry
-      // covers one path, so `'/sign-in'` protects nothing and a prefix has to
-      // be written `'/sign-in/*'`.
+      secretKey: turnstileSecretKey() ?? '',
+      // Exact match: `'/sign-in'` protects nothing; a prefix is `'/sign-in/*'`.
       // TODO: add the proper endpoints — and write each one in full.
       endpoints: ['/sign-in/email'],
     }),
@@ -123,6 +178,7 @@ export const auth = betterAuth({
     reauthentication(),
     // Empty unless a method is configured.
     ...twoFactorPlugins,
+    sessionCookieCache(),
     openAPI({ disableDefaultReference: true }),
   ],
 });

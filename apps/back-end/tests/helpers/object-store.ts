@@ -37,6 +37,8 @@ import type {
   PutObjectCommandInput,
 } from '@aws-sdk/client-s3';
 
+import { compareCodeUnits } from '@/utils/text';
+
 interface CommandInputs {
   PutObject: PutObjectCommandInput;
   DeleteObject: DeleteObjectCommandInput;
@@ -139,7 +141,7 @@ function storeKeys(bucket: string): string[] {
   const keys: string[] = [];
   for (const id of objects.keys())
     if (id.startsWith(prefix)) keys.push(id.slice(prefix.length));
-  return keys.toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+  return keys.toSorted(compareCodeUnits);
 }
 
 /** The headers the stub holds for one object, or `null`. */

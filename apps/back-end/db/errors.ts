@@ -71,6 +71,19 @@ export function isInvalidTextEncoding(e: unknown): boolean {
   return hasSqlState(e, '22021');
 }
 
+/**
+ * PostgreSQL `deadlock_detected`: the transaction was aborted to break a lock
+ * cycle, and a retry normally succeeds.
+ */
+export function isDeadlock(e: unknown): boolean {
+  return hasSqlState(e, '40P01');
+}
+
+/** PostgreSQL `query_canceled`: a statement exceeded `statement_timeout`. */
+export function isStatementTimeout(e: unknown): boolean {
+  return hasSqlState(e, '57014');
+}
+
 export function getConstraintName(e: unknown): string {
   const direct = dbErrorField(e, 'constraint');
   if (typeof direct === 'string') return direct;

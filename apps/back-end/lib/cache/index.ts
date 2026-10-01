@@ -11,12 +11,12 @@
  *
  * ⚠️ SCAFFOLD: no call site uses this yet. Before the first one adopts it,
  * decide and write down the key namespace grammar, the total on-disk budget and
- * what enforces it, the invalidation trigger, and whether decoded values need
- * schema validation instead of a bare `JSON.parse`. A per-value size cap is
+ * what enforces it, and the invalidation trigger. A per-value size cap is
  * enforced; a total-size cap and an eviction policy are NOT.
  */
 import type { Migration } from '@/lib/sqlite/database';
 import type { SweepResult } from '@/lib/sqlite/sweep';
+import type * as z from 'zod';
 
 import { CACHE_DB_PATH } from '@/lib/env.server';
 import { lazyStore } from '@/lib/sqlite/store';
@@ -86,16 +86,22 @@ const decoder = new TextDecoder();
 const MAX_VALUE_BYTES = 512 * 1024;
 
 /**
- * Null on a miss, an expired entry, or any store failure: a cache that throws
- * would need a try/catch at every call site to stay invisible.
+ * Null on a miss, an expired entry, a value `schema` rejects, or any store
+ * failure: a cache that throws would need a try/catch at every call site to
+ * stay invisible.
  *
  * @knipignore
  */
-export function cacheGet<Value>(key: string): Value | null {
+export function cacheGet<Value>(
+  key: string,
+  schema: z.ZodType<Value>
+): Value | null {
   try {
     const row = getStore().read.get<{ value: Uint8Array }>(key, Date.now());
     if (!row) return null;
-    return JSON.parse(decoder.decode(row.value)) as Value;
+    const decoded: unknown = JSON.parse(decoder.decode(row.value));
+    const parsed = schema.safeParse(decoded);
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }

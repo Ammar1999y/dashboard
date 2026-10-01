@@ -8,6 +8,8 @@ export const userMsg = {
   roleNotFound: 'الدور غير موجود أو غير متاح',
   customRoleNeedsPermissions: MSG_CUSTOM_ROLE_NEEDS_PERMISSIONS,
   currentPasswordIncorrect: 'كلمة المرور الحالية غير صحيحة',
+  accountTemporarilyLocked:
+    'تم قفل الحساب مؤقتاً بسبب محاولات تسجيل دخول فاشلة متكررة. حاول مرة أخرى لاحقاً',
   passwordChanged: 'تم تغيير كلمة المرور بنجاح',
   emailChanged: 'تم تغيير البريد الإلكتروني بنجاح',
   newEmailSameAsCurrent: 'البريد الإلكتروني الجديد مطابق للحالي',

@@ -2,7 +2,7 @@
  * Framework-independent post-response work. Audit writes remain transactional
  * because losing them after a committed mutation would break the audit trail.
  */
-import { errorClassOf, logLine } from '@/utils/log';
+import { errorClassOf, logLine, serializeForLog } from '@/utils/log';
 
 type AfterResponseTask = () => void | Promise<void>;
 
@@ -16,12 +16,24 @@ interface RequestSummary {
 /** The raw request is the framework-independent handle shared by both stages. */
 const queues = new WeakMap<Request, AfterResponseTask[]>();
 
+/**
+ * Requests whose queue has run, with their log path. Work that queues itself
+ * after that point (an issuance still running when its response went out) would
+ * sit in a queue nobody runs, so it is run at once instead.
+ */
+const flushed = new WeakMap<Request, string>();
+
 const inFlight = new Set<Promise<void>>();
 
 export function enqueueAfterResponse(
   request: Request,
   task: AfterResponseTask
 ): void {
+  const path = flushed.get(request);
+  if (path !== undefined) {
+    track([task], path);
+    return;
+  }
   const queue = queues.get(request);
   if (queue) queue.push(task);
   else queues.set(request, [task]);
@@ -35,9 +47,16 @@ export function runAfterResponse(
   const queue = queues.get(request) ?? [];
   queues.delete(request);
 
-  logRequest(summary);
+  // The client's path, so bounded and stripped like any caller string.
+  const path = serializeForLog(summary.path);
+  logRequest({ ...summary, path });
+  flushed.set(request, path);
   if (queue.length === 0) return;
 
+  track(queue, path);
+}
+
+function track(queue: AfterResponseTask[], path: string): void {
   const settled = (async () => {
     for (const task of queue) {
       try {
@@ -45,7 +64,7 @@ export function runAfterResponse(
       } catch (error) {
         logLine('error', {
           msg: 'after-response task failed',
-          path: summary.path,
+          path,
           errorClass: errorClassOf(error),
         });
       }

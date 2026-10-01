@@ -267,6 +267,66 @@ describe('registering a passkey', () => {
     expect(rows).toHaveLength(0);
   });
 
+  test('reads the grant from the query string the stock client sends, the body first', async () => {
+    const user = await seedUser();
+    const signedIn = await signIn(user);
+    const granted = await call(
+      'POST',
+      '/api/auth/two-factor/passkey/grant',
+      { password: user.password },
+      signedIn.cookie
+    );
+    const grant = ((await granted.json()) as { data?: { grant?: string } }).data
+      ?.grant;
+    if (!grant) throw new Error('no grant minted');
+    const optionsResponse = await call(
+      'GET',
+      '/api/auth/passkey/generate-register-options',
+      undefined,
+      signedIn.cookie
+    );
+    const options = (await optionsResponse.json()) as { challenge: string };
+    const jar = [
+      signedIn.cookie,
+      cookieHeader(optionsResponse.headers.getSetCookie()),
+    ]
+      .filter(Boolean)
+      .join('; ');
+    const ceremony = buildRegistrationResponse({
+      challenge: options.challenge,
+      origin: PUBLIC_ORIGIN,
+      rpId: RP_ID,
+      userVerified: true,
+    });
+
+    const withQuery = `/api/auth/passkey/verify-registration?grant=${encodeURIComponent(grant)}`;
+    const credential = () =>
+      db
+        .select({ id: passkeys.id })
+        .from(passkeys)
+        .where(eq(passkeys.credentialID, ceremony.credentialId));
+
+    const bodyWins = await call(
+      'POST',
+      withQuery,
+      { response: ceremony.response, grant: 'not-the-grant' },
+      jar
+    );
+    expect(bodyWins.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+    expect(await credential()).toHaveLength(0);
+
+    // The same grant and ceremony: the refusal spent neither. `addPasskey`
+    // writes this body itself, so `fetchOptions.query` is where it puts the grant.
+    const fromQuery = await call(
+      'POST',
+      withQuery,
+      { response: ceremony.response },
+      jar
+    );
+    expect(fromQuery.status).toBe(HTTP_STATUS.OK);
+    expect(await credential()).toHaveLength(1);
+  });
+
   test('refuses an authenticator that did not verify the user', async () => {
     // ⚠️ The SIGNED bit, not the requested option. The plugin's own
     // `/passkey/verify-registration` passes `requireUserVerification: false`, so
@@ -685,6 +745,50 @@ describe('deleting a passkey', () => {
       .from(trustedDevices)
       .where(eq(trustedDevices.userId, user.userId));
     expect(trust).toHaveLength(0);
+  });
+
+  test('reads the grant from the body, never the query string', async () => {
+    const user = await seedUser();
+    const { cookie, grant } = await grantFor(user);
+    if (!grant) throw new Error('no grant minted');
+    await givePasskey(user.userId, 'harness-query-grant-credential');
+    await db.insert(twoFactorMethods).values({
+      userId: user.userId,
+      method: 'totp',
+    });
+    await db.insert(twoFactorCredentials).values({
+      userId: user.userId,
+      secret: await symmetricEncrypt({
+        key: process.env.BETTER_AUTH_SECRET ?? '',
+        data: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+      }),
+      backupCodes: await symmetricEncrypt({
+        key: process.env.BETTER_AUTH_SECRET ?? '',
+        data: '[]',
+      }),
+      verified: true,
+    });
+    const id = await passkeyRowId('harness-query-grant-credential');
+    const remaining = () =>
+      db.select({ id: passkeys.id }).from(passkeys).where(eq(passkeys.id, id));
+
+    const fromQuery = await call(
+      'POST',
+      `/api/auth/passkey/delete-passkey?grant=${encodeURIComponent(grant)}`,
+      { id },
+      cookie
+    );
+    expect(fromQuery.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+    expect(await remaining()).toHaveLength(1);
+
+    const fromBody = await call(
+      'POST',
+      '/api/auth/passkey/delete-passkey',
+      { id, grant },
+      cookie
+    );
+    expect(fromBody.status).toBe(HTTP_STATUS.OK);
+    expect(await remaining()).toHaveLength(0);
   });
 
   test("another user's passkey answers as if it did not exist", async () => {

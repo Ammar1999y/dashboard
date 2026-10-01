@@ -6,7 +6,7 @@
  * Each is asserted with its opposite, which is what proves it is a rule rather
  * than a blanket refusal.
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
 import { and, eq } from 'drizzle-orm';
@@ -22,17 +22,22 @@ import {
   verifications,
   verificationSessions,
 } from '@/db/schema';
-import { symmetricEncrypt } from 'better-auth/crypto';
+import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 
 import { HTTP_STATUS } from '@app/shared/api-messages';
 
 import { auth } from '@/lib/auth';
-import { otpMsg } from '@/lib/auth/messages';
+import { otpMsg, twoFactorMsg } from '@/lib/auth/messages';
+import { totpEnrolmentKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { hashOtpCode } from '@/lib/otp/hash';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { flooredBudget } from '../helpers/otp';
+import { resetRateLimits } from '../helpers/rate-limit';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -71,6 +76,13 @@ function cookieHeader(setCookie: string[]): string {
     .map((value) => value.split(';', 1)[0] ?? '')
     .filter((pair) => pair.length > 0 && !pair.endsWith('='))
     .join('; ');
+}
+
+async function expectEnrolmentExpired(response: Response): Promise<void> {
+  expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
+  expect(((await response.json()) as { message?: string }).message).toBe(
+    twoFactorMsg.totpEnrolmentExpired
+  );
 }
 
 function call(
@@ -143,9 +155,7 @@ async function methodsOf(userId: string) {
     .where(eq(twoFactorMethods.userId, userId));
   // Explicit comparator: these are ASCII method names, so a locale-aware
   // collation would be the surprise. Same rule the other suites follow.
-  return rows
-    .map((row) => row.method)
-    .toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+  return rows.map((row) => row.method).toSorted(compareCodeUnits);
 }
 
 beforeAll(async () => {
@@ -155,6 +165,10 @@ beforeAll(async () => {
   // The recovery second factor is delivered by SMS here.
   scriptEgress('apis.deewan.sa', () => Response.json({ success: true }));
 });
+
+// Nearly every test signs in, and a fast run fits more of them into one per-IP
+// window than the sign-in budget allows.
+beforeEach(resetRateLimits);
 
 describe('removing one method', () => {
   test('is allowed while another remains, and refused for the last', async () => {
@@ -282,6 +296,185 @@ describe('removing one method', () => {
     );
     expect(cleanup.status).toBe(HTTP_STATUS.OK);
     expect(await methodsOf(user.userId)).toEqual(['totp']);
+  });
+
+  test('a removed authenticator cannot be re-confirmed without a fresh start', async () => {
+    // Removal kept the sessions and the encrypted secret, and `confirm` takes no
+    // password — so whoever held a live session and the old authenticator app
+    // turned TOTP back on and signed the owner out of every other device.
+    const user = await seedUser({
+      phoneNumber: uniquePhone(),
+      phoneNumberVerified: true,
+    });
+    const cookie = await signInCookie(user, false);
+    const oldSecret = await enrolTotpBySql(user.userId);
+    await enrol(user.userId, 'otp', 'sms');
+
+    const removed = await call(
+      'POST',
+      '/api/auth/two-factor/methods/disable',
+      { method: 'totp', password: user.password },
+      cookie
+    );
+    expect(removed.status).toBe(HTTP_STATUS.OK);
+
+    // The secret goes too, not only the pending start: with it kept, a start
+    // row left over from before would let the old app confirm again.
+    const [cleared] = await db
+      .select({
+        secret: twoFactorCredentials.secret,
+        verified: twoFactorCredentials.verified,
+      })
+      .from(twoFactorCredentials)
+      .where(eq(twoFactorCredentials.userId, user.userId));
+    expect(cleared?.verified).toBe(false);
+    expect(
+      await symmetricDecrypt({
+        key: BETTER_AUTH_SECRET,
+        data: cleared?.secret ?? '',
+      })
+    ).not.toBe(oldSecret);
+
+    const { code: oldCode } = await auth.api.generateTOTP({
+      body: { secret: oldSecret },
+    });
+    const reconfirmed = await call(
+      'POST',
+      '/api/auth/two-factor/totp/confirm',
+      { code: oldCode },
+      cookie
+    );
+    await expectEnrolmentExpired(reconfirmed);
+    expect(await methodsOf(user.userId)).toEqual(['otp']);
+
+    // The opposite: after the password-gated `start`, the NEW secret confirms.
+    const started = await call(
+      'POST',
+      '/api/auth/two-factor/totp/start',
+      { password: user.password },
+      cookie
+    );
+    expect(started.status).toBe(HTTP_STATUS.OK);
+    const [credential] = await db
+      .select({ secret: twoFactorCredentials.secret })
+      .from(twoFactorCredentials)
+      .where(eq(twoFactorCredentials.userId, user.userId));
+    if (!credential) throw new Error('start stored no TOTP credential');
+    const { code: newCode } = await auth.api.generateTOTP({
+      body: {
+        secret: await symmetricDecrypt({
+          key: BETTER_AUTH_SECRET,
+          data: credential.secret,
+        }),
+      },
+    });
+    const confirmed = await call(
+      'POST',
+      '/api/auth/two-factor/totp/confirm',
+      { code: newCode },
+      cookie
+    );
+    expect(confirmed.status).toBe(HTTP_STATUS.OK);
+    expect(await methodsOf(user.userId)).toEqual(['otp', 'totp']);
+  });
+});
+
+describe('confirming TOTP with no start pending', () => {
+  /**
+   * The placeholder a removal or a backup-code-only row leaves is random, but
+   * `confirm` has no lockout, so a session holder could guess against it. The
+   * placeholder's OWN code is the strongest guess there is.
+   */
+  async function placeholderCode(userId: string): Promise<string> {
+    const [credential] = await db
+      .select({ secret: twoFactorCredentials.secret })
+      .from(twoFactorCredentials)
+      .where(eq(twoFactorCredentials.userId, userId));
+    if (!credential) throw new Error('no TOTP credential row');
+    const { code } = await auth.api.generateTOTP({
+      body: {
+        secret: await symmetricDecrypt({
+          key: BETTER_AUTH_SECRET,
+          data: credential.secret,
+        }),
+      },
+    });
+    return code;
+  }
+
+  test('is refused after a removal, even with the placeholder’s own code', async () => {
+    const user = await seedUser({
+      phoneNumber: uniquePhone(),
+      phoneNumberVerified: true,
+    });
+    const cookie = await signInCookie(user, false);
+    await enrolTotpBySql(user.userId);
+    await enrol(user.userId, 'otp', 'sms');
+
+    const removed = await call(
+      'POST',
+      '/api/auth/two-factor/methods/disable',
+      { method: 'totp', password: user.password },
+      cookie
+    );
+    expect(removed.status).toBe(HTTP_STATUS.OK);
+
+    const confirmed = await call(
+      'POST',
+      '/api/auth/two-factor/totp/confirm',
+      { code: await placeholderCode(user.userId) },
+      cookie
+    );
+    await expectEnrolmentExpired(confirmed);
+    expect(await methodsOf(user.userId)).toEqual(['otp']);
+  });
+
+  test('is refused on a backup-code-only row, even with the placeholder’s own code', async () => {
+    const user = await seedUser();
+    const cookie = await signInCookie(user, false);
+
+    const generated = await call(
+      'POST',
+      '/api/auth/two-factor/generate-backup-codes',
+      { password: user.password },
+      cookie
+    );
+    expect(generated.status).toBe(HTTP_STATUS.OK);
+
+    const confirmed = await call(
+      'POST',
+      '/api/auth/two-factor/totp/confirm',
+      { code: await placeholderCode(user.userId) },
+      cookie
+    );
+    await expectEnrolmentExpired(confirmed);
+    expect(await methodsOf(user.userId)).toEqual([]);
+  });
+
+  test('is refused once the start has expired, even with the new secret’s code', async () => {
+    const user = await seedUser();
+    const cookie = await signInCookie(user, false);
+
+    const started = await call(
+      'POST',
+      '/api/auth/two-factor/totp/start',
+      { password: user.password },
+      cookie
+    );
+    expect(started.status).toBe(HTTP_STATUS.OK);
+    await db
+      .update(verifications)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(verifications.identifier, totpEnrolmentKey(user.userId)));
+
+    const confirmed = await call(
+      'POST',
+      '/api/auth/two-factor/totp/confirm',
+      { code: await placeholderCode(user.userId) },
+      cookie
+    );
+    await expectEnrolmentExpired(confirmed);
+    expect(await methodsOf(user.userId)).toEqual([]);
   });
 });
 
@@ -543,61 +736,69 @@ describe('password recovery against a second factor', () => {
     });
   }
 
-  test('is refused when every factor is an OTP to the recovery contact', async () => {
-    const user = await seedUser();
-    // The collapse: recovery reaches the mailbox, and so does the only second
-    // factor. Whoever holds that mailbox holds both — and requiring the second
-    // factor here would not help, because they can prove it too.
-    await enrol(user.userId, 'otp', 'email');
+  test(
+    'is refused when every factor is an OTP to the recovery contact',
+    async () => {
+      const user = await seedUser();
+      // The collapse: recovery reaches the mailbox, and so does the only second
+      // factor. Whoever holds that mailbox holds both — and requiring the second
+      // factor here would not help, because they can prove it too.
+      await enrol(user.userId, 'otp', 'email');
 
-    const response = await attemptReset(user);
-    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
+      const response = await attemptReset(user);
+      expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
 
-    // The password is UNCHANGED, which is the property: the refusal is what
-    // keeps the account two-factor.
-    const stillOld = await call('POST', '/api/auth/sign-in/email', {
-      email: user.email,
-      password: user.password,
-    });
-    expect(stillOld.status).toBe(HTTP_STATUS.OK);
-  });
+      // The password is UNCHANGED, which is the property: the refusal is what
+      // keeps the account two-factor.
+      const stillOld = await call('POST', '/api/auth/sign-in/email', {
+        email: user.email,
+        password: user.password,
+      });
+      expect(stillOld.status).toBe(HTTP_STATUS.OK);
+    },
+    flooredBudget(2)
+  );
 
-  test('does not write the password on the recovery code alone', async () => {
-    // ⚠️ The finding. Recovery by email, second factor by SMS: the possessions
-    // are disjoint, so the reset is not REFUSED — but it also may not proceed on
-    // the mailbox alone. It answers a grant, and the password is untouched until
-    // the surviving factor is proven against it.
-    const user = await seedUser({
-      phoneNumber: uniquePhone(),
-      phoneNumberVerified: true,
-    });
-    await enrol(user.userId, 'otp', 'sms');
+  test(
+    'does not write the password on the recovery code alone',
+    async () => {
+      // ⚠️ The finding. Recovery by email, second factor by SMS: the possessions
+      // are disjoint, so the reset is not REFUSED — but it also may not proceed on
+      // the mailbox alone. It answers a grant, and the password is untouched until
+      // the surviving factor is proven against it.
+      const user = await seedUser({
+        phoneNumber: uniquePhone(),
+        phoneNumberVerified: true,
+      });
+      await enrol(user.userId, 'otp', 'sms');
 
-    const response = await attemptReset(user);
-    expect(response.status).toBe(HTTP_STATUS.OK);
-    const body = (await response.json()) as {
-      data?: {
-        reset?: boolean;
-        twoFactorRequired?: boolean;
-        grant?: string;
-        options?: { id: string }[];
+      const response = await attemptReset(user);
+      expect(response.status).toBe(HTTP_STATUS.OK);
+      const body = (await response.json()) as {
+        data?: {
+          reset?: boolean;
+          twoFactorRequired?: boolean;
+          grant?: string;
+          options?: { id: string }[];
+        };
       };
-    };
-    expect(body.data?.reset).toBe(false);
-    expect(body.data?.twoFactorRequired).toBe(true);
-    expect(body.data?.grant).toBeString();
-    expect(body.data?.options?.map((option) => option.id)).toEqual([
-      'otp:phone',
-    ]);
+      expect(body.data?.reset).toBe(false);
+      expect(body.data?.twoFactorRequired).toBe(true);
+      expect(body.data?.grant).toBeString();
+      expect(body.data?.options?.map((option) => option.id)).toEqual([
+        'otp:phone',
+      ]);
 
-    // The old password still works, which is the property: a mailbox alone did
-    // not rewrite it.
-    const stillOld = await call('POST', '/api/auth/sign-in/email', {
-      email: user.email,
-      password: user.password,
-    });
-    expect(stillOld.status).toBe(HTTP_STATUS.OK);
-  });
+      // The old password still works, which is the property: a mailbox alone did
+      // not rewrite it.
+      const stillOld = await call('POST', '/api/auth/sign-in/email', {
+        email: user.email,
+        password: user.password,
+      });
+      expect(stillOld.status).toBe(HTTP_STATUS.OK);
+    },
+    flooredBudget(2)
+  );
 
   test('completes only against a proven second factor', async () => {
     const user = await seedUser();

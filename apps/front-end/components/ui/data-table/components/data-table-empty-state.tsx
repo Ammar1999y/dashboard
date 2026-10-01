@@ -10,7 +10,7 @@ const DataTableEmptyState = memo(() => {
   return (
     <TableRow className='max-w-[95vw] justify-center fade-in'>
       <TableCell className='min-h-24 text-center'>
-        <div className='flex flex-col items-center justify-center py-6 text-foreground space-y-6'>
+        <div className='flex flex-col items-center justify-center gap-6 py-6 text-foreground'>
           <EmptyIcon />
           <span>{NO_RESULTS_MESSAGE}</span>
         </div>

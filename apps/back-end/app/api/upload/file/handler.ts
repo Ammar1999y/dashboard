@@ -19,20 +19,18 @@ import { isVisibilityEnabled } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 /**
- * Authorised against the resource the file is FOR, not a permission of its
- * own: this endpoint owns no data, and a standalone "may upload" grant would
- * let its holder attach files to a resource they cannot otherwise touch. A
- * file is attached while creating a record or while editing one.
+ * Authorised against the resource the file is FOR: a standalone "may upload"
+ * grant would let its holder attach files to a resource they cannot otherwise
+ * touch.
  */
 const UPLOAD_ACTIONS = ['create', 'edit'] as const;
 
 /**
- * Read from the QUERY STRING because the permission check has to run before
- * `readFormData()`, and a form field is only readable by parsing the body this
- * route guards. `Object.hasOwn`, because a bare `in` accepts `__proto__`.
+ * From the QUERY STRING: the permission check must run before `readFormData()`
+ * parses the body it guards. `Object.hasOwn`, because `in` accepts `__proto__`.
  *
- * ⚠️ Call it only after the session check: before it, an unauthenticated caller
- * would get 400 for an unknown resource and 401 for a real page name.
+ * ⚠️ Only after the session check, or an unauthenticated caller could tell real
+ * page names (401) from unknown ones (400).
  */
 function requireUploadResource(query: URLSearchParams): DashboardPage {
   const requested = query.get('resource');
@@ -61,9 +59,8 @@ export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
       HTTP_STATUS.UNPROCESSABLE
     );
 
-  // Per USER: an IP bucket would let one account spend every colleague's
-  // budget from a shared NAT egress. The coarse per-IP bound runs ahead of
-  // this, in the adapter.
+  // Per USER: an IP bucket lets one account spend its NAT neighbours' budget.
+  // The coarse per-IP bound runs earlier, in the adapter.
   await enforceRateLimit({
     scope: UPLOAD_ADMISSION_SCOPE,
     identifier: userIdentifier(caller.userId),

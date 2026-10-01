@@ -1,24 +1,15 @@
 /**
- * The rule every table that references `files` must satisfy, checked against
- * the PostgreSQL catalog rather than against a list someone maintains.
+ * Every referrer of `files` MUST have the composite `(file_id, file_status) →
+ * files (id, status)` key, a status column NULL cannot slip through (`NOT NULL`,
+ * or `MATCH FULL` for an optional attachment), a `file_status = 'active'` check,
+ * refusing referential actions, and an entry in `USAGE_SOURCES`. That shape
+ * refuses the `deleting` mark BEFORE a byte is destroyed.
  *
- * A referrer MUST use the composite `(file_id, file_status) → files (id,
- * status)` key, with a status column a NULL cannot slip through (`NOT NULL`, or
- * a `MATCH FULL` key for an optional attachment), a `file_status = 'active'`
- * check, and referential actions that REFUSE rather than propagate; and it MUST
- * be registered in `USAGE_SOURCES`. That shape is what makes deletion safe with
- * no transaction open across the object store: marking a row `deleting` is
- * refused while any referrer exists, BEFORE a byte is destroyed.
+ * A plain `file_id → files(id)` key is invisible to `unreferenced()` and is
+ * refused only at the final row delete, after the object is already gone.
  *
- * A plain `file_id → files(id)` key is the failure this exists to stop. It is
- * invisible to `unreferenced()`, so the reaper treats the file as unused, and
- * PostgreSQL only refuses the FINAL row delete — which `finishDeleting` reaches
- * after the object is already gone. The result is lost bytes with a dangling
- * reference, and nothing in the request path can detect it.
- *
- * Driver-agnostic, with no runtime `@/` import: `scripts/migrate.ts` imports it
- * by relative path and runs it over its own `bun:sql` client, and the
- * integration tier runs it over Drizzle.
+ * ⚠️ No runtime `@/` import: `scripts/migrate.ts` imports this by relative path
+ * and runs it over its own `bun:sql` client.
  */
 
 /** Runs one parameterless catalog statement and returns its rows. */
@@ -39,28 +30,16 @@ interface ForeignKey {
 }
 
 /**
- * The two `pg_constraint` action codes that make the database REFUSE rather
- * than rewrite the referencing row: `a` = NO ACTION, `r` = RESTRICT.
- *
- * `c` (CASCADE), `n` (SET NULL) and `d` (SET DEFAULT) all let the referenced row
- * move on and take the reference with it, which is the one thing this contract
- * exists to prevent — read `ACTION_RULES` for what each does here.
+ * `a` = NO ACTION, `r` = RESTRICT. `c`, `n` and `d` let the referenced row move
+ * on and take the reference with it; see `ACTION_RULES`.
  */
 const REFUSING_ACTIONS = new Set(['a', 'r']);
 
 /**
- * Why each event must refuse, stated per event because the two failures are
- * different.
- *
- * ON UPDATE: `lifecycle.ts` marks `files.status` `deleting` and relies on the
- * key to refuse while another owner still references the row. SET NULL nulls
- * both referencing columns, and an all-null pair satisfies MATCH FULL and a
- * `CHECK` alike, so the update succeeds and silently unlinks that owner — after
- * which `finishDeleting` destroys an object something still points at.
- *
- * ON DELETE: the final row delete is the LAST refusal standing, and it is
- * reached after the object is gone. A propagating action there deletes or
- * blanks the referrer instead of failing the deletion.
+ * ON UPDATE: SET NULL nulls both columns, and an all-null pair satisfies MATCH
+ * FULL and the `CHECK`, so the `deleting` mark succeeds and silently unlinks the
+ * owner. ON DELETE: the final row delete is the last refusal, reached after the
+ * object is gone.
  */
 const ACTION_RULES = [
   { code: 'updateAction', event: 'ON UPDATE' },
@@ -101,12 +80,8 @@ const COMPOSITE_KEY =
   /^FOREIGN KEY \((\w+), (\w+)\) REFERENCES files\(id, status\)/;
 
 /**
- * The `CHECK` that pins a status column to `'active'`, as PostgreSQL prints it,
- * whitespace and the optional outer parentheses removed.
- *
- * A substring test is not enough: `definition.includes(column)` also matches a
- * check on an unrelated column whose text merely contains the name, which
- * accepts a table whose status column is pinned to nothing.
+ * An exact match on PostgreSQL's printed form: a substring test also accepts a
+ * check on another column whose name contains this one.
  */
 function pinsToActive(definition: string, statusColumn: string): boolean {
   const normalised = definition.replaceAll(/\s+/g, '').toLowerCase();
@@ -118,20 +93,10 @@ function pinsToActive(definition: string, statusColumn: string): boolean {
 }
 
 /**
- * Every way the schema currently breaks the contract, one line each, empty when
- * it does not. Never throws on a clean schema, so a caller decides whether a
- * violation is fatal.
+ * Returns violations rather than throwing; the caller decides what is fatal.
  *
- * **The nullability rule IS the delete protection.** `MATCH SIMPLE` skips a row
- * with any NULL key component and a `CHECK` is satisfied by NULL, so a nullable
- * status column carrying the `'active'` check leaves a referrer the database
- * will not defend. An optional attachment stays expressible — either a
- * `NOT NULL` status column beside a nullable id, or a `MATCH FULL` key where
- * all-null is an absent attachment and a half-null one is refused outright.
- *
- * **So is the referential-action rule**, and for the same reason one layer down:
- * a key that RE-WRITES the referencing row on a status change or a delete is not
- * a key that refuses. See `ACTION_RULES`.
+ * ⚠️ The nullability rule IS the delete protection: `MATCH SIMPLE` skips a row
+ * with any NULL key component, and a `CHECK` passes NULL.
  */
 export async function referrerContractViolations(
   query: CatalogQuery,

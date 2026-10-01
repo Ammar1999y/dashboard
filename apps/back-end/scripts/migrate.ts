@@ -11,10 +11,11 @@
  * hashes, so an environment migrated by the CLI continues where it was.
  *
  * **Phase 2: `db/migrations/`, hand-written SQL** (extensions, trigram
- * indexes) that Drizzle Kit cannot express. There is no ledger, so every file
- * must be idempotent; they run after phase 1 because they index its tables.
- * Each file is ONE multi-statement query in an implicit transaction, so
- * `CREATE INDEX CONCURRENTLY` needs a file of its own.
+ * indexes) that Drizzle Kit cannot express, applied once per file under the
+ * `drizzle.__sql_migrations` ledger (`applySqlMigrations`); they run after
+ * phase 1 because they index its tables. Each file is ONE multi-statement
+ * query in one transaction, so `CREATE INDEX CONCURRENTLY` needs a file of its
+ * own.
  *
  * **Phase 3: the referrer contract.** Every table referencing `files` must use
  * the composite `(file_id, file_status)` key; a plain `file_id` key is
@@ -23,7 +24,8 @@
  * migration, so this is where it is caught.
  *
  * **The lock:** both phases read what is pending before their transaction, so
- * two concurrent migrators would replay the same DDL.
+ * two concurrent migrators would replay the same DDL. Both ledgers' applied
+ * history is checked under it before phase 1 applies anything.
  *
  * Reads `process.env.DATABASE_URL` directly rather than importing
  * `@/lib/env.server`: migrating must not require the pepper keyring, the
@@ -31,16 +33,23 @@
  * opens no connection.
  */
 import { SQL } from 'bun';
-import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { LedgerSource } from '@/db/migration-ledger';
 
 import { drizzle } from 'drizzle-orm/bun-sql';
 import { migrate } from 'drizzle-orm/bun-sql/migrator';
 
-import { referrerContractViolations } from '../lib/media/referrer-contract';
-import { registeredFileColumns } from '../lib/media/usage-sources';
-import { compareCodeUnits } from '../utils/text';
+import {
+  applySqlMigrations,
+  assertLedgerPrefix,
+  assertSqlMigrationHistory,
+  migrationHash,
+  readSqlMigrations,
+} from '@/db/migration-ledger';
+
+import { referrerContractViolations } from '@/lib/media/referrer-contract';
+import { registeredFileColumns } from '@/lib/media/usage-sources';
 
 const WORKSPACE_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -51,12 +60,6 @@ const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   console.error('DATABASE_URL is not set');
   process.exit(1);
-}
-
-/** Code-unit order: a locale collation could order `0010_` before `0009_`. */
-async function sqlFilesInOrder(): Promise<string[]> {
-  const entries = await readdir(SQL_DIR);
-  return entries.filter((f) => f.endsWith('.sql')).toSorted(compareCodeUnits);
 }
 
 // One connection: these phases are strictly sequential and nothing else is using
@@ -77,11 +80,7 @@ interface JournalEntry {
   tag: string;
 }
 
-/**
- * The journal as the installed migrator reads it, plus the hash it would write.
- *
- * Same digest drizzle computes (`migrator.js`): sha256 of the raw file text.
- */
+/** The journal as the installed migrator reads it, plus the hash it would write. */
 async function journalWithHashes(): Promise<
   Array<JournalEntry & { hash: string }>
 > {
@@ -112,7 +111,7 @@ async function journalWithHashes(): Promise<
         idx,
         when,
         tag,
-        hash: createHash('sha256').update(sql).digest('hex'),
+        hash: migrationHash(sql),
       };
     })
   );
@@ -140,39 +139,26 @@ async function ledgerRows(): Promise<LedgerRow[] | null> {
   `) as LedgerRow[];
 }
 
-/**
- * Every ledger row against the journal entry of the same index.
- *
- * Only the PREFIX: a row with no journal entry behind it is a rollback, and the
- * caller decides whether journal entries with no row are pending work or a
- * migrator that did not do its job.
- */
-function assertLedgerPrefix(
+const DRIZZLE_JOURNAL: LedgerSource = {
+  ledger: 'migration ledger',
+  entries: 'journal entry(ies)',
+  remedy: 'Generate a new migration instead of editing this one.',
+};
+
+/** Phase 1's ledger against its journal, keyed by the `when` drizzle records. */
+function assertJournalPrefix(
   journal: Array<JournalEntry & { hash: string }>,
   rows: LedgerRow[]
 ): void {
-  if (rows.length > journal.length)
-    throw new Error(
-      `migration ledger has ${rows.length} row(s) for ${journal.length} journal ` +
-        'entry(ies). The database is ahead of this checkout (a rollback), or ' +
-        'rows were removed by hand.'
-    );
-
-  for (const [index, row] of rows.entries()) {
-    const expected = journal[index];
-    if (!expected) throw new Error(`ledger row ${index} has no journal entry`);
-    if (Number(row.created_at) !== expected.when)
-      throw new Error(
-        `ledger row ${index} was applied for a different migration: ` +
-          `expected ${expected.tag} (${expected.when}), found ${row.created_at}`
-      );
-    if (row.hash !== expected.hash)
-      throw new Error(
-        `${expected.tag}.sql has changed since it was applied. The database ` +
-          'still holds the old statements and no environment will ever replay ' +
-          'the new ones. Generate a new migration instead of editing this one.'
-      );
-  }
+  assertLedgerPrefix(
+    DRIZZLE_JOURNAL,
+    journal.map(({ when, tag, hash }) => ({
+      key: String(when),
+      file: `${tag}.sql`,
+      hash,
+    })),
+    rows.map((row) => ({ key: String(Number(row.created_at)), hash: row.hash }))
+  );
 }
 
 /**
@@ -199,15 +185,16 @@ function assertLedgerPrefix(
  * ⚠️ Two of the three are properties of what is ALREADY applied, and a refusal
  * that has let the pending set commit first is not a refusal — a migration that
  * drops the columns an edited predecessor was supposed to read from takes the
- * state with it. So `assertLedgerPrefix` runs before the migrator too, over the
- * rows that exist then; this pass adds only what needs the run to have happened,
- * which is that every journal entry now HAS a row.
+ * state with it. So `assertJournalPrefix` runs before the migrator too, over the
+ * rows that exist then, as does phase 2's `assertSqlMigrationHistory`; this pass
+ * adds only what needs the run to have happened, which is that every journal
+ * entry now HAS a row.
  */
 async function verifyLedger(
   journal: Array<JournalEntry & { hash: string }>
 ): Promise<void> {
   const rows = (await ledgerRows()) ?? [];
-  assertLedgerPrefix(journal, rows);
+  assertJournalPrefix(journal, rows);
   if (rows.length !== journal.length)
     throw new Error(
       `migration ledger has ${rows.length} row(s) for ${journal.length} journal ` +
@@ -252,7 +239,9 @@ try {
 
   process.stdout.write('applied history ... ');
   const applied = await ledgerRows();
-  if (applied) assertLedgerPrefix(journal, applied);
+  if (applied) assertJournalPrefix(journal, applied);
+  const sqlFiles = await readSqlMigrations(SQL_DIR);
+  await assertSqlMigrationHistory(client, sqlFiles);
   console.log(applied ? 'ok' : 'none yet');
 
   process.stdout.write('drizzle migrations ... ');
@@ -263,16 +252,7 @@ try {
   await verifyLedger(journal);
   console.log('ok');
 
-  const files = await sqlFilesInOrder();
-  for (const file of files) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `file` comes from readdir of a fixed in-repo directory, not from input
-    const statements = await readFile(path.join(SQL_DIR, file), 'utf8');
-    process.stdout.write(`applying ${file} ... `);
-    // `unsafe` because these files are multi-statement and carry no parameters;
-    // they are repository content, not input.
-    await client.unsafe(statements);
-    console.log('ok');
-  }
+  const files = await applySqlMigrations(client, sqlFiles);
 
   process.stdout.write('referrer contract ... ');
   const violations = await referrerContractViolations(

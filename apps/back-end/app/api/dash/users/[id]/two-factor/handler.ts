@@ -16,13 +16,17 @@ import {
   revokePendingProofs,
 } from '@/lib/auth/session/rotation';
 import { clearTwoFactorEnrolment } from '@/lib/auth/two-factor/methods';
+import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
 import { requireId } from '@/lib/http/input';
 import { apiSuccess, notFoundError, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { validateRolePermissionScope } from '@/lib/permissions/scope';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 import { liveUser } from '@/lib/users/filters';
-import { assertTargetUserVisible } from '@/lib/users/target-user';
+import {
+  assertTargetUserVisible,
+  assertTargetUserVisibleUnlocked,
+} from '@/lib/users/target-user';
 
 /**
  * Clears a user's second factor entirely — the only path back for a user who
@@ -35,13 +39,8 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
   // ⚠️ Deliberately NOT gated on the configured method list: stored 2FA state
   // outlives the configuration that created it, and under an empty list this
   // reset is the only exit for an account still holding it.
-  const targetId = requireId(
-    ctx.params.id,
-    MSG_NOT_FOUND,
-    HTTP_STATUS.NOT_FOUND
-  );
-
   const {
+    session,
     userId: actorUserId,
     scope,
     permissions: actorPermissions,
@@ -63,6 +62,12 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
     limit: 10,
     failClosed: true,
   });
+
+  const targetId = requireId(
+    ctx.params.id,
+    MSG_NOT_FOUND,
+    HTTP_STATUS.NOT_FOUND
+  );
 
   // ADDITIVE, never authoritative, like `editUserAsAdmin`'s preflight: the
   // locked transaction re-reads the target and re-runs both gates, so this can
@@ -96,6 +101,12 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
   await withTransaction(async (tx) => {
     // Locked first, keeping the canonical order (users -> everything else),
     // and joined so the authorization below reads the role the row holds NOW.
+    await assertTargetUserVisibleUnlocked(tx, {
+      targetId,
+      actorUserId,
+      scope,
+    });
+    await lockTargetAndActor(tx, targetId, actorUserId, 'update');
     const [target] = await tx
       .select({
         id: users.id,
@@ -125,13 +136,12 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
     // `resetTwoFactor` has no `Own` variant, so the `createdBy` narrowing never
     // fires; without this an actor refused a `PUT` on this id could still strip
     // its second factor.
-    if (actorPermissions)
-      await validateRolePermissionScope(
-        actorPermissions,
-        targetRoleId,
-        tx,
-        'reachability'
-      );
+    await validateRolePermissionScope(
+      actorPermissions,
+      targetRoleId,
+      tx,
+      'reachability'
+    );
 
     await clearTwoFactorEnrolment(tx, targetId, { deletePasskeys: true });
 
@@ -141,18 +151,13 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
     await revokeOtherSessions(tx, targetId);
 
     await auditLog(tx, {
-      userId: targetId,
-      userEmail: target.email,
+      userId: actorUserId,
+      userEmail: session.user.email,
       action: 'UPDATE',
       tableName: 'users',
       recordId: targetId,
       oldData: { twoFactorEnabled: target.twoFactorEnabled },
-      newData: {
-        twoFactorEnabled: false,
-        twoFactorReset: true,
-        // The rest of the row describes the target; this names the actor.
-        resetBy: actorUserId,
-      },
+      newData: { twoFactorEnabled: false, twoFactorReset: true },
       meta: auditMeta,
     });
   });

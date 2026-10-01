@@ -1,13 +1,9 @@
 /**
- * The single policy for what a credential or identity rotation invalidates.
- * Password, email and phone are all credentials — phone is a passwordless login
- * factor — so every rotation routes through these helpers rather than choosing
- * its own subset.
- *
- * All run inside the caller's transaction after the `users` row is locked, in
- * the canonical lock order users -> sessions / verification_sessions ->
- * trusted_devices / verifications. Nothing else locks the last two, so adding
- * work at the END of that order cannot introduce a cycle.
+ * The single policy for what a credential rotation invalidates (phone counts: it
+ * is a passwordless factor). Callers hold the `users` lock; lock order is
+ * users -> sessions / verification_sessions -> trusted_devices / verifications.
+ * Every caller takes the user's row first, so these rows are only reached
+ * behind it, and work added at the END cannot form a cycle among them.
  */
 import type { Executor, Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
@@ -39,14 +35,9 @@ import {
 } from '../verifications';
 
 /**
- * The `verifications` rows keyed by SESSION id: the two-factor proof, the
- * re-authentication method and the passkey ceremony.
- *
- * None stores the user id, so a session deleted without them leaves rows
- * nothing can find again until they expire. Every path that deletes a session
- * owes this call: this codebase's own deletes inside their transaction, Better
- * Auth's through the `session.delete.after` hook in `lib/auth/session/hooks.ts`
- * — which runs after the library's transaction committed, hence `Executor`.
+ * ⚠️ These rows hold no user id, so every session delete owes this call —
+ * Better Auth's via `session.delete.after` (`hooks.ts`), after its transaction
+ * committed, hence `Executor`.
  */
 export async function revokeSessionArtifacts(
   tx: Executor,
@@ -65,7 +56,6 @@ export async function revokeSessionArtifacts(
   );
 }
 
-/** Deletes the sessions `where` selects and their artifacts; returns their ids. */
 export async function revokeSessionsWhere(
   tx: Tx,
   where: SQL | undefined
@@ -80,17 +70,9 @@ export async function revokeSessionsWhere(
 }
 
 /**
- * Every `verifications` row this deployment writes on a user's behalf.
- *
- * ⚠️ `WHERE value = userId` finds only the rows valued by the user id, such as
- * the challenge and the re-authentication grants. The challenge's companions
- * store a count, a JSON document and a WebAuthn challenge, and the device-trust
- * proof a SESSION id, so each is reached through the challenge ids or the
- * user's sessions.
- *
- * The passkey plugin's own registration-ceremony rows are deliberately left to
- * the retention sweep: random identifier, nothing joining them to a user, and
- * useless without the challenge cookie.
+ * ⚠️ `value = userId` misses rows valued otherwise (challenge companions,
+ * session-keyed proofs), so those are reached through challenge ids and
+ * sessions. The passkey plugin's ceremony rows are left to the retention sweep.
  */
 async function revokeVerificationArtifacts(
   tx: Tx,
@@ -119,11 +101,8 @@ async function revokeVerificationArtifacts(
 
   await tx.delete(verifications).where(eq(verifications.value, userId));
 
-  // ⚠️ The device-trust proof is keyed by SESSION id: method removal KEEPS the
-  // caller's session, and a surviving proof would let it mint a new trusted
-  // device right after the old ones were revoked. This reaches surviving
-  // sessions only, which is why every session delete carries
-  // `revokeSessionArtifacts` itself.
+  // ⚠️ Method removal keeps the caller's session; its surviving proof could
+  // mint a new trusted device. Reaches surviving sessions only.
   const owned = await tx
     .select({ id: sessions.id })
     .from(sessions)
@@ -134,14 +113,8 @@ async function revokeVerificationArtifacts(
   );
 }
 
-/**
- * Drops every standing skip of the second factor, and any in-flight challenge.
- *
- * Recovery, method removal, an administrative reset and capability loss all take
- * this: each is a moment where a device trusted against a factor is a bypass of
- * a factor that may no longer exist. A VOLUNTARY password change does not — see
- * `revokePendingProofs`.
- */
+// Trust granted against a factor that may be gone is a bypass. A voluntary
+// password change skips this — see `revokePendingProofs`.
 export async function revokeTwoFactorState(
   tx: Tx,
   userId: EntityID
@@ -150,15 +123,8 @@ export async function revokeTwoFactorState(
   await revokeVerificationArtifacts(tx, userId);
 }
 
-/**
- * Every standing second-factor skip this user holds, and nothing else.
- *
- * Split out of `revokeTwoFactorState` for the containment case: bulk session
- * revocation must remove the trusted devices — they are keyed by their own
- * cookie and outlive every session, so signing out everywhere without them
- * leaves the attacker's device still skipping 2FA — but must NOT touch the
- * user's enrolment or an in-flight challenge, which that function also clears.
- */
+// Split out for bulk session revocation: trusted devices outlive every session,
+// but enrolment and in-flight challenges must stay.
 export async function revokeTrustedDevices(
   tx: Tx,
   userId: EntityID
@@ -166,7 +132,6 @@ export async function revokeTrustedDevices(
   await tx.delete(trustedDevices).where(eq(trustedDevices.userId, userId));
 }
 
-/** Revoke every auth session for the user except the one making the request. */
 export async function revokeOtherSessions(
   tx: Tx,
   userId: EntityID,
@@ -181,17 +146,9 @@ export async function revokeOtherSessions(
 }
 
 /**
- * Removes proofs invalidated by credential rotation. The proof being consumed
- * may be retained long enough to record its final state.
- *
- * Trusted devices are a PARAMETER because the answer differs by event:
- *
- *  - `'revoke'` — recovery, contact change, administrative reset, user deletion.
- *    The person performing the change may not be the account's owner, or the
- *    factor the trust was granted against has just gone.
- *  - `'keep'` — a voluntary password change made by a caller who already proved
- *    the old password on a live session. Their trusted devices are theirs; the
- *    user should be TOLD about them, not silently signed out of them.
+ * `'keep'` is only for a voluntary password change proven with the old password
+ * on a live session. Every other rotation revokes: the actor may not be the
+ * owner, or the trusted factor is gone.
  */
 export async function revokePendingProofs(
   tx: Tx,
@@ -219,9 +176,11 @@ export async function revokePendingProofs(
   else await revokeVerificationArtifacts(tx, userId);
 }
 
+/** `actor` is whoever caused it: the user on self-service, the admin otherwise. */
 export async function unlinkGoogle(
   tx: Tx,
   userId: EntityID,
+  actor: { userId: EntityID; email: string },
   auditMeta: AuditMeta
 ): Promise<void> {
   const removed = await tx
@@ -233,25 +192,21 @@ export async function unlinkGoogle(
       )
     )
     .returning({ id: accounts.id });
-  if (removed.length === 0) return;
-  const [user] = await tx
-    .select({ email: users.email })
-    .from(users)
-    .where(eq(users.id, userId));
-  if (!user) throw new Error('Unlinked identity has no local user.');
   for (const account of removed)
     await auditLog(tx, {
-      userId,
-      userEmail: user.email,
+      userId: actor.userId,
+      userEmail: actor.email,
       action: 'DELETE',
       tableName: 'accounts',
       recordId: account.id,
-      oldData: { provider: 'google', identityLinked: true },
+      oldData: { provider: 'google', identityLinked: true, forUserId: userId },
       newData: {
         provider: 'google',
         identityLinked: false,
         reason: 'google_identity_unlinked',
+        forUserId: userId,
       },
+      metadataFields: ['forUserId'],
       meta: auditMeta,
     });
 }

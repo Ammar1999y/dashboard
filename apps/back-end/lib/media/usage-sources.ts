@@ -2,20 +2,16 @@ import type { DashboardPage } from '@app/shared/permissions/constants';
 import type { BucketType } from '@app/shared/validation/enums';
 
 /**
- * One table that references `files.id`.
+ * ⚠️ No runtime `@/` import: `scripts/migrate.ts` imports this by relative path
+ * and runs without the server's secrets, which `@/db` requires.
  *
- * A leaf module, with no runtime `@/` import: `scripts/migrate.ts` imports it by
- * relative path to check the referrer contract, and must run without the
- * server's secrets, which anything reaching `@/db` requires.
+ * Every table referencing `files.id` MUST be declared here
+ * (`tests/integration/media-usages.test.ts` fails otherwise): the registry
+ * answers "used by", the delete 409, and whether a public usage blocks
+ * `unpublish`.
  *
- * Every referrer MUST be declared here, and the integration tier proves it: a
- * foreign key to `files` that has no entry fails
- * `tests/integration/media-usages.test.ts`. The registry is what answers "used
- * by" for the details endpoint and the 409 on delete, and what decides whether
- * a file has a PUBLIC usage — the one fact that blocks `unpublish`.
- *
- * `table`/`column`/`idColumn` are identifiers from THIS file, never from a
- * request, which is what makes `sql.identifier` on them safe.
+ * `table`/`column`/`idColumn` come from THIS file, never a request, which is
+ * what makes `sql.identifier` on them safe.
  */
 export interface UsageSource {
   /** The referencing table, e.g. `project_images`. */

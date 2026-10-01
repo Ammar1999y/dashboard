@@ -23,6 +23,7 @@
 **/docs
 **/TODO.md
 **/i18n-db.txt
+**/prompt*.md
 
 # Then the test suite — the largest thing in the back-end and served by nothing.
 #

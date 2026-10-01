@@ -16,18 +16,20 @@ const svgoConfig: Config = {
       name: 'preset-default',
       params: {
         overrides: {
+          // Not minified: its rename rewrites the first `#id` in each referencing
+          // attribute twice, so `url(#f) url(#fx)` becomes `url(#a) url(#ax)` and
+          // the second definition is deleted as unused.
           cleanupIds: {
-            minify: true,
+            minify: false,
             preserve: [],
           },
         },
       },
     },
     'removeScripts',
-    // No `removeRasterImages`: it matches `xlink:href` and a few raster types
-    // only, so it deletes a legitimate inlined bitmap on one spelling and passes
-    // an animated GIF on the other. `sanitizeSvg`'s `isSafeInlineRaster` is the
-    // single authority on which rasters may be inlined.
+    // No `removeRasterImages`: it only knows `xlink:href` and a few raster
+    // types. `analyzeInlineRaster` in `sanitizeSvg` alone decides which rasters
+    // may be inlined.
     'removeTitle',
   ],
 };

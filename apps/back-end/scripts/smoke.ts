@@ -17,6 +17,8 @@
  * deliberately unreachable host, so the SQLite checks are asserted one by one
  * and the aggregate `status` only has to be CONSISTENT with `checks`.
  */
+import * as z from 'zod';
+
 // Not `@/lib/audit`: that one loads `db/schema` and the OTP config into this
 // parent process for one constant.
 import { TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
@@ -112,11 +114,17 @@ async function waitForBoot(): Promise<Response | null> {
   return null;
 }
 
+const healthBodySchema = z.object({
+  status: z.string().optional(),
+  checks: z.record(z.string(), z.boolean()).optional(),
+});
+
+const envelopeSchema = z.object({ success: z.boolean() });
+
 async function runChecks(health: Response): Promise<Check[]> {
-  const healthBody = (await health.json()) as {
-    status?: string;
-    checks?: Record<string, boolean>;
-  };
+  const healthRaw: unknown = await health.json();
+  const healthParsed = healthBodySchema.safeParse(healthRaw);
+  const healthBody = healthParsed.success ? healthParsed.data : {};
   const checks = healthBody.checks ?? {};
   // Everything except `postgres`, which this environment may deliberately lack.
   const storageChecks = Object.entries(checks).filter(
@@ -125,11 +133,16 @@ async function runChecks(health: Response): Promise<Check[]> {
   const failedStorage = storageChecks
     .filter(([, passed]) => !passed)
     .map(([name]) => name);
+  const storageSummary =
+    storageChecks.length === 0
+      ? 'readiness reported no checks at all'
+      : `${storageChecks.length} checked, failed=[${failedStorage.join(', ')}]`;
   const expectedStatus = Object.values(checks).every(Boolean)
     ? 'ok'
     : 'degraded';
   const missing = await probe('/api/definitely-not-a-route');
-  const missingBody = (await missing.json()) as { success?: boolean };
+  const missingRaw: unknown = await missing.json();
+  const missingBody = envelopeSchema.safeParse(missingRaw);
   // Rejected by Better Auth's own path allowlist, so 404 is the expected
   // answer. A 500 or a connection error is the failure this catches.
   const authProbe = await probe('/api/auth/not-an-endpoint');
@@ -139,8 +152,8 @@ async function runChecks(health: Response): Promise<Check[]> {
   });
   // Readiness WITHOUT the token: a caller outside the container gets nothing.
   const anonymousHealth = await probe('/api/health/storage');
-  // The one gate a browser reaches WITHOUT a preflight (multipart is a
-  // CORS-simple content type). A real form is sent so that a 400, meaning the
+  // A gate a browser reaches WITHOUT a preflight (multipart is a CORS-simple
+  // content type). A real form is sent so that a 400, meaning the
   // body was parsed before authentication, is told apart from the 401.
   const uploadForm = new FormData();
   uploadForm.append(
@@ -167,10 +180,9 @@ async function runChecks(health: Response): Promise<Check[]> {
     {
       name: 'every storage readiness check passes',
       ok: storageChecks.length > 0 && failedStorage.length === 0,
-      detail:
-        storageChecks.length === 0
-          ? 'readiness reported no checks at all'
-          : `${storageChecks.length} checked, failed=[${failedStorage.join(', ')}]`,
+      detail: healthParsed.success
+        ? storageSummary
+        : `readiness body has an unexpected shape: ${JSON.stringify(healthRaw)}`,
     },
     {
       name: 'readiness status agrees with its own checks',
@@ -192,8 +204,11 @@ async function runChecks(health: Response): Promise<Check[]> {
     },
     {
       name: 'unknown route returns the API envelope',
-      ok: missing.status === 404 && missingBody.success === false,
-      detail: `HTTP ${missing.status} body=${JSON.stringify(missingBody)}`,
+      ok:
+        missing.status === 404 &&
+        missingBody.success &&
+        !missingBody.data.success,
+      detail: `HTTP ${missing.status} body=${JSON.stringify(missingRaw)}`,
     },
     {
       name: 'better auth handler is mounted',

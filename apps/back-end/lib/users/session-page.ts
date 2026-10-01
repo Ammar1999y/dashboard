@@ -18,18 +18,9 @@ import {
 import { userMsg } from './messages';
 
 /**
- * ONE canonical cursor format: `<ISO-8601 UTC with milliseconds>|<uuid>`.
- *
- * Not "anything `Date` can read": `new Date()` normalises rather than rejects,
- * so a permissive form silently points at a different page —
- *
- * - no timezone      → read in the SERVER's zone, a different instant per host
- * - `T24:00:00Z`     → rolled forward to 00:00 the next day
- * - six fraction digits → truncated to millisecond precision
- *
- * `formatCursor` emits none of them, so a correctly paginating client never
- * sends one; everything else is a 422. The range checks below cover what the
- * anchored pattern cannot express.
+ * One canonical form, `formatCursor`'s: `new Date()` normalises instead of
+ * rejecting (no zone, `T24:00`, extra fraction digits), so a permissive parse
+ * silently points at a different page.
  */
 const CURSOR_TIMESTAMP =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;
@@ -38,18 +29,13 @@ const CURSOR_TIMESTAMP =
 const daysInMonth = (year: number, month: number) =>
   new Date(Date.UTC(year, month, 0)).getUTCDate();
 
-/** Emits the only timestamp form accepted by `parseCursor`. */
 export function formatCursor(createdAt: string | Date, id: string): string {
   const date = safeDate(createdAt);
   if (!date) throw new Error('formatCursor received an unparseable timestamp');
   return `${date.toISOString()}|${id}`;
 }
 
-/**
- * Components validated directly rather than through `Date`, which would accept
- * an impossible date (`2026-02-30` → 2 March) and an out-of-range hour
- * (`24:00:00` → next day) by normalising them.
- */
+// Not through `Date`, which normalises `2026-02-30` to 2 March.
 function parseCursorTimestamp(raw: string): Date | null {
   const match = CURSOR_TIMESTAMP.exec(raw);
   if (!match) return null;
@@ -71,17 +57,14 @@ function parseCursorTimestamp(raw: string): Date | null {
     return null;
 
   const parsed = safeDate(raw);
-  // A value that passed every check above must survive the round trip, or the
-  // two representations have drifted apart.
   return parsed && parsed.toISOString() === raw ? parsed : null;
 }
 
 export function parseCursor(
   raw: string | null
 ): { createdAt: Date; id: string } | null {
-  // Absent and malformed are different answers: treating a corrupted cursor as
-  // absent restarts at page one while the client believes it is advancing,
-  // which in a revocation list can hide the session it is hunting for.
+  // Malformed is not absent: restarting at page one can hide the session a
+  // revocation list is hunting for.
   if (raw === null) return null;
   if (!raw || raw.length > SESSION_CURSOR_MAX_LENGTH) invalidCursor();
   const separator = raw.lastIndexOf('|');
@@ -102,8 +85,7 @@ function invalidCursor(): never {
 export function parseLimit(raw: string | null): number {
   if (raw === null) return SESSIONS_PAGE_SIZE;
 
-  // Over the maximum is rejected, not clamped: the message promises a value
-  // within the cap, and a silent clamp is a lie the client cannot detect.
+  // Rejected, not clamped: a silent clamp is undetectable by the client.
   const requested = positiveInt(raw, SESSIONS_MAX_PAGE_SIZE);
   if (requested < 1) invalidLimit();
   return requested;
@@ -116,13 +98,8 @@ function invalidLimit(): never {
   );
 }
 
-/**
- * One page of the user's unexpired sessions, newest first.
- *
- * Keyset on `(createdAt, id)` rather than OFFSET: session rows are deleted
- * concurrently by every revocation path, and OFFSET would skip or repeat rows
- * as the set shifts underneath the pages.
- */
+// Keyset, not OFFSET: revocations delete rows concurrently, and OFFSET would
+// skip or repeat them.
 export async function readSessionsPage(opts: {
   userId: EntityID;
   currentSessionId: EntityID | null;
@@ -148,7 +125,6 @@ export async function readSessionsPage(opts: {
       )
     )
     .orderBy(desc(sessions.createdAt), desc(sessions.id))
-    // One extra row is the cheapest reliable "is there another page" probe.
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;

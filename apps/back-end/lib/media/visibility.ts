@@ -34,9 +34,8 @@ import { removeObject, removeOrphanedObject } from './orphaned-objects';
 import { hasPublicUsage } from './usages';
 
 /**
- * A transition older than this with its marker still set was abandoned by the
- * request that started it; the sweep finishes or reverts it. Generous against a
- * slow copy, short against a stale `to_public` that keeps a file unpublishable.
+ * Past this a set marker counts as abandoned and the sweep takes it over. Must
+ * outlast a slow copy; too long keeps an abandoned file unpublishable.
  */
 const TRANSITION_STALE_AFTER = '10 minutes';
 
@@ -44,19 +43,12 @@ const staleTransition = () =>
   lt(files.updatedAt, sql`now() - ${TRANSITION_STALE_AFTER}::interval`);
 
 /**
- * How many times one cleanup will delete again because a losing attempt
- * recorded a copy landing during the previous delete (`files.cleanupRequests`).
- *
- * Small on purpose: every round is another R2 delete on the request's own clock.
- * Exhausting them leaves the marker set, which costs one staleness window —
- * `retryTransitions` finishes exactly this work.
+ * Small on purpose: each round is another R2 delete on the request's clock, and
+ * exhausting them only leaves the marker for `retryTransitions`.
  */
 const CLEANUP_ROUNDS = 3;
 
-/**
- * Stalled sagas one recovery pass will work through. Each one is at least an R2
- * delete against the row's own clock.
- */
+/** Each stalled saga costs at least one R2 delete. */
 export const TRANSITION_RETRY_BATCH = 1000;
 
 const other = (bucket: BucketType): BucketType =>
@@ -66,23 +58,13 @@ const towards = (bucket: BucketType): FileTransition =>
   bucket === 'public' ? 'to_public' : 'to_private';
 
 /**
- * Ownership of the cleanup, and what a caller that cannot take it leaves behind.
+ * Claims the cleanup, or records the demand on the attempt that owns it. One
+ * UPDATE on purpose: reading "busy" and then recording lets the owner clear the
+ * marker in between, stranding the demand on an idle row. A claim restamps
+ * `updated_at` so the staleness window covers the delete about to be issued.
  *
- * One statement: a caller that reads the row as busy and then records its
- * demand can have the owner clear the marker in between, leaving the demand on
- * an idle row nobody reads again. So claiming and recording are the same UPDATE.
- *
- * Three outcomes, all against the bucket the row does NOT name:
- * - the caller already owns the row — kept, and `updated_at` restamped so the
- *   staleness window covers the delete it is about to issue;
- * - the row is idle — claimed under a fresh `cleanup`, which also keeps the next
- *   publish out until the delete has finished;
- * - somebody else owns it — `cleanup_requests` is bumped, the demand the owner
- *   has to honour, and the caller gets nothing.
- *
- * No row at all is two states needing opposite handling — the row is gone, or
- * it now NAMES this bucket and the object in it is live — so the caller tells
- * them apart.
+ * `null` is also returned when the row is gone or now names this bucket (its
+ * object is live); those need opposite handling, so the caller tells them apart.
  */
 async function claimCleanup(
   fileId: EntityID,
@@ -118,36 +100,18 @@ interface CleanupOutcome {
 }
 
 /**
- * Remove the copy in the bucket the row does NOT name — the only object any
- * caller here may delete — clear the transition marker, and answer with the
- * settled row.
+ * Deletes the copy in the bucket the row does NOT name, the only object this
+ * module may delete, and clears the marker. Every abandoned copy comes here.
  *
- * **Never the live object, and never one that can BECOME live while the delete
- * is in flight.** R2 has no conditional delete, so re-reading `bucket_type` is
- * not enough: another transition can copy into that bucket and commit between
- * the read and the delete. What holds across the call is the transition token —
- * while an attempt owns it, `transitionFile` refuses the row as busy and
- * `retryTransitions` cannot claim it inside the staleness window. So ownership
- * is re-asserted in the statement that also restamps `updated_at`, and one R2
- * delete (`R2_REQUEST_TIMEOUT_MS` × `maxAttempts`) must stay well inside
- * `TRANSITION_STALE_AFTER`.
+ * R2 has no conditional delete, so only the transition token keeps that bucket
+ * from becoming live mid-delete: one R2 delete (`R2_REQUEST_TIMEOUT_MS` ×
+ * `maxAttempts`) must stay well inside `TRANSITION_STALE_AFTER`.
  *
- * ⚠️ Another attempt's copy can land in that same bucket WHILE the delete is in
- * flight; its flip then fails and it has no marker to hand the leftover to.
- * `claimCleanup` covers it: the loser bumps `cleanup_requests`, the clear below
- * refuses to run against a bumped value, and this goes round again. Giving up
- * leaves the marker set, which is the sweep's own signal.
- *
- * ⚠️ And the row itself can be GONE — reverted by the sweep, then deleted —
- * while this caller's copy is in flight, leaving nothing that names the key:
- * `claimCleanup` matches nothing and reconciliation only reports. An absent row
- * is proof enough — the key embeds the row's primary key (`lib/media/keys.ts`)
- * and `ux_files_r2_key` is unique, so the key can never belong to anything
- * again — and the writer removes what it wrote through `removeOrphanedObject`,
- * so a failure is owed to the drain rather than lost.
- *
- * Every path that abandons a copy comes through here, the verification failure
- * as much as the lost flip; they differ only in which step noticed.
+ * ⚠️ A copy landing during the delete bumps `cleanup_requests`, which refuses
+ * the clear below and sends this round again.
+ * ⚠️ A missing row proves the key dead (it embeds the primary key and
+ * `ux_files_r2_key` is unique); nothing else names it, so the copy goes to
+ * `removeOrphanedObject`.
  */
 async function removeStaleCopy(
   fileId: EntityID,
@@ -173,9 +137,7 @@ async function removeStaleCopy(
           row: null,
         };
       }
-      // Not this caller's row: the demand is recorded against the attempt that
-      // owns it, or there is nothing to remove because the row names this
-      // bucket itself and the object in it is live.
+      // The owning attempt now holds the demand, or the object here is live.
       logSanitized('error', {
         msg: 'media.transition stale copy handed to the transition that owns the row',
         id: fileId,
@@ -183,9 +145,7 @@ async function removeStaleCopy(
       return { removed: false, row: null };
     }
     token = owned.token;
-    // A failure leaves the marker set, which is what the sweep picks up — and
-    // for a `cleanup` row it deletes the bucket the row does not name, the one
-    // claimed against here.
+    // A failure leaves the marker set for the sweep, which deletes this bucket.
     if (!(await removeObject(key, bucketType)))
       return { removed: false, row: null };
     const [settled] = await db
@@ -205,39 +165,20 @@ async function removeStaleCopy(
 }
 
 /**
- * Move a file's object to the other bucket under the same key, and flip the row
- * once the copy is verified. Five steps, three of them transactions, none of
- * them open across the object store:
+ * Copies the object to the other bucket under the same key and flips the row
+ * once the copy is verified; no transaction stays open across the object store.
+ * Equal ETags prove equal bytes: R2's single-part ETag is the content MD5.
  *
- * 1. mark `transition` (refused if another saga owns the row, if the target is
- *    disabled, if the media API may not touch the row (`mediaGoverned`), or —
- *    for `to_private` — if a public owner still references it);
- * 2. `HeadObject` the source and check it against the row; copy with the
- *    target's headers; `HeadObject` the target and require the source's length
- *    and ETag — R2's single-part ETag is the content MD5, so equal ETags are
- *    equal bytes;
- * 3. flip `bucket_type`, mark `cleanup`, audit — from here URLs point at the
- *    target;
- * 4. delete the stale source object (and purge its public URL if it had one);
- * 5. clear the marker.
- *
- * A failure at 2 reverts: the target copy is removed and, only once that
- * removal succeeded, the marker cleared; otherwise the marker stays and
- * `retryTransitions` reverts later. A flip at 3 that matches no row means the
- * sweep cleared the marker while the copy was still in flight, so the copy that
- * has since landed is removed here — nothing else would ever look at it again.
- * A failure at 4 leaves `cleanup` for the same sweep. The row returned is the
- * PERSISTED state, so a caller sees `transition: 'cleanup'` when the stale copy
- * is still there.
+ * Returns the PERSISTED row, so a caller sees `transition: 'cleanup'` while the
+ * stale copy is still there.
  */
 export async function transitionFile(params: {
   id: EntityID;
   to: BucketType;
   actor: Actor;
   /**
-   * Owner code linking a file to a public purpose passes `true`. The media
-   * routes leave it off, so an entity upload still held by its record cannot
-   * be published or unpublished from the library.
+   * Only owner code linking a file to a public purpose sets this, so the
+   * library cannot move an upload its record still holds.
    */
   authorizedByOwner?: boolean;
 }): Promise<MediaFileRow> {
@@ -248,8 +189,6 @@ export async function transitionFile(params: {
       HTTP_STATUS.UNPROCESSABLE
     );
 
-  // This attempt's identity, minted before the row is touched so every guard
-  // below can name it. See `files.transitionId`.
   const transitionToken = generateUuidV7();
   const ownedBy = (token: string) =>
     and(eq(files.id, id), eq(files.transitionId, token));
@@ -329,10 +268,8 @@ export async function transitionFile(params: {
     const [updated] = await tx
       .update(files)
       .set({ bucketType: to, transition: 'cleanup' })
-      // On the TOKEN, not on the marker value: `retryTransitions` writes the
-      // same marker when it takes a stalled saga over, so a value match lets
-      // this flip land while the sweep's delete of the target object is already
-      // in flight, and the row then names a bucket with no object in it.
+      // On the token, not the marker value `retryTransitions` also writes on
+      // takeover: a value match could flip onto the object its sweep is deleting.
       .where(ownedBy(transitionToken))
       .returning(FILE_COLUMNS);
     if (!updated) return null;
@@ -346,32 +283,23 @@ export async function transitionFile(params: {
     return updated;
   });
 
-  // The marker was cleared under us — `retryTransitions` reverted this saga
-  // while the copy was still in flight — so the copy that has since landed in
-  // the target bucket is the one nothing will look at again.
+  // The sweep reverted this saga mid-copy; nothing else will remove the copy
+  // that has since landed.
   if (!flipped) {
     await removeStaleCopy(id, row.r2Key, to, transitionToken);
     throw new CustomError(mediaMsg.fileBusy, HTTP_STATUS.CONFLICT);
   }
 
-  // The PERSISTED state either way: a caller sees `transition: 'cleanup'` when
-  // the stale copy is still there.
   const cleaned = await removeStaleCopy(id, row.r2Key, from, transitionToken);
   return cleaned.row ?? flipped;
 }
 
 /**
- * Finish or revert transitions a crashed request left behind.
+ * Reverts `to_*` rows (never flipped, so nobody holds the new URL) and finishes
+ * `cleanup` rows a crashed request left behind. Safe to repeat: R2 deletes a
+ * missing key as 204.
  *
- * A row still at `to_public`/`to_private` never flipped, so nobody holds its
- * new URL: the copy in the target bucket is removed and the marker cleared. A
- * row at `cleanup` has flipped: the stale copy in the OTHER bucket is removed
- * and, for a public one, its edge copy purged. Every step is idempotent (a
- * missing key deletes as 204), so a second pass over the same row is harmless.
- *
- * `hasMore` reports rows this bounded pass never reached, which is a backlog and
- * not a failure — `failed` stays the count of attempts the store refused, and
- * the two drive different signals on the retention job.
+ * `hasMore` is backlog, not failure; the retention job signals them differently.
  */
 export async function retryTransitions(): Promise<{
   reverted: number;
@@ -389,10 +317,8 @@ export async function retryTransitions(): Promise<{
   let finished = 0;
   let failed = 0;
   for (const row of stuck) {
-    // `chk_files_transition_owner` makes this state unreachable, so reaching it
-    // means the constraint is gone — reported rather than skipped, because a
-    // row with a marker and no token can never be claimed and would sit here
-    // forever.
+    // Unreachable under `chk_files_transition_owner`; counted as a failure
+    // because a tokenless marker can never be claimed.
     if (!row.transition || !row.transitionId) {
       logSanitized('error', {
         msg: 'media.transition sweep found a saga with no owner token',
@@ -402,11 +328,8 @@ export async function retryTransitions(): Promise<{
       continue;
     }
 
-    // CLAIMED before a single byte is touched: the token, not the marker value
-    // both sides write, is what makes this exclusive with a slow-but-alive
-    // request still running the saga — its flip then fails its own guard and it
-    // cleans up after itself. Still guarded on the staleness window, so a saga
-    // started while this batch was read is not taken over at once.
+    // Claimed on the token before any R2 call, so a slow-but-alive owner's flip
+    // fails its guard; re-checked stale so a saga started since the read is kept.
     const claim = generateUuidV7();
     const [claimed] = await db
       .update(files)
@@ -421,9 +344,8 @@ export async function retryTransitions(): Promise<{
       .returning({ id: files.id });
     if (!claimed) continue;
 
-    // Either way the copy to remove is in the bucket the row does NOT name: a
-    // `cleanup` row has flipped and the stale source sits opposite; a `to_*` row
-    // has not, and the unverified target copy sits opposite.
+    // Opposite the row's bucket either way: the stale source after a flip, the
+    // unverified target before one.
     const cleaned = await removeStaleCopy(
       row.id,
       row.r2Key,

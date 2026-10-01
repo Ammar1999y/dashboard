@@ -19,11 +19,7 @@ import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { authenticationDenied } from './errors';
 
-/**
- * One RP identity for BOTH halves of the ceremony. The registration plugin is
- * configured from this and `PUBLIC_ORIGIN` in `lib/auth/two-factor/plugin.ts`; left to
- * itself it would take `expectedOrigin` from the request's own `Origin` header.
- */
+// Shared with registration (`two-factor/plugin.ts`), so both halves use one RP identity.
 export const RP_ID = new URL(PUBLIC_ORIGIN).hostname;
 
 const transportSchema: z.ZodType<AuthenticatorTransportFuture> = z.enum([

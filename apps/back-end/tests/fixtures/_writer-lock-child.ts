@@ -1,9 +1,11 @@
-import { acquireWriterLock } from '@/lib/sqlite/writer-lock';
+import { tryAcquireWriterLock } from '@/lib/sqlite/writer-lock';
 
 const directory = process.argv[2];
 if (!directory) throw new Error('writer-lock child needs a directory');
 
-const lock = acquireWriterLock(directory);
+const lock = tryAcquireWriterLock(directory);
+if (!lock)
+  throw new Error(`writer-lock child lost the election for ${directory}`);
 console.log(JSON.stringify({ held: true, pid: process.pid }));
 
 await Bun.sleep(60_000);

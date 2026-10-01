@@ -11,6 +11,8 @@ import {
   sanitizePreferences,
 } from '@app/shared/validation/preferences';
 
+import { compareCodeUnits } from '@/utils/text';
+
 const VALID = {
   preset: 'modern-minimal',
   colorMode: 'dark',
@@ -118,9 +120,8 @@ describe('sanitizePreferences', () => {
 
   test('drops an unknown key instead of returning it', () => {
     const result = sanitizePreferences({ ...VALID, styles: { light: {} } });
-    const byText = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
-    expect(Object.keys(result).toSorted(byText)).toEqual(
-      Object.keys(DEFAULT_PREFERENCES).toSorted(byText)
+    expect(Object.keys(result).toSorted(compareCodeUnits)).toEqual(
+      Object.keys(DEFAULT_PREFERENCES).toSorted(compareCodeUnits)
     );
   });
 

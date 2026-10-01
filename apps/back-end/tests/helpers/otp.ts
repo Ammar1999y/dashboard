@@ -14,9 +14,14 @@ import { verificationCodes, verificationSessions } from '@/db/schema';
 
 import { OTP_EXPIRY_MINUTES } from '@app/shared/validation/constants';
 
+import { MINIMUM_RESPONSE_MS } from '@/lib/http/timing-floor';
 import { hashOtpCode } from '@/lib/otp/hash';
 
 import { assertHarnessDatabase } from './database';
+
+/** Room for `calls` responses held to the anonymous timing floor, and one more floor for the rest. */
+export const flooredBudget = (calls: number) =>
+  (calls + 1) * MINIMUM_RESPONSE_MS;
 
 export interface SeededOtpProof {
   sessionId: string;

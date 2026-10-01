@@ -21,6 +21,7 @@ import {
   revokeSessionsWhere,
   revokeTrustedDevices,
 } from '@/lib/auth/session/rotation';
+import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
 import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, notFoundError, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
@@ -32,7 +33,10 @@ import {
   parseLimit,
   readSessionsPage,
 } from '@/lib/users/session-page';
-import { assertTargetUserReachable } from '@/lib/users/target-user';
+import {
+  assertTargetUserReachable,
+  assertTargetUserVisibleUnlocked,
+} from '@/lib/users/target-user';
 
 /**
  * The sessions sub-resource admits the owner, or an actor with `users.edit`
@@ -94,7 +98,7 @@ async function assertTargetReachable(
     targetId: EntityID;
     currentUserId: EntityID;
     editScope: 'all' | 'own' | null;
-    actorPermissions: ActorPermissions | undefined;
+    actorPermissions: ActorPermissions;
     lock: boolean;
   }
 ): Promise<void> {
@@ -191,6 +195,15 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
   const auditMeta = getAuditMeta(ctx);
 
   const revoked = await withTransaction(async (tx) => {
+    // The self case too: a password change in another tab holds the row and
+    // then waits for the sessions this deletes.
+    if (!isSelf)
+      await assertTargetUserVisibleUnlocked(tx, {
+        targetId,
+        actorUserId: currentUserId,
+        scope: editScope,
+      });
+    await lockTargetAndActor(tx, targetId, currentUserId, 'share');
     if (!isSelf)
       await assertTargetReachable(tx, {
         targetId,

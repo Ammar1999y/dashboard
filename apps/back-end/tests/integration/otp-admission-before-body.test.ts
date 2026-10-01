@@ -14,8 +14,8 @@
  * Every handler is exhausted through its own route rather than through the
  * limiter API, so the test follows whatever budget and scope each handler
  * declares instead of copying them. Captcha is scripted to refuse while the
- * budget is spent: that path answers without the response-time floor, and it
- * still counts, because the limiter runs first.
+ * budget is spent, which still counts because the limiter runs first. The
+ * budget is spent in concurrent batches.
  */
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 
@@ -40,6 +40,7 @@ const ROUTES = [
 
 /** Well above any per-IP budget a handler declares; a loop that gets here is a bug. */
 const MAX_ADMISSIONS = 500;
+const BATCH_SIZE = 25;
 
 /** A second address, so the control request is admitted after the first is spent. */
 const CONTROL_IP = '203.0.113.9';
@@ -56,13 +57,24 @@ function request(path: string, body: string, ip = TEST_IP): Request {
 }
 
 async function spendBudget(path: string): Promise<number> {
-  for (let n = 1; n <= MAX_ADMISSIONS; n++) {
-    const response = await app.handle(request(path, '{}'));
-    if (response.status === HTTP_STATUS.TOO_MANY_REQUESTS) return n;
-    expect(
-      response.status,
-      `${path} answered ${response.status} on attempt ${n}; only a captcha refusal is expected while the budget lasts`
-    ).toBe(HTTP_STATUS.FORBIDDEN);
+  let admitted = 0;
+  for (let sent = 0; sent < MAX_ADMISSIONS; sent += BATCH_SIZE) {
+    const statuses = await Promise.all(
+      Array.from({ length: BATCH_SIZE }, () =>
+        app.handle(request(path, '{}')).then((response) => response.status)
+      )
+    );
+    for (const status of statuses)
+      if (status !== HTTP_STATUS.TOO_MANY_REQUESTS)
+        expect(
+          status,
+          `${path} answered ${status}; only a captcha refusal is expected while the budget lasts`
+        ).toBe(HTTP_STATUS.FORBIDDEN);
+    const refused = statuses.filter(
+      (status) => status === HTTP_STATUS.TOO_MANY_REQUESTS
+    ).length;
+    admitted += BATCH_SIZE - refused;
+    if (refused > 0) return admitted;
   }
   throw new Error(
     `${path} was never throttled within ${MAX_ADMISSIONS} requests`

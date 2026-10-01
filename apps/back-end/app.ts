@@ -111,27 +111,47 @@ function finish(request: Request, response: Response): Response {
   });
 }
 
+/** The access log line and the after-response queue, once per request. */
+function complete(request: Request, path: string, status: number): void {
+  const started = startedAt.get(request);
+  startedAt.delete(request);
+  finalStatus.delete(request);
+  runAfterResponse(request, {
+    method: request.method,
+    path,
+    status,
+    durationMs: started === undefined ? 0 : performance.now() - started,
+  });
+}
+
 /**
- * CORS policy. **Also one of the three things standing in for a CSRF token —
- * read it as a security control.** There is deliberately no CSRF token; a
- * fourth mechanism would duplicate these three:
+ * `finish` for an answer `onRequest` gives: Elysia returns it without
+ * scheduling `onAfterResponse`, so it is completed here.
+ */
+function finishEarly(
+  request: Request,
+  path: string,
+  response: Response
+): Response {
+  const finished = finish(request, response);
+  complete(request, path, finished.status);
+  return finished;
+}
+
+/**
+ * CORS policy. **Also one of the things standing in for a CSRF token — read it
+ * as a security control.** There is deliberately no CSRF token:
  *
  * 1. Better Auth's routes are origin-checked: `originCheckMiddleware`
  *    validates `Origin`/`Referer` against `trustedOrigins` (default `baseURL`,
  *    which is `PUBLIC_ORIGIN`) on every non-GET request carrying a cookie.
  * 2. The session cookie is `SameSite=Lax` (Better Auth's default; nothing here
  *    sets `advanced.defaultCookieAttributes`), so a cross-site POST/PUT/DELETE
- *    arrives with no session.
- * 3. Application JSON routes require exactly `application/json`
- *    (`lib/http/request.ts`), which is not CORS-simple, so a cross-site attempt
- *    needs a preflight that only the origin below passes.
- *
- * Layer 3 does not cover `multipart/form-data`, which IS CORS-simple. Both
- * upload routes (`app/api/upload/file/handler.ts`,
- * `app/api/dash/media/files/handler.ts`) are session-gated and layer 2 keeps
- * the cookie off such a request; `bun run smoke` asserts the 401. **Any future
- * multipart or form-encoded route inherits this gap and needs the same
- * treatment.**
+ *    arrives with no session. A same-site sibling origin still gets the cookie.
+ * 3. Table routes refuse a write whose `Origin` or `Sec-Fetch-Site` names
+ *    another origin (`lib/http/origin.ts`). This is the only layer covering a
+ *    body-less POST or `multipart/form-data`, which are CORS-simple; a JSON
+ *    route also needs a preflight, since `application/json` is not.
  */
 const CORS_POLICY = {
   // Not `*`: these endpoints are credentialed, and browsers refuse `*` with
@@ -143,12 +163,7 @@ const CORS_POLICY = {
   // `X-Captcha-Response` is required: `lib/captcha.ts` reads the token from it.
   // Without it the preflight still answers 204, so `curl` looks healthy while
   // every browser blocks the real request.
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Captcha-Response',
-    'X-Maintenance-Token',
-  ],
+  allowedHeaders: ['Content-Type', 'X-Captcha-Response'],
   // Without these a rate-limited UI cannot tell the user when to retry.
   exposeHeaders: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining'],
   // The plugin default re-fires a preflight for practically every request;
@@ -238,7 +253,7 @@ const base = new Elysia({
     // one, or a mount outside Elysia, would reach them unguarded.
     const url = URL.parse(request.url);
     if (!url || url.hostname.length < MIN_ROUTABLE_HOSTNAME_LENGTH)
-      return finish(request, notFound());
+      return finishEarly(request, url?.pathname ?? request.url, notFound());
 
     // The ONE ceiling every request crosses, decided from the path alone, so a
     // mount that reads its own body (`/api/auth/*`) cannot opt out of it and a
@@ -249,12 +264,17 @@ const base = new Elysia({
     // the body is read — `readBoundedText` for table routes,
     // `boundedBodyRequest` at the Better Auth prefix below.
     if (declaresBodyOver(request, lookupBodyCeiling(url.pathname)))
-      return finish(request, toWebResponse(handleApiError(bodyTooLarge())));
+      return finishEarly(
+        request,
+        url.pathname,
+        toWebResponse(handleApiError(bodyTooLarge()))
+      );
 
     // Route-aware OPTIONS, ahead of the CORS plugin's own `OPTIONS /*`
     // catch-all, which answers 204 on any path. The trailing-slash redirect is
     // repeated here because this hook short-circuits before the router, and an
     // OPTIONS on the slash form must get the same 308 as every other method.
+    // Not `finishEarly`: OPTIONS is unlogged (should-ignore #66).
     if (
       request.method === 'OPTIONS' &&
       lookupMethods(url.pathname).size === 0
@@ -281,22 +301,16 @@ const base = new Elysia({
     return finish(request, responseValue) as never;
   })
   .onAfterResponse(({ request, set, path, responseValue }) => {
-    const started = startedAt.get(request);
-    startedAt.delete(request);
-    const stamped = finalStatus.get(request);
-    finalStatus.delete(request);
-    runAfterResponse(request, {
-      method: request.method,
+    complete(
+      request,
       path,
-      status:
-        stamped ??
+      finalStatus.get(request) ??
         (responseValue instanceof Response
           ? responseValue.status
           : typeof set.status === 'number'
             ? set.status
-            : 200),
-      durationMs: started === undefined ? 0 : performance.now() - started,
-    });
+            : 200)
+    );
   })
   .onError(({ code, error, set, request }) => {
     // Re-applied: an error thrown inside `onRequest` lands here before that

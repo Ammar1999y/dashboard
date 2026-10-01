@@ -12,8 +12,6 @@ import { contactKindOf } from '@app/shared/validation/enums';
 
 import { getClientIp } from '@/lib/http/client-ip';
 
-import { logSanitized } from '@/utils/log';
-
 import { rateLimit } from './fixed-window';
 
 /**
@@ -65,17 +63,20 @@ function ipBucket(ip: string): string {
 export function ipIdentifier(headers: Headers): string {
   const ip = getClientIp(headers);
   if (!ip) {
-    logSanitized('error', {
+    // Every caller answers through `handleApiError`, which logs this cause
+    // with the 503: one line, not two.
+    const refusal = new CustomError(
+      MSG_MISSING_CLIENT_IP,
+      HTTP_STATUS.SERVICE_UNAVAILABLE
+    );
+    refusal.cause = {
       msg: 'missing client ip headers',
       cf: headers.get('cf-connecting-ip'),
       forwarded: headers.get('x-forwarded-for'),
       host: headers.get('host'),
       ua: headers.get('user-agent'),
-    });
-    throw new CustomError(
-      MSG_MISSING_CLIENT_IP,
-      HTTP_STATUS.SERVICE_UNAVAILABLE
-    );
+    };
+    throw refusal;
   }
   return `ip:${ipBucket(ip)}`;
 }
@@ -148,6 +149,11 @@ export async function enforceOtpSurfaceSendQuota(opts: {
  * spend it. A rejection surfaces as the handlers' usual generic success.
  * Charged before dispatch rather than after, so a provider that is timing out
  * still trips it.
+ *
+ * The one limiter call made after an account lookup, so it never blocks the
+ * thread (`yieldWhenBusy`): a held writer lock would otherwise stall every
+ * request, and whether the lookup found an account would show in how late
+ * they answer.
  */
 export async function enforceOtpGlobalSendBudget(opts: {
   channel: OtpChannel;
@@ -158,6 +164,7 @@ export async function enforceOtpGlobalSendBudget(opts: {
     limit: OTP_GLOBAL_SEND_CAP_PER_DAY,
     window: ONE_DAY_S,
     failClosed: true,
+    yieldWhenBusy: true,
   });
 }
 
@@ -216,6 +223,8 @@ export async function enforceRateLimit(opts: {
    * security event.
    */
   failClosed?: boolean;
+  /** See `rateLimit`. */
+  yieldWhenBusy?: boolean;
 }): Promise<void> {
   const window = opts.window ?? 60;
   const result = await rateLimit({
@@ -223,6 +232,7 @@ export async function enforceRateLimit(opts: {
     limit: opts.limit,
     window,
     cost: opts.cost,
+    yieldWhenBusy: opts.yieldWhenBusy,
   });
 
   if (result.degraded && opts.failClosed) {

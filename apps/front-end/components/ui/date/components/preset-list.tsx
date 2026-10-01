@@ -12,7 +12,7 @@ interface PresetListProps {
 
 export const PresetList = memo<PresetListProps>(
   ({ selectedPreset, onPresetSelect }) => (
-    <div className='flex w-full flex-col items-start space-y-1'>
+    <div className='flex w-full flex-col items-start gap-1'>
       {PRESETS.map((preset) => (
         <PresetButton
           key={preset.name}

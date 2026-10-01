@@ -14,10 +14,12 @@ no_auto_install: true
 pre-commit:
   parallel: true
   jobs:
+    # No `root:` on the two consumer typechecks: it also narrows the staged
+    # files to its workspace, and a commit touching only `packages/shared` has
+    # to re-check both consumers, which compile it with their own tsconfig.
     - name: front-end typecheck
-      root: 'apps/front-end/'
-      glob: '*.{ts,tsx,mts,cts}'
-      run: bun --bun tsc --noEmit
+      glob: ['apps/front-end/*.{ts,tsx,mts,cts}', 'packages/shared/*.ts']
+      run: cd apps/front-end && bun --bun tsc --noEmit
     - name: front-end lint
       root: 'apps/front-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs}'
@@ -31,9 +33,8 @@ pre-commit:
       glob: '*.{ts,tsx,js,jsx,mjs}'
       run: bun scripts/build-icons.ts --check
     - name: back-end typecheck
-      root: 'apps/back-end/'
-      glob: '*.{ts,tsx,mts,cts}'
-      run: bunx tsc --noEmit
+      glob: ['apps/back-end/*.{ts,tsx,mts,cts}', 'packages/shared/*.ts']
+      run: cd apps/back-end && bunx tsc --noEmit
     - name: back-end lint
       root: 'apps/back-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs}'

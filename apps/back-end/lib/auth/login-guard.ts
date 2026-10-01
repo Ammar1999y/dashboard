@@ -7,8 +7,12 @@ import { and, eq, sql } from 'drizzle-orm';
 import { withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
 
+import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CustomError } from '@app/shared/error-class';
+
 import { auditLog } from '@/lib/audit';
 import { liveUser } from '@/lib/users/filters';
+import { userMsg } from '@/lib/users/messages';
 
 import { logLine } from '@/utils/log';
 
@@ -31,18 +35,16 @@ const PASSWORD_UPGRADE_AUDIT_META = {
 } satisfies AuditMeta;
 
 /**
- * What a password check is FOR, labelling its `passwordVerified` audit event.
- *
- * The event records a PROOF, never a session: gates that can still refuse the
- * request run after it. `loginSuccess` is written once, after issuance, by the
- * `session.create.after` hook in `lib/auth/session/hooks.ts`.
+ * Labels the `passwordVerified` event, which records a proof, never a session;
+ * `loginSuccess` is written after issuance by `session.create.after`.
  */
-type PasswordProofPurpose =
+export type PasswordProofPurpose =
   | 'sign_in'
   | 'reauth_change_password'
   | 'reauth_change_email'
   | 'reauth_change_phone'
-  | 'reauth_two_factor';
+  | 'reauth_two_factor'
+  | 'reauth_admin';
 
 interface VerifyAttemptBase {
   password: string;
@@ -54,11 +56,7 @@ interface VerifyAttemptBase {
   returnPasswordProof?: boolean;
 }
 
-/**
- * Auditing and its label travel together. When audited, lockout enter/exit and
- * password proofs are recorded; failed attempts deliberately are not (high
- * volume, low signal), only the lockout transition.
- */
+// Failed attempts are deliberately not audited, only the lockout transition.
 type AuditedAttempt = {
   auditMeta: AuditMeta;
   purpose: PasswordProofPurpose;
@@ -76,15 +74,12 @@ export interface VerifiedPasswordProof {
 }
 
 /**
- * Every stored hash the just-verified password may be checked against by a later
- * reader of the account row in this same request: two entries whenever a pepper
- * upgrade replaced the hash after the verification committed, since a reader can
- * legitimately see either. Oldest first, so `[0]` is the hash that was verified.
+ * Two entries when a pepper upgrade replaced the hash after verification, since
+ * a later reader in this request may see either. `[0]` is the verified hash.
  */
 export type AcceptedPasswordHashes = readonly [string, ...string[]];
 
-type RejectedOutcome =
-  'reject_unknown_or_inactive' | 'reject_locked' | 'reject_bad_password';
+type RejectedOutcome = 'reject_unknown_or_inactive' | 'reject_bad_password';
 
 interface PendingPasswordUpgrade {
   accountId: EntityID;
@@ -101,21 +96,13 @@ type AttemptResult =
       passwordProof: VerifiedPasswordProof;
       passwordUpgrade?: PendingPasswordUpgrade;
     }
-  | { outcome: RejectedOutcome; passwordCostPaid: boolean };
+  | { outcome: RejectedOutcome; passwordCostPaid: boolean }
+  | { outcome: 'reject_locked'; passwordCostPaid: false; lockedUntil: Date };
 
 /**
- * Atomic login verification: locks the user row, checks lock status,
- * verifies the password, and updates attempt counters — all in a single
- * transaction. Eliminates the TOCTOU race between check and increment.
- *
- * The decision (success / reject) is computed inside the transaction and
- * returned. The throw and the optional timing guard run AFTER the tx
- * commits so the failed-attempt increment and lockout audit persist
- * (a throw inside withTransaction would roll the writes back).
- *
- * Returns the hashes the verified password is now valid against, and throws
- * LoginRejected on any credential rejection. The explicit proof mode returns a
- * compare-and-swap proof instead and suppresses the automatic hash upgrade.
+ * The throw and timing guard run AFTER the transaction commits, so the
+ * failed-attempt increment and lockout audit persist. Proof mode returns a CAS
+ * proof and suppresses the hash upgrade.
  */
 export function verifyLoginAttempt(
   options: VerifyAttemptOptions & { returnPasswordProof: true }
@@ -192,7 +179,11 @@ export async function verifyLoginAttempt(
     if (user.lockedUntil) {
       const lockTime = user.lockedUntil.getTime();
       if (lockTime > Date.now()) {
-        return { outcome: 'reject_locked', passwordCostPaid: false };
+        return {
+          outcome: 'reject_locked',
+          passwordCostPaid: false,
+          lockedUntil: user.lockedUntil,
+        };
       }
 
       const [reset] = await tx
@@ -279,11 +270,9 @@ export async function verifyLoginAttempt(
       throw new Error('Verified credential account is missing its hash');
     }
 
-    // No lockout reset for an account `session.create.before` will refuse:
-    // that refusal is the same generic 401 a wrong password gets, so a correct
-    // guess would silently buy an unbounded run of further guesses. The role is
-    // the only such gate (inactive users are rejected above; the verification
-    // gates answer with their own code), and only `sign_in` reaches it.
+    // No lockout reset for a role `session.create.before` will refuse with the
+    // same generic 401: a correct guess would buy unbounded further guesses.
+    // The role is the only such gate; a new one must be added here.
     const eligible =
       purpose !== 'sign_in' || (await roleAllowsLoginFor(tx, user.roleId));
 
@@ -346,14 +335,10 @@ export async function verifyLoginAttempt(
           upgrade: result.passwordUpgrade,
           auditMeta,
         });
-        // Only when the compare-and-swap landed: a lost CAS means a concurrent
-        // writer replaced the row with a hash that is neither of these.
         if (upgradedHash) return [verifiedHash, upgradedHash];
 
-        // ⚠️ ACCEPTED: this login answers 401 on a correct password. Do not mint
-        // the proof from a re-read hash instead — the concurrent writer may
-        // have been a password CHANGE, and the old password would then mint a
-        // session.
+        // ⚠️ Accepted 401 on a correct password. Never mint from a re-read hash:
+        // the concurrent writer may be a password change.
         logLine('error', {
           msg: 'auth.passwordHashUpgrade raceLost',
           effect:
@@ -372,18 +357,16 @@ export async function verifyLoginAttempt(
     return [verifiedHash];
   }
 
-  // Any branch that did not verify a PHC hash pays the active Argon2 cost after
-  // the transaction commits, including missing or unsupported credentials.
+  if (purpose && purpose !== 'sign_in' && result.outcome === 'reject_locked')
+    throw accountTemporarilyLocked(result.lockedUntil);
+
   if (!skipTimingGuard && !result.passwordCostPaid) {
     await runPasswordTimingGuard(password);
   }
   throw new LoginRejected();
 }
 
-/**
- * The hash it stored, or `null` when the compare-and-swap found the row already
- * changed — the caller needs the distinction to build `AcceptedPasswordHashes`.
- */
+/** `null` when the compare-and-swap found the row already changed. */
 async function upgradePasswordHash({
   password,
   upgrade,
@@ -420,15 +403,24 @@ async function upgradePasswordHash({
         passwordPepperId: upgrade.activePepperId,
         passwordHashUpgraded: true,
       },
-      // The pepper's VERSION id, not the pepper. Declared because the generic
-      // denylist matches the substring `password` and would otherwise strip the
-      // only fields this event exists to record.
+      // A version id, not the pepper; the denylist's `password` substring would strip it.
       safeFields: ['passwordPepperId'],
       meta: auditMeta ?? PASSWORD_UPGRADE_AUDIT_META,
     });
 
     return upgradedHash;
   });
+}
+
+// Authenticated callers only: on anonymous sign-in it would reveal the account exists.
+function accountTemporarilyLocked(lockedUntil: Date): CustomError {
+  const error = new CustomError(
+    userMsg.accountTemporarilyLocked,
+    HTTP_STATUS.TOO_MANY_REQUESTS
+  );
+  const seconds = Math.ceil((lockedUntil.getTime() - Date.now()) / 1000);
+  error.responseHeaders = { 'Retry-After': String(Math.max(1, seconds)) };
+  return error;
 }
 
 export class LoginRejected extends Error {

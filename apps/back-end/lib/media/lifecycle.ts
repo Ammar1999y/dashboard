@@ -32,47 +32,35 @@ import { mediaMsg } from './messages';
 import { unreferenced, usedBy } from './usages';
 
 /**
- * How long an entity-form upload may stay unclaimed — the time between
- * uploading an image and saving the record that owns it. It must cover a form
- * left open overnight; lowering it deletes uploads out from under an open form.
- * Also the TTL of a library upload whose activation
- * never ran, and of one whose object write failed ambiguously (the row is kept
- * so the sweep can remove whatever the store may have committed).
+ * Must cover an entity form left open overnight: lowering it deletes uploads
+ * out from under the open form. Also reaps a library upload whose activation
+ * never ran or whose object write failed ambiguously.
  */
 const PENDING_FILE_TTL = '24 hours';
 
 const SWEEP_BATCH_SIZE = 1000;
 
 /**
- * Days an unfiled file — active, in no folder, referenced by no registered
- * owner — survives before the sweep deletes it. Counted from the pass that
- * first saw it unfiled (`unfiled_at`), because the owner's deletion, which is
- * what orphans it, touches no row here. Filing it or linking it clears the
- * stamp; the `unfiled` listing exposes both the stamp and this number.
+ * Counted from the pass that first saw the file unfiled (`unfiled_at`), because
+ * the owner deletion that orphans it touches no row here. The `unfiled` listing
+ * exposes this number.
  */
 export const UNFILED_RETENTION_DAYS = 7;
 /** Reaped per pass: each one is a statement and an object delete. */
 const UNFILED_REAP_BATCH = 100;
 
 /**
- * What "unfiled" means, in one place: active, in no folder, held by no
- * registered owner. The listing, the stamp and the reaper share it so no two of
- * them can disagree about which rows are on the clock. `unreferenced()` fails
- * closed while the registry is empty, so this matches nothing until a project
- * declares its owner tables.
+ * Shared by the listing, the stamp and the reaper so they agree on which rows
+ * are on the clock. Matches nothing until a project registers its owner tables
+ * (`unreferenced()` fails closed).
  */
 export const unfiledNow = () =>
   and(eq(files.status, 'active'), isNull(files.folderId), unreferenced());
 
 /**
- * Attach pending uploads to their owner, in the owner's transaction.
- *
- * Conditional on `status = 'pending'` and on the uploader, so a swept, already
- * claimed, or foreign upload is refused rather than silently attached — and so
- * the sweep and a claim racing on one row cannot both win: the second blocks on
- * the row lock and then matches nothing. The caller inserts its referrer rows
- * AFTER this in the same transaction; the composite FK sees the status flip.
- * `attachFiles` in `./link.ts` is the usual way in.
+ * Attaches pending uploads to their owner, in the owner's transaction;
+ * `attachFiles` in `./link.ts` is the usual way in. The caller inserts its
+ * referrer rows AFTER this: the composite FK needs the status flip.
  */
 export async function claimFiles(
   tx: Tx,
@@ -113,29 +101,16 @@ interface DoomedRow {
 }
 
 /**
- * Phases B and C for rows already marked `deleting`: objects first, then rows.
- * `DeleteObjects` reports a missing key as deleted, so a re-run over a
- * half-finished batch is clean. A row stays `deleting` — and is reported as
- * retained — while any object delete it needs is refused, or while a configured
- * cache purge of its public URL has failed: an object gone from the origin but
- * still served from the edge is not gone.
+ * Objects first, then rows, for rows already `deleting`; a re-run is clean
+ * because `DeleteObjects` reports a missing key as deleted. A row is retained
+ * while any delete or configured purge it needs failed: a copy still served
+ * from the edge is not gone.
  *
- * ⚠️ EVERY enabled bucket, not the one the row names. A transition that lost
- * its saga to the sweep can leave a copy in the other bucket, and the row is
- * then the only record of the key: deleting by `bucket_type` alone strands that
- * copy, readable if public, with nothing left to find it. `ux_files_r2_key`
- * makes this safe to do blind: one key belongs to one row.
- *
- * ⚠️ And the row's OWN bucket must be among them. A bucket dropped from the
- * environment is unavailable, not clean — its objects are still stored — so
- * such a row is retained and reported pending until the bucket is configured
- * again; the other buckets are still cleaned meanwhile.
- *
- * The purge follows the same rule, for the reason `removeObject` in
- * `lib/media/orphaned-objects.ts` purges every public delete: a stale public
- * copy is reachable at a URL derived from the key, whatever `bucket_type` says.
- * It is decided on the PUBLIC delete alone; another bucket's outage retains the
- * row anyway.
+ * ⚠️ EVERY enabled bucket, not the one the row names: a transition lost to the
+ * sweep can leave a copy opposite that only this row still names. Safe blind,
+ * since `ux_files_r2_key` gives one key one row.
+ * ⚠️ A row whose own bucket is not configured is retained: its objects are
+ * still stored.
  */
 async function finishDeleting(
   rows: readonly DoomedRow[]
@@ -209,18 +184,12 @@ async function finishDeleting(
 }
 
 /**
- * Delete files on request: mark, then remove objects, then remove rows.
+ * Marking `deleting` is the only transaction, and the composite FK refuses it
+ * on a referenced row before any byte is lost. Objects and rows are removed
+ * after it with no transaction open (`db/limits.ts`).
  *
- * Phase A is the only transaction, and the composite FK does the work in it: an
- * `UPDATE` to `deleting` on a referenced row is refused by the database before
- * any byte is lost, and a referrer racing this update blocks on the row lock and
- * then fails because `(id, 'active')` no longer exists. Phases B and C run with
- * no transaction open (`db/limits.ts`); a crash between them leaves `deleting`
- * rows, invisible to listings and finished by the sweep.
- *
- * `deleted` is what is gone from both stores; `pending` is what phase A
- * committed to but the object store (or a configured purge) has not yet
- * honoured — invisible already, finished by the sweep, never coming back.
+ * `pending` is what the store or a purge has not honoured yet: already
+ * invisible, and finished by the sweep.
  */
 export async function deleteFiles(params: {
   ids: readonly EntityID[];
@@ -228,9 +197,8 @@ export async function deleteFiles(params: {
   /** Pages the actor may `view`, for naming the owners in a refusal. */
   viewable: ReadonlySet<DashboardPage>;
   /**
-   * Owner code removing its own record's files passes `true`. The media routes
-   * leave it off, so a file an owner still holds is not theirs to delete
-   * (`mediaGoverned`).
+   * Only owner code removing its own record's files sets this, so the library
+   * cannot delete a file an owner still holds (`mediaGoverned`).
    */
   authorizedByOwner?: boolean;
 }): Promise<{ deleted: EntityID[]; pending: EntityID[] }> {
@@ -263,10 +231,8 @@ export async function deleteFiles(params: {
       );
       if (visible.length !== ids.length)
         throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
-      // Anything but `active`: the two sagas must not interleave, a repeat of a
-      // delete in flight has nothing to add, and a `pending` row is an upload
-      // still in progress — deleting its row lets the PUT that follows write an
-      // object nothing owns, discoverable only by reconciliation.
+      // The sagas must not interleave, and deleting a `pending` row lets its
+      // upload's PUT write an object nothing owns.
       if (visible.some((row) => row.status !== 'active' || row.transition))
         throw new CustomError(mediaMsg.fileBusy, HTTP_STATUS.CONFLICT);
 
@@ -296,8 +262,6 @@ export async function deleteFiles(params: {
     });
   } catch (error) {
     if (!isForeignKeyViolation(error)) throw error;
-    // The transaction rolled back; ask the registry who the owners are so the
-    // refusal can name the ones this caller may see.
     const summaries = await usedBy(ids, params.viewable);
     const labels = new Set<string>();
     let hidden = 0;
@@ -318,28 +282,15 @@ export async function deleteFiles(params: {
 }
 
 /**
- * Delete a folder and everything under it, bounded by
- * `FOLDER_RECURSIVE_DELETE_MAX` descendants.
+ * Plan under the tree lock, `deleteFiles`, then delete the folders under the
+ * lock again: no transaction may stay open across the object store
+ * (`db/limits.ts`), and going through `deleteFiles` keeps the composite FK
+ * refusing a held file.
  *
- * Three steps, because deleting files touches the object store and no
- * transaction may be open across it (`db/limits.ts`):
+ * A tree that changed in between returns `folders: 0` rather than throwing: the
+ * files ARE deleted by then, and a retry after the sweep removes the folders.
  *
- * 1. under the tree lock: resolve the subtree, refuse above the cap, refuse a
- *    file that is not settled (a pending upload, a half-deleted row), and — for
- *    an `own` scope — a folder someone else created;
- * 2. `deleteFiles` on the active files, the same three-phase path a request
- *    takes, so the composite FK still refuses a file a record holds and NOTHING
- *    is deleted when it does;
- * 3. under the tree lock again: delete the folders, deepest first.
- *
- * Step 3 refuses if the tree is not what step 1 saw — a file uploaded into it
- * in the window between the locks, or a row whose object phase B could not
- * remove. It reports that as `folders: 0` rather than throwing, because by then
- * the files ARE deleted and an error would say the opposite; the caller retries
- * once the sweep has finished, and the empty tree deletes on the second pass.
- *
- * It lives here rather than in `./folders.ts` because it is a file deletion
- * first: that module must not import this one, or the two would form a cycle.
+ * Not in `./folders.ts`, which must not import this module.
  */
 export async function deleteFolderTree(params: {
   folderId: EntityID;
@@ -352,8 +303,7 @@ export async function deleteFolderTree(params: {
     await lockTree(tx);
     await lockFolderFor(tx, folderId, actor);
     const tree = await subtreeFolders(tx, folderId);
-    // `own` narrows the whole subtree, not only its root: a folder someone else
-    // created is not this caller's to remove because its parent is.
+    // `own` narrows the whole subtree, not only its root.
     if (tree.some((folder) => !withinScope(actor, folder.createdBy)))
       throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
 
@@ -370,18 +320,14 @@ export async function deleteFolderTree(params: {
           tree.map((folder) => folder.id)
         )
       );
-    // Descendants: the root folder is what is being deleted, not something
-    // under it, so a folder holding exactly the cap in files is at the cap.
+    // The root is not a descendant of itself.
     if (tree.length - 1 + contents.length > FOLDER_RECURSIVE_DELETE_MAX)
       throw new CustomError(mediaMsg.folderTooLarge, HTTP_STATUS.UNPROCESSABLE);
-    // Refused before anything is deleted rather than after: a row that is not
-    // `active` cannot be deleted by `deleteFiles` and would only strand the
-    // folders it sits in.
+    // Refused up front: `deleteFiles` cannot delete a non-`active` row, which
+    // would strand the folders it sits in.
     if (contents.some((row) => row.status !== 'active'))
       throw new CustomError(mediaMsg.folderBusy, HTTP_STATUS.CONFLICT);
-    // `own` reaches the files too, decided HERE so the refusal names the file
-    // while the tree is still intact — `deleteFiles` would refuse the same set
-    // one step later, after the caller has been told the delete began.
+    // `own` reaches the files too, refused while the tree is still intact.
     if (contents.some((row) => !withinScope(actor, row.uploadedBy)))
       throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
 
@@ -400,9 +346,8 @@ export async function deleteFolderTree(params: {
   const folders = await withTransaction(async (tx) => {
     await lockTree(tx);
     const ids = plan.tree.map((folder) => folder.id);
-    // The same tree, not merely one of the same size: a folder created inside
-    // it between the two locks is not covered by the plan, and deleting its
-    // parent would be refused by the foreign key.
+    // The same tree, not one of the same size: a folder created in between is
+    // not in the plan, and the FK would refuse deleting its parent.
     const current = await subtreeFolders(tx, folderId);
     const tree = new Set(current.map((folder) => folder.id));
     const [remaining] = await tx
@@ -416,8 +361,7 @@ export async function deleteFolderTree(params: {
     )
       return 0;
 
-    // One statement over the whole subtree: `folders.parent_id` is NO ACTION,
-    // so a parent and its children may go together.
+    // One statement: `folders.parent_id` is NO ACTION, checked at its end.
     await tx.delete(foldersTable).where(inArray(foldersTable.id, ids));
     for (const folder of plan.tree)
       await auditAs(tx, actor, {
@@ -439,11 +383,7 @@ export interface FileSweepCount {
   degraded: boolean;
 }
 
-/**
- * Stamps files that have just become unfiled and clears the stamp on any that
- * gained a folder or an owner since. Two statements, so the predicate is the
- * same one the `unfiled` listing and the reaper use.
- */
+/** Two statements, so the stamp can use `unfiledNow()` itself. */
 async function stampUnfiled(): Promise<number> {
   await db
     .update(files)
@@ -460,11 +400,9 @@ async function stampUnfiled(): Promise<number> {
 }
 
 /**
- * Marks unfiled files past the retention window `deleting`, one statement per
- * row so that a refusal on one leaves its neighbours marked. The refusal that
- * can happen is the composite FK: a referrer the registry does not know about,
- * which `tests/integration/media-usages.test.ts` exists to prevent — the file
- * survives and the run reports degraded.
+ * One statement per row, so an FK refusal leaves its neighbours marked. A
+ * refusal means a referrer missing from the registry, which
+ * `tests/integration/media-usages.test.ts` exists to catch.
  */
 async function reapUnfiled(): Promise<{
   reaped: number;
@@ -511,15 +449,8 @@ async function reapUnfiled(): Promise<{
 }
 
 /**
- * The retention half: pending uploads past the TTL and unfiled files past
- * theirs become `deleting`, and every `deleting` row — those plus the ones a
- * crashed request left — is finished.
- *
- * Marking an expired pending row cannot hit the composite FK: a `pending` row
- * can have no referrer. `hasMore` is true when a full batch was marked or when
- * something was retained; `degraded` only for a retained row or a refused reap,
- * so an ordinary backlog and a store outage stay distinguishable at the job
- * level.
+ * `degraded` is only a retained row or a refused reap, so the job can tell a
+ * store outage from an ordinary backlog (`hasMore`).
  */
 export async function sweepFiles(): Promise<FileSweepCount> {
   const expiredBefore = sql`now() - ${PENDING_FILE_TTL}::interval`;
@@ -535,12 +466,10 @@ export async function sweepFiles(): Promise<FileSweepCount> {
       .from(files)
       .where(expired())
       .limit(SWEEP_BATCH_SIZE);
-    // The predicate is repeated on the UPDATE itself. Under Read Committed the
-    // subquery's snapshot can show a row as pending that a claim — holding its
-    // lock until we are blocked on it — has just made active, and PostgreSQL
-    // re-evaluates only the outer WHERE against the new row version. Without
-    // the repeat the sweep marks a freshly claimed, referenced file and throws
-    // on the FK.
+    // A `pending` row can have no referrer, so marking it cannot hit the
+    // composite FK. Repeated on the UPDATE: under Read Committed only the outer
+    // WHERE is re-checked against a row a racing claim just made active, so
+    // without it the sweep marks a referenced file and throws on the FK.
     return tx
       .update(files)
       .set({ status: 'deleting' })

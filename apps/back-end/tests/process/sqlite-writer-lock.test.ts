@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { acquireWriterLock } from '@/lib/sqlite/writer-lock';
+import { tryAcquireWriterLock } from '@/lib/sqlite/writer-lock';
 
 const HOLDER = path.join(
   import.meta.dir,
@@ -13,6 +13,13 @@ const HOLDER = path.join(
 );
 
 const created: string[] = [];
+
+function claim(directory: string) {
+  const lock = tryAcquireWriterLock(directory);
+  if (!lock)
+    throw new Error(`expected to win the writer lock for ${directory}`);
+  return lock;
+}
 
 function tempDir(): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'writer-lock-'));
@@ -54,14 +61,12 @@ async function startHolder(directory: string) {
 }
 
 describe('the writer lock', () => {
-  test('a second acquirer in another process is refused, loudly', async () => {
+  test('a second acquirer in another process loses the election without throwing', async () => {
     const directory = tempDir();
     const holder = await startHolder(directory);
 
     try {
-      expect(() => acquireWriterLock(directory)).toThrow(
-        /already owns the SQLite directory/
-      );
+      expect(tryAcquireWriterLock(directory)).toBeNull();
     } finally {
       holder.kill();
       await holder.exited;
@@ -78,17 +83,17 @@ describe('the writer lock', () => {
     holder.kill(9);
     await holder.exited;
 
-    const lock = acquireWriterLock(directory);
+    const lock = claim(directory);
     expect(lock.release).toBeFunction();
     lock.release();
   }, 60_000);
 
   test('releasing lets the next acquirer through — a redeploy is not blocked', () => {
     const directory = tempDir();
-    const first = acquireWriterLock(directory);
+    const first = claim(directory);
     first.release();
 
-    const second = acquireWriterLock(directory);
+    const second = claim(directory);
     second.release();
     // Idempotent: shutdown can call it twice (the normal path and the
     // forced-exit timer).
@@ -96,9 +101,27 @@ describe('the writer lock', () => {
   });
 
   test('two directories are independent locks', () => {
-    const a = acquireWriterLock(tempDir());
-    const b = acquireWriterLock(tempDir());
+    const a = claim(tempDir());
+    const b = claim(tempDir());
     a.release();
     b.release();
+  });
+
+  test('a second acquirer in the same process loses too — a worker thread opens its own connection', () => {
+    const directory = tempDir();
+    const first = claim(directory);
+    try {
+      expect(tryAcquireWriterLock(directory)).toBeNull();
+    } finally {
+      first.release();
+    }
+  });
+
+  test('a directory the lock cannot be created in still fails loudly, not as a lost election', () => {
+    const directory = tempDir();
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a temp directory this test created
+    mkdirSync(path.join(directory, '.writer-lock.db'));
+
+    expect(() => tryAcquireWriterLock(directory)).toThrow();
   });
 });

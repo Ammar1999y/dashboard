@@ -35,6 +35,7 @@ import { hashOtpCode } from '@/lib/otp/hash';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { flooredBudget } from '../helpers/otp';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -373,72 +374,83 @@ describe('signing in with the OTP second factor', () => {
 });
 
 describe('passwordless sign-in for a user with a second factor', () => {
-  test('issues a challenge instead of a session', async () => {
-    const before = await sessionCount(actor().userId);
+  test(
+    'issues a challenge instead of a session',
+    async () => {
+      const before = await sessionCount(actor().userId);
 
-    const sent = await post('/api/auth/passwordless/send', {
-      channel: 'email',
-      email: actor().email,
-    });
-    expect(sent.status).toBe(HTTP_STATUS.OK);
-    await plantCode(actor().userId, 'passwordless_login', 'email');
+      const sent = await post('/api/auth/passwordless/send', {
+        channel: 'email',
+        email: actor().email,
+      });
+      expect(sent.status).toBe(HTTP_STATUS.OK);
+      await plantCode(actor().userId, 'passwordless_login', 'email');
 
-    const verified = await post('/api/auth/passwordless/verify', {
-      channel: 'email',
-      email: actor().email,
-      code: RIGHT_CODE,
-    });
+      const verified = await post('/api/auth/passwordless/verify', {
+        channel: 'email',
+        email: actor().email,
+        code: RIGHT_CODE,
+      });
 
-    // The bypass, closed. Before the fix this answered 200 with a session
-    // cookie and `{ loggedIn: true }`.
-    expect(verified.status).toBe(HTTP_STATUS.OK);
-    expect(await verified.json()).toMatchObject({
-      twoFactorRedirect: true,
-      // The user's OTP factor is on the PHONE and the login proved the EMAIL,
-      // so it is a different possession and is still required. A comparison on
-      // the method name rather than the contact kind would have dropped it and
-      // signed the user straight in.
-      twoFactorMethods: ['otp'],
-    });
-    expect(await sessionCount(actor().userId)).toBe(before);
-    expect(cookieHeader(verified.headers.getSetCookie())).not.toContain(
-      'session_token'
-    );
-  });
+      // The bypass, closed. Before the fix this answered 200 with a session
+      // cookie and `{ loggedIn: true }`.
+      expect(verified.status).toBe(HTTP_STATUS.OK);
+      expect(await verified.json()).toMatchObject({
+        twoFactorRedirect: true,
+        // The user's OTP factor is on the PHONE and the login proved the EMAIL,
+        // so it is a different possession and is still required. A comparison on
+        // the method name rather than the contact kind would have dropped it and
+        // signed the user straight in.
+        twoFactorMethods: ['otp'],
+      });
+      expect(await sessionCount(actor().userId)).toBe(before);
+      expect(cookieHeader(verified.headers.getSetCookie())).not.toContain(
+        'session_token'
+      );
+    },
+    flooredBudget(2)
+  );
 
-  test('a passwordless login with no second factor honours "do not remember"', async () => {
-    // `D10` names every first-factor path. This one read the field only to carry
-    // it into a challenge; a user with no second factor got the 28-day row
-    // whatever they asked for.
-    const plain = await seedUser();
-    const sent = await post('/api/auth/passwordless/send', {
-      channel: 'email',
-      email: plain.email,
-    });
-    expect(sent.status).toBe(HTTP_STATUS.OK);
-    await plantCode(plain.userId, 'passwordless_login', 'email');
+  test(
+    'a passwordless login with no second factor honours "do not remember"',
+    async () => {
+      // `D10` names every first-factor path. This one read the field only to carry
+      // it into a challenge; a user with no second factor got the 28-day row
+      // whatever they asked for.
+      const plain = await seedUser();
+      const sent = await post('/api/auth/passwordless/send', {
+        channel: 'email',
+        email: plain.email,
+      });
+      expect(sent.status).toBe(HTTP_STATUS.OK);
+      await plantCode(plain.userId, 'passwordless_login', 'email');
 
-    const verified = await post('/api/auth/passwordless/verify', {
-      channel: 'email',
-      email: plain.email,
-      code: RIGHT_CODE,
-      rememberMe: false,
-    });
-    expect(verified.status).toBe(HTTP_STATUS.OK);
-    expect(cookieHeader(verified.headers.getSetCookie())).toContain(
-      'dont_remember'
-    );
+      const verified = await post('/api/auth/passwordless/verify', {
+        channel: 'email',
+        email: plain.email,
+        code: RIGHT_CODE,
+        rememberMe: false,
+      });
+      expect(verified.status).toBe(HTTP_STATUS.OK);
+      expect(cookieHeader(verified.headers.getSetCookie())).toContain(
+        'dont_remember'
+      );
 
-    const [row] = await db
-      .select({ createdAt: sessions.createdAt, expiresAt: sessions.expiresAt })
-      .from(sessions)
-      .where(eq(sessions.userId, plain.userId));
-    expect(row).toBeDefined();
-    const lifetimeDays =
-      ((row?.expiresAt.getTime() ?? 0) - (row?.createdAt.getTime() ?? 0)) /
-      86_400_000;
-    expect(lifetimeDays).toBeLessThan(2);
-  });
+      const [row] = await db
+        .select({
+          createdAt: sessions.createdAt,
+          expiresAt: sessions.expiresAt,
+        })
+        .from(sessions)
+        .where(eq(sessions.userId, plain.userId));
+      expect(row).toBeDefined();
+      const lifetimeDays =
+        ((row?.expiresAt.getTime() ?? 0) - (row?.createdAt.getTime() ?? 0)) /
+        86_400_000;
+      expect(lifetimeDays).toBeLessThan(2);
+    },
+    flooredBudget(2)
+  );
 });
 
 describe('the enrol-versus-sign-in discriminator', () => {
@@ -486,5 +498,94 @@ describe('the enrol-versus-sign-in discriminator', () => {
       jar
     );
     expect(sent.status).toBe(HTTP_STATUS.OK);
+  });
+});
+
+describe('a code sent before its OTP method was removed', () => {
+  /**
+   * Sign-in and enrolment share one `two_factor` proof row per contact, so a
+   * sign-in code still live when the method goes would otherwise re-enrol it on
+   * a session alone — past the password `send` demands before an enrolment.
+   */
+  async function enrolledWithPendingSignInCode(
+    extra: { email?: boolean } = {}
+  ): Promise<{ user: SeededUser; session: string }> {
+    const user = await seedUser({
+      phoneNumber: uniquePhone(),
+      phoneNumberVerified: true,
+    });
+    const session = await signIn(user);
+    expect(session.status).toBe(HTTP_STATUS.OK);
+
+    await db.insert(twoFactorMethods).values([
+      { userId: user.userId, method: 'otp', channel: 'sms' },
+      ...(extra.email
+        ? [
+            {
+              userId: user.userId,
+              method: 'otp' as const,
+              channel: 'email' as const,
+            },
+          ]
+        : []),
+    ]);
+    await db
+      .update(users)
+      .set({ twoFactorEnabled: true })
+      .where(eq(users.id, user.userId));
+
+    const challenged = await signIn(user);
+    expect(challenged.body).toMatchObject({ twoFactorRedirect: true });
+    const sent = await post(
+      '/api/auth/two-factor/otp/send',
+      { option: 'otp:phone' },
+      challenged.cookie
+    );
+    expect(sent.status).toBe(HTTP_STATUS.OK);
+    await plantCode(user.userId, 'two_factor', 'phone');
+
+    return { user, session: session.cookie };
+  }
+
+  async function reEnrol(session: string): Promise<Response> {
+    return post(
+      '/api/auth/two-factor/otp/verify',
+      { channel: 'sms', code: RIGHT_CODE },
+      session
+    );
+  }
+
+  test('turning two-factor off kills it', async () => {
+    const { user, session } = await enrolledWithPendingSignInCode();
+
+    const disabled = await post(
+      '/api/auth/two-factor/disable',
+      { password: user.password },
+      session
+    );
+    expect(disabled.status).toBe(HTTP_STATUS.OK);
+
+    const reEnrolled = await reEnrol(session);
+    expect(reEnrolled.status).not.toBe(HTTP_STATUS.OK);
+    expect(await enrolledMethods(user.userId)).toEqual([]);
+  });
+
+  test('removing that one method kills it', async () => {
+    const { user, session } = await enrolledWithPendingSignInCode({
+      email: true,
+    });
+
+    const removed = await post(
+      '/api/auth/two-factor/methods/disable',
+      { method: 'otp', contactKind: 'phone', password: user.password },
+      session
+    );
+    expect(removed.status).toBe(HTTP_STATUS.OK);
+
+    const reEnrolled = await reEnrol(session);
+    expect(reEnrolled.status).not.toBe(HTTP_STATUS.OK);
+    expect(await enrolledMethods(user.userId)).toEqual([
+      { method: 'otp', channel: 'email' },
+    ]);
   });
 });

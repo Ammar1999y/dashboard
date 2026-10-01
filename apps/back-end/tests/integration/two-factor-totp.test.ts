@@ -18,12 +18,13 @@ import {
 } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
 import { MAX_POOL_CONNECTIONS } from '@/db/limits';
 import {
+  auditLogs,
   sessions,
   twoFactorCredentials,
   twoFactorMethods,
@@ -38,6 +39,7 @@ import {
 import { HTTP_STATUS } from '@app/shared/api-messages';
 
 import { auth } from '@/lib/auth';
+import { decodeBackupCodes } from '@/lib/auth/two-factor/backup-codes';
 import {
   consumeTotpCode,
   DELEGATED_TOTP_WINDOW,
@@ -46,6 +48,7 @@ import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { dropMockedClockWindows } from '../helpers/rate-limit';
 import { baseHeaders, mergeCookies, seedUser } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -286,6 +289,7 @@ afterAll(() => {
   // `setSystemTime()` with no argument IS the documented reset; this tier runs
   // `--no-isolate`, so a clock left forward would follow every later file.
   setSystemTime();
+  dropMockedClockWindows();
 });
 
 describe('enrolling TOTP', () => {
@@ -755,4 +759,200 @@ describe('the backup-code verifier under the same concurrency', () => {
       )
     );
   }, 60_000);
+
+  test('one backup-code sign-in spends exactly one from the counter', async () => {
+    const user = await seedUser();
+    const session = await signInRaw(user);
+    const generated = await post(
+      'http://localhost/api/auth/two-factor/generate-backup-codes',
+      { password: user.password },
+      session.cookie
+    );
+    const set = (await generated.json()) as {
+      data?: { backupCodes?: string[]; setId?: string };
+    };
+    const issued = set.data?.backupCodes?.length ?? 0;
+    expect(issued).toBeGreaterThan(1);
+    const acknowledged = await post(
+      'http://localhost/api/auth/two-factor/backup-codes/acknowledge',
+      { password: user.password, setId: set.data?.setId },
+      session.cookie
+    );
+    expect(acknowledged.status).toBe(HTTP_STATUS.OK);
+
+    const challenge = await signInRaw(user);
+    const verified = await post(
+      'http://localhost/api/auth/two-factor/verify-backup-code',
+      { code: set.data?.backupCodes?.[0] },
+      challenge.cookie
+    );
+    expect(verified.status).toBe(HTTP_STATUS.OK);
+
+    const [credential] = await db
+      .select({
+        remaining: twoFactorCredentials.backupCodesRemaining,
+        backupCodes: twoFactorCredentials.backupCodes,
+      })
+      .from(twoFactorCredentials)
+      .where(eq(twoFactorCredentials.userId, user.userId));
+    expect(credential?.remaining).toBe(issued - 1);
+    expect(
+      await decodeBackupCodes(BETTER_AUTH_SECRET, credential?.backupCodes ?? '')
+    ).toHaveLength(issued - 1);
+  });
+
+  test('a regeneration committed while the sign-in finishes keeps its full count', async () => {
+    // The decrement ran in an after-hook, after the verifier's transaction had
+    // committed and released the user lock. A regeneration landing in between
+    // set the new count and then lost one to the old sign-in, so the counter
+    // drifted low until the method stopped being offered with codes left.
+    const user = await seedUser();
+    const session = await signInRaw(user);
+    const first = await post(
+      'http://localhost/api/auth/two-factor/generate-backup-codes',
+      { password: user.password },
+      session.cookie
+    );
+    const firstSet = (await first.json()) as {
+      data?: { backupCodes?: string[]; setId?: string };
+    };
+    const acknowledged = await post(
+      'http://localhost/api/auth/two-factor/backup-codes/acknowledge',
+      { password: user.password, setId: firstSet.data?.setId },
+      session.cookie
+    );
+    expect(acknowledged.status).toBe(HTTP_STATUS.OK);
+    const challenge = await signInRaw(user);
+    expect(challenge.body).toMatchObject({ twoFactorRedirect: true });
+
+    // Holds the verifier's request open AFTER its transaction commits: the
+    // device-trust proof is the first write of its after-hooks.
+    await db.execute(
+      sql`create function _two_factor_proof_delay() returns trigger language plpgsql as $$ begin perform pg_sleep(3); return new; end $$`
+    );
+    await db.execute(
+      sql`create trigger _two_factor_proof_delay before insert on verifications for each row when (new.identifier like '2fa-proven-%') execute function _two_factor_proof_delay()`
+    );
+    let regeneratedCount = 0;
+    try {
+      const verifying = post(
+        'http://localhost/api/auth/two-factor/verify-backup-code',
+        { code: firstSet.data?.backupCodes?.[0] },
+        challenge.cookie
+      );
+      await Bun.sleep(700);
+      const regenerated = await post(
+        'http://localhost/api/auth/two-factor/generate-backup-codes',
+        { password: user.password },
+        session.cookie
+      );
+      expect(regenerated.status).toBe(HTTP_STATUS.OK);
+      regeneratedCount =
+        ((await regenerated.json()) as { data?: { backupCodes?: string[] } })
+          .data?.backupCodes?.length ?? 0;
+      const verified = await verifying;
+      expect(verified.status).toBe(HTTP_STATUS.OK);
+    } finally {
+      await db.execute(
+        sql`drop trigger _two_factor_proof_delay on verifications`
+      );
+      await db.execute(sql`drop function _two_factor_proof_delay()`);
+    }
+
+    const [credential] = await db
+      .select({
+        remaining: twoFactorCredentials.backupCodesRemaining,
+        backupCodes: twoFactorCredentials.backupCodes,
+      })
+      .from(twoFactorCredentials)
+      .where(eq(twoFactorCredentials.userId, user.userId));
+    expect(regeneratedCount).toBeGreaterThan(0);
+    expect(credential?.remaining).toBe(regeneratedCount);
+    expect(
+      await decodeBackupCodes(BETTER_AUTH_SECRET, credential?.backupCodes ?? '')
+    ).toHaveLength(regeneratedCount);
+  }, 20_000);
+});
+
+describe('disclosing the TOTP secret', () => {
+  /** The disclosure rows for `userId`, however the gate was satisfied. */
+  async function disclosures(userId: string): Promise<number> {
+    const rows = await db
+      .select({ newData: auditLogs.newData })
+      .from(auditLogs)
+      .where(eq(auditLogs.userId, userId));
+    return rows.filter(
+      (row) =>
+        (row.newData as { twoFactorSecretDisclosed?: unknown } | null)
+          ?.twoFactorSecretDisclosed === true
+    ).length;
+  }
+
+  test('is audited on a password proof and inside the re-auth window alike', async () => {
+    // `/two-factor/get-totp-uri` hands back the secret itself, and left no
+    // record that it had; inside an open admin re-auth window it left no row
+    // at all.
+    const user = await seedUser();
+    const session = await signInRaw(user);
+    const started = await post(
+      'http://localhost/api/auth/two-factor/totp/start',
+      { password: user.password },
+      session.cookie
+    );
+    expect(started.status).toBe(HTTP_STATUS.OK);
+
+    const refused = await post(
+      'http://localhost/api/auth/two-factor/get-totp-uri',
+      {},
+      session.cookie
+    );
+    expect(refused.status).not.toBe(HTTP_STATUS.OK);
+    expect(await disclosures(user.userId)).toBe(0);
+
+    const withPassword = await post(
+      'http://localhost/api/auth/two-factor/get-totp-uri',
+      { password: user.password },
+      session.cookie
+    );
+    expect(withPassword.status).toBe(HTTP_STATUS.OK);
+    expect(await disclosures(user.userId)).toBe(1);
+
+    const reauth = await post(
+      'http://localhost/api/dash/auth/reauth',
+      { password: user.password },
+      session.cookie
+    );
+    expect(reauth.status).toBe(HTTP_STATUS.OK);
+    const inWindow = await post(
+      'http://localhost/api/auth/two-factor/get-totp-uri',
+      {},
+      session.cookie
+    );
+    expect(inWindow.status).toBe(HTTP_STATUS.OK);
+    expect(await disclosures(user.userId)).toBe(2);
+  });
+});
+
+describe('signing in with no second factor', () => {
+  test('a remembered sign-in clears the marker an earlier short one left', async () => {
+    // Only the challenge paths cleared it. A password sign-in that needed no
+    // challenge left `dont_remember` in the jar, so Better Auth skipped the
+    // sliding refresh for a session the user had asked to keep.
+    const user = await seedUser();
+    const short = await signInRaw(user, { rememberMe: false });
+    expect(short.status).toBe(HTTP_STATUS.OK);
+    expect(short.cookie).toContain('dont_remember');
+
+    // Revoked server-side without a sign-out, so the browser keeps its jar.
+    await db.delete(sessions).where(eq(sessions.userId, user.userId));
+
+    const remembered = await signInRaw(
+      user,
+      { rememberMe: true },
+      short.cookie
+    );
+    expect(remembered.status).toBe(HTTP_STATUS.OK);
+    expect(remembered.cookie).toContain('session_token');
+    expect(remembered.cookie).not.toContain('dont_remember');
+  });
 });

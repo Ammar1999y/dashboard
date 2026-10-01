@@ -93,13 +93,12 @@ describe('a read with a valid cookie cache', () => {
 describe('signing out takes the session artifacts with it', () => {
   /**
    * `revokeSessionArtifacts` says every path that deletes a session owes it the
-   * call, and `/sign-out` is a path this codebase does not own: Better Auth
-   * deletes the row through its own adapter. The three `verifications` rows keyed
-   * by the SESSION id — the two-factor proof and both re-authentication windows —
-   * store no user id, so a session deleted without them leaves rows nothing can
-   * find again until they expire. The `session.delete.after` database hook in
-   * `lib/auth/session/hooks.ts` is what makes the invariant true for the
-   * library's deletes.
+   * call. The three `verifications` rows keyed by the SESSION id — the
+   * two-factor proof and both re-authentication windows — store no user id, so
+   * a session deleted without them leaves rows nothing can find again until
+   * they expire. `/sign-out` deletes the row in the `before` hook
+   * (`lib/auth/path-policy.ts`) through `revokeSessionsWhere`; the
+   * `session.delete.after` database hook covers the library's own deletes.
    */
   test('the re-authentication window opened on it is gone', async () => {
     // `signedInUser` opens the window, which is what writes the rows: a fixture

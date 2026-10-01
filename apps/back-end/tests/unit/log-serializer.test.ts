@@ -196,8 +196,112 @@ const queryErr = serializeForLog(
 );
 check(
   'query error params withheld',
-  !has(queryErr, 'st_live_SENTINEL') && has(queryErr, 'withheld'),
+  !has(queryErr, 'st_live_SENTINEL') && !has(queryErr, 'params:'),
   queryErr
+);
+check(
+  'query error keeps its SQL text and SQLSTATE',
+  has(queryErr, 'Failed query: select * from sessions where token = $1') &&
+    has(queryErr, '42P01'),
+  queryErr
+);
+
+// ── the driver level: value-bearing parts cut, the diagnosis kept ─────
+class DrizzleQueryError extends Error {
+  constructor(
+    readonly query: string,
+    readonly params: unknown[],
+    cause: unknown
+  ) {
+    super(`Failed query: ${query}\nparams: ${params.join(',')}`, { cause });
+  }
+}
+const checkViolation = serializeForLog(
+  new DrizzleQueryError(
+    'insert into "sessions" ("token", "user_agent") values ($1, $2)',
+    ['st_live_ROW_SENTINEL', 'UA'],
+    new SQL.PostgresError(
+      'new row for relation "sessions" violates check constraint "chk_x"',
+      {
+        code: 'ERR_POSTGRES_SERVER_ERROR',
+        errno: '23514',
+        constraint: 'chk_x',
+        table: 'sessions',
+        routine: 'ExecConstraints',
+        detail: 'Failing row contains (st_live_ROW_SENTINEL, UA).',
+        where: 'unnamed portal parameter $1 = st_live_ROW_SENTINEL',
+      }
+    )
+  )
+);
+check(
+  'neither detail nor where reaches the line',
+  !has(checkViolation, 'st_live_ROW_SENTINEL'),
+  checkViolation
+);
+check(
+  'error classes, SQL, SQLSTATE, constraint, table and routine kept',
+  [
+    'DrizzleQueryError',
+    'PostgresError',
+    String.raw`insert into \"sessions\"`,
+    '23514',
+    'chk_x',
+    '"table":"sessions"',
+    'ExecConstraints',
+    'violates check constraint',
+  ].every((needle) => has(checkViolation, needle)),
+  checkViolation
+);
+
+const echoedValue = serializeForLog(
+  new DrizzleQueryError(
+    'select 1 from users where id = $1',
+    ['not"a-uuid-SENTINEL'],
+    new SQL.PostgresError(
+      'invalid input syntax for type uuid: "not"a-uuid-SENTINEL"',
+      { code: 'ERR_POSTGRES_SERVER_ERROR', errno: '22P02' }
+    )
+  )
+);
+check(
+  'a quoted value the driver echoes is cut, even one containing a quote',
+  !has(echoedValue, 'SENTINEL') &&
+    has(echoedValue, 'invalid input syntax for type uuid'),
+  echoedValue
+);
+
+const midMessageValue = serializeForLog(
+  new DrizzleQueryError(
+    'select $1::int',
+    ['98765432109'],
+    new SQL.PostgresError(
+      'value "98765432109" is out of range for type integer',
+      { code: 'ERR_POSTGRES_SERVER_ERROR', errno: '22003' }
+    )
+  )
+);
+check(
+  'a quoted value that is not identifier-shaped is cut mid-message',
+  !has(midMessageValue, '98765432109') &&
+    has(midMessageValue, 'is out of range for type integer'),
+  midMessageValue
+);
+
+const connectionLost = serializeForLog(
+  new DrizzleQueryError(
+    'select 1',
+    [],
+    new SQL.PostgresError('Connection closed', {
+      code: 'ERR_POSTGRES_CONNECTION_CLOSED',
+    })
+  )
+);
+check(
+  "Bun's connection class and message are kept",
+  has(connectionLost, 'ERR_POSTGRES_CONNECTION_CLOSED') &&
+    has(connectionLost, 'Connection closed'),
+  connectionLost
 );
 
 // ── prototype-pollution key ───────────────────────────────────────────

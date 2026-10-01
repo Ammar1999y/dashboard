@@ -22,6 +22,7 @@ import { auditLog, getAuditMeta } from '@/lib/audit';
 import { insertCredentialAccount } from '@/lib/auth/credential-account';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword } from '@/lib/auth/password/hash';
+import { lockActor } from '@/lib/auth/user-eligibility';
 import { parseDataTableParams } from '@/lib/data-table/params';
 import { handleUserConstraintViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody } from '@/lib/http/input';
@@ -132,7 +133,11 @@ export const POST = withApiErrors(
       session,
       userId: actorUserId,
       permissions: actorPermissions,
-    } = await requirePermission(ctx, { resource: 'users', action: 'create' });
+    } = await requirePermission(ctx, {
+      resource: 'users',
+      action: 'create',
+      reauth: true,
+    });
 
     await enforceRateLimit({
       scope: 'users.post',
@@ -150,7 +155,7 @@ export const POST = withApiErrors(
     )
       throw insufficientPermissions();
 
-    if (actorPermissions && isCustomRole && input.permissions?.length)
+    if (isCustomRole && input.permissions?.length)
       validatePermissionScope(actorPermissions, input.permissions);
 
     // ADDITIVE, never authoritative: the transaction below re-runs both gates
@@ -160,13 +165,12 @@ export const POST = withApiErrors(
     // preflight as `assertTargetEditable` in `lib/users/edit.ts`.
     if (!isCustomRole) {
       await validateAssignableRole(validID(input.roleId), db);
-      if (actorPermissions)
-        await validateRolePermissionScope(
-          actorPermissions,
-          validID(input.roleId),
-          db,
-          'grant'
-        );
+      await validateRolePermissionScope(
+        actorPermissions,
+        validID(input.roleId),
+        db,
+        'grant'
+      );
     }
 
     // HIBP before Argon2, so a rejected password costs no hash.
@@ -176,15 +180,16 @@ export const POST = withApiErrors(
     const auditMeta = getAuditMeta(ctx);
 
     const newId = await withTransaction(async (tx) => {
-      if (!isCustomRole)
+      await lockActor(tx, actorUserId);
+      if (!isCustomRole) {
         await validateAssignableRole(validID(input.roleId), tx);
-      if (actorPermissions && !isCustomRole)
         await validateRolePermissionScope(
           actorPermissions,
           validID(input.roleId),
           tx,
           'grant'
         );
+      }
 
       const customPermissions =
         isCustomRole && input.permissions?.length ? input.permissions : null;

@@ -31,6 +31,8 @@ import { readFileSync } from 'node:fs';
 
 import { prefixUpperBound } from '@/lib/cache/prefix';
 
+import { compareCodeUnits } from '@/utils/text';
+
 const CACHE = 'lib/cache/index.ts';
 const CHILD = 'tests/fixtures/_cache-prefix-child.cjs';
 const MAX = String.fromCodePoint(0x10_ff_ff);
@@ -136,9 +138,8 @@ for (const [index, result] of outcome.cases.entries()) {
     const survivingOutsiders = result.survivors.filter((k) =>
       OUTSIDERS.includes(k)
     );
-    const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-    expect(survivingOutsiders.toSorted(byCodePoint)).toEqual(
-      expected.toSorted(byCodePoint)
+    expect(survivingOutsiders.toSorted(compareCodeUnits)).toEqual(
+      expected.toSorted(compareCodeUnits)
     );
   });
 }

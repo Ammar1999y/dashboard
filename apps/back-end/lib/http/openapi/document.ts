@@ -46,9 +46,10 @@ function documentVersion(document: JsonSchema): string {
  * every client generated from it is wrong the same way.
  */
 export function openApiDocument(
-  manifest: readonly RouteManifestEntry[] = []
+  manifest: readonly RouteManifestEntry[] = [],
+  withheld: readonly RouteManifestEntry[] = []
 ): JsonSchema {
-  assertConsistent(openApiConsistencyProblems(manifest));
+  assertConsistent(openApiConsistencyProblems(manifest, withheld));
 
   const paths: Record<string, JsonSchema> = {};
 

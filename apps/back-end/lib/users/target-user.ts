@@ -1,8 +1,12 @@
-import type { Executor } from '@/db';
+import type { Executor, Tx } from '@/db';
 import type { ActorPermissions } from '@/lib/permissions/checker';
 import type { RolePolicyTarget } from '@/lib/permissions/roles';
 import type { AccessScope } from '@app/shared/permissions/constants';
 import type { EntityID } from '@app/shared/types';
+
+import { eq } from 'drizzle-orm';
+
+import { roles, users } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
@@ -10,6 +14,8 @@ import { CustomError } from '@app/shared/error-class';
 import { notFoundError } from '@/lib/http/response';
 import { isProtectedSystemRole } from '@/lib/permissions/roles';
 import { validateRolePermissionScope } from '@/lib/permissions/scope';
+
+import { liveUser } from './filters';
 
 interface TargetUserVisibility {
   isSelf: boolean;
@@ -20,13 +26,7 @@ interface TargetUserVisibility {
   scope: AccessScope | null;
 }
 
-/**
- * The single definition of "which user rows this actor may act on", shared by
- * the user routes and their subresources: a subresource must never be
- * reachable when its parent is not.
- *
- * Returns the target's role id, already proved present.
- */
+// Shared with subresources: one must never be reachable when its parent is not.
 export function assertTargetUserVisible(opts: TargetUserVisibility): EntityID {
   if (!opts.roleId) throw notFoundError();
 
@@ -44,36 +44,57 @@ export function assertTargetUserVisible(opts: TargetUserVisibility): EntityID {
 }
 
 /**
- * `assertTargetUserVisible`, then role authority over the target's role as
- * the same 404.
+ * `assertTargetUserVisible` over an unlocked read, for a write that locks the
+ * target before its authoritative checks: a caller the target is hidden from
+ * gets its 404 without holding the row. It takes no lock, so it cannot join a
+ * lock cycle, and the locked re-check still decides.
  */
+export async function assertTargetUserVisibleUnlocked(
+  tx: Tx,
+  opts: { targetId: EntityID; actorUserId: EntityID; scope: AccessScope | null }
+): Promise<void> {
+  const [target] = await tx
+    .select({
+      roleId: users.roleId,
+      createdBy: users.createdBy,
+      roleName: roles.roleName,
+      roleScope: roles.scope,
+    })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(liveUser(eq(users.id, opts.targetId)))
+    .limit(1);
+  if (!target) throw notFoundError();
+  assertTargetUserVisible({
+    isSelf: opts.targetId === opts.actorUserId,
+    roleId: target.roleId,
+    createdBy: target.createdBy,
+    role: { roleName: target.roleName, scope: target.roleScope },
+    actorUserId: opts.actorUserId,
+    scope: opts.scope,
+  });
+}
+
 export async function assertTargetUserReachable(
   executor: Executor,
-  opts: TargetUserVisibility & {
-    actorPermissions: ActorPermissions | undefined;
-  }
+  opts: TargetUserVisibility & { actorPermissions: ActorPermissions }
 ): Promise<EntityID> {
   const roleId = assertTargetUserVisible(opts);
-  if (opts.actorPermissions)
-    await validateRolePermissionScope(
-      opts.actorPermissions,
-      roleId,
-      executor,
-      'reachability'
-    );
+  await validateRolePermissionScope(
+    opts.actorPermissions,
+    roleId,
+    executor,
+    'reachability'
+  );
   return roleId;
 }
 
-/**
- * Non-throwing `validateRolePermissionScope`, for data that is omitted rather
- * than refused, so both paths ask the authority question the same way.
- */
+/** Non-throwing `validateRolePermissionScope`, for data omitted rather than refused. */
 export async function actorCoversTargetRole(
-  actorPermissions: ActorPermissions | undefined,
+  actorPermissions: ActorPermissions,
   roleId: EntityID,
   executor: Executor
 ): Promise<boolean> {
-  if (!actorPermissions) return true;
   try {
     await validateRolePermissionScope(
       actorPermissions,
@@ -83,9 +104,7 @@ export async function actorCoversTargetRole(
     );
     return true;
   } catch (error) {
-    // BOTH refusal shapes: 404 under `'reachability'`, 403 under `'grant'`.
-    // Letting either escape turns a GET that omits session metadata into a
-    // whole-request refusal.
+    // Both refusal shapes (404 and 403), or an omission becomes a whole-request refusal.
     if (
       error instanceof CustomError &&
       (error.status === HTTP_STATUS.FORBIDDEN ||

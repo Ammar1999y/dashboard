@@ -1,9 +1,6 @@
 /**
- * Every `identifier` this codebase writes to `verifications`, in one place
- * because rotation and session deletion find rows by these prefixes.
- *
- * ⚠️ `2fa-` and `2fa-attempts-` are Better Auth's private formats, mirrored:
- * its two-factor verifiers read those rows (see `two-factor/challenge.ts`).
+ * In one place because rotation finds rows by these prefixes. ⚠️ `2fa-` and
+ * `2fa-attempts-` mirror Better Auth's private formats.
  */
 import crypto from 'node:crypto';
 import type { Tx } from '@/db';
@@ -13,7 +10,6 @@ import { eq } from 'drizzle-orm';
 import { verifications } from '@/db/schema';
 
 export const twoFactorChallengeKey = (token: string) => `2fa-${token}`;
-/** `LIKE` pattern matching every `2fa-*` row. */
 export const TWO_FACTOR_KEY_PATTERN = '2fa-%';
 export const twoFactorAttemptsKey = (challengeId: string) =>
   `2fa-attempts-${challengeId}`;
@@ -25,6 +21,9 @@ export const twoFactorProofKey = (sessionId: string) =>
   `2fa-proven-${sessionId}`;
 
 export const trustDeviceKey = (token: string) => `trust-device-${token}`;
+
+/** Valued by the user id, so every two-factor revocation also ends a started enrolment. */
+export const totpEnrolmentKey = (userId: string) => `totp-enrolment-${userId}`;
 
 export const adminReauthKey = (sessionId: string) =>
   `admin-reauth-${sessionId}`;

@@ -88,6 +88,7 @@ import {
 } from '@/lib/permissions/session-refresh';
 
 import { sanitizeForLog } from '@/utils/log';
+import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
 import { seedUser, signedInUser } from '../helpers/session';
@@ -105,7 +106,7 @@ const SELF_UPDATE_CTE = {
 } as const;
 const LOCKING_SELECT = {
   file: 'lib/users/delete.ts',
-  anchor: 'FOR UPDATE OF u',
+  anchor: 'FOR SHARE OF r',
 } as const;
 const ADVISORY_LOCK = {
   file: 'lib/otp/send.ts',
@@ -212,7 +213,7 @@ function jsonbColumns(): string[] {
     for (const column of columns)
       if (column.getSQLType() === 'jsonb') found.push(`${name}.${column.name}`);
   }
-  return found.toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+  return found.toSorted(compareCodeUnits);
 }
 
 /** A session row for `userId`, written through Drizzle's jsonb column mapper. */
@@ -794,7 +795,7 @@ describe('db.execute yields an array, at each call site that reads it', () => {
     expect(after?.name).toBe(renamed);
   });
 
-  test('the locking SELECT … FOR UPDATE OF u FOR SHARE OF r returns the locked row', async () => {
+  test('the locking SELECT … FOR SHARE OF r returns the locked row', async () => {
     const locked = await withTransaction((tx) =>
       tx.execute<{ email: string; role_name: string; role_scope: string }>(
         productionStatement(LOCKING_SELECT, [

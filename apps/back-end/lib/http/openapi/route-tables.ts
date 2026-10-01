@@ -47,6 +47,35 @@ export const BODYLESS_BAD_REQUEST_ROUTES = new Set([
   'DELETE /api/dash/users/:id',
 ]);
 
+/**
+ * Routes that pass `requireId` the not-found 404, so a malformed path id is
+ * never their 422.
+ */
+export const ID_NOT_FOUND_ROUTES = new Set([
+  'GET /api/dash/media/files/:id',
+  'PUT /api/dash/media/files/:id',
+  'POST /api/dash/media/files/:id/publish',
+  'POST /api/dash/media/files/:id/unpublish',
+  'PUT /api/dash/media/folders/:id',
+  'DELETE /api/dash/media/folders/:id',
+  'POST /api/dash/users/:id/two-factor/reset',
+]);
+
+/**
+ * JSON-body routes that pass `readJsonBody` a refusal status, so a failed
+ * schema is that status, never 422, and its published description covers it.
+ */
+export const BODY_SCHEMA_REFUSALS: Record<
+  string,
+  { status: string; description: string }
+> = {
+  'POST /api/dash/auth/reauth': {
+    status: '401',
+    description:
+      'No session, the session row is no longer live, or the password is absent, malformed or wrong.',
+  },
+};
+
 /** Correct-method operations whose own handler can deliberately answer 404. */
 export const NOT_FOUND_ROUTES = new Set([
   // The target user is gone, out of the caller's scope, or holds no such
@@ -91,7 +120,7 @@ export const QUERY_VALIDATION_ROUTES = new Set([
   'GET /api/dash/users/:id/sessions',
   'GET /api/dash/media',
   'POST /api/dash/media/files',
-  // `recursive` is either `true` or absent; anything else is a refusal.
+  // `recursive` other than `true`, `false`, empty or absent is a refusal.
   'DELETE /api/dash/media/folders/:id',
   // The bucket a publish needs may be disabled in this deployment.
   'POST /api/dash/media/files/:id/publish',
@@ -152,6 +181,7 @@ export const OPERATION_DOCS: Record<
   },
   'POST /api/dash/permissions': {
     summary: 'Create a role and permission matrix',
+    description: 'This operation requires re-authentication.',
     tag: 'Permissions',
   },
   'GET /api/dash/permissions/:id': {
@@ -166,6 +196,7 @@ export const OPERATION_DOCS: Record<
   },
   'DELETE /api/dash/permissions/:id': {
     summary: 'Delete a role',
+    description: 'This operation requires re-authentication.',
     tag: 'Permissions',
   },
   'GET /api/dash/roles': {
@@ -210,6 +241,7 @@ export const OPERATION_DOCS: Record<
   },
   'POST /api/dash/users': {
     summary: 'Create a dashboard user',
+    description: 'This operation requires re-authentication.',
     tag: 'Users',
   },
   'GET /api/dash/users/:id': {
@@ -224,10 +256,11 @@ export const OPERATION_DOCS: Record<
     // caller's own. A generated client validates `{ name }` happily for another
     // user and then gets a 422 for the admin fields it did not send.
     description:
-      'Two bodies, selected by WHO the path id names. Updating your own account takes the self shape (`name` alone). Updating anyone else takes the administrative shape, whose required fields are listed in its branch — sending the self shape for another user is refused 422. The branches are not distinguishable from the payload, so a client must pick by comparing the path id with the signed-in user.',
+      'Two bodies, selected by WHO the path id names. Updating your own account takes the self shape (`name` alone). Updating anyone else takes the administrative shape, whose required fields are listed in its branch — sending the self shape for another user is refused 422. The branches are not distinguishable from the payload, so a client must pick by comparing the path id with the signed-in user. An administrative change to the password, email, phone, role, permissions or active flag requires re-authentication.',
   },
   'DELETE /api/dash/users/:id': {
     summary: 'Delete a dashboard user',
+    description: 'This operation requires re-authentication.',
     tag: 'Users',
   },
   'GET /api/dash/users/:id/sessions': {
@@ -240,6 +273,7 @@ export const OPERATION_DOCS: Record<
   },
   'POST /api/dash/users/:id/two-factor/reset': {
     summary: 'Clear a user’s two-factor enrolment',
+    description: 'This operation requires re-authentication.',
     tag: 'Users',
   },
   'GET /api/dash/media': {

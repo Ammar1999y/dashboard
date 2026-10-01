@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test';
 
 import { and, eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db, withTransaction } from '@/db';
+import { DATABASE_RETRY_AFTER_S, MAX_POOL_CONNECTIONS } from '@/db/limits';
 import {
   accounts,
   auditLogs,
@@ -11,10 +12,13 @@ import {
   sessions,
   twoFactorMethods,
   users,
+  verifications,
 } from '@/db/schema';
 import { ROUTES } from '@/routes';
+import * as z from 'zod';
 
 import { REQUIRE_EMAIL_VERIFICATION } from '@app/shared/config';
+import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
 
 import { auth } from '@/lib/auth';
 import { hasAdminReauth } from '@/lib/auth/reauth/window';
@@ -23,12 +27,17 @@ import {
   revokePendingProofs,
   unlinkGoogle,
 } from '@/lib/auth/session/rotation';
+import { totpEnrolmentKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { openApiDocument } from '@/lib/http/openapi/document';
 import { toPublishedManifest } from '@/lib/http/route-manifest';
+import { generateUuidV7 } from '@/lib/id';
+
+import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
 import { startGoogle } from '../helpers/google';
+import { sentMail, settleDelivery } from '../helpers/mailbox';
 import { seedOtpProof } from '../helpers/otp';
 import { resetRateLimits } from '../helpers/rate-limit';
 import {
@@ -41,6 +50,21 @@ import {
 
 beforeEach(resetTables);
 beforeEach(resetRateLimits);
+
+async function enrolOtp(userId: string, channels: ('email' | 'sms')[]) {
+  await db.insert(twoFactorMethods).values(
+    channels.map((channel, index) => ({
+      userId,
+      method: 'otp' as const,
+      channel,
+      isDefault: index === 0,
+    }))
+  );
+  await db
+    .update(users)
+    .set({ twoFactorEnabled: true })
+    .where(eq(users.id, userId));
+}
 
 async function userState(userId: string) {
   const [user] = await db.select().from(users).where(eq(users.id, userId));
@@ -191,6 +215,118 @@ describe('Google sign-in through the routed OAuth exchange', () => {
       )
     ).toBe(true);
   });
+
+  test('Google refuses an account whose only second factor is the mailbox Google just proved', async () => {
+    const owner = await seedUser();
+    await enrolOtp(owner.userId, ['email']);
+    const flow = await startGoogle({
+      sub: 'email-otp-only-subject',
+      email: owner.email,
+    });
+    const response = await flow.callback();
+    expect(response.status).toBe(401);
+    await settleDelivery();
+    expect(sentMail().filter((mail) => mail.to === owner.email)).toEqual([]);
+    const after = await userState(owner.userId);
+    expect(after.sessions).toHaveLength(0);
+  });
+
+  test('that refusal is audited although the sign-in transaction rolls back', async () => {
+    const owner = await seedUser();
+    await enrolOtp(owner.userId, ['email']);
+    const flow = await startGoogle({
+      sub: 'email-otp-only-audited-subject',
+      email: owner.email,
+    });
+    const response = await flow.callback();
+    expect(response.status).toBe(401);
+
+    const after = await userState(owner.userId);
+    expect(
+      after.accounts.filter((account) => account.providerId === 'google')
+    ).toHaveLength(0);
+    expect(after.sessions).toHaveLength(0);
+    const refusals = await db
+      .select({ newData: auditLogs.newData })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.userId, owner.userId),
+          eq(auditLogs.tableName, 'sessions')
+        )
+      );
+    // Written after the rollback, so it describes no session.
+    expect(refusals.map((row) => row.newData)).toEqual([
+      expect.objectContaining({
+        reason: 'two_factor_excluded_by_first_factor',
+        twoFactorRefused: true,
+        sessionRolledBack: true,
+        firstFactor: 'google',
+      }),
+    ]);
+    expect(refusals[0]?.newData).not.toHaveProperty('sessionAbandoned');
+  });
+
+  test('Google never offers the email OTP beside another second factor', async () => {
+    const owner = await seedUser({
+      phoneNumber: uniquePhone(),
+      phoneNumberVerified: true,
+    });
+    await enrolOtp(owner.userId, ['email', 'sms']);
+    const flow = await startGoogle({
+      sub: 'mixed-otp-subject',
+      email: owner.email,
+    });
+    const response = await flow.callback();
+    expect(response.status).toBe(200);
+    const body = z
+      .object({
+        twoFactorRedirect: z.literal(true),
+        twoFactorOptions: z.array(z.object({ id: z.string() })),
+        defaultMethod: z.string().nullable(),
+      })
+      .parse(await response.json());
+    expect(body.twoFactorOptions.map((option) => option.id)).toEqual([
+      'otp:phone',
+    ]);
+    expect(body.defaultMethod).toBe('otp:phone');
+    const sent = await app.handle(
+      new Request(`${PUBLIC_ORIGIN}/api/auth/two-factor/otp/send`, {
+        method: 'POST',
+        headers: baseHeaders({
+          cookie: mergeCookies(flow.cookie, response.headers.getSetCookie()),
+          origin: PUBLIC_ORIGIN,
+          'content-type': 'application/json',
+        }),
+        body: JSON.stringify({ option: 'otp:email' }),
+      })
+    );
+    expect(sent.status).not.toBe(200);
+    await settleDelivery();
+    expect(sentMail().filter((mail) => mail.to === owner.email)).toEqual([]);
+  });
+
+  test('more concurrent Google challenges than the pool holds all complete', async () => {
+    const flows = [];
+    for (let index = 0; index < MAX_POOL_CONNECTIONS + 2; index++) {
+      const owner = await seedUser({
+        phoneNumber: uniquePhone(),
+        phoneNumberVerified: true,
+      });
+      await enrolOtp(owner.userId, ['sms']);
+      flows.push(
+        await startGoogle({
+          sub: `pool-subject-${index}`,
+          email: owner.email,
+        })
+      );
+    }
+    const responses = await Promise.all(flows.map((flow) => flow.callback()));
+    expect(responses.map((response) => response.status)).toEqual(
+      flows.map(() => 200)
+    );
+  }, 30_000);
+
   test('first exact match links and verifies without replacing administrator fields; password still works', async () => {
     expect(REQUIRE_EMAIL_VERIFICATION).toBe(false);
     const owner = await seedUser({ emailVerified: false });
@@ -203,10 +339,7 @@ describe('Google sign-in through the routed OAuth exchange', () => {
       picture: 'https://example.invalid/image',
     });
     expect(
-      flow.url.searchParams
-        .get('scope')
-        ?.split(' ')
-        .toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1))
+      flow.url.searchParams.get('scope')?.split(' ').toSorted(compareCodeUnits)
     ).toEqual(['email', 'openid']);
     expect(flow.url.searchParams.get('access_type')).toBe('online');
     expect(flow.url.searchParams.get('nonce')).toBeTruthy();
@@ -357,16 +490,20 @@ describe('Google sign-in through the routed OAuth exchange', () => {
       sub: 'concurrent-subject',
       email: owner.email,
     });
+    // The loser either finds the state already consumed (the lost-state 302) or
+    // reads it first and loses the once-marker (401); which is timing.
     const responses = await Promise.all([flow.callback(), flow.callback()]);
-    expect(
-      responses.map((response) => response.status).toSorted((a, b) => a - b)
-    ).toEqual([200, 401]);
+    const [won, lost] = responses
+      .map((response) => response.status)
+      .toSorted((a, b) => a - b);
+    expect(won).toBe(200);
+    expect([302, 401]).toContain(lost ?? 0);
     const state = await userState(owner.userId);
     expect(
       state.accounts.filter((account) => account.providerId === 'google')
     ).toHaveLength(1);
     expect(state.sessions).toHaveLength(1);
-    await expect(flow.callback()).resolves.toHaveProperty('status', 401);
+    await expect(flow.callback()).resolves.toHaveProperty('status', 302);
     const audits = await db
       .select()
       .from(auditLogs)
@@ -528,6 +665,110 @@ describe('Google sign-in through the routed OAuth exchange', () => {
     }
   );
 
+  test('a database fault reading the state is not reported as a lost state', async () => {
+    const owner = await seedUser();
+    const flow = await startGoogle({ sub: 'state-fault', email: owner.email });
+    const context = await auth.$context;
+    const lookup = spyOn(
+      context.internalAdapter,
+      'findVerificationValue'
+    ).mockRejectedValue(new Error('connection terminated'));
+    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await flow.callback();
+      expect(lookup).toHaveBeenCalled();
+      expect(response.status).toBe(500);
+      expect(response.headers.get('retry-after')).toBeNull();
+      // Not even `parseState`'s own error redirect rides on the answer.
+      expect(response.headers.get('location')).toBeNull();
+    } finally {
+      lookup.mockRestore();
+      logged.mockRestore();
+    }
+  });
+
+  test.each([undefined, '/finish'])(
+    'a deadlock after a valid state answers 503 with Retry-After, callbackURL %p',
+    async (callbackURL) => {
+      const owner = await seedUser();
+      const flow = await startGoogle(
+        { sub: 'deadlock-subject', email: owner.email },
+        { callbackURL }
+      );
+      const context = await auth.$context;
+      const deadlock = spyOn(
+        context.internalAdapter,
+        'consumeVerificationValue'
+      ).mockRejectedValue(
+        new Error('Failed query', {
+          cause: Object.assign(new Error('deadlock detected'), {
+            errno: '40P01',
+          }),
+        })
+      );
+      const logged = spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const response = await flow.callback();
+        expect(deadlock).toHaveBeenCalled();
+        expect(response.status).toBe(503);
+        expect(response.headers.get('retry-after')).toBe(
+          String(DATABASE_RETRY_AFTER_S)
+        );
+        expect(response.headers.get('location')).toBeNull();
+        expect(response.headers.getSetCookie()).not.toContainEqual(
+          expect.stringContaining('oauth_result')
+        );
+      } finally {
+        deadlock.mockRestore();
+        logged.mockRestore();
+      }
+    }
+  );
+
+  test('an unexpected exception after a valid state answers 500, not a credential refusal', async () => {
+    const owner = await seedUser();
+    const flow = await startGoogle(
+      { sub: 'unexpected-subject', email: owner.email },
+      { callbackURL: '/finish' }
+    );
+    const context = await auth.$context;
+    const consume = spyOn(
+      context.internalAdapter,
+      'consumeVerificationValue'
+    ).mockRejectedValue(new Error('connection terminated'));
+    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await flow.callback();
+      expect(consume).toHaveBeenCalled();
+      expect(response.status).toBe(500);
+      expect(response.headers.get('location')).toBeNull();
+    } finally {
+      consume.mockRestore();
+      logged.mockRestore();
+    }
+  });
+
+  test("a state naming one of the application's verification rows never reaches the lookup", async () => {
+    const owner = await seedUser();
+    await db.insert(verifications).values({
+      identifier: totpEnrolmentKey(owner.userId),
+      value: owner.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const answers = await Promise.all(
+      [owner.userId, generateUuidV7()].map((userId) =>
+        app.handle(
+          new Request(
+            `${PUBLIC_ORIGIN}/api/auth/oauth/google/callback?state=${totpEnrolmentKey(userId)}&code=harness-code`,
+            { headers: baseHeaders() }
+          )
+        )
+      )
+    );
+    // One answer for the row that exists and the one that does not.
+    expect(answers.map((answer) => answer.status)).toEqual([400, 400]);
+  });
+
   test('callback state binds the browser; off-origin return URLs and forged client profiles fail', async () => {
     const owner = await seedUser();
     const flow = await startGoogle({
@@ -540,7 +781,12 @@ describe('Google sign-in through the routed OAuth exchange', () => {
         { headers: baseHeaders() }
       )
     );
-    expect(noCookie.status).toBe(401);
+    // The lost state held the flow's callbackURL, so the browser goes to the
+    // one page that can say "start again" instead of landing on raw JSON.
+    expect(noCookie.status).toBe(302);
+    expect(noCookie.headers.get('location')).toBe(
+      `${PUBLIC_ORIGIN}${OAUTH_STATE_LOST_PAGE}`
+    );
     for (const body of [
       { callbackURL: 'https://attacker.example' },
       { email: owner.email, sub: 'forged' },
@@ -611,11 +857,12 @@ describe('Google sign-in through the routed OAuth exchange', () => {
         .update(users)
         .set({ email: `changed.${owner.email}` })
         .where(eq(users.id, owner.userId));
-      await unlinkGoogle(tx, owner.userId, {
-        ip: null,
-        userAgent: null,
-        apiPath: '/test/email-change',
-      });
+      await unlinkGoogle(
+        tx,
+        owner.userId,
+        { userId: owner.userId, email: `changed.${owner.email}` },
+        { ip: null, userAgent: null, apiPath: '/test/email-change' }
+      );
       await revokePendingProofs(tx, owner.userId);
       await revokeOtherSessions(tx, owner.userId);
     });

@@ -36,8 +36,11 @@ export const mediaValidationMsg = {
  * Path separators and every control or format character. A name is a display
  * string, never a path segment, but `/` is refused anyway so a name can never
  * READ as a path — and because `chk_folders_name` in the schema refuses it too.
+ *
+ * `\p{Cs}` under `u` matches only an unpaired surrogate, which PostgreSQL
+ * stores as U+FFFD in `varchar` and refuses in `jsonb`.
  */
-const FORBIDDEN_NAME_CHARACTERS = /[\p{Cc}\p{Cf}/\\]/u;
+const FORBIDDEN_NAME_CHARACTERS = /[\p{Cc}\p{Cf}\p{Cs}/\\]/u;
 
 /**
  * NFC first, then whitespace collapse, then trim — in that order. Unicode
@@ -86,7 +89,7 @@ const NAMED = String.raw`\s*${NAME_CHARACTER_CLASS}(?:${NAME_CHARACTER_CLASS}|\s
 const NAME_PATTERN = `^${NAMED}$`;
 const FOLDER_NAME_PATTERN = String.raw`^(?!\s*\.{1,2}\s*$)${NAMED}$`;
 const NAME_DESCRIPTION =
-  'Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, `/` and `\\` are rejected';
+  'Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected';
 
 export const folderNameSchema = z.preprocess(
   normalizeName,

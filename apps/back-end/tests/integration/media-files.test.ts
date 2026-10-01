@@ -28,20 +28,28 @@ import {
 } from 'bun:test';
 import type { SignedInSession } from '../helpers/session';
 import type { FileTypeSpec } from '@/lib/media/allowlist';
+import type { UploadPurpose } from '@/lib/media/policy';
 import type { BucketType } from '@app/shared/validation/enums';
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db, withTransaction } from '@/db';
-import { auditLogs, files, orphanedObjects } from '@/db/schema';
+import {
+  auditLogs,
+  files,
+  orphanedObjects,
+  rolePermissions,
+} from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
+import { DOC_MIME_TYPE } from '@app/shared/validation/media-types';
 
 import * as purge from '@/lib/cloudflare/purge';
 import { generateUuidV7 } from '@/lib/id';
 import { FILE_TYPES } from '@/lib/media/allowlist';
+import { downloadFilename, downloadUrl } from '@/lib/media/files';
 import { claimFiles, sweepFiles } from '@/lib/media/lifecycle';
 import { attachFiles, linkFiles, promoteForLink } from '@/lib/media/link';
 import { mediaMsg } from '@/lib/media/messages';
@@ -51,6 +59,8 @@ import {
 } from '@/lib/media/orphaned-objects';
 import { retryTransitions, transitionFile } from '@/lib/media/visibility';
 import * as r2 from '@/lib/r2/client';
+
+import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
 import {
@@ -75,13 +85,12 @@ import {
   referrerCount,
   unrefer,
   withSource,
+  withUploadPurpose,
 } from '../helpers/usage-registry';
 
 const PUBLIC_BUCKET = process.env.R2_PUBLIC_BUCKET ?? '';
 const PRIVATE_BUCKET = process.env.R2_PRIVATE_BUCKET ?? '';
 const PUBLIC_URL = process.env.R2_PUBLIC_URL ?? '';
-
-const byText = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
 
 interface Answer {
   status: number;
@@ -229,7 +238,7 @@ function deletedBucketsFor(key: string): string[] {
   return storeOpsOf('DeleteObjects')
     .filter((op) => (op.keys ?? []).includes(key))
     .flatMap((op) => (op.bucket === undefined ? [] : [op.bucket]))
-    .toSorted(byText);
+    .toSorted(compareCodeUnits);
 }
 
 const sessions: { admin?: SignedInSession; viewer?: SignedInSession } = {};
@@ -248,6 +257,14 @@ function actorOf(session: SignedInSession) {
     email: session.user.email,
     scope: 'all' as const,
     meta: { ip: null, userAgent: null, apiPath: '/test' },
+  };
+}
+
+/** What owner code hands `linkFiles`: its caller, and the request carrying the session. */
+function linkerOf(session: SignedInSession) {
+  return {
+    actor: actorOf(session),
+    headers: authedRequest(session, '/test').headers,
   };
 }
 
@@ -365,7 +382,7 @@ describe('upload into a folder', () => {
     expect(swept.removed).toBe(1);
     expect(await rowOf(row?.id ?? '')).toBeNull();
     expect(deletedBucketsFor(row?.r2Key ?? '')).toEqual(
-      [PRIVATE_BUCKET, PUBLIC_BUCKET].toSorted(byText)
+      [PRIVATE_BUCKET, PUBLIC_BUCKET].toSorted(compareCodeUnits)
     );
   });
 
@@ -536,7 +553,7 @@ describe('listing, renaming, moving', () => {
       breadcrumbs: unknown[];
     };
     expect(
-      dataA.files.map((file) => file.displayName).toSorted(byText)
+      dataA.files.map((file) => file.displayName).toSorted(compareCodeUnits)
     ).toEqual(['alpha.svg', 'beta.svg']);
     expect(inA.body.meta).toMatchObject({ total: 2 });
 
@@ -648,6 +665,26 @@ describe('listing, renaming, moving', () => {
     );
     expect(badFolder.status).toBe(HTTP_STATUS.NOT_FOUND);
     expect(badFolder.body.message).toBe(mediaMsg.folderNotFound);
+  });
+
+  test('a type disabled after files of it were stored keeps its download extension', async () => {
+    // The extension came from the upload allowlist, so a stored `.doc` renamed
+    // `report` downloaded, and was published, as a bare `report`.
+    expect(FILE_TYPES.has(DOC_MIME_TYPE)).toBe(false);
+    const row = { displayName: 'report', mimeType: DOC_MIME_TYPE };
+
+    expect(downloadFilename(row)).toBe('report.doc');
+    expect(downloadFilename({ ...row, displayName: 'report.DOC' })).toBe(
+      'report.DOC'
+    );
+    const disposition = new URL(
+      await downloadUrl({
+        ...row,
+        r2Key: 'm/2026/01/0192b4b6-6f1a-7c3e-9a1f-2b3c4d5e6f70.doc',
+        bucketType: 'private',
+      })
+    ).searchParams.get('response-content-disposition');
+    expect(disposition).toContain('filename="report.doc"');
   });
 
   test('filters over the enum columns are checked before SQL: an unknown member is 422, emptiness is NULL', async () => {
@@ -1466,7 +1503,9 @@ describe('publish and unpublish', () => {
         bucketType: orphanedObjects.bucketType,
       })
       .from(orphanedObjects);
-    return rows.map((row) => `${row.bucketType}/${row.r2Key}`).toSorted(byText);
+    return rows
+      .map((row) => `${row.bucketType}/${row.r2Key}`)
+      .toSorted(compareCodeUnits);
   }
 
   test('a copy landing between the two bucket deletes is removed by the writer whose row is gone', async () => {
@@ -1645,7 +1684,7 @@ describe('publish and unpublish', () => {
         hasMore: true,
       });
       expect(await orphanDemands()).toEqual(
-        stuck.map((key) => `private/${key}`).toSorted(byText)
+        stuck.map((key) => `private/${key}`).toSorted(compareCodeUnits)
       );
     } finally {
       clearObjectStoreFailures();
@@ -1812,7 +1851,7 @@ describe('deletion and the composite foreign key', () => {
       'DeleteObjects',
     ]);
     expect(deletedBucketsFor(key)).toEqual(
-      [PRIVATE_BUCKET, PUBLIC_BUCKET].toSorted(byText)
+      [PRIVATE_BUCKET, PUBLIC_BUCKET].toSorted(compareCodeUnits)
     );
     expect(await auditActions(file.id)).toContain('DELETE');
   });
@@ -2198,7 +2237,7 @@ describe('entity uploads: claiming, governance, unfiled', () => {
         linkFiles({
           ids: [held.id],
           purpose: publicPurpose,
-          actor: actorOf(admin()),
+          ...linkerOf(admin()),
           write: async () => {},
         })
       ).rejects.toThrow(mediaMsg.linkNotAllowed);
@@ -2220,7 +2259,7 @@ describe('entity uploads: claiming, governance, unfiled', () => {
         linkFiles({
           ids: [orphan.id],
           purpose: publicPurpose,
-          actor: actorOf(admin()),
+          ...linkerOf(admin()),
           write: async () => {},
         })
       ).rejects.toThrow(mediaMsg.linkNotAllowed);
@@ -2236,7 +2275,7 @@ describe('entity uploads: claiming, governance, unfiled', () => {
         linkFiles({
           ids: [document.id],
           purpose: publicPurpose,
-          actor: actorOf(admin()),
+          ...linkerOf(admin()),
           write: async () => {},
         })
       ).rejects.toThrow(mediaMsg.kindNotAllowedHere);
@@ -2261,7 +2300,7 @@ describe('entity uploads: claiming, governance, unfiled', () => {
       await linkFiles({
         ids: [picked.id],
         purpose,
-        actor: actorOf(admin()),
+        ...linkerOf(admin()),
         write: async (tx) => {
           await refer(picked.id, tx);
         },
@@ -2287,7 +2326,7 @@ describe('entity uploads: claiming, governance, unfiled', () => {
       await promoteForLink({
         ids: [raced.id],
         purpose,
-        actor: actorOf(admin()),
+        ...linkerOf(admin()),
       });
       expect(await rowOf(raced.id)).toMatchObject({ bucketType: 'public' });
       await transitionFile({
@@ -2333,7 +2372,7 @@ describe('entity uploads: claiming, governance, unfiled', () => {
       await linkFiles({
         ids: [pendingPrivate.id],
         purpose: privatePurpose,
-        actor: actorOf(admin()),
+        ...linkerOf(admin()),
         write: async (tx) => {
           await refer(pendingPrivate.id, tx);
         },
@@ -2344,6 +2383,110 @@ describe('entity uploads: claiming, governance, unfiled', () => {
       });
       expect(await referrerCount(pendingPrivate.id)).toBe(1);
     });
+  });
+
+  test('a link that would publish takes media.publish, read from the database', async () => {
+    // Linking used to publish on the owner's write grant alone, so any
+    // create/edit holder could make a private library file world-readable
+    // through the first public purpose a project declares.
+    await withSource(PUBLIC_SOURCE, async () => {
+      const purpose = {
+        visibility: 'public' as const,
+        kinds: ['image' as const],
+      };
+      const folderId = await createFolder(admin(), 'Linked without publish');
+      const refusedWith = async (
+        linker: ReturnType<typeof linkerOf>,
+        fileId: string
+      ) => {
+        await expect(
+          linkFiles({
+            ids: [fileId],
+            purpose,
+            ...linker,
+            write: async (tx) => {
+              await refer(fileId, tx);
+            },
+          })
+        ).rejects.toMatchObject({ status: HTTP_STATUS.FORBIDDEN });
+        expect(await rowOf(fileId)).toMatchObject({
+          bucketType: 'private',
+          transition: null,
+        });
+        expect(storeHas(PUBLIC_BUCKET, await keyOf(fileId))).toBe(false);
+        expect(await referrerCount(fileId)).toBe(0);
+      };
+
+      const editor = await signedInUser({
+        permissions: { media: { view: true, create: true, edit: true } },
+      });
+      const unpublished = await upload(admin(), folderId, svgForm('no.svg'));
+      await refusedWith(linkerOf(editor), unpublished.id);
+
+      // Revoked after sign-in: the session's cached matrix still says yes.
+      const publisher = await signedInUser({
+        permissions: {
+          media: { view: true, create: true, edit: true, publish: true },
+        },
+      });
+      await db
+        .update(rolePermissions)
+        .set({ permissions: { view: true, create: true, edit: true } })
+        .where(
+          and(
+            eq(rolePermissions.roleId, publisher.user.roleId),
+            eq(rolePermissions.pageName, 'media')
+          )
+        );
+      const revoked = await upload(admin(), folderId, svgForm('revoked.svg'));
+      await refusedWith(linkerOf(publisher), revoked.id);
+    });
+  });
+
+  test('an upload to a public purpose takes media.publish', async () => {
+    const cover: UploadPurpose = { visibility: 'public', kinds: ['image'] };
+    const path = '/api/upload/file?resource=users&purpose=cover';
+    const publicPuts = () =>
+      storeOpsOf('PutObject').filter((op) => op.bucket === PUBLIC_BUCKET)
+        .length;
+
+    await withSource(PUBLIC_SOURCE, () =>
+      withUploadPurpose('users', 'cover', cover, async () => {
+        const writer = await signedInUser({
+          permissions: { users: { view: true, create: true, edit: true } },
+        });
+        const putsBefore = publicPuts();
+        const refused = await call(
+          writer,
+          'POST',
+          path,
+          svgForm('cover.svg', 'files')
+        );
+        expect(refused.status, JSON.stringify(refused.body)).toBe(
+          HTTP_STATUS.FORBIDDEN
+        );
+        expect(publicPuts()).toBe(putsBefore);
+
+        const publisher = await signedInUser({
+          permissions: {
+            users: { view: true, create: true, edit: true },
+            media: { view: true, publish: true },
+          },
+        });
+        const accepted = await call(
+          publisher,
+          'POST',
+          path,
+          svgForm('cover.svg', 'files')
+        );
+        expect(accepted.status, JSON.stringify(accepted.body)).toBe(
+          HTTP_STATUS.CREATED
+        );
+        const [file] = accepted.body.data as MediaFile[];
+        expect(file?.bucketType).toBe('public');
+        expect(storeHas(PUBLIC_BUCKET, await keyOf(file?.id ?? ''))).toBe(true);
+      })
+    );
   });
 });
 
@@ -2569,8 +2712,8 @@ describe('recursive folder delete', () => {
       pending: string[];
     };
     expect(outcome.folders).toBe(2);
-    expect(outcome.deleted.toSorted(byText)).toEqual(
-      [top.id, deep.id].toSorted(byText)
+    expect(outcome.deleted.toSorted(compareCodeUnits)).toEqual(
+      [top.id, deep.id].toSorted(compareCodeUnits)
     );
     expect(outcome.pending).toEqual([]);
 

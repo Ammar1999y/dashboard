@@ -1,5 +1,8 @@
+import type { HandlerOutput, HandlerRequestMeta } from '../contract';
 import type { RouteDefinition } from '../route-manifest';
 
+import { withQueuedCookies } from '../cookies';
+import { assertSameOriginWrite } from '../origin';
 import { enforcePreAuthIpLimit } from '../pre-auth';
 import { buildRequestMeta, withBodyPolicy } from '../request';
 import { handleApiError, toWebResponse } from '../response';
@@ -23,9 +26,13 @@ interface ElysiaRouteContext {
  * The order is the security-relevant part:
  *
  *   1. read the request head — no body byte is touched
- *   2. run admission checks (the coarse per-IP limit) against that head
+ *   2. run admission checks (the origin check, the coarse per-IP limit)
+ *      against that head
  *   3. extend the per-request timeout, if the route asked for one
  *   4. hand the handler LAZY readers, gated to the shape the route declared
+ *
+ * Every response, a refusal included, carries the cookies the session reads
+ * queued (`withQueuedCookies`); a 401 is often what delivers their expiry.
  *
  * ⚠️ Every route registered with this MUST use `elysiaRouteConfig`: Elysia
  * parses the body into `ctx.body` by default, which drains the stream the
@@ -33,18 +40,23 @@ interface ElysiaRouteContext {
  */
 export function toElysiaHandler(route: RouteDefinition) {
   return async (ctx: ElysiaRouteContext): Promise<Response> => {
+    let meta: HandlerRequestMeta | undefined;
+    const respond = (output: HandlerOutput) =>
+      toWebResponse(meta ? withQueuedCookies(output, meta.headers) : output);
+
     try {
-      const meta = buildRequestMeta(ctx.request, ctx.params ?? {});
+      meta = buildRequestMeta(ctx.request, ctx.params ?? {});
+      assertSameOriginWrite(meta);
       if (route.preAuth === 'ip-limit') await enforcePreAuthIpLimit(meta);
       if (route.timeoutSeconds !== undefined)
         ctx.server?.timeout(ctx.request, route.timeoutSeconds);
-      return toWebResponse(
+      return respond(
         await route.handler(
           withBodyPolicy(meta, route.body, route.maxJsonBodyBytes)
         )
       );
     } catch (error) {
-      return toWebResponse(handleApiError(error));
+      return respond(handleApiError(error));
     }
   };
 }

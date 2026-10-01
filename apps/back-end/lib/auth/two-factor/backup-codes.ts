@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
+import type { Executor } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { SymmetricDecryptOptions } from 'better-auth/crypto';
 
 import { eq, sql } from 'drizzle-orm';
 
-import { db } from '@/db';
 import { twoFactorCredentials } from '@/db/schema';
 import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 
@@ -25,11 +25,8 @@ export function generateBackupCodes(): string[] {
   });
 }
 
-/**
- * The exact storage the plugin's `verify-backup-code` reads back: a JSON array
- * under `symmetricEncrypt`, which is what `storeBackupCodes: "encrypted"` — the
- * default this deployment leaves in place — means.
- */
+// Must match what the plugin's `verify-backup-code` reads under its default
+// `storeBackupCodes: "encrypted"`.
 export function encodeBackupCodes(
   key: SymmetricDecryptOptions['key'],
   codes: string[]
@@ -37,7 +34,6 @@ export function encodeBackupCodes(
   return symmetricEncrypt({ key, data: JSON.stringify(codes) });
 }
 
-/** The set `encodeBackupCodes` stored, or `null` when the blob is not one. */
 export async function decodeBackupCodes(
   key: SymmetricDecryptOptions['key'],
   blob: string
@@ -62,19 +58,15 @@ export async function decodeBackupCodes(
 }
 
 /**
- * One backup code was just spent by the plugin's verifier.
- *
- * ⚠️ The count is kept in a column because the codes themselves live in one
- * encrypted blob that cannot be counted without the key, and `readEnrolmentState`
- * runs on every sign-in. The plugin owns the blob, so this is the one place the
- * two can disagree — and the direction is chosen: a LOST decrement leaves the
- * count too high, so the method stays offered and an exhausted set answers
- * "invalid code" rather than the user being silently refused a factor they
- * still hold. `GREATEST(..., 0)` is what keeps it from going negative when they
- * do drift.
+ * ⚠️ `executor` must be the transaction the plugin's rewrite ran on, under the
+ * user lock: elsewhere a regeneration committing in between takes the decrement
+ * and the count drifts low until the method stops being offered.
  */
-export async function spendBackupCode(userId: EntityID): Promise<void> {
-  await db
+export async function spendBackupCode(
+  userId: EntityID,
+  executor: Executor
+): Promise<void> {
+  await executor
     .update(twoFactorCredentials)
     .set({
       backupCodesRemaining: sql`GREATEST(${twoFactorCredentials.backupCodesRemaining} - 1, 0)`,

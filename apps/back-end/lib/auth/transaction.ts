@@ -21,21 +21,13 @@ const transactions = new AsyncLocalStorage<Tx>();
 export const authDatabase = () => transactions.getStore() ?? db;
 
 /**
- * The endpoint context with its adapter bound to the transaction that is open,
- * for handing to a library endpoint called from inside one.
- *
- * ⚠️ Not a convenience. `internalAdapter` resolves every statement through
- * `getCurrentAdapter`, so it already runs on the transaction — but a plugin
- * reaching for `ctx.context.adapter` DIRECTLY gets the pool, and Better Auth's
- * two-factor plugin does exactly that for its credential read and its lockout
- * counters. A pool statement issued from inside a transaction asks for a second
- * connection while holding the first, so `MAX_POOL_CONNECTIONS` concurrent
- * verifications deadlock on the pool; the same call also writes the credential
- * row the caller may hold a lock on.
- *
- * A Proxy rather than a spread: the library SETS `newSession` on this object and
- * our own after-hooks read it back off the original, so a copy would silently
- * lose every completion event.
+ * ⚠️ `internalAdapter` already runs on the open transaction; the two-factor
+ * plugin reads `ctx.context.adapter` directly, which is the pool. From inside a
+ * transaction that deadlocks the pool under concurrency, and it writes the
+ * credential row the caller may hold a lock on: a hang one request causes
+ * alone, which `POOL_ACQUIRE_TIMEOUT_MS` does not bound.
+ * A Proxy, not a spread: the library sets `newSession` on this object and our
+ * after-hooks read it off the original.
  */
 export async function transactionBoundContext(
   context: AuthContext['context']

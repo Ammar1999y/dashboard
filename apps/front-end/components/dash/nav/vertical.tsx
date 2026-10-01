@@ -85,7 +85,7 @@ function VerticalBranch({
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={className}>{content}</CollapsibleTrigger>
       <CollapsibleContent className='pb-1 pe-1'>
-        <ul className='ms-4 mt-1 flex flex-col space-y-1'>{children}</ul>
+        <ul className='ms-4 mt-1 flex flex-col gap-1'>{children}</ul>
       </CollapsibleContent>
     </Collapsible>
   );
@@ -144,7 +144,7 @@ const VerticalSection = memo(({ section }: { section: NavSection }) => (
       </CollapsibleTrigger>
     )}
     <CollapsibleContent className='p-1'>
-      <ul className='flex w-full flex-col space-y-1'>
+      <ul className='flex w-full flex-col gap-1'>
         {visibleNavItems(section.items).map((item) => (
           <VerticalItem key={item.path} item={item} depth={1} />
         ))}
@@ -155,7 +155,7 @@ const VerticalSection = memo(({ section }: { section: NavSection }) => (
 VerticalSection.displayName = 'VerticalSection';
 
 export const NavVertical = memo(({ data }: NavProps) => (
-  <nav className='flex w-full flex-col space-y-1'>
+  <nav className='flex w-full flex-col gap-1'>
     {data.map((section, index) => (
       <VerticalSection key={section.name || index} section={section} />
     ))}

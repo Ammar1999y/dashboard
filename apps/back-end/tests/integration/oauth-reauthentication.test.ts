@@ -1,4 +1,11 @@
-import { beforeEach, expect, spyOn, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  expect,
+  setDefaultTimeout,
+  spyOn,
+  test,
+} from 'bun:test';
 
 import { eq } from 'drizzle-orm';
 
@@ -24,8 +31,24 @@ import {
 } from '../helpers/session';
 import { syntheticAuthenticator } from '../helpers/webauthn';
 
+/** Each case pays several 64 MiB Argon2id hashes and verifies. */
+setDefaultTimeout(30_000);
+
 beforeEach(resetTables);
 beforeEach(resetRateLimits);
+
+/**
+ * Set by a case that pauses a request inside its transaction. Run after the
+ * case rather than in a `finally`, because a timeout abandons the body with the
+ * transaction open and the spies installed, and this tier runs `--no-isolate`.
+ */
+const paused: { release?: () => Promise<void> } = {};
+
+afterEach(async () => {
+  const { release } = paused;
+  paused.release = undefined;
+  await release?.();
+});
 
 test('competing password changes serialize the user and credential locks without deadlocking', async () => {
   const owner = await seedUser();
@@ -38,45 +61,47 @@ test('competing password changes serialize the user and credential locks without
   const hashed = Promise.withResolvers<void>();
   const revoke = rotation.revokePendingProofs;
   const hash = passwords.hashPassword;
-  const paused = spyOn(rotation, 'revokePendingProofs').mockImplementation(
-    async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return revoke(...args);
-    }
+  const spies: { mockRestore: () => void }[] = [];
+  const requests: Promise<Response>[] = [];
+  paused.release = async () => {
+    release.resolve();
+    for (const spy of spies) spy.mockRestore();
+    await Promise.allSettled(requests);
+  };
+
+  spies.push(
+    spyOn(rotation, 'revokePendingProofs').mockImplementation(
+      async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return revoke(...args);
+      }
+    )
   );
   const first = call('/api/dash/users/me/change-password', cookie, {
     newPassword: 'First!ChangedPassw0rd',
   });
-  try {
-    await entered.promise;
-    const hashing = spyOn(passwords, 'hashPassword').mockImplementation(
-      async (...args) => {
-        const result = await hash(...args);
-        hashed.resolve();
-        return result;
-      }
-    );
-    const second = call('/api/dash/users/me/change-password', cookie, {
-      newPassword: 'Second!ChangedPassw0rd',
-    });
-    try {
-      await hashed.promise;
-      await waitForUserLock();
-      release.resolve();
-      const responses = await Promise.all([first, second]);
-      expect(responses.map((response) => response.status)).toEqual([200, 400]);
-      await signIn({ ...owner, password: 'First!ChangedPassw0rd' });
-    } finally {
-      release.resolve();
-      hashing.mockRestore();
-      await second;
-    }
-  } finally {
-    release.resolve();
-    paused.mockRestore();
-    await first;
-  }
+  requests.push(first);
+  await entered.promise;
+
+  spies.push(
+    spyOn(passwords, 'hashPassword').mockImplementation(async (...args) => {
+      const result = await hash(...args);
+      hashed.resolve();
+      return result;
+    })
+  );
+  const second = call('/api/dash/users/me/change-password', cookie, {
+    newPassword: 'Second!ChangedPassw0rd',
+  });
+  requests.push(second);
+  await hashed.promise;
+  await waitForUserLock();
+
+  release.resolve();
+  const responses = await Promise.all([first, second]);
+  expect(responses.map((response) => response.status)).toEqual([200, 400]);
+  await signIn({ ...owner, password: 'First!ChangedPassw0rd' });
 });
 
 function call(path: string, cookie: string, body?: object) {

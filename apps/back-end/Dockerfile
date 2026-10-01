@@ -13,7 +13,7 @@ WORKDIR /app
 # The install guard would otherwise try to repair the toolchain over the
 # network; inside a build the image IS the toolchain.
 ENV BUN_GUARD_NO_AUTO_INSTALL=1
-COPY package.json bun.lock bunfig.toml ./
+COPY package.json bun.lock bunfig.toml tsconfig.base.json ./
 COPY scripts/require-bun.mjs scripts/
 # Bun validates every `patchedDependencies` file even when the patched package
 # belongs to a workspace the `--filter` below leaves out.
@@ -63,11 +63,20 @@ RUN bun install --frozen-lockfile --production --filter @app/back-end --filter @
 COPY packages/shared packages/shared
 COPY apps/back-end apps/back-end
 # Copied only so this stage cannot be built without `verify` passing; the
-# served document is regenerated at start from the runtime configuration.
-COPY --from=verify /app/apps/back-end/build /app/apps/back-end/build
+# served document is regenerated at start from the runtime configuration, which
+# is why the runtime user owns it.
+COPY --from=verify --chown=bun:bun /app/apps/back-end/build /app/apps/back-end/build
+# `SQLITE_DIR` as `reports/coolify-deployment.md` §4 sets it; the two must
+# agree. A new named volume inherits this owner and mode; one created while the
+# process ran as root needs the one-time `chown` described there.
+RUN install -d -o bun -g bun -m 0700 /app/data
 WORKDIR /app/apps/back-end
 ENV NODE_ENV=production
 EXPOSE 3000
+# `oven/bun` creates this user (uid 1000) but does not switch to it. Everything
+# above stays root-owned, so code run through an upload parser cannot rewrite
+# the application or its `node_modules`.
+USER bun
 # `exec`, and the server invoked directly rather than through `bun run start`.
 # Both halves are required for `SIGTERM` to reach the handlers in `server.ts`,
 # which every graceful-shutdown guarantee in `reports/coolify-deployment.md`

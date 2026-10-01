@@ -1,7 +1,4 @@
-/**
- * Single-use re-authentication grants bound to one user. Their rows are valued
- * by the user id, which is how credential rotation revokes them.
- */
+// Rows are valued by the user id, which is how credential rotation revokes them.
 import type { AuthContext } from '../context';
 import type { EntityID } from '@app/shared/types';
 
@@ -35,10 +32,6 @@ export async function mintReauthGrant(
   return token;
 }
 
-/**
- * Spends the grant, and answers `false` for every reason it could not be spent —
- * absent, expired, another user's, another purpose's, already used.
- */
 export async function consumeReauthGrant(
   ctx: AuthContext,
   params: { userId: EntityID; purpose: ReauthPurpose; token: unknown }
@@ -53,11 +46,8 @@ export async function consumeReauthGrant(
   return validID(consumed.value) === params.userId;
 }
 
-/**
- * The password boundary for app-owned 2FA endpoints, which never reach
- * `password.verify` and so get no proof from `path-policy.ts`: a supplied
- * password, or an open window on this user's own session.
- */
+// For app-owned endpoints, which never reach `password.verify` and so get no
+// proof from `path-policy.ts`.
 export async function requireReauthPassword(
   ctx: AuthContext,
   userId: EntityID

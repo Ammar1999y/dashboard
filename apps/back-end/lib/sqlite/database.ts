@@ -44,8 +44,24 @@ const BASE_PRAGMAS = [
  * synchronous: a busy wait blocks the worker's whole event loop, and a long
  * stall on a login rate-limit check is worse than failing it. If this ceiling
  * is reached in practice the answer is a shared store, not a longer timeout.
+ * The anonymous OTP floor (`MINIMUM_RESPONSE_MS`) is derived from it.
  */
 export const BUSY_TIMEOUT_MS = 2000;
+
+/**
+ * Runs `fn` with a lock conflict throwing at once (`isSqliteBusy`) instead of
+ * blocking the thread for `BUSY_TIMEOUT_MS`. For a caller that retries without
+ * blocking, because the wait stalls every other request on the event loop. The
+ * setting is restored before anything else can run on the connection.
+ */
+export function withoutBusyWait<T>(db: SqliteConnection, fn: () => T): T {
+  db.pragma('busy_timeout = 0');
+  try {
+    return fn();
+  } finally {
+    db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
 
 /** `PRAGMA synchronous` reads back as an integer: NORMAL is 1, OFF is 0. */
 export const SYNCHRONOUS_VALUE: Record<Durability, number> = {

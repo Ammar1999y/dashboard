@@ -1,13 +1,8 @@
 /**
- * Raw RGBA pixels out of a `Bun.Image` pipeline.
- *
- * `Bun.Image` has no raw terminal and no `ensureAlpha()`, and `blurhash.encode`
- * needs RGBA, so the pipeline encodes an uncompressed PNG and this module reads
- * it straight back.
- *
- * **It only reads PNGs this module just produced** — 8-bit, non-interlaced,
- * colour type 0/2/4/6 — and rejects anything else instead of guessing: a
- * general PNG decoder is a much larger surface than this needs.
+ * `Bun.Image` has no raw terminal or `ensureAlpha()`, so the pipeline encodes an
+ * uncompressed PNG and this module reads it back. Only the PNGs it just produced
+ * (8-bit, non-interlaced, colour type 0/2/4/6) are accepted: a general decoder
+ * is a much larger surface than this needs.
  */
 import { boundedImage } from './bounded';
 
@@ -27,10 +22,7 @@ type DecodedPng = {
   data: Buffer;
 };
 
-/**
- * Reverses one row's filter, per PNG spec §9.2. All five have to be handled:
- * the encoder picks per row, and Bun's does use more than one.
- */
+/** PNG spec §9.2. All five: Bun's encoder picks per row and uses several. */
 function unfilter(
   filter: number | undefined,
   value: number,
@@ -52,7 +44,6 @@ function unfilter(
       return value + ((left + up) >> 1);
     }
     case 4: {
-      // Paeth: whichever neighbour the linear estimate is closest to.
       const estimate = left + up - upLeft;
       const dLeft = Math.abs(estimate - left);
       const dUp = Math.abs(estimate - up);
@@ -71,8 +62,7 @@ function decodePng(bytes: Uint8Array): DecodedPng {
   if (buf.length < 8 || buf.readUInt32BE(0) !== PNG_SIGNATURE)
     throw new Error('rgba: not a PNG');
 
-  // IHDR is spec-mandated as the first chunk, so it is read at its fixed
-  // position rather than searched for: 8 signature bytes + 4 length + 4 type.
+  // The spec mandates IHDR first, so it is read at its fixed offset.
   if (buf.length < 33 || buf.toString('ascii', 12, 16) !== 'IHDR')
     throw new Error('rgba: PNG without a leading IHDR');
   const width = buf.readUInt32BE(16);
@@ -81,9 +71,7 @@ function decodePng(bytes: Uint8Array): DecodedPng {
   const colourType = buf[25] ?? 0;
   const interlace = buf[28] ?? 0;
 
-  // Then the walk only has to gather image data. IDAT may be split across any
-  // number of chunks and the spec requires them to be consecutive, but
-  // concatenating whatever is found is both simpler and stricter-safe.
+  // Every IDAT found is concatenated; their required adjacency is not checked.
   const idat: Buffer[] = [];
   let offset = 8;
   while (offset + 12 <= buf.length) {
@@ -149,11 +137,6 @@ function toRgba({ width, height, channels, data }: DecodedPng): Buffer {
   return out;
 }
 
-/**
- * Decodes `input`, fits it inside `size`x`size` preserving aspect ratio, and
- * returns the pixels as RGBA. Rejects anything over `MAX_IMAGE_PIXELS` from the
- * header, before a pixel buffer is allocated.
- */
 export async function imageToRgba(
   input: Buffer,
   size: number

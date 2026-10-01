@@ -129,11 +129,8 @@
     `chk_phone_number_format` enforces `^9665[0-9]{8}$`; future international /
     non-mobile support would require a migration. Acceptable for current local
     launch (does not contradict #11, which is about email/password checks).
-57. **User-delete ↔ Role-delete Opposite Lock Order** —
-    `app/api/dash/users/[id]/handler.ts`,
-    `app/api/dash/permissions/[id]/handler.ts` — user→role vs role→users lock
-    acquisition can deadlock under concurrent destructive admin actions;
-    PostgreSQL aborts one transaction (no corruption). Intermittent only.
+57. **Retired.** The user-delete ↔ role-delete lock order is fixed: every
+    writer takes users before roles.
 58. **OTP Send Collapses 429 to Generic 200 (by design)** —
     `app/api/auth/otp/send/handler.ts` — masking `TOO_MANY_REQUESTS` is a
     deliberate privacy contract: the endpoint returns an identical
@@ -271,3 +268,28 @@
 14. **`@knipignore` Masks Dead Exports and Unused Helpers**
     - **Locations:** `app.ts`, `lib/data-table/config.ts`, `utils/validation/rules.ts`, `utils/index.ts`, `knip.jsonc`
     - **Summary:** `@knipignore` tags mask several unused exports and dormant helpers. Dead export cleanup and knip suppression pruning will be handled upon project completion.
+
+15. **Sign-in Racing a Role Edit Can Persist a Stale Permission Snapshot**
+    - **Locations:** `lib/auth/session/hooks.ts` (sign-in snapshot), `lib/permissions/session-refresh.ts` (`refreshRoleSessions`), `lib/permissions/checker.ts` (`resolveGrants`, `hasSessionCookieCache`)
+    - **Summary:** The sign-in hook reads the role's permissions, then a role edit commits `refreshRoleSessions` before the new session row exists, and the row is saved with the pre-edit snapshot. Nothing locks the two against each other. The window is a few milliseconds between the hook's read and the session insert, so it is rare. The stale snapshot stays until something repairs it, and today only a database check of the caller's grants (`liveGrants`) does. Every permission-checked write takes that path, so only reads are exposed. Reads skip it whenever a cookie named like the cache is present, even an expired one, and `/api/auth/get-session` re-mints the cache from the stale row. A session that only reads therefore keeps a revoked read grant until it expires, not for #5's 5 minutes. This race is the only known source of a drifted row, because role edits and user edits refresh or revoke sessions inside their own transactions. Planned fix: make the snapshot read and the session insert atomic against role edits, so a concurrent edit waits for the new row and then refreshes it.
+
+### [Medium] 2FA-2 (OTP side): a concurrent OTP send can restore a proof that method removal just revoked
+
+- **Where:** `lib/otp/revoke.ts:11-31` (`revokePendingTwoFactorCodes`), called from `lib/auth/two-factor/methods.ts:378` (`clearTwoFactorEnrolment`) and `:412` (`removeMethodIntent`); `lib/otp/send.ts:110-135` (`processOtpSend`); `lib/auth/two-factor/otp.ts:313` (`verifyForEnrolment`).
+- **Problem:** the two paths share no lock, so a send already in flight when a method is removed can still commit a usable code:
+  - The send authorises the challenge before its transaction starts, then writes the code under a per-contact advisory lock and a `FOR UPDATE` on the `verification_sessions` row.
+  - Removal deletes the codes currently visible through a subquery, holding only the user-row lock. It takes neither the advisory lock nor the session row.
+  - A send that started before the removal therefore commits a fresh code after it.
+  - The enrolment verifier accepts that `two_factor` proof without a password and re-enrols the removed method.
+- **Evidence:** a second review reproduced it on the harness DB. Setup: email and phone OTP enrolled, an existing phone verification session, an ordinary sign-in challenge, and the code insert delayed 3 s. Result:
+  - The concurrent phone-method removal answered 200 in 180 ms.
+  - The send answered 200 after 3055 ms and left one code row.
+  - Verifying that code from the surviving session, with no password, answered 200 and restored the phone method.
+  - The existing removal tests only cover codes committed before the removal.
+- **Failure scenario:** the stolen-device scenario from 2FA-2, through the OTP method instead of TOTP.
+- **Status:** not a regression, since `HEAD` had no revocation at all. The fix closes only the committed-before case, and the race was not swept.
+- **Fix:**
+  - Have revocation take the same advisory lock, or lock the `verification_sessions` rows `FOR UPDATE`.
+  - Re-check challenge and enrolment authorisation inside the issuance transaction after acquiring the lock. Locking alone does not refuse a send authorised before the removal.
+  - Alternatively, bind each proof to an enrolment generation and check it on consume.
+  - Cover an in-flight resend against both method removal and full 2FA disable.

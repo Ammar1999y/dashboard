@@ -10,15 +10,8 @@ import { users } from '@/db/schema';
 import { auditLog } from '@/lib/audit';
 import { activeUser } from '@/lib/users/filters';
 
-/**
- * Idempotently flip a contact's verified flag and audit the transition, under a
- * row lock on the user. Runs inside the caller's transaction.
- *
- * Owns every verification of an UNCHANGED address. Contact REPLACEMENT does not
- * route through here: `lib/users/contact-change.ts` writes the new address and
- * its verified flag in one UPDATE, because splitting them would leave the row
- * carrying a new address with the old flag.
- */
+// Unchanged addresses only: a replacement writes address and flag in one UPDATE
+// (`lib/users/contact-change.ts`).
 export async function markContactVerified(
   tx: Tx,
   opts: {
@@ -46,7 +39,6 @@ export async function markContactVerified(
     ? currentUser.emailVerified
     : currentUser.phoneNumberVerified;
 
-  // No UPDATE and no audit row, so the log only reflects real transitions.
   if (alreadyVerified) return;
 
   await tx

@@ -40,17 +40,19 @@ import {
   memoiseOpenApiDocument,
   resolveOpenApiDocument,
 } from '@/lib/http/openapi/route';
+import { operationKey } from '@/lib/http/openapi/route-operations';
+import { isSafeMethod } from '@/lib/http/origin';
 import {
   toManifest,
   toPublishedManifest,
   toRegisteredRoutes,
 } from '@/lib/http/route-manifest';
 
+import { compareCodeUnits } from '@/utils/text';
+
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 
 /** Locale-independent string ordering, so a sorted comparison is stable. */
-const byText = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
-
 /** The status codes one operation declares, sorted. */
 function statusesOf(document: unknown, path: string, method: string): string[] {
   const paths = (document as { paths: Record<string, unknown> }).paths;
@@ -60,7 +62,7 @@ function statusesOf(document: unknown, path: string, method: string): string[] {
   if (!operation) throw new Error(`${method} ${path} is not in the document`);
   const responses = (operation as { responses: Record<string, unknown> })
     .responses;
-  return Object.keys(responses).toSorted(byText);
+  return Object.keys(responses).toSorted(compareCodeUnits);
 }
 
 function pathsOf(document: unknown): string[] {
@@ -287,6 +289,26 @@ describe('the OpenAPI document', () => {
     );
   });
 
+  test('refuses a status override the route no longer matches', () => {
+    const manifest = toManifest(ROUTES);
+    const bodyless = manifest.map((entry) =>
+      operationKey(entry) === 'POST /api/dash/auth/reauth'
+        ? { ...entry, body: 'none' as const }
+        : entry
+    );
+    const withoutReset = manifest.filter(
+      (entry) =>
+        operationKey(entry) !== 'POST /api/dash/users/:id/two-factor/reset'
+    );
+
+    expect(() => openApiDocument(bodyless)).toThrow(
+      "POST /api/dash/auth/reauth has a BODY_SCHEMA_REFUSALS entry but declares body: 'none'"
+    );
+    expect(() => openApiDocument(withoutReset)).toThrow(
+      "ID_NOT_FOUND_ROUTES has 'POST /api/dash/users/:id/two-factor/reset', which is not a route"
+    );
+  });
+
   test('names no /api/internal path — those routes no longer exist', () => {
     const paths = pathsOf(openApiDocument(toManifest(ROUTES)));
     expect(paths.filter((path) => path.startsWith('/api/internal'))).toEqual(
@@ -349,7 +371,7 @@ describe('artifact resolution', () => {
     let generated = false;
     expect(() =>
       resolveOpenApiDocument(
-        null,
+        () => null,
         () => {
           generated = true;
           return {};
@@ -360,9 +382,47 @@ describe('artifact resolution', () => {
     expect(generated).toBe(false);
   });
 
+  test('production serves the artifact without generating', () => {
+    const artifact = { openapi: '3.1.1', built: true };
+    let generated = false;
+    expect(
+      resolveOpenApiDocument(
+        () => artifact,
+        () => {
+          generated = true;
+          return {};
+        },
+        true
+      )
+    ).toBe(artifact);
+    expect(generated).toBe(false);
+  });
+
   test('development may generate when no artifact exists', () => {
     const document = { openapi: '3.1.1' };
-    expect(resolveOpenApiDocument(null, () => document, false)).toBe(document);
+    expect(
+      resolveOpenApiDocument(
+        () => null,
+        () => document,
+        false
+      )
+    ).toBe(document);
+  });
+
+  test('development generates even when an artifact exists, and never reads it', () => {
+    const document = { openapi: '3.1.1' };
+    let read = false;
+    expect(
+      resolveOpenApiDocument(
+        () => {
+          read = true;
+          return { openapi: '3.1.1', stale: true };
+        },
+        () => document,
+        false
+      )
+    ).toBe(document);
+    expect(read).toBe(false);
   });
 });
 
@@ -438,8 +498,8 @@ describe('the envelope schema against the shape handlers actually emit', () => {
   }
 
   test('meta declares exactly the keys of a PaginationMeta value', () => {
-    expect(metaProperties().toSorted(byText)).toEqual(
-      Object.keys(meta).toSorted(byText)
+    expect(metaProperties().toSorted(compareCodeUnits)).toEqual(
+      Object.keys(meta).toSorted(compareCodeUnits)
     );
   });
 });
@@ -671,7 +731,7 @@ describe('request and response contract fidelity', () => {
         parameters
           .map((parameter) => parameter.name)
           .filter((name): name is string => typeof name === 'string')
-          .toSorted(byText)
+          .toSorted(compareCodeUnits)
           // Media adds `folder` and `scope` of its own; this test owns the
           // shared DSL, and the media-specific pair is covered below.
           .filter((name) => expected.includes(name))
@@ -795,8 +855,8 @@ describe('request and response contract fidelity', () => {
       '/api/auth/forgot-password/send',
       '/api/auth/passwordless/send',
     ])
-      expect(channelsOf(pathName).toSorted(byText)).toEqual(
-        enabled.toSorted(byText)
+      expect(channelsOf(pathName).toSorted(compareCodeUnits)).toEqual(
+        enabled.toSorted(compareCodeUnits)
       );
 
     // A verify spends an already-delivered code, so it accepts a channel
@@ -806,8 +866,8 @@ describe('request and response contract fidelity', () => {
       '/api/auth/otp/verify',
       '/api/auth/forgot-password/reset',
     ])
-      expect(channelsOf(pathName).toSorted(byText)).toEqual(
-        every.toSorted(byText)
+      expect(channelsOf(pathName).toSorted(compareCodeUnits)).toEqual(
+        every.toSorted(compareCodeUnits)
       );
   });
 
@@ -885,7 +945,7 @@ describe('request and response contract fidelity', () => {
       (getSession.parameters as Record<string, unknown>[])
         .map((parameter) => parameter.name)
         .filter((name): name is string => typeof name === 'string')
-        .toSorted(byText)
+        .toSorted(compareCodeUnits)
     ).toEqual(['disableCookieCache', 'disableRefresh']);
     expect(getSession.security).toEqual([{}, { sessionCookie: [] }]);
 
@@ -898,7 +958,7 @@ describe('request and response contract fidelity', () => {
     // with passkey off. The project's own shared schemas sit beside them: the
     // media file schema alone was inlined nine times, so a generator emitted
     // nine anonymous copies of one type.
-    expect(Object.keys(schemas).toSorted(byText)).toEqual(
+    expect(Object.keys(schemas).toSorted(compareCodeUnits)).toEqual(
       [
         'ErrorEnvelope',
         'MediaFile',
@@ -909,7 +969,7 @@ describe('request and response contract fidelity', () => {
         'Session',
         'User',
         ...(isTwoFactorMethodEnabled('passkey') ? ['Passkey'] : []),
-      ].toSorted(byText)
+      ].toSorted(compareCodeUnits)
     );
 
     // Every published `$ref` resolves inside this document. A name that does
@@ -1004,7 +1064,9 @@ describe('the Better Auth surface, per endpoint', () => {
     const paths = (document as { paths: Record<string, unknown> }).paths;
     const entry = paths[`/api/auth${authPath}`];
     if (!entry) throw new Error(`${authPath} is not in the document`);
-    return Object.keys(entry as Record<string, unknown>).toSorted(byText);
+    return Object.keys(entry as Record<string, unknown>).toSorted(
+      compareCodeUnits
+    );
   }
 
   test('every documented path declares exactly the methods the table declares', () => {
@@ -1015,7 +1077,9 @@ describe('the Better Auth surface, per endpoint', () => {
     // captcha plugin's processing before its method is rejected.
     for (const endpoint of BETTER_AUTH_ENDPOINTS)
       expect(operationsFor(endpoint.path)).toEqual(
-        endpoint.methods.map((method) => method.toLowerCase()).toSorted(byText)
+        endpoint.methods
+          .map((method) => method.toLowerCase())
+          .toSorted(compareCodeUnits)
       );
   });
 
@@ -1356,11 +1420,11 @@ describe('the refusals an operation declares for its own authorisation', () => {
     }
   });
 
-  test('a public envelope route declares no 401, and a 403 only for its captcha', () => {
+  test('a public envelope route declares no 401, and a 403 only for its captcha or a write', () => {
     // `public` is about SESSIONS. A captcha refusal is a 403 on a route no
     // session guards — measured, `POST /api/auth/otp/send` with no
-    // `x-captcha-response` answers 403 in this envelope — so the two fields
-    // decide 403 together and only `auth` decides 401.
+    // `x-captcha-response` answers 403 in this envelope — and so is the
+    // adapter's cross-origin refusal of any write, so only `auth` decides 401.
     const document = openApiDocument(manifest);
     expect(
       of('public')
@@ -1382,7 +1446,7 @@ describe('the refusals an operation declares for its own authorisation', () => {
               document,
               entry.path.replaceAll(/:(\w+)/g, '{$1}'),
               entry.method.toLowerCase()
-            ).includes('403') !== entry.captcha
+            ).includes('403') !== (entry.captcha || !isSafeMethod(entry.method))
         )
         .map(label)
     ).toEqual([]);
@@ -1396,13 +1460,45 @@ describe('the refusals an operation declares for its own authorisation', () => {
     expect(forbidden.description.toLowerCase()).not.toContain('captcha');
   });
 
+  /**
+   * The names `source` imports from `@/lib/…` whose exported declaration calls
+   * `enforceRateLimit(` itself, so a handler behind a named limiter still counts.
+   * The body ends at the first unindented `}`, which is prettier's layout.
+   */
+  function importedRateLimiters(source: string): string[] {
+    const imports = source.matchAll(
+      /import\s*\{([^}]*)\}\s*from\s*'@\/lib\/([^']+)'/g
+    );
+    return imports
+      .flatMap(([, names = '', module = '']) => {
+        const lib =
+          reads(path.join(REPO_ROOT, 'lib', `${module}.ts`)) ??
+          reads(path.join(REPO_ROOT, 'lib', module, 'index.ts')) ??
+          '';
+        const limiters = new Set(
+          lib
+            .matchAll(/^export async function (\w+)\([\s\S]*?^\}/gm)
+            .filter(([body]) => body.includes('enforceRateLimit('))
+            .map(([, name]) => name)
+        );
+        return names
+          .split(',')
+          .map((name) => name.trim())
+          .filter((name) => limiters.has(name));
+      })
+      .toArray();
+  }
+
+  const callsRateLimit = (source: string) =>
+    source.includes('enforceRateLimit(') ||
+    importedRateLimiters(source).some((name) => source.includes(`${name}(`));
+
   test('handler rate-limit policy matches the handlers and publishes 429/503', () => {
     const document = openApiDocument(manifest);
     const wrong = ROUTES.filter((route) => {
       const source = reads(sourceOf(route));
       return (
-        source !== null &&
-        source.includes('enforceRateLimit(') !== route.handlerRateLimit
+        source !== null && callsRateLimit(source) !== route.handlerRateLimit
       );
     });
     expect(wrong.map(label)).toEqual([]);
@@ -1497,7 +1593,7 @@ describe('the refusals an operation declares for its own authorisation', () => {
     // write lock.
     expect(
       Object.keys(operation.responses as Record<string, unknown>).toSorted(
-        byText
+        compareCodeUnits
       )
     ).toEqual(['200', '401', '503']);
 
@@ -1920,7 +2016,7 @@ describe('the statuses each Better Auth operation declares', () => {
             // thirty entries of a map whose whole point is that each line was
             // probed.
             ...(method === 'POST' ? ['413'] : []),
-          ].toSorted(byText),
+          ].toSorted(compareCodeUnits),
         ]);
   });
 
@@ -1965,7 +2061,7 @@ describe('the statuses each Better Auth operation declares', () => {
     );
     expect(
       Object.keys(acknowledge.properties as Record<string, unknown>).toSorted(
-        byText
+        compareCodeUnits
       )
     ).toEqual(['password', 'setId']);
     expect(acknowledge.required).toEqual(['setId']);
@@ -2026,7 +2122,7 @@ describe('the statuses each Better Auth operation declares', () => {
     const kinds = new Set(
       BETTER_AUTH_ENDPOINTS.map((endpoint) => endpoint.session)
     );
-    expect([...kinds].toSorted(byText)).toEqual([
+    expect([...kinds].toSorted(compareCodeUnits)).toEqual([
       'challenge',
       'none',
       'optional',
@@ -2070,7 +2166,7 @@ describe('the statuses each Better Auth operation declares', () => {
       const schema = requestSchemaOf(document, path, 'put');
       const names = Object.keys(
         (schema.properties ?? {}) as Record<string, unknown>
-      ).toSorted(byText);
+      ).toSorted(compareCodeUnits);
       expect([path, schema.anyOf]).toEqual([
         path,
         names.map((name) => ({ required: [name] })),
@@ -2140,5 +2236,109 @@ describe('development-only routes are not registered outside development', () =>
     );
 
     expect(registered.some((path) => path.startsWith('/api/dev'))).toBe(true);
+  });
+});
+
+describe('refusals a client branches on are published', () => {
+  const document = openApiDocument(toPublishedManifest(ROUTES, true));
+  const description = (pathName: string, method: string, status: string) => {
+    const responses = operationOf(document, pathName, method)
+      .responses as Record<string, { description?: unknown }>;
+    return String(responses[status]?.description);
+  };
+
+  test.each([
+    ['post', '/api/dash/users'],
+    ['delete', '/api/dash/permissions/{id}'],
+    ['post', '/api/dash/users/me/change-password'],
+  ])(
+    '%s %s names REAUTH_REQUIRED and where to answer it',
+    (method, pathName) => {
+      const text = description(pathName, method, '401');
+      expect(text).toInclude('REAUTH_REQUIRED');
+      expect(text).toInclude('POST /api/dash/auth/reauth');
+    }
+  );
+
+  test('a route without re-authentication keeps the plain 401', () => {
+    expect(description('/api/dash/users', 'get', '401')).not.toInclude(
+      'REAUTH_REQUIRED'
+    );
+  });
+
+  test.each([
+    '/api/dash/auth/reauth',
+    '/api/dash/users/me/change-password',
+    '/api/dash/users/me/change-email',
+  ])('%s publishes the locked-account 429', (pathName) => {
+    expect(description(pathName, 'post', '429')).toInclude('locked');
+  });
+
+  test.each([
+    '/api/auth/two-factor/get-totp-uri',
+    '/api/auth/two-factor/disable',
+    '/api/auth/two-factor/passkey/grant',
+  ])('%s publishes the locked-account 429 in both shapes', (pathName) => {
+    const responses = operationOf(document, pathName, 'post')
+      .responses as Record<
+      string,
+      { description?: unknown; content?: unknown }
+    >;
+    expect(String(responses['429']?.description)).toInclude('locked');
+    expect(JSON.stringify(responses['429']?.content)).toInclude('anyOf');
+  });
+
+  test('every write publishes the cross-origin 403', () => {
+    expect(description('/api/dash/auth/reauth', 'post', '403')).toInclude(
+      'origin'
+    );
+  });
+
+  test('every envelope route publishes the database 503 with Retry-After', () => {
+    const manifest = toPublishedManifest(ROUTES, true).filter(
+      (entry) => entry.response === 'envelope'
+    );
+    for (const entry of manifest) {
+      const responses = operationOf(
+        document,
+        entry.path.replaceAll(/:(\w+)/g, '{$1}'),
+        entry.method.toLowerCase()
+      ).responses as Record<
+        string,
+        { description?: unknown; headers?: unknown }
+      >;
+      const label = `${entry.method} ${entry.path}`;
+      expect(String(responses['503']?.description), label).toInclude(
+        'deadlock'
+      );
+      expect(responses['503']?.headers, label).toHaveProperty('Retry-After');
+    }
+  });
+
+  test('every Better Auth operation publishes the database 503', () => {
+    const paths = (document as { paths: Record<string, unknown> }).paths;
+    const betterAuth = Object.keys(paths).filter((pathName) =>
+      pathName.startsWith('/api/auth/')
+    );
+    expect(betterAuth.length).toBeGreaterThan(0);
+    for (const pathName of betterAuth) {
+      const operations = Object.entries(
+        paths[pathName] as Record<
+          string,
+          { responses?: Record<string, { description?: unknown }> }
+        >
+      );
+      for (const [method, operation] of operations)
+        expect(
+          String(operation.responses?.['503']?.description),
+          `${method} ${pathName}`
+        ).toInclude('deadlock');
+    }
+  });
+
+  test('the TOTP confirmation publishes its enrolment deadline', () => {
+    expect(
+      description('/api/auth/two-factor/totp/confirm', 'post', '400')
+    ).toInclude('/two-factor/totp/start');
   });
 });

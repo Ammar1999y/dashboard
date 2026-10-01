@@ -24,6 +24,8 @@ import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
 import { PRE_AUTH_LIMIT } from '@/lib/http/pre-auth';
 import { getRateLimitStore } from '@/lib/rate-limit/store';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import { egressCallsTo } from '../helpers/egress';
 import { baseHeaders } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
@@ -31,8 +33,6 @@ import { resetSqliteStores } from '../helpers/sqlite';
 const TURNSTILE_HOST = 'challenges.cloudflare.com';
 
 /** Locale-independent ordering, so an `Allow` comparison is stable. */
-const byText = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
-
 /**
  * What `Allow` must name for a path serving `methods`.
  *
@@ -43,7 +43,7 @@ const byText = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
 function advertised(methods: readonly string[]): string[] {
   const all = new Set<string>([...methods, 'OPTIONS']);
   if (all.has('GET')) all.add('HEAD');
-  return [...all].toSorted(byText);
+  return [...all].toSorted(compareCodeUnits);
 }
 
 /**
@@ -174,7 +174,7 @@ describe('a sub-path outside the allowlist', () => {
           .split(',')
           .map((value) => value.trim())
           .filter(Boolean)
-          .toSorted(byText);
+          .toSorted(compareCodeUnits);
         expect(allow).toEqual(advertised(endpoint.methods));
       }
     }
@@ -259,7 +259,7 @@ describe('a sub-path outside the allowlist', () => {
         .split(',')
         .map((value) => value.trim())
         .filter(Boolean)
-        .toSorted(byText);
+        .toSorted(compareCodeUnits);
       expect(allow).toEqual(advertised(endpoint.methods));
     }
   });

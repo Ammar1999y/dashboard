@@ -15,6 +15,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     # Workspace steps run inside `apps/back-end`; install, lockfile and dedupe
     # steps run at the repository root, where the one `bun.lock` lives.
     defaults:
@@ -57,6 +58,13 @@ jobs:
         # only its own run lints it and applies the stricter tsconfig on its own.
         working-directory: packages/shared
         run: bun run lint && bun run format:check
+      - name: Front-end typecheck
+        # The other consumer of `@app/shared`, which compiles it under a
+        # different target and without `noUncheckedIndexedAccess`, so a shared
+        # change can pass both runs above and still break it. The command is the
+        # front-end's lefthook typecheck job.
+        working-directory: apps/front-end
+        run: bun --bun tsc --noEmit
       - name: Root files lint and format
         # The guard script, hooks, workflows and manifests live above every
         # workspace; without this step nothing would check them.
@@ -94,11 +102,10 @@ jobs:
         # so it enforces the OLD rule, exactly as a deployed database will.
         # Needs no service container: `drizzle-kit generate` never connects.
         run: bun run check:schema-drift
-      - name: Unreachable files and unregistered handlers
-        # This scanner checks handler registration; Knip below covers files under
-        # `tests/`, which this import graph treats as entry points.
-        run: bun scripts/find-unused-files.ts
-      - name: Unused files, exports and types
+      - name: Unreachable files, unregistered handlers, unused exports and types
+        # `scripts/find-unused-files.ts` checks handler registration, then Knip
+        # covers files under `tests/`, which that scanner's import graph treats
+        # as entry points.
         run: bun run find:unused-files
       - name: Collapsible duplicate dependencies
         # What Bun checks, and not more: duplicates whose ranges OVERLAP, so
@@ -126,7 +133,12 @@ jobs:
         # These are throwaway values shaped to pass validation only — no real
         # credential belongs in this file.
         run: bun run smoke
-      - name: Boot smoke test (production posture)
+      - name: OpenAPI build and boot smoke test (production posture)
+        # The image CMD's sequence: the artefact regenerated under the runtime
+        # configuration, then the server. The Build step above runs as
+        # `development`, so without the first half here that generation never
+        # ran in CI before a deploy.
+        #
         # The same boot, in the posture that is actually deployed — because the
         # job above runs as `development` and therefore evaluated a DIFFERENT
         # module graph from production's. Measured: `development` emits 11
@@ -164,7 +176,28 @@ jobs:
           R2_PUBLIC_BUCKET: ci-placeholder-public
           R2_PRIVATE_BUCKET: ci-placeholder-private
           R2_PUBLIC_URL: https://ci-placeholder.example.invalid
-        run: bun run smoke
+          # Required by the production env validation the generation half
+          # loads; `smoke` hands the same value to the server it starts.
+          SQLITE_MAINTENANCE_TOKEN: ci-maintenance-token-0123456789012
+        run: bun scripts/build-openapi.ts && bun run smoke
+
+  # The deployable artefact itself. Every other job runs from a full checkout,
+  # so none of them notices a file the Dockerfile forgets to copy or a
+  # `.dockerignore` entry that removes one a stage needs.
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the back-end image
+        # From the repository root, as Coolify builds it; the runtime stage
+        # copies from `verify`, so this builds and gates both.
+        run: docker build --file apps/back-end/Dockerfile --tag back-end:ci .
+      - name: Runtime user is not root
+        # The UID `reports/coolify-deployment.md` §4 has the volume owned by.
+        run: test "$(docker run --rm --entrypoint id back-end:ci -u)" = 1000
 
   # The database-backed tiers. Their own job because they need a PostgreSQL
   # service container, and because keeping them out of `verify` means a lint
@@ -176,6 +209,7 @@ jobs:
   # command has to be safe on a developer machine where that is not true.
   tests:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: apps/back-end
@@ -281,6 +315,7 @@ jobs:
 
   workflows:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -291,6 +326,7 @@ jobs:
 
   audit:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

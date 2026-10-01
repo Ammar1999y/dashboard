@@ -1,27 +1,18 @@
 /**
- * Six-digit OTPs use HMAC-SHA-256 under a dedicated versioned key, not a slow
- * password hash: the online attempt budget stops guessing and the key prevents
- * database-only enumeration, and a memory-hard hash would improve neither while
- * adding row-lock time.
- *
- * Envelope: `o1:<keyId>:<base64url mac>` so retained keys keep live codes valid
- * during rotation.
+ * HMAC under a versioned key, not a slow hash: the attempt budget stops online
+ * guessing, the key stops database-only enumeration, and a memory-hard hash
+ * would only add row-lock time.
  */
 import crypto from 'node:crypto';
 
 import { BASE64URL_32_BYTES_PATTERN, KEY_ID_PATTERN } from '@/lib/auth/keyring';
-import { verifyPassword } from '@/lib/auth/password/hash';
 
 import { getActiveOtpKey, getOtpKey } from './key';
 
 const ENVELOPE_VERSION = 'o1';
 
-/** Argon2id OTP hashes from `hashPassword`; recognised on the verify path only. */
-const LEGACY_PASSWORD_ENVELOPE = 'p1:';
-
 function computeMac(code: string, secret: Buffer): Buffer {
-  // NFKC, matching `normalizePassword`: a no-op for ASCII digits, but a channel
-  // that echoes a full-width digit would otherwise mismatch silently.
+  // A channel echoing full-width digits would otherwise mismatch silently.
   return crypto
     .createHmac('sha256', secret)
     .update(code.normalize('NFKC'), 'utf8')
@@ -34,22 +25,11 @@ export function hashOtpCode(code: string): string {
 }
 
 /**
- * Can this stored value be compared against a submitted code AT ALL?
- *
- * `false` means only one thing: an `o1:` envelope whose key generation is no
- * longer configured. `verifyOtpCode` deliberately THROWS there — an operator has
- * to see it — but a throw on an anonymous verification path is a 500, and an
- * unknown identifier takes the generic 400 path, so the pair distinguishes a real
- * live proof from a nonexistent account. Callers on those paths ask this first
- * and answer "invalid or expired", which is the truth: the code can never match
- * again, and requesting a new one fixes it.
- *
- * A malformed envelope returns `true` — it IS evaluable, and `verifyOtpCode`
- * answers `false` for it without throwing.
+ * `false` only for a retired key id, where `verifyOtpCode` throws; on an
+ * anonymous path that 500 would reveal a live proof, so callers ask first and
+ * answer "invalid or expired".
  */
 export function canEvaluateOtp(stored: string): boolean {
-  if (stored.startsWith(LEGACY_PASSWORD_ENVELOPE)) return true;
-
   const parts = stored.split(':');
   if (parts.length !== 3) return true;
   const [version, keyId] = parts;
@@ -65,30 +45,13 @@ export function canEvaluateOtp(stored: string): boolean {
 }
 
 /**
- * Constant-time comparison against the stored value.
- *
- * A malformed `o1:` value returns false rather than throwing: a corrupted row
- * must not become an error-shaped oracle.
- *
- * Two cases deliberately DO throw, because both mean an operator has to act and
- * neither is a wrong code: a key id the keyring no longer holds, and a
- * malformed legacy `p1:` envelope, which `verifyPassword` rejects with
- * `PasswordHashFormatError`.
- *
- * `timingSafeEqual` throws on a length mismatch, so the length is checked first;
- * the MAC length is fixed by SHA-256 and carries no secret.
+ * A malformed value answers `false`, not a throw, so a corrupted row is no
+ * oracle. A retired key id deliberately throws: an operator has to act.
  */
 export async function verifyOtpCode(
   code: string,
   stored: string
 ): Promise<boolean> {
-  // Delete this branch, and the `verifyPassword` import, once no deployment can
-  // hold a `p1:` code issued before the HMAC cutover (OTP_EXPIRY_MINUTES after
-  // that deploy). Until then it keeps mid-verification users from an
-  // unexplained rejection.
-  if (stored.startsWith(LEGACY_PASSWORD_ENVELOPE))
-    return verifyPassword({ password: code, hash: stored });
-
   const parts = stored.split(':');
   if (parts.length !== 3) return false;
 

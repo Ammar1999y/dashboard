@@ -29,6 +29,8 @@ import { isPgEnum } from 'drizzle-orm/pg-core';
 import { db, withTransaction } from '@/db';
 import * as schema from '@/db/schema';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import { assertHarnessDatabase } from '../helpers/database';
 import { seedUser } from '../helpers/session';
 
@@ -47,9 +49,7 @@ function declaredEnums(): Declared[] {
         name: value.enumName,
         values: value.enumValues,
       });
-  return declared.toSorted((a, b) =>
-    a.name === b.name ? 0 : a.name < b.name ? -1 : 1
-  );
+  return declared.toSorted((a, b) => compareCodeUnits(a.name, b.name));
 }
 
 // Read-only, but it holds the real client — and `tests/unit/harness-layout`

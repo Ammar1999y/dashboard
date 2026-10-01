@@ -1,13 +1,12 @@
-/**
- * Better Auth's `before` hook: the path allow-list and every per-path rule this
- * deployment applies before the library's own handler runs.
- */
 import type { HookContext } from './context';
 import type { AcceptedPasswordHashes } from './login-guard';
 import type { EntityID } from '@app/shared/types';
 import type { TwoFactorMethod } from '@app/shared/validation/enums';
 
-import { db } from '@/db';
+import { eq } from 'drizzle-orm';
+
+import { db, withTransaction } from '@/db';
+import { sessions } from '@/db/schema';
 import { formCsrfMiddleware } from 'better-auth/api';
 
 import {
@@ -35,18 +34,15 @@ import { hasAdminReauth } from './reauth/window';
 import { assertLiveSession } from './session/live';
 import { submittedRememberMe } from './session/remember-me';
 import { resolveRequestSession } from './session/request';
+import { revokeSessionsWhere } from './session/rotation';
 import {
   PLUGIN_VERIFIER_METHOD,
   requireTwoFactorChallenge,
 } from './two-factor/challenge';
 
 /**
- * The paths a browser reaches with no cookie at all, where Better Auth's
- * router-level origin check is skipped and its `formCsrfMiddleware` runs on the
- * endpoint itself — AFTER this hook. Anything the hook does for these paths
- * before that check runs against an unvalidated origin, so the check is run
- * here first. Every other listed path needs a session or a challenge cookie,
- * which the router-level check already validates.
+ * Cookieless paths: the router-level origin check is skipped and the endpoint's
+ * `formCsrfMiddleware` runs AFTER this hook, so it is run here first.
  */
 const FIRST_LOGIN_PATHS: ReadonlySet<string> = new Set([
   '/sign-in/email',
@@ -55,27 +51,15 @@ const FIRST_LOGIN_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Better Auth paths that verify a password through `validatePassword` /
- * `checkPassword`, and therefore reach `password.verify`.
- *
- * ⚠️ A password-taking path that is NOT here mints no proof and so rejects every
- * password. Update this whenever the allow-list grows. The 2FA endpoints this
- * deployment owns (`two-factor/enrolment.ts`) never reach `password.verify`;
- * they call `requireReauthPassword`.
+ * Library paths that reach `password.verify`. ⚠️ One missing here mints no
+ * proof and rejects every password; update it whenever the allow-list grows.
  */
-const PASSWORD_PROOF_PATHS: ReadonlySet<string> = new Set([
+export const PASSWORD_PROOF_PATHS: ReadonlySet<string> = new Set([
   '/two-factor/get-totp-uri',
 ]);
 
-/**
- * Session-bearing Better Auth paths that must pass this application's liveness
- * predicate before the plugin's own middleware sees them.
- *
- * `sessionMiddleware` and `freshSessionMiddleware` resolve a session through the
- * cookie CACHE and consult neither `users.is_active` nor `users.deleted_at`, so
- * a suspended or soft-deleted user whose row still exists otherwise keeps full
- * access here — the class `session/live.ts` exists to close.
- */
+// The library's session middlewares answer from the cookie cache and ignore
+// `is_active` / `deleted_at`, so a suspended user would otherwise keep access.
 const LIVE_SESSION_PATHS: ReadonlySet<string> = new Set([
   '/reauth/methods',
   '/reauth/passkey/options',
@@ -102,77 +86,52 @@ const LIVE_SESSION_PATHS: ReadonlySet<string> = new Set([
   '/passkey/update-passkey',
 ]);
 
-/**
- * Paths that serve BOTH an enrolment and a sign-in verification.
- *
- * Not in `LIVE_SESSION_PATHS`, which would demand a session on the sign-in
- * branch, where the caller holds only a challenge cookie. Liveness is required
- * on the session branch alone — and required, because these are writes that
- * `sessionMiddleware` would otherwise admit for a suspended account.
- */
+// Enrolment and sign-in on one path: liveness only when a session is present,
+// since the sign-in branch holds just a challenge cookie.
 const DUAL_MODE_LIVE_SESSION_PATHS: ReadonlySet<string> = new Set([
   '/two-factor/otp/send',
   '/two-factor/otp/verify',
 ]);
 
-/**
- * WebAuthn paths that add or remove a factor, and cannot carry a password of
- * their own — the ceremony spans two requests with the library's bodies. They
- * spend a grant minted by `/two-factor/passkey/grant` instead.
- */
+// Their library bodies cannot carry a password; they spend a
+// `/two-factor/passkey/grant` grant instead.
 const REAUTH_GRANT_PATHS: ReadonlySet<string> = new Set([
   '/passkey/verify-registration',
   '/passkey/delete-passkey',
 ]);
 
-/** Plugin paths carrying a `name` this schema bounds at `NAME_MAX`. */
 const PASSKEY_BOUNDED_PATHS: ReadonlySet<string> = new Set([
   '/passkey/verify-registration',
   '/passkey/update-passkey',
   '/passkey/delete-passkey',
 ]);
 
-/** …and the subset whose `id` must be a UUID this schema could actually hold. */
 const PASSKEY_ID_PATHS: ReadonlySet<string> = new Set([
   '/passkey/update-passkey',
   '/passkey/delete-passkey',
 ]);
 
-/** The plugin's verification endpoints, whose `trustDevice` flag is forced off. */
 const TRUST_DEVICE_STRIPPED_PATHS: ReadonlySet<string> = new Set(
   Object.keys(PLUGIN_VERIFIER_METHOD)
 );
 
 /**
- * Library paths whose body can ask for a SESSION, which this deployment does not
- * grant from an enrolment.
- *
- * `/passkey/verify-registration` takes `createSession`, and on the way out
- * `recordPasskeyEnrolment` rotates the user's sessions and keeps only the one
- * the REQUEST arrived on — so a session the plugin minted would be deleted
- * after its cookie was set, leaving the browser a token for a missing row that
- * `/get-session` still answers from the cookie cache. A session minted here
- * would also have completed no second factor.
+ * A session minted here completes no second factor, and `recordPasskeyEnrolment`
+ * would delete it after its cookie was set, leaving a cached token for a
+ * missing row.
  */
 const SESSION_CREATION_STRIPPED_PATHS: ReadonlySet<string> = new Set([
   '/passkey/verify-registration',
 ]);
 
-/**
- * What Better Call reports as the path of an endpoint declared without one.
- * Mirrored, and it fails closed: if the placeholder changes upstream, our own
- * `auth.api.*` calls to server-only endpoints answer 404.
- */
+// Better Call's path for an endpoint declared without one. Upstream drift fails
+// closed: our `auth.api.*` server-only calls answer 404.
 const SERVER_ONLY_VIRTUAL_PATH = '/';
 
 /**
- * The server-only endpoints this deployment actually calls, by the operation id
- * the dispatcher carries (`toAuthEndpoints` sets it to the `auth.api` key).
- *
- * ⚠️ A NAMED set, never a blanket pass on the placeholder path: every
- * `createAuthEndpoint.serverOnly` endpoint reports `'/'`, including
- * `viewBackupCodes`, which returns a user's DECRYPTED recovery codes for any
- * user id. Calling another one has to be a deliberate edit to this list.
+ * By `auth.api` key. ⚠️ Never a blanket pass on `'/'`: every server-only
+ * endpoint reports it, including `viewBackupCodes`, which returns any user's
+ * decrypted recovery codes.
  */
 const SERVER_ONLY_OPERATIONS: ReadonlySet<string> = new Set(['generateTOTP']);
 
@@ -181,11 +140,8 @@ export async function enforcePathPolicy(
 ): Promise<{ context: unknown } | undefined> {
   const internalSchemaGeneration =
     ctx.path === '/open-api/generate-schema' && !ctx.request;
-  // A server-only endpoint is never registered on the router, so it is outside
-  // the surface this list bounds: `app.ts` enforces the same list before
-  // `auth.handler` runs. All three conditions are required: `!ctx.request`
-  // alone would exempt every `auth.api.*` call, the placeholder alone a request
-  // for `/api/auth/`, and without the operation id every server-only endpoint.
+  // All three conditions are required: `!ctx.request` alone would exempt every
+  // `auth.api.*` call, the placeholder alone a request for `/api/auth/`.
   const serverOnlyEndpoint =
     ctx.path === SERVER_ONLY_VIRTUAL_PATH &&
     !ctx.request &&
@@ -207,18 +163,27 @@ export async function enforcePathPolicy(
   if (twoFactorContext) return twoFactorContext;
 
   if (ctx.path === '/sign-in/email') return await signInContext(ctx);
+  if (ctx.path === '/sign-out') await revokeSignedOutSession(ctx);
+}
+
+// Ahead of the library, whose delete swallows a fault and answers 200 with the
+// cookies cleared. A fault here is `app.ts`'s 500 with the cookies kept, so the
+// client can retry.
+async function revokeSignedOutSession(ctx: HookContext): Promise<void> {
+  const token = await ctx.getSignedCookie(
+    ctx.context.authCookies.sessionToken.name,
+    ctx.context.secret
+  );
+  if (!token) return;
+  await withTransaction((tx) =>
+    revokeSessionsWhere(tx, eq(sessions.token, token))
+  );
 }
 
 /**
- * Verifies the real password for `/sign-in/email` and hands the library a proof
- * in its place.
- *
- * ⚠️ The returned body is MERGED, not substituted — `runBeforeHooks` combines it
- * with the caller's through `defuReplaceArrays`, so every key named here wins
- * and every key omitted survives. `callbackURL` survives into `Location` and
- * `url`; what keeps it from being an open redirect is the library's
- * `originCheckMiddleware` against `baseURL`, not this return (asserted in
- * `tests/integration/sign-in-controls.test.ts`).
+ * ⚠️ The returned body is MERGED with the caller's (`defuReplaceArrays`), so an
+ * omitted key survives. `callbackURL` is kept from being an open redirect by the
+ * library's `originCheckMiddleware`, not by this return.
  */
 async function signInContext(ctx: HookContext): Promise<{ context: unknown }> {
   const { email, password, rememberMe } = bodyRecord(ctx);
@@ -227,8 +192,7 @@ async function signInContext(ctx: HookContext): Promise<{ context: unknown }> {
     email,
     password,
     rememberMe,
-    // Already verified by the captcha plugin's `onRequest`, which runs ahead of
-    // every hook.
+    // Already verified by the captcha plugin's `onRequest`, ahead of every hook.
     captcha: 'success',
   });
 
@@ -253,17 +217,11 @@ async function signInContext(ctx: HookContext): Promise<{ context: unknown }> {
   return withBody(ctx, {
     email: data.email,
     password: mintPasswordProof(acceptedHashes),
-    // Explicit rather than left to the merge: it decides a session lifetime
-    // and has to survive into the two-factor challenge's companion record.
+    // Explicit, not left to the merge: it must survive into the challenge record.
     rememberMe: submittedRememberMe({ rememberMe: data.rememberMe }),
   });
 }
 
-/**
- * Everything the 2FA and passkey paths need before Better Auth's own middleware
- * runs: a live session, reauthentication proof, and no client-chosen device
- * trust. One function because all three answers share the session lookup.
- */
 async function enforceTwoFactorPathPolicy(
   ctx: HookContext
 ): Promise<{ context: unknown } | undefined> {
@@ -288,7 +246,7 @@ async function enforceTwoFactorPathPolicy(
         !(await consumeReauthGrant(ctx, {
           userId: mode.userId,
           purpose: 'two_factor_enrolment',
-          token: grantToken(ctx),
+          token: grantToken(ctx, path),
         }))
       )
         throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
@@ -305,11 +263,8 @@ async function enforceTwoFactorPathPolicy(
 
   const body = bodyRecord(ctx);
 
-  // Overwritten rather than deleted: the dispatcher MERGES the returned body,
-  // so an omitted key keeps the caller's value. See `two-factor/trusted-device.ts`
-  // for why the plugin's own trust record is refused. `disableSession` rides
-  // along: on a sign-in verification it spends a backup code and returns
-  // WITHOUT completing the challenge or re-arming the attempt counter.
+  // Overwritten, not deleted: the body is merged. `disableSession` on a sign-in
+  // verification spends a backup code without completing the challenge.
   const patch: Record<string, unknown> = {
     ...(stripsTrustDevice && { trustDevice: false, disableSession: false }),
     ...(stripsSessionCreation && { createSession: false }),
@@ -365,10 +320,6 @@ function withBody(
   return { context: { ...ctx, body } };
 }
 
-/**
- * The DATABASE, not the cookie cache: liveness is exactly the question the
- * cache cannot answer.
- */
 async function requireLiveSession(
   sessionId: string,
   userId: EntityID
@@ -381,12 +332,9 @@ async function requireLiveSession(
 }
 
 /**
- * The plugin's verifiers resolve their credential row and consult no offered
- * set, so an unacknowledged or removed backup-code set, or a TOTP confirmed
- * after the challenge was issued, would complete a sign-in the challenge never
- * offered. Sign-in mode only, the same fence `two-factor/plugin.ts` applies
- * inside the endpoint: kept in both places, because this one is keyed by path
- * and that one owns verification.
+ * The plugin's verifiers consult no offered set, so they could complete a
+ * sign-in with a method the challenge never offered. Duplicated in
+ * `two-factor/plugin.ts` on purpose.
  */
 async function assertPluginVerifierOffered(
   ctx: HookContext,
@@ -395,10 +343,7 @@ async function assertPluginVerifierOffered(
   await requireTwoFactorChallenge(ctx, { method, signInOnly: true });
 }
 
-/**
- * From the signed cookie and the database, not the cookie cache — whose answer
- * is precisely what must not be trusted here. See `LIVE_SESSION_PATHS`.
- */
+/** Not the cookie cache — see `LIVE_SESSION_PATHS`. */
 async function readRequestSession(
   ctx: HookContext
 ): Promise<{ userId: EntityID; sessionId: string } | null> {
@@ -414,21 +359,16 @@ async function readRequestSession(
 }
 
 /**
- * The bounds this schema stores under, applied to the plugin's own bodies.
- *
- * ⚠️ These paths carry the library's Zod schemas: an unbounded `name` and a
- * plain `string` id, against a `varchar(NAME_MAX)` column and UUID ids — a 500
- * where every other authenticated surface answers a 4xx envelope. `app.ts`
- * mounts one wildcard, so this hook is the only boundary a per-path schema can
- * live on.
+ * The library's schemas leave `name` unbounded and `id` a plain string, which
+ * would 500 against the columns. `app.ts` mounts one wildcard, so this hook is
+ * the only per-path boundary.
  */
 function assertPasskeyInputBounds(ctx: HookContext, path: string): void {
   if (!PASSKEY_BOUNDED_PATHS.has(path)) return;
   const body = bodyRecord(ctx);
 
   const name = body.name;
-  // `varchar(NAME_MAX)` counts CHARACTERS, so this has to as well; the plugin's
-  // own schema is `z.string().trim()`, so the trim is what reaches the column.
+  // `varchar` counts characters; the plugin's schema trims before the column.
   const overlongName =
     typeof name === 'string' && exceedsCodePoints(name.trim(), NAME_MAX);
   const id = body.id;
@@ -439,20 +379,20 @@ function assertPasskeyInputBounds(ctx: HookContext, path: string): void {
     throw authError(HTTP_STATUS.UNPROCESSABLE, MSG_INVALID_INPUT);
 }
 
-/** `?grant=` on the GET ceremony route, `grant` in the body on the POST ones. */
-function grantToken(ctx: HookContext): unknown {
-  return (
-    bodyRecord(ctx).grant ??
-    (ctx.query as { grant?: unknown } | undefined)?.grant
-  );
+// The body wins. Registration also reads `?grant=`: the stock client's
+// `addPasskey` writes that body itself, over any `grant` a caller puts in it.
+function grantToken(ctx: HookContext, path: string): unknown {
+  const fromBody = bodyRecord(ctx).grant;
+  if (fromBody !== undefined || path !== '/passkey/verify-registration')
+    return fromBody;
+  const query: unknown = ctx.query;
+  return query && typeof query === 'object' && 'grant' in query
+    ? query.grant
+    : undefined;
 }
 
-/**
- * `passwordSchema`'s own bound, in its own unit (code points after
- * normalisation). This runs ahead of it on every Better Auth path and is all a
- * password meets before `/sign-in/email` parses it, so a different unit would
- * refuse logins with a password the rotation routes accepted.
- */
+// Must use `passwordSchema`'s unit (normalised code points), or it refuses logins
+// with passwords the rotation routes accepted.
 function rejectOverlongPassword(ctx: HookContext): void {
   const supplied = bodyRecord(ctx).password;
   if (

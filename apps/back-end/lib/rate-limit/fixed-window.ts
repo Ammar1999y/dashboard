@@ -1,6 +1,10 @@
 import { errorClassOf, logSanitized } from '@/utils/log';
 
-import { admitWindow, getRateLimitStore } from './store';
+import {
+  admitWindow,
+  admitWindowWithoutBlocking,
+  getRateLimitStore,
+} from './store';
 
 interface StoreFailureLog {
   msg: 'rate-limit store error';
@@ -61,6 +65,12 @@ export async function rateLimit(opts: {
   window: number;
   /** Units this request spends. Defaults to 1. */
   cost?: number;
+  /**
+   * Wait for a held writer lock with timers instead of blocking the thread.
+   * For a charge made after an account lookup: a blocking wait there delays
+   * every request in the process, so the lookup's outcome shows in their timing.
+   */
+  yieldWhenBusy?: boolean;
 }): Promise<RateLimitResult> {
   const windowMs = opts.window * 1000;
   const cost = opts.cost ?? 1;
@@ -79,17 +89,22 @@ export async function rateLimit(opts: {
   try {
     const now = Date.now();
     const windowStart = now - (now % windowMs);
-    const admitted = admitWindow(getRateLimitStore(), {
+    const admission = {
       key: opts.identifier,
       windowStart,
       cost,
       expiresAt: windowStart + windowMs,
       limit: opts.limit,
-    });
+    };
+    const store = getRateLimitStore();
+    const admitted = opts.yieldWhenBusy
+      ? await admitWindowWithoutBlocking(store, admission)
+      : admitWindow(store, admission);
 
     // No row: refused without a write, and the statement's WHERE proves the
-    // stored row is in the `windowStart` bound above. Do not read it back —
-    // a concurrent rollover between the two would overstate `retryAfter` by a
+    // stored row is in the `windowStart` bound above or the next one; the next
+    // (a stale bind) floors to 1s below. Do not read it back — a
+    // concurrent rollover between the two would overstate `retryAfter` by a
     // whole window.
     if (!admitted) {
       return {

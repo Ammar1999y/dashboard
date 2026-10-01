@@ -1,10 +1,4 @@
-/**
- * The in-process outbox `OTP_DELIVERY=outbox` delivers to instead of a provider.
- *
- * In memory and never logged: the plaintext code is here so a test can read it
- * back, and nowhere else. `./config.ts` refuses the mode in production, so
- * nothing in this file can run there.
- */
+// Holds plaintext codes for tests: never log it. `./config.ts` refuses the mode in production.
 import type { OtpChannel, OtpPurpose } from '@app/shared/validation/enums';
 
 interface OutboxDelivery {

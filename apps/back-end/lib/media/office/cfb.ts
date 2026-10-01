@@ -1,31 +1,15 @@
 /**
- * Compound File Binary inspection — the container behind legacy `.doc` and
- * `.xls`, and behind every password-protected Office file of any age.
+ * Compound File Binary: legacy `.doc`/`.xls`, and every password-protected
+ * Office file of any age. Directory names miss legacy encryption, which lives
+ * in records: the FIB flags of `WordDocument` ([MS-DOC] 2.5.2), or a `FilePass`
+ * in `Workbook` ([MS-XLS] 2.4.117) after which even the `BoundSheet8` records
+ * naming macro sheets are ciphertext. The encrypted fixtures in
+ * `tests/fixtures/office` pass the name check and must fail the record check.
  *
- * A compound file is a small filesystem: a FAT of sectors, a mini FAT for the
- * small streams packed into the root entry's stream, and a directory of named
- * storages and streams. Two levels are inspected, because names answer only
- * part of the question:
+ * Field codes, DDE links and external references are not read: documents are
+ * served as attachments, never rendered (`UPLOAD_LIMITS_DESCRIPTION`).
  *
- * - Directory names. Word keeps macros under a `Macros` storage, Excel under
- *   `_VBA_PROJECT_CUR`; embedded objects sit in `ObjectPool` (Word) or `MBD…`
- *   storages (Excel); an ECMA-376 encrypted package carries `EncryptedPackage`
- *   and `EncryptionInfo`.
- * - Records. Legacy encryption is NOT a directory entry. Word records it in the
- *   `fEncrypted`/`fObfuscated` bits of the FIB at the head of `WordDocument`
- *   ([MS-DOC] 2.5.2); Excel writes a `FilePass` record into the `Workbook`
- *   stream ([MS-XLS] 2.4.117), after which every record is ciphertext —
- *   including the `BoundSheet8` records ([MS-XLS] 2.4.28) whose `dt` names an
- *   Excel 4.0 macro sheet or a VBA module, neither of which a storage name
- *   reveals. The encrypted fixtures in `tests/fixtures/office` pass the name
- *   check and must fail the record check.
- *
- * What this does not read: field codes, DDE links, external references. Those
- * are content, and the documents are served as attachments and never rendered
- * here; the contract states it (`UPLOAD_LIMITS_DESCRIPTION`).
- *
- * Reference: [MS-CFB] 2.2 (header), 2.3 (FAT), 2.4 (mini FAT), 2.5 (DIFAT),
- * 2.6 (directory entry). Only what the two levels need is read.
+ * Reference: [MS-CFB] 2.2–2.6.
  */
 import type { DetectResult, OfficeFamily } from '../detect-result';
 
@@ -137,9 +121,8 @@ function fatSectorNumbers(layout: Layout): number[] | null {
 
   const fatSectors = sectorNumbersAt(layout, 76, HEADER_DIFAT_ENTRIES);
   let difatSector = data.getUint32(68, true);
-  // The declared count bounds the walk, but it is a number out of the file:
-  // a chain that revisits a sector must terminate on its own, or the bound is
-  // the attacker's to choose.
+  // The declared count comes from the file, so a revisiting chain must end on
+  // its own.
   const visited = new Set<number>();
   while (difatSector !== END_OF_CHAIN && visited.size < difatSectorCount) {
     if (!sectorInFile(layout, difatSector) || visited.has(difatSector))
@@ -149,10 +132,8 @@ function fatSectorNumbers(layout: Layout): number[] | null {
     fatSectors.push(
       ...sectorNumbersAt(layout, base, layout.entriesPerFatSector - 1)
     );
-    // Inside the loop: checked only at the end, a small file naming the cap's
-    // worth of FAT sectors over and over builds the whole list, and `readTable`
-    // allocates a sector's worth of entries for every one of them, before it
-    // is refused.
+    // Inside the loop: at the end, a small file repeating FAT sectors would
+    // already have built the whole list for `readTable` to allocate.
     if (fatSectors.length > MAX_FAT_SECTORS) return null;
     difatSector = data.getUint32(
       base + (layout.entriesPerFatSector - 1) * 4,
@@ -168,10 +149,8 @@ function readTable(
   sectors: readonly number[]
 ): number[] | null {
   const table: number[] = [];
-  // A sector's POSITION in this flat table is its FAT index, so a repeat puts
-  // every later entry at the wrong index: refused rather than deduplicated. It
-  // also stops one in-file sector being read `MAX_FAT_SECTORS` times ([MS-CFB]
-  // 2.5: each FAT sector is listed once).
+  // Position here is the FAT index, so a repeat is refused, not deduplicated;
+  // [MS-CFB] 2.5 lists each FAT sector once.
   const seen = new Set<number>();
   for (const sector of sectors) {
     if (!sectorInFile(layout, sector) || seen.has(sector)) return null;
@@ -233,8 +212,7 @@ function directoryEntryAt(
     name,
     type,
     startSector: layout.data.getUint32(offset + 116, true),
-    // The high half is reserved in version 3 files and unused by Office either
-    // way; a stream larger than the file cannot be read regardless.
+    // The high half is reserved in version 3 and unused by Office.
     size: layout.data.getUint32(offset + 120, true),
   };
 }
@@ -300,11 +278,8 @@ function parse(bytes: Uint8Array): Parsed | null {
 }
 
 /**
- * The first `limit` bytes of a stream (all of it when `limit` is larger).
- * A stream under the cutoff lives in the mini stream — the root entry's own
- * chain, cut into 64-byte mini sectors and chained through the mini FAT — and
- * anything else in ordinary sectors. `null` when the chains do not deliver the
- * bytes the entry claims.
+ * A stream under the cutoff lives in the mini stream: the root entry's chain,
+ * cut into 64-byte mini sectors chained through the mini FAT.
  */
 function readStream(
   parsed: Parsed,
@@ -390,10 +365,8 @@ function inspectWord(fib: Uint8Array): DetectResult {
 }
 
 /**
- * The workbook globals substream: `BOF` … `EOF`. A `FilePass` anywhere in it
- * means everything after is ciphertext, so it is refused before any sheet record
- * is trusted; a `BoundSheet8` whose `dt` names a macro sheet or a VBA module is
- * code however the storages are named.
+ * A `FilePass` means everything after it is ciphertext, so it is refused before
+ * any sheet record is trusted.
  */
 function inspectWorkbook(stream: Uint8Array): DetectResult {
   if (stream.length < 4) return { ok: false, reason: 'container' };
@@ -420,12 +393,8 @@ function inspectWorkbook(stream: Uint8Array): DetectResult {
 }
 
 /**
- * Is this a plain legacy Office file of `family`, free of macros, embedded
- * objects and encryption?
- *
- * Names are compared lowercased and without their leading control character
- * (`\x05SummaryInformation`, `\x01CompObj`): the character is a sort-order
- * convention, not part of the name a check should key on.
+ * Names are compared lowercased and without a leading control character
+ * (`\x05SummaryInformation`), which is a sort-order convention.
  */
 export function detectCompoundFile(
   bytes: Uint8Array,

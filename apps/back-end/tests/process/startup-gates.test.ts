@@ -21,7 +21,7 @@
  * deliberately withholding.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -335,6 +335,16 @@ describe('the production environment gate refuses a missing variable', () => {
     expect(outcome.output).toInclude('OTP_DELIVERY');
   }, 60_000);
 
+  test('an SQLITE_DIR the writer lock cannot be claimed in fails before listening', async () => {
+    const sqliteDir = tempSqliteDir();
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a temp directory this test created
+    mkdirSync(path.join(sqliteDir, '.writer-lock.db'));
+    const outcome = await bootWith(baseEnv(sqliteDir));
+
+    expect(outcome.exitCode).not.toBe(0);
+    expect(outcome.output).not.toInclude('server started');
+  }, 60_000);
+
   test('a relative SQLITE_DIR fails the boot', async () => {
     const outcome = await bootWith({
       ...productionEnv(tempSqliteDir()),
@@ -567,6 +577,66 @@ describe('a production-posture boot serves the production header set', () => {
       child.kill();
       await child.exited;
     }
+  }, 90_000);
+});
+
+describe('a second process on one SQLITE_DIR', () => {
+  async function answer(
+    child: Bun.Subprocess,
+    port: number
+  ): Promise<Response | null> {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline && child.exitCode === null) {
+      try {
+        return await fetch(`http://127.0.0.1:${port}/api/health/storage`);
+      } catch {
+        await Bun.sleep(250);
+      }
+    }
+    return null;
+  }
+
+  test('boots and serves, without registering the schedule', async () => {
+    const dir = tempSqliteDir();
+    const spawn = (port: number) =>
+      Bun.spawn(['bun', '--no-env-file', SERVER], {
+        cwd: REPO_ROOT,
+        env: { ...baseEnv(dir), PORT: String(port) },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+    const output = (child: ReturnType<typeof spawn>) =>
+      Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]).then((streams) => streams.join('\n'));
+
+    const owner = spawn(BOOT_PORT + 4);
+    const ownerOutput = output(owner);
+    let second: ReturnType<typeof spawn> | undefined;
+    try {
+      // Listening means the owner already holds the directory.
+      expect(await answer(owner, BOOT_PORT + 4)).not.toBeNull();
+
+      second = spawn(BOOT_PORT + 5);
+      const secondOutput = output(second);
+      const served = await answer(second, BOOT_PORT + 5);
+      second.kill();
+      await second.exited;
+
+      expect(served).not.toBeNull();
+      const text = await secondOutput;
+      expect(text).toInclude('"msg":"maintenance schedule not started"');
+      expect(text).not.toInclude('"msg":"maintenance schedule started"');
+    } finally {
+      second?.kill();
+      owner.kill();
+      await owner.exited;
+    }
+
+    const text = await ownerOutput;
+    expect(text).toInclude('"msg":"maintenance schedule started"');
+    expect(text).not.toInclude('"msg":"maintenance schedule not started"');
   }, 90_000);
 });
 

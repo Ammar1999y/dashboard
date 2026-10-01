@@ -337,7 +337,7 @@ function ColorPickerPanel({ state }: { state: ColorPickerState }) {
   return (
     <div className={cn(styles.colorPicker, 'w-72 space-y-3')}>
       <Picker color={state.pickerColor} onChange={state.commit} />
-      <div className='flex space-x-2'>
+      <div className='flex gap-2'>
         <ColorFormatSelect
           colorFormat={state.colorFormat}
           onColorFormatChange={state.setColorFormat}

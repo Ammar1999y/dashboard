@@ -1,19 +1,8 @@
 /**
- * Carries "this request's password was already verified" from the `before`
- * hook (`lib/auth/path-policy.ts`) to Better Auth's `password.verify`.
- *
- * The hook verifies the real plaintext through `verifyLoginAttempt` and
- * substitutes a one-shot proof for `body.password`; `verify` accepts only a live
- * proof for the hash it is handed, so a real plaintext reaching it — an
- * uncompensated path — matches nothing and fails closed.
- *
- * A proof carries a SET of hashes because `verifyLoginAttempt` rehashes on a
- * pepper-generation change, so the row Better Auth reads a moment later may hold
- * either value. Binding to one would break login mid-rotation, or force
- * `returnPasswordProof: true`, which suppresses the upgrade entirely.
- *
- * `path-policy.ts` must stay the only minter: a second one would be a second
- * place deciding what counts as a verified password.
+ * `path-policy.ts` swaps the verified plaintext for a one-shot proof, and
+ * `password.verify` accepts only proofs, so a plaintext reaching it fails
+ * closed. A SET of hashes because a pepper rehash may land in between.
+ * ⚠️ `path-policy.ts` must stay the only minter.
  */
 import crypto from 'node:crypto';
 
@@ -36,11 +25,7 @@ interface PendingProof {
   readonly expiresAt: number;
 }
 
-/**
- * Process-local by design: the `before` hook and the handler always run in the
- * same process for the same request, so nothing needs to survive a restart — and
- * because it cannot, a restart cannot leave a usable proof behind.
- */
+// Process-local by design: hook and handler share one request in one process.
 const pending = new Map<string, PendingProof>();
 
 function sweepExpired(now: number): void {
@@ -48,10 +33,7 @@ function sweepExpired(now: number): void {
     if (proof.expiresAt <= now) pending.delete(token);
 }
 
-/**
- * `hashes` must contain every hash the account row could hold by the time the
- * handler reads it.
- */
+/** `hashes`: every value the account row could hold when the handler reads it. */
 export function mintPasswordProof(hashes: readonly string[]): string {
   const accepted = hashes.filter((hash) => hash.length > 0);
   if (accepted.length === 0)
@@ -69,12 +51,8 @@ export function mintPasswordProof(hashes: readonly string[]): string {
 }
 
 /**
- * Better Auth's `password.verify`, in full. Deletes before deciding, so a proof
- * is spent whether or not it matched and can never be replayed — including by a
- * second `verify` call inside one request.
- *
- * No constant-time compare, deliberately: both operands are hash-map lookups by
- * exact key, and the candidate is CSPRNG output that never leaves this process.
+ * Deletes before deciding, so a proof is spent even when it did not match. No
+ * constant-time compare, deliberately: a map lookup of CSPRNG output.
  */
 export function consumePasswordProof(hash: string, candidate: string): boolean {
   const proof = pending.get(candidate);
@@ -85,11 +63,7 @@ export function consumePasswordProof(hash: string, candidate: string): boolean {
   );
 }
 
-/**
- * A proof must be LONGER than any password this application accepts:
- * `path-policy.ts` rejects every inbound `password` over `PASSWORD_MAX`, so no
- * value that survives validation can be one.
- */
+// Longer than `PASSWORD_MAX`, so no inbound password surviving validation is a proof.
 const PROOF_LENGTH =
   `${PROOF_PREFIX}${Buffer.alloc(PROOF_ENTROPY_BYTES).toString('base64url')}`
     .length;

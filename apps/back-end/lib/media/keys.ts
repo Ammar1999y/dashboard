@@ -1,18 +1,13 @@
-/**
- * Every object this application stores lives under this prefix, in either
- * bucket. Reconciliation lists it; nothing else in the bucket is ours.
- */
+/** Reconciliation lists this prefix; nothing else in either bucket is ours. */
 export const OBJECT_KEY_PREFIX = 'm/';
 
 /**
- * `m/<yyyy>/<mm>/<file id>.<ext>` — opaque, immutable, identical in both
- * buckets. No filename (it would go stale on the first rename and leak the
- * uploader's name into every public URL) and no entity prefix (an owner created
- * in the same form as the upload has no id yet).
+ * Identical in both buckets. No filename (stale on the first rename, and it
+ * would leak into public URLs) and no entity prefix (an owner created in the
+ * same form has no id yet).
  *
- * The id is the row's primary key, so two objects cannot share a key without a
- * primary-key collision first; the year/month is a listing convenience for a
- * human in the Cloudflare console, not a partition anything reads.
+ * ⚠️ Embedding the primary key is what makes a key unique to one row; the
+ * year/month is only for humans browsing the console.
  */
 export function objectKey(
   fileId: string,

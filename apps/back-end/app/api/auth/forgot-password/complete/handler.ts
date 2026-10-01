@@ -36,17 +36,13 @@ import { otpGuessWasEvaluated } from '@/lib/otp/verify';
 import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
 
 /**
- * Forgot-password step 3, the half that makes the reset a two-possession
- * operation.
- *
- * ⚠️ The grant is NOT sufficient alone: it proves the recovery contact and
- * nothing else. The password is written only after a factor from the grant's
- * issued set — excluding the contact the recovery code arrived on — is proven
- * in this request, against the SAME grant, consumed in the write's transaction.
+ * ⚠️ The grant alone is NOT sufficient: the password is written only after a
+ * factor from its issued set is proven here, and the grant is consumed in the
+ * write's transaction.
  */
 export const POST = withTimingFloor(
   otpMsg.passwordResetError,
-  async (ctx, floor) => {
+  async (ctx, startFloor) => {
     requireFeature(OTP_ENABLED);
 
     await enforceRateLimit({
@@ -69,11 +65,11 @@ export const POST = withTimingFloor(
     if (!resolved) throw invalidOrExpiredCode();
     const { grant, option } = resolved;
 
-    // Screened and hashed before the attempt is spent: neither depends on the
-    // account, so a rejection here costs the user nothing.
+    // Before the attempt is spent, so a rejection here costs no attempt.
     await checkPasswordCompromise(newPassword);
     const hashedPassword = await hashPassword(newPassword);
 
+    startFloor();
     const [user] = await db
       .select({
         id: users.id,
@@ -108,8 +104,7 @@ export const POST = withTimingFloor(
         auditMeta
       );
     } catch (caught) {
-      // The sign-in challenge's rule: only a code COMPARED and lost is a guess.
-      // A missing proof row or a fault before the comparison is refunded.
+      // Only a code compared and lost is a guess; everything else is refunded.
       await (otpGuessWasEvaluated(caught)
         ? attempt.recordFailure()
         : attempt.restore());
@@ -117,20 +112,15 @@ export const POST = withTimingFloor(
     }
 
     if (verdict !== 'matched') {
-      // The same distinction as a verdict: `rejected` was compared,
-      // `unavailable` never got that far.
       await (verdict === 'rejected'
         ? attempt.recordFailure()
         : attempt.restore());
       throw new CustomError(twoFactorMsg.invalidCode, HTTP_STATUS.BAD_REQUEST);
     }
 
-    // One transaction: the grant is spent, the password written, and every
-    // session, pending proof and trusted device goes with it — the person
-    // recovering may not be the account's owner.
+    // Trusted devices go too: the person recovering may not be the owner.
     const written = await withTransaction(async (tx) => {
-      // The user row before the grant rows: every other writer of this user's
-      // `verifications` rows already holds the user lock.
+      // Before the grant rows: every other writer of them holds the user lock.
       await lockUser(tx, user.id);
 
       if (!(await consumeRecoveryGrant(tx, grantToken, user.id))) return false;
@@ -169,7 +159,6 @@ export const POST = withTimingFloor(
 
     if (!written) throw invalidOrExpiredCode();
 
-    await floor();
     return apiSuccess({
       message: otpMsg.passwordResetSuccess,
       data: { reset: true },

@@ -17,21 +17,10 @@ const HIBP_RETRY_BASE_MS = 75;
 const HIBP_ATTEMPT_TIMEOUT_MS = 1000;
 
 /**
- * k-Anonymity check against the HaveIBeenPwned Passwords API: only the first 5
- * characters of the SHA-1 hash are sent. Throws `CustomError` (400) when the
- * password appears in known breaches.
- *
- * **The only implementation, and it FAILS OPEN — both deliberate.** Do not also
- * register Better Auth's `haveIBeenPwned` plugin: it fails closed, so the two
- * would disagree on an outage.
- *
- * After `HIBP_RETRIES + 1` bounded attempts an unreachable HIBP logs
- * `hibp.degraded` and the password is ACCEPTED: a third party being down must
- * not take account creation, password reset and credential rotation down with
- * it, and a breached password that slips through is still subject to every
- * other control. The cost: during an outage every password-setting path accepts
- * a known-breached password, recorded only by the log line. Alert on
- * `hibp.degraded`.
+ * ⚠️ Deliberately FAILS OPEN: an unreachable HIBP logs `hibp.degraded` and the
+ * password is accepted, so a third-party outage cannot take password writes
+ * down. Alert on `hibp.degraded`. Do not also register Better Auth's
+ * `haveIBeenPwned` plugin, which fails closed.
  */
 export async function checkPasswordCompromise(password: string): Promise<void> {
   const sha1Hash = createHash('sha1')

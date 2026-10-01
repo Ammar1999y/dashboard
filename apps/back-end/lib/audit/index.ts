@@ -14,6 +14,13 @@ export interface AuditMeta {
   apiPath: string;
 }
 
+/** Cut to the `user_agent` column width every table shares. */
+export function boundedUserAgent(
+  userAgent: string | null | undefined
+): string | undefined {
+  return userAgent?.slice(0, USER_AGENT_MAX);
+}
+
 /** Cut to the `audit_logs` column widths. */
 export function boundedAuditMeta(
   ip: string | null,
@@ -22,7 +29,7 @@ export function boundedAuditMeta(
 ): AuditMeta {
   return {
     ip,
-    userAgent: userAgent?.slice(0, USER_AGENT_MAX) ?? null,
+    userAgent: boundedUserAgent(userAgent) ?? null,
     apiPath: apiPath.slice(0, API_PATH_MAX),
   };
 }
@@ -86,6 +93,7 @@ function isSensitiveAuditKey(
 // character, so a stored row can be ~2x this.
 const MAX_AUDIT_JSON_CHARS = 32_768;
 const MAX_AUDIT_DEPTH = 6;
+const AUDIT_PREVIEW_CODE_POINTS = 1024;
 
 /**
  * Bound a value for a `jsonb` column, and hand back one the driver will accept.
@@ -102,7 +110,10 @@ function clampJson<T>(value: T): T | { _truncated: true; preview: string } {
   if (value == null) return value;
   const s = JSON.stringify(value);
   if (s.length <= MAX_AUDIT_JSON_CHARS) return JSON.parse(s) as T;
-  return { _truncated: true, preview: s.slice(0, 1024) };
+  // By code point: a cut through a surrogate pair leaves a lone half, which
+  // `jsonb` refuses.
+  const preview = s[Symbol.iterator]().take(AUDIT_PREVIEW_CODE_POINTS);
+  return { _truncated: true, preview: preview.toArray().join('') };
 }
 
 const MAX_AUDIT_NODES = 2000;
@@ -139,6 +150,8 @@ function redactValue(
   }
 
   if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date)
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
 
   // Prototype-free: `safe['__proto__'] = v` on a plain object mutates the
   // prototype instead of recording a key, so the field would silently vanish.

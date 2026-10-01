@@ -2,13 +2,12 @@
  * The PostgreSQL client: one pooled `Bun.SQL` connection pool for the process,
  * and the transaction helper that runs on it.
  *
- * The driver has to hold real TCP sessions: `FOR UPDATE` across statements,
- * `pg_advisory_xact_lock` and `SET LOCAL` throughout this codebase all assume a
- * transaction runs on one backend connection. A per-query HTTP driver breaks
- * every one of them silently.
+ * The driver has to hold real TCP sessions: `FOR UPDATE` across statements and
+ * `pg_advisory_xact_lock` both assume a transaction runs on one backend
+ * connection. A per-query HTTP driver breaks them silently.
  */
 import { SQL } from 'bun';
-import type { PgTransactionConfig } from 'drizzle-orm/pg-core';
+import type { Tx } from './transaction';
 
 import { drizzle } from 'drizzle-orm/bun-sql';
 
@@ -16,6 +15,9 @@ import { DATABASE_URL } from '@/lib/env.server';
 
 import { MAX_POOL_CONNECTIONS } from './limits';
 import * as schema from './schema';
+import { transactionRunner } from './transaction';
+
+export type { Tx } from './transaction';
 
 /**
  * Module-private on purpose: one pool per process, reachable only through `db`,
@@ -32,17 +34,13 @@ const client = new SQL(DATABASE_URL, { max: MAX_POOL_CONNECTIONS });
 
 export const db = drizzle<typeof schema>({ client, schema });
 
-export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
 export type Executor = typeof db | Tx;
 
-/** Keeps transaction boundaries independent of the database driver at call sites. */
-export function withTransaction<T>(
-  fn: (tx: Tx) => Promise<T>,
-  config?: PgTransactionConfig
-): Promise<T> {
-  return db.transaction(fn, config);
-}
+/**
+ * Keeps transaction boundaries independent of the database driver at call
+ * sites, and answers 503 once no connection frees up in time.
+ */
+export const withTransaction = transactionRunner(client);
 
 /**
  * The readiness probe's own pool: one connection, with the deadline enforced

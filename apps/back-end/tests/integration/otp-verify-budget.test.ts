@@ -64,6 +64,7 @@ import {
 import { processOtpVerify } from '@/lib/otp/verify';
 
 import { resetTables } from '../helpers/database';
+import { dropMockedClockWindows } from '../helpers/rate-limit';
 import { seedUser } from '../helpers/session';
 
 /** The code every seeded proof row will match. */
@@ -313,6 +314,7 @@ afterEach(() => {
   // `bun:test` exports no bare `useRealTimers` (it lives on `jest`/`vi`);
   // `setSystemTime()` with no argument IS the documented reset.
   setSystemTime();
+  dropMockedClockWindows();
 });
 
 describe('one budget per identity', () => {

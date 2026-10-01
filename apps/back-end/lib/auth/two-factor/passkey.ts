@@ -1,16 +1,10 @@
 /**
- * Passkey as a SECOND factor, which the passkey plugin does not offer.
+ * ⚠️ The plugin's `/passkey/verify-authentication` is an unauthenticated
+ * sign-in (credential id alone); it and `/passkey/generate-authenticate-options`
+ * must stay out of `BETTER_AUTH_ENDPOINTS`, unconditionally.
  *
- * ⚠️ The plugin's `/passkey/verify-authentication` resolves a credential by
- * `credentialID` alone and calls `createSession(passkey.userId)` — a complete
- * unauthenticated sign-in endpoint. It and
- * `/passkey/generate-authenticate-options` must stay absent from
- * `BETTER_AUTH_ENDPOINTS`, unconditionally and with no flag.
- *
- * The assertion here is bound to the pending challenge twice, and neither half
- * is optional: `allowCredentials` is scoped to the challenge user (a browser
- * hint, not a guarantee), and the stored credential is looked up UNDER that user
- * so a mismatch cannot resolve at all.
+ * `allowCredentials` is only a browser hint; the credential lookup under the
+ * challenge user is the binding.
  */
 import type { BetterAuthPlugin } from 'better-auth';
 
@@ -47,11 +41,7 @@ import {
 
 const CHALLENGE_MAX_AGE_S = 300;
 
-/**
- * Keyed by the 2FA challenge id rather than a cookie of its own, which is what
- * makes the ceremony inseparable from the sign-in it belongs to: one started
- * under one challenge cannot be completed under another.
- */
+// Keyed by the challenge id, so a ceremony cannot complete under another challenge.
 function ceremonyIdentifier(challengeId: string): string {
   return twoFactorWebauthnKey(challengeId).slice(
     0,
@@ -132,13 +122,9 @@ export const twoFactorPasskey = () =>
               twoFactorMsg.tooManyAttempts
             );
 
-          // The attempt is spent and NOT written back, so every exit below has
-          // to settle it exactly once. `settled` is what makes the catch a
-          // refund for everything that produced no verdict: a rejected
-          // assertion, or one naming a credential this user does not hold,
-          // charges on its own way out; a ceremony that was never started, a
-          // malformed body, a database error or a counter write that throws
-          // gives the attempt back instead of leaving the row absent.
+          // ⚠️ The spent attempt is not written back, so every exit must settle
+          // it exactly once: a rejected assertion charges, anything that
+          // produced no verdict is refunded by the catch.
           let settled = false;
           const chargeFailure = async () => {
             settled = true;
@@ -176,11 +162,8 @@ export const twoFactorPasskey = () =>
               );
             }
 
-            // A concurrent assertion already carried the row to at least this
-            // value. Logged because it is the only visible trace of two
-            // simultaneous ceremonies on one credential, not because it failed.
-            // A THROW here is still refunded: the assertion was proven, so the
-            // attempt was not a guess and the challenge is still live.
+            // `false`: a concurrent assertion got there first. Logged as the only
+            // trace of it, not as a failure.
             if (
               !(await advancePasskeyCounter(
                 verification.credential.id,
@@ -192,8 +175,7 @@ export const twoFactorPasskey = () =>
                 passkeyId: verification.credential.id,
               });
 
-            // The challenge is about to be consumed, so nothing after this may
-            // re-arm its counter.
+            // The challenge is about to be consumed; nothing may re-arm its counter.
             settled = true;
 
             const completed = await completeTwoFactorChallenge(

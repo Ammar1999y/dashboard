@@ -43,6 +43,7 @@ import {
 } from '@/lib/auth/credential';
 import { hashPassword } from '@/lib/auth/password/hash';
 import { generateUuidV7 } from '@/lib/id';
+import { CUSTOM_ROLE_NAME_PREFIX } from '@/lib/permissions/roles';
 
 import { assertHarnessDatabase } from './database';
 
@@ -149,14 +150,14 @@ export async function seedUser(options: SeedOptions = {}): Promise<SeededUser> {
 
   await db.insert(roles).values({
     id: roleId,
-    // `chk_custom_prefix_scope` ties the `custom-` prefix to the custom scope, so
+    // `chk_custom_prefix_scope` ties the custom prefix to the custom scope, so
     // the name has to be derived from the scope rather than picked freely.
     //
     // The WHOLE id, not `slice(0, 8)`. A UUID v7's leading hex digits are its
     // TIMESTAMP, so a truncated prefix is identical for every role seeded in the
     // same millisecond — two `seedUser()` calls in one `beforeAll` collided on
     // `ux_roles_role_name`. 40 characters against a `ROLE_NAME_MAX` of 100.
-    roleName: `${scope === ROLE_SCOPE.CUSTOM ? 'custom-' : ''}harness-${roleId.replaceAll('-', '')}`,
+    roleName: `${scope === ROLE_SCOPE.CUSTOM ? CUSTOM_ROLE_NAME_PREFIX : ''}harness-${roleId.replaceAll('-', '')}`,
     scope,
     isActive: options.roleActive ?? true,
   });
@@ -225,12 +226,19 @@ export interface SignedInSession {
  * account-model defect this fixture exists to keep visible, and swallowing it
  * would make every authenticated test fail somewhere less informative.
  */
-export async function signIn(user: SeededUser): Promise<SignedInSession> {
+export async function signIn(
+  user: SeededUser,
+  options: { rememberMe?: boolean } = {}
+): Promise<SignedInSession> {
   const response = await app.handle(
     new Request('http://localhost/api/auth/sign-in/email', {
       method: 'POST',
       headers: baseHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ email: user.email, password: user.password }),
+      body: JSON.stringify({
+        email: user.email,
+        password: user.password,
+        ...options,
+      }),
     })
   );
 

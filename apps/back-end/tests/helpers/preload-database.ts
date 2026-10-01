@@ -13,6 +13,7 @@
  * hard-exits.
  */
 import { SQL } from 'bun';
+import { beforeAll } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -137,3 +138,18 @@ try {
   // would sit inside the application's own connection budget for the whole run.
   await client.close();
 }
+
+/**
+ * Every file starts on an empty limiter store. The fixtures sign in from one
+ * `TEST_IP`, so a file that spent most of the current window would otherwise
+ * hand the next file on its worker a 429 for a correct password.
+ *
+ * Per file only under `--parallel`, where Bun documents that a preload's
+ * `beforeAll` wraps every file, ahead of the file's own; a single-worker run
+ * gets it once. Imported in the hook: a static import would load the
+ * application's environment before `DATABASE_URL` is rewritten above.
+ */
+beforeAll(async () => {
+  const { resetRateLimits } = await import('./rate-limit');
+  resetRateLimits();
+});

@@ -28,12 +28,12 @@ const WORKSPACE_ROOT = path.resolve(import.meta.dirname, '..');
  * generate-affecting key this script supplies itself, so a hand-written copy of
  * it is the one value the guard below cannot catch — the scratch would hold the
  * old folder's journal while `db:generate` wrote to the new one. `'drizzle'` is
- * drizzle-kit's own default when the key is absent.
+ * drizzle-kit's own default when the key is absent. An argument replaces it so
+ * a test can hand the gate a doctored copy.
  */
-const DRIZZLE_DIR = path.resolve(
-  WORKSPACE_ROOT,
-  drizzleConfig.out ?? 'drizzle'
-);
+const DRIZZLE_DIR = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.resolve(WORKSPACE_ROOT, drizzleConfig.out ?? 'drizzle');
 
 /** Every file under `dir`, keyed by its relative path, with its contents. */
 async function snapshotOf(dir: string): Promise<Map<string, string>> {

@@ -93,24 +93,37 @@ export function handleUserUniqueViolation(
  */
 const USER_FK_CONSTRAINTS = new Set(['users_role_id_roles_id_fk']);
 
+// Only the file's own `folder_id`: the same writes insert audit rows, and an
+// actor FK failing there is a server fault, not a missing folder.
+const FOLDER_FK_CONSTRAINTS = new Set(['files_folder_id_folders_id_fk']);
+
+/** Whether `error` violates one of `constraints`; an unmapped FK violation is logged. */
+function isMappedForeignKeyViolation(
+  error: unknown,
+  constraints: ReadonlySet<string>,
+  scope: string
+): boolean {
+  if (!isForeignKeyViolation(error)) return false;
+  const constraint = getConstraintName(error);
+  if (constraints.has(constraint)) return true;
+  logSanitized('error', {
+    msg: 'db.unknownForeignKeyViolation',
+    scope,
+    constraint: constraint || '(none)',
+  });
+  return false;
+}
+
 /** A known users FK violation as a 400; same `undefined` contract. */
 export function handleUserForeignKeyViolation(
   error: unknown,
   messages: { roleNotFound: string }
 ): HandlerOutput<null> | undefined {
-  if (!isForeignKeyViolation(error)) return undefined;
-  const constraint = getConstraintName(error);
-  if (!USER_FK_CONSTRAINTS.has(constraint)) {
-    // Deliberately unmapped: `role_permissions_role_id_roles_id_fk` can only
-    // fail on a role this transaction created or locked, a server invariant
-    // break rather than a client mistake.
-    logSanitized('error', {
-      msg: 'db.unknownForeignKeyViolation',
-      scope: 'users',
-      constraint: constraint || '(none)',
-    });
+  // Deliberately unmapped: `role_permissions_role_id_roles_id_fk` can only fail
+  // on a role this transaction created or locked, a server invariant break
+  // rather than a client mistake.
+  if (!isMappedForeignKeyViolation(error, USER_FK_CONSTRAINTS, 'users'))
     return undefined;
-  }
   return handleApiError(
     new CustomError(messages.roleNotFound, HTTP_STATUS.BAD_REQUEST),
     undefined,
@@ -135,11 +148,12 @@ export function handlePermissionUniqueViolation(
   return uniqueViolationConflict(error, PERMISSION_UNIQUE_CONSTRAINTS, 'roles');
 }
 
-/** A file write whose destination folder was deleted after it was checked. */
+/** A file write whose destination folder was deleted after it was checked; same `undefined` contract. */
 export function handleFolderForeignKeyViolation(
   error: unknown
 ): HandlerOutput<null> | undefined {
-  if (!isForeignKeyViolation(error)) return undefined;
+  if (!isMappedForeignKeyViolation(error, FOLDER_FK_CONSTRAINTS, 'files'))
+    return undefined;
   return handleApiError(
     new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND)
   );

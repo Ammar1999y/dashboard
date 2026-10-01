@@ -1,3 +1,5 @@
+import type { PermissionRows } from './matrix';
+import type { HandlerCookie } from '@/lib/http/contract';
 import type {
   AccessScope,
   AllScopedAction,
@@ -12,6 +14,7 @@ import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { rolePermissions, roles, sessions, users } from '@/db/schema';
+import { parseCookies } from 'better-auth/cookies';
 
 import {
   HTTP_STATUS,
@@ -26,10 +29,15 @@ import {
 import { validID } from '@app/shared/utils';
 
 import { auth } from '@/lib/auth';
-import { assertLiveSession } from '@/lib/auth/session/live';
-import { activeUser } from '@/lib/users/filters';
+import {
+  parseSetCookieHeaders,
+  queueResponseCookies,
+} from '@/lib/http/cookies';
 
-import { sanitizePermissions } from './matrix';
+import { logSanitized } from '@/utils/log';
+
+import { permissionsEqual, sanitizePermissions } from './matrix';
+import { resyncUserSessions } from './session-refresh';
 
 type AuthSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
 
@@ -40,12 +48,6 @@ const SCOPED_ACTIONS = new Set<PermissionAction>(
 );
 const READ_ACTIONS = new Set<PermissionAction>(['view', 'viewOwn']);
 
-function hasSessionCookieCache(headers: Headers): boolean {
-  return /(?:^|;\s*)better-auth\.session_data=/.test(
-    headers.get('cookie') ?? ''
-  );
-}
-
 function loginRequired(): CustomError {
   return new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
 }
@@ -54,14 +56,48 @@ export function insufficientPermissions(): CustomError {
   return new CustomError(MSG_INSUFFICIENT_PERMISSIONS, HTTP_STATUS.FORBIDDEN);
 }
 
-/** Better Auth's view of the caller, possibly from the cookie cache. */
+/**
+ * Better Auth's view of the caller, possibly from the cookie cache. The cookies
+ * the read sets (a re-minted cache, its expiry, the sliding refresh) are queued
+ * for the response, the 401 below included.
+ */
 export async function authenticatedSession(
   headers: Headers
 ): Promise<{ session: AuthSession; userId: EntityID }> {
-  const session = await auth.api.getSession({ headers });
+  const { headers: setCookies, response: session } = await auth.api.getSession({
+    headers,
+    returnHeaders: true,
+  });
+  queueResponseCookies(
+    headers,
+    parseSetCookieHeaders(setCookies.getSetCookie())
+  );
   const userId = validID(session?.user.id);
   if (!session || !userId) throw loginRequired();
   return { session, userId };
+}
+
+// Uncached, so a revoked session clears its cookies. Non-fatal: a failure leaves
+// the cookies as they were, and the caller's answer stands.
+export async function refreshSessionCookies(
+  headers: Headers
+): Promise<HandlerCookie[] | undefined> {
+  try {
+    const refreshed = await auth.api.getSession({
+      headers,
+      query: { disableCookieCache: true },
+      returnHeaders: true,
+    });
+    const cookies = parseSetCookieHeaders(refreshed.headers.getSetCookie());
+    return cookies.length > 0 ? cookies : undefined;
+  } catch (e) {
+    logSanitized('error', { msg: 'session.cookieRefresh failed', error: e });
+    return undefined;
+  }
+}
+
+async function queueRefreshedSessionCookies(headers: Headers): Promise<void> {
+  queueResponseCookies(headers, (await refreshSessionCookies(headers)) ?? []);
 }
 
 function sessionIdOf(session: AuthSession): EntityID {
@@ -128,32 +164,67 @@ export function holdsActionOn(
   return allowed && (scope === 'all' || createdBy === actorUserId);
 }
 
-function sanitizeCachedPermissions(
-  cached: Partial<PermissionObject>
-): Partial<PermissionObject> {
-  const entries = Object.entries(cached).map(([pageName, perms]) => ({
+interface Grants {
+  source: 'database' | 'cache';
+  sessionId: EntityID;
+  roleId: EntityID;
+  permissions: ActorPermissions;
+}
+
+/**
+ * Whether `getSession` may have answered from the cookie cache. The name is the
+ * library's own, so it carries `__Secure-` under an https origin, and a large
+ * value arrives as `.0`, `.1`… chunks.
+ */
+async function hasSessionCookieCache(headers: Headers): Promise<boolean> {
+  const header = headers.get('cookie');
+  if (!header) return false;
+
+  const context = await auth.$context;
+  const name = context.createAuthCookie('session_data').name;
+  const chunkPrefix = `${name}.`;
+  return parseCookies(header)
+    .keys()
+    .some(
+      (cookie) =>
+        cookie === name ||
+        (cookie.startsWith(chunkPrefix) &&
+          isChunkIndex(cookie.slice(chunkPrefix.length)))
+    );
+}
+
+function isChunkIndex(suffix: string): boolean {
+  const index = Number(suffix);
+  return Number.isSafeInteger(index) && index >= 0 && String(index) === suffix;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function cachedPermissionRows(cached: Record<string, unknown>): PermissionRows {
+  return Object.entries(cached).map(([pageName, permissions]) => ({
     pageName,
-    permissions: perms,
+    permissions,
   }));
-  return sanitizePermissions(entries);
+}
+
+function sanitizeCachedPermissions(
+  cached: Record<string, unknown>
+): ActorPermissions {
+  return sanitizePermissions(cachedPermissionRows(cached));
 }
 
 async function getUserPermissions({
   roleId,
   session,
-  forceDB = false,
 }: {
-  roleId: EntityID | null;
-  session: { metadata?: SessionMetadata | unknown } | null;
-  forceDB?: boolean;
-}): Promise<Partial<PermissionObject>> {
-  if (!forceDB && (session?.metadata as SessionMetadata)?.permissions) {
-    return sanitizeCachedPermissions(
-      (session?.metadata as SessionMetadata).permissions as PermissionObject
-    );
-  }
-
-  if (!roleId) return {};
+  roleId: EntityID;
+  session: { metadata?: unknown };
+}): Promise<ActorPermissions> {
+  const { metadata } = session;
+  if (isRecord(metadata) && isRecord(metadata.permissions))
+    return sanitizeCachedPermissions(metadata.permissions);
 
   const roleData = await db.query.roles.findFirst({
     where: (rolesTable, { eq, and }) =>
@@ -166,9 +237,147 @@ async function getUserPermissions({
     },
   });
 
-  if (!roleData?.rolePermissions) return {};
-
+  if (!roleData) return {};
   return sanitizePermissions(roleData.rolePermissions);
+}
+
+/**
+ * Read routes accept Better Auth's cookie-cache window: a grant narrowed or a
+ * session revoked meanwhile is honoured until `cookieCache.maxAge`.
+ */
+async function cachedGrants(session: AuthSession): Promise<Grants> {
+  const sessionId = sessionIdOf(session);
+  const roleId = validID(session.user.roleId);
+  if (!roleId) throw insufficientPermissions();
+
+  const permissions = await getUserPermissions({
+    roleId,
+    session: session.session,
+  });
+  return { source: 'cache', sessionId, roleId, permissions };
+}
+
+/**
+ * Whether a session snapshot (the cookie cache's, or the row's) disagrees with
+ * the database's grants. A sign-in racing a role edit can persist a pre-edit
+ * snapshot that no refresh reaches.
+ */
+function snapshotDrifted(
+  snapshot: { metadata: unknown; userRoleId: unknown },
+  live: SessionMetadata & { roleId: EntityID; rows: PermissionRows }
+): boolean {
+  const { metadata } = snapshot;
+  if (!isRecord(metadata) || !isRecord(metadata.permissions)) return true;
+  return (
+    validID(snapshot.userRoleId) !== live.roleId ||
+    metadata.roleId !== live.roleId ||
+    metadata.roleName !== live.roleName ||
+    metadata.roleScope !== live.roleScope ||
+    !permissionsEqual(cachedPermissionRows(metadata.permissions), live.rows)
+  );
+}
+
+/** Best-effort: this request is judged by the live grants either way. */
+async function resyncSession(headers: Headers, userId: EntityID) {
+  try {
+    await resyncUserSessions(userId);
+    await queueRefreshedSessionCookies(headers);
+  } catch (error) {
+    logSanitized('error', { msg: 'session.resync failed', error });
+  }
+}
+
+/**
+ * The caller's grants as the database holds them now. The session ROW is
+ * verified too: `getSession` may answer from Better Auth's cookie cache, which
+ * outlives a deleted row, and every revocation deletes rows. A stale row is
+ * rewritten; a cookie cache stale behind a current row is only re-minted.
+ */
+async function liveGrants(
+  headers: Headers,
+  session: AuthSession,
+  userId: EntityID
+): Promise<Grants> {
+  const sessionId = sessionIdOf(session);
+
+  const rows = await db
+    .select({
+      metadata: sessions.metadata,
+      roleId: users.roleId,
+      roleIsActive: roles.isActive,
+      roleName: roles.roleName,
+      roleScope: roles.scope,
+      pageName: rolePermissions.pageName,
+      pagePermissions: rolePermissions.permissions,
+    })
+    .from(sessions)
+    .innerJoin(users, eq(sessions.userId, users.id))
+    .leftJoin(roles, eq(users.roleId, roles.id))
+    .leftJoin(rolePermissions, eq(roles.id, rolePermissions.roleId))
+    .where(
+      and(
+        eq(sessions.id, sessionId),
+        eq(sessions.userId, userId),
+        gt(sessions.expiresAt, sql`now()`),
+        isNull(users.deletedAt),
+        eq(users.isActive, true)
+      )
+    );
+
+  // Covers both "user is gone/inactive" and "this session was revoked".
+  const [sessionRow] = rows;
+  if (!sessionRow) {
+    await queueRefreshedSessionCookies(headers);
+    throw loginRequired();
+  }
+
+  const roleId = sessionRow.roleId;
+  if (!roleId || !sessionRow.roleIsActive) throw insufficientPermissions();
+
+  const permissionRows = rows.flatMap((r) =>
+    r.pageName == null
+      ? []
+      : [{ pageName: r.pageName, permissions: r.pagePermissions }]
+  );
+
+  const live = {
+    roleId,
+    roleName: sessionRow.roleName,
+    roleScope: sessionRow.roleScope,
+    rows: permissionRows,
+  };
+  // A role edit refreshes the rows, not the cookies already issued.
+  if (
+    snapshotDrifted({ metadata: sessionRow.metadata, userRoleId: roleId }, live)
+  )
+    await resyncSession(headers, userId);
+  else if (
+    snapshotDrifted(
+      { metadata: session.session.metadata, userRoleId: session.user.roleId },
+      live
+    )
+  )
+    await queueRefreshedSessionCookies(headers);
+
+  const permissions = sanitizePermissions(permissionRows);
+  return { source: 'database', sessionId, roleId, permissions };
+}
+
+async function resolveGrants(params: {
+  headers: Headers;
+  session: AuthSession;
+  userId: EntityID;
+  actions: readonly PermissionAction[];
+  forceDB: boolean;
+}): Promise<Grants> {
+  const cacheable =
+    !params.forceDB &&
+    params.actions.every((action) => READ_ACTIONS.has(action)) &&
+    (await hasSessionCookieCache(params.headers));
+
+  return cacheable
+    ? cachedGrants(params.session)
+    : liveGrants(params.headers, params.session, params.userId);
 }
 
 export async function checkUserPermission(params: {
@@ -187,88 +396,12 @@ export async function checkUserPermission(params: {
   } = params;
 
   const { session, userId } = await authenticatedSession(headers);
-
-  const shouldForceDB =
-    forceDB || !READ_ACTIONS.has(action) || !hasSessionCookieCache(headers);
-
-  if (shouldForceDB) {
-    // The session ROW is verified here, not just the user and role:
-    // `getSession` may answer from Better Auth's cookie cache, which stays
-    // valid after the row behind it is deleted, and every revocation deletes
-    // rows. An active user with an active role passes every other check.
-    const sessionId = sessionIdOf(session);
-
-    const rows = await db
-      .select({
-        roleId: users.roleId,
-        roleName: roles.roleName,
-        roleScope: roles.scope,
-        roleIsActive: roles.isActive,
-        pageName: rolePermissions.pageName,
-        pagePermissions: rolePermissions.permissions,
-      })
-      .from(sessions)
-      .innerJoin(users, eq(sessions.userId, users.id))
-      .leftJoin(roles, eq(users.roleId, roles.id))
-      .leftJoin(rolePermissions, eq(roles.id, rolePermissions.roleId))
-      .where(
-        and(
-          eq(sessions.id, sessionId),
-          eq(sessions.userId, userId),
-          gt(sessions.expiresAt, sql`now()`),
-          isNull(users.deletedAt),
-          eq(users.isActive, true)
-        )
-      );
-
-    // Covers both "user is gone/inactive" and "this session was revoked".
-    const [sessionRow] = rows;
-    if (!sessionRow) throw loginRequired();
-
-    const roleId = sessionRow.roleId;
-    if (!roleId) throw insufficientPermissions();
-
-    if (sessionRow.roleIsActive === false) throw insufficientPermissions();
-
-    const rolePerms = rows.flatMap((r) =>
-      r.pageName == null
-        ? []
-        : [{ pageName: r.pageName, permissions: r.pagePermissions }]
-    );
-
-    const permissions = sanitizePermissions(rolePerms);
-
-    const { allowed, scope } = resolveActionScope(
-      permissions,
-      resource,
-      action
-    );
-    if (!allowed && throwError) throw insufficientPermissions();
-
-    return {
-      allowed,
-      scope,
-      source: 'database' as const,
-      session,
-      userId,
-      sessionId,
-      roleId,
-      permissions,
-    };
-  }
-
-  // Read routes accept Better Auth's configured cookie-cache revocation window.
-  // Sensitive mutations take the forceDB branch above.
-  const sessionId = sessionIdOf(session);
-
-  const roleId = validID(session.user.roleId) ?? null;
-
-  if (!roleId) throw insufficientPermissions();
-
-  const permissions = await getUserPermissions({
-    session: session.session,
-    roleId,
-    forceDB: false,
+  const { source, sessionId, roleId, permissions } = await resolveGrants({
+    headers,
+    session,
+    userId,
+    actions: [action],
+    forceDB,
   });
 
   const { allowed, scope } = resolveActionScope(permissions, resource, action);
@@ -277,7 +410,7 @@ export async function checkUserPermission(params: {
   return {
     allowed,
     scope,
-    source: 'cache' as const,
+    source,
     session,
     userId,
     sessionId,
@@ -299,42 +432,12 @@ export async function checkMultiplePermissions(params: {
   const { headers, checks, forceDB = false } = params;
 
   const { session, userId } = await authenticatedSession(headers);
-
-  const hasWriteAction = checks.some((c) => !READ_ACTIONS.has(c.action));
-  const shouldForceDB =
-    forceDB || hasWriteAction || !hasSessionCookieCache(headers);
-
-  let roleId: EntityID | null = validID(session.user.roleId) ?? null;
-
-  const cachedSessionId = sessionIdOf(session);
-  const sessionId = shouldForceDB
-    ? await assertLiveSession(cachedSessionId, userId)
-    : cachedSessionId;
-
-  if (shouldForceDB) {
-    const [userData] = await db
-      .select({
-        roleId: users.roleId,
-        roleName: roles.roleName,
-        roleScope: roles.scope,
-        roleIsActive: roles.isActive,
-      })
-      .from(users)
-      .leftJoin(roles, eq(users.roleId, roles.id))
-      .where(activeUser(eq(users.id, userId)));
-
-    if (!userData) throw loginRequired();
-    roleId = userData.roleId;
-
-    if (!userData.roleIsActive) throw insufficientPermissions();
-  }
-
-  if (!roleId) throw insufficientPermissions();
-
-  const allPermissions = await getUserPermissions({
-    roleId,
-    session: shouldForceDB ? null : session.session,
-    forceDB: shouldForceDB,
+  const { sessionId, permissions: allPermissions } = await resolveGrants({
+    headers,
+    session,
+    userId,
+    actions: checks.map((check) => check.action),
+    forceDB,
   });
 
   const permissions = checks.reduce(

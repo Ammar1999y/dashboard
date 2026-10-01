@@ -26,7 +26,7 @@ export const ErrorState = memo(
       <Button
         variant='none'
         onClick={refetch}
-        className='mx-auto mt-6 flex items-center justify-center border border-destructive space-x-2 hover:bg-destructive/10'
+        className='mx-auto mt-6 flex items-center justify-center gap-2 border border-destructive hover:bg-destructive/10'
       >
         <Icon icon='lucide:refresh-ccw' className='size-4' />
         <span className='underline-offset-2 hover:no-underline'>

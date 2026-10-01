@@ -127,6 +127,30 @@ export const BETTER_AUTH_LOCAL_THROTTLE_PATHS = new Set([
   '/two-factor/otp/verify',
 ]);
 
+/**
+ * Paths whose handler maps a database 503 itself, so it answers in Better
+ * Auth's error shape as well as the wildcard's envelope.
+ */
+export const BETTER_AUTH_DATABASE_FAULT_PATHS = new Set([
+  '/oauth/google/callback',
+]);
+
+/**
+ * Paths that check the account password (`requireReauthPassword`, or the proof
+ * `/two-factor/get-totp-uri` takes), so a locked account answers 429 there in
+ * Better Auth's error shape.
+ */
+export const BETTER_AUTH_PASSWORD_LOCKOUT_PATHS = new Set([
+  '/two-factor/get-totp-uri',
+  '/two-factor/totp/start',
+  '/two-factor/generate-backup-codes',
+  '/two-factor/backup-codes/acknowledge',
+  '/two-factor/methods/disable',
+  '/two-factor/disable',
+  '/two-factor/passkey/grant',
+  '/two-factor/otp/send',
+]);
+
 /** The paths whose 200 is a union of "signed in" and "challenged". */
 export const TWO_FACTOR_CHALLENGE_PATHS: ReadonlySet<string> = new Set([
   '/sign-in/email',

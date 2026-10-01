@@ -45,7 +45,7 @@ export const SmoothHeightContainer = ({
 
   return (
     <motion.div
-      className={cn('relative', isAnimating && 'overflow-hidden')}
+      className={cn('relative', isAnimating && 'overflow-y-clip-safe')}
       animate={{ height: disabled ? 'auto' : bounds.height || 'auto' }}
       transition={HEIGHT_TRANSITION}
       onAnimationStart={handleAnimationStart}

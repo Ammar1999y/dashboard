@@ -58,8 +58,6 @@ const r2Client = new S3Client({
   forcePathStyle: true,
   // The signing scope Cloudflare documents; a location hint is not a region.
   region: 'auto',
-  // Options rather than a constructed handler, so `@smithy/node-http-handler`,
-  // a transitive dependency only, is never imported.
   requestHandler: {
     connectionTimeout: R2_CONNECTION_TIMEOUT_MS,
     requestTimeout: R2_REQUEST_TIMEOUT_MS,

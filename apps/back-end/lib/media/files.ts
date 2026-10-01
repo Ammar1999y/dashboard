@@ -12,6 +12,7 @@ import { files } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { normalizeMimeType } from '@app/shared/validation/media-types';
 
 import {
   checksumSha256Of,
@@ -21,7 +22,7 @@ import {
 } from '@/lib/r2/client';
 
 import { auditAs, withinScope } from './actor';
-import { fileTypeFor } from './allowlist';
+import { FILE_TYPE_TABLE } from './allowlist';
 import { requireFolder } from './folders';
 import { getContentDisposition } from './headers';
 import { mediaMsg } from './messages';
@@ -56,27 +57,21 @@ export function distinctIds(ids: readonly EntityID[]): EntityID[] {
 }
 
 /**
- * Whether the media API may act on the row: it sits in the library, or no
- * registered owner references it. An entity upload still held by its record is
- * reached through that record's routes, whatever media grant the caller holds.
+ * A library file or one no registered owner holds; a record-held upload is
+ * reached only through its record's routes, whatever media grant the caller has.
  *
- * **Never in the target list of the statement that takes the row lock.** Under
- * Read Committed a blocked statement re-evaluates its quals against the updated
- * tuple, but a correlated sub-plan inside it still runs under the statement's
- * original snapshot, so a claim that commits during the lock wait is invisible
- * to it — in the target list and in a WHERE clause alike. Lock the row first,
- * then evaluate this in `governedIds` as a separate statement of the same
- * transaction.
+ * ⚠️ Never inside the statement that takes the row lock: under Read Committed
+ * its sub-plan keeps the original snapshot, so a claim committing during the
+ * lock wait is invisible. Lock first, then call `governedIds`.
  */
 function mediaGoverned(): SQL<boolean> {
   return sql<boolean>`(${files.folderId} is not null or (${unreferenced()}))`;
 }
 
 /**
- * Which of `ids` the media API governs, read in the caller's transaction AFTER
- * the rows are locked. Owner code inserting a referrer takes `FOR KEY SHARE` on
- * the referenced row through the composite foreign key, which conflicts with
- * `FOR UPDATE`, so no owner link can commit between this and the write.
+ * Call AFTER the rows are locked `FOR UPDATE`: a referrer insert takes
+ * `FOR KEY SHARE` through the composite FK, so no owner link can commit
+ * between this and the write.
  */
 export async function governedIds(
   tx: Tx,
@@ -103,13 +98,8 @@ export async function findFile(
 }
 
 /**
- * Locks every id and hands back the rows, or refuses the whole set.
- *
- * The gate both edits below share: the lock is taken FIRST and ownership
- * evaluated after it (`mediaGoverned`), the row has to be an active library
- * file, and an `own` scope narrows to the caller's uploads. A missing, foreign
- * or record-held id answers exactly like an absent one, so a batch is all or
- * nothing and a caller learns nothing about what it may not see.
+ * A missing, foreign or record-held id refuses the whole batch exactly like an
+ * absent one, so the caller learns nothing about what it may not see.
  */
 async function lockFilesForEdit(
   tx: Tx,
@@ -131,27 +121,21 @@ async function lockFilesForEdit(
   );
   if (editable.length !== wanted.length)
     throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
-  // AFTER the disclosure gate, and 409 rather than 404: the caller can already
-  // see this file. A visibility transition copies the object with the row's
-  // CURRENT name in its `Content-Disposition`, so a rename landing mid-transition
-  // leaves the copy serving the old name. `transitionFile` refuses the same
-  // state from the other side.
+  // 409 after the disclosure gate, since the caller can see this file. A
+  // transition copies the object with the row's current name in
+  // `Content-Disposition`, so a rename mid-transition would serve the old name.
   if (editable.some((row) => row.transition))
     throw new CustomError(mediaMsg.fileBusy, HTTP_STATUS.CONFLICT);
   return editable;
 }
 
-/**
- * Filing a file is also how an unfiled one — a former entity upload no record
- * references any more — enters the library and leaves the retention clock.
- */
+/** Filing is also how an unfiled file leaves the retention clock. */
 const filedInto = (folderId: EntityID) =>
   ({ folderId, unfiledAt: null }) as const;
 
 /**
- * Rename and/or move ONE file. `folderId` is optional but never null, by
- * design: a file lives in a folder or belongs to a record, so adoption into the
- * library is one-way and the way out is `DELETE`.
+ * `folderId` is never null by design: adoption into the library is one-way,
+ * and the way out is `DELETE`.
  */
 export async function updateFile(params: {
   id: EntityID;
@@ -193,9 +177,8 @@ export async function updateFile(params: {
 }
 
 /**
- * Move a batch of files into one folder, in one transaction: a partly moved
- * selection is a state nobody asked for, and a request per file does not fit
- * the route's rate limit.
+ * One transaction: a partly moved selection is a state nobody asked for, and a
+ * request per file does not fit the route's rate limit.
  */
 export async function moveFiles(params: {
   ids: readonly EntityID[];
@@ -231,9 +214,8 @@ export async function moveFiles(params: {
 }
 
 /**
- * Does the object match the row that describes it? Length always; the SHA-256
- * when R2 returns one, which it does only for the object written with the
- * checksum, not for a copy of it.
+ * R2 returns the SHA-256 only for the object written with the checksum, never
+ * for a copy of it, so a missing one is not a mismatch.
  */
 export function matchesRow(
   head: ObjectHead,
@@ -265,14 +247,15 @@ export interface MediaFile {
 }
 
 /**
- * The name a browser saves the file under. The display name is free text the
- * user may have renamed; the extension is the allowlist's, so a renamed
- * `report` still downloads as `report.pdf`.
+ * The type table, not the allowlist: a type disabled after files of it were
+ * stored keeps its extension.
  */
 export function downloadFilename(
   row: Pick<MediaFileRow, 'displayName' | 'mimeType'>
 ): string {
-  const extension = fileTypeFor(row.mimeType)?.extension;
+  const extension = FILE_TYPE_TABLE.get(
+    normalizeMimeType(row.mimeType)
+  )?.extension;
   if (!extension) return row.displayName;
   return row.displayName.toLowerCase().endsWith(`.${extension}`)
     ? row.displayName
@@ -280,10 +263,8 @@ export function downloadFilename(
 }
 
 /**
- * How the object is reached. Public bucket with a public URL configured → the
- * permanent URL; anything else → a signed GET on the S3 endpoint. The row's
- * `bucket_type` alone decides: during a `to_public` transition it still says
- * `private`, and flips only once the copy is verified (`lib/media/visibility.ts`).
+ * `bucket_type` alone decides: during a `to_public` transition it says
+ * `private` until the copy is verified.
  */
 async function fileUrl(
   row: Pick<MediaFileRow, 'r2Key' | 'bucketType'>
@@ -294,10 +275,9 @@ async function fileUrl(
 }
 
 /**
- * Always signed, always `attachment`, always named after the CURRENT display
- * name: the disposition baked into the object cannot follow a rename, and the
- * `download` attribute of a link is ignored cross-origin, so this is the only
- * way a rename reaches "save as".
+ * The only way a rename reaches "save as": the disposition baked into the
+ * object cannot follow it, and a link's `download` attribute is ignored
+ * cross-origin.
  */
 export function downloadUrl(
   row: Pick<MediaFileRow, 'r2Key' | 'bucketType' | 'displayName' | 'mimeType'>

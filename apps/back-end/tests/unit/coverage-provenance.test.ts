@@ -206,4 +206,25 @@ describe("CI's tier order ends with a report the gate accepts", () => {
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain('different tier');
   }, 30_000);
+
+  test('the gate refuses a sidecar whose fields are not the types the runner writes', async () => {
+    const dir = coverageDir();
+    const report = writeReport(dir);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path from this process's own mkdtemp
+    writeFileSync(
+      path.join(dir, 'provenance.json'),
+      JSON.stringify({
+        tier: 'integration',
+        startedAt: before(),
+        finishedAt: new Date().toISOString(),
+        digest: 1,
+      })
+    );
+
+    const result = await runGate(report);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain('not the shape the runner writes');
+    expect(result.output).toContain('"invalidFields":["startedAt","digest"]');
+  }, 30_000);
 });

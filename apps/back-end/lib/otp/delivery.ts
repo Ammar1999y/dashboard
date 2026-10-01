@@ -13,7 +13,6 @@ import { OTP_DELIVERY_OUTBOX } from './config';
 import { otpSubjectFor, otpTextFor } from './content';
 import { recordOutboxDelivery } from './outbox';
 
-/** The wall-clock bound on one provider call, every channel. */
 export const PROVIDER_TIMEOUT_MS = 5000;
 
 // Every error leaving `deliverOtp` carries one of these, never text derived
@@ -24,23 +23,15 @@ const MSG_WHATSAPP_SEND_FAILED = MSG_OTP_SEND_FAILED;
 const MSG_EMAIL_SEND_FAILED =
   'حدثت مشكلة اثناء إرسال رمز التحقق عبر البريد الإلكتروني';
 
-/**
- * Checked by membership rather than assumed: `instanceof CustomError` says
- * nothing about where a message came from, so a sender doing
- * `new CustomError(providerText, 500)` would otherwise pass provider text
- * straight through the boundary.
- */
+// Membership, not `instanceof CustomError`, which says nothing about where the text came from.
 const SAFE_DELIVERY_MESSAGES: ReadonlySet<string> = new Set([
   MSG_OTP_SEND_FAILED,
   MSG_SMS_SEND_FAILED,
   MSG_EMAIL_SEND_FAILED,
 ]);
 
-/**
- * Nodemailer's own failure classes plus `lib/smtp.ts`'s deadline, set client-side
- * from a fixed vocabulary — unlike `err.message` / `err.response`, which carry
- * the SMTP server's reply and can quote the rejected message, i.e. the code.
- */
+// Client-set codes from a fixed vocabulary, unlike `message` / `response`,
+// which can quote the rejected message and so the code.
 const SMTP_ERROR_CODES = new Set([
   'EAUTH',
   'ECONNECTION',
@@ -68,11 +59,7 @@ function smtpTransportOptions(): SMTPTransport.Options {
   };
 }
 
-/**
- * Errors reaching this boundary are created in-process (fetch, Nodemailer,
- * `CustomError`), so a plain read suffices. `message` is only ever tested
- * against `SAFE_DELIVERY_MESSAGES`, never logged: it can quote the provider.
- */
+// ⚠️ Never log `message`: it can quote the provider.
 function readErrorField(
   error: unknown,
   key: 'message' | 'name' | 'code'
@@ -84,12 +71,9 @@ function readErrorField(
 }
 
 /**
- * NOTHING provider-controlled is logged — not the body, the message, or an
- * error code. These APIs echo the submitted text back on failure and that text
- * contains the plaintext OTP; no shape filter can exclude every encoding a
- * provider might choose. Channel and transport status are enough to diagnose an
- * outage. If provider error codes are ever needed, add them as a hard-coded
- * allowlist of known constants, never a pattern over provider output.
+ * ⚠️ Nothing provider-controlled is logged: providers echo the submitted text,
+ * which holds the plaintext OTP. Provider codes, if ever needed, go in a
+ * hard-coded allowlist, never a pattern over provider output.
  */
 function logProviderFailure(channel: OtpChannel, response: Response) {
   logSanitized('error', {
@@ -220,11 +204,9 @@ async function sendOtpEmail(
 }
 
 /**
- * The single containment boundary for delivery failures. Callers log what they
- * catch and the outbound payload holds the plaintext code, so no error may leave
- * with provider- or payload-derived text: the outward message must be in
- * `SAFE_DELIVERY_MESSAGES`, and the outbound text is composed inside the `try`
- * so nothing building it can throw past it.
+ * ⚠️ The containment boundary: callers log what they catch, so no error may
+ * leave with provider- or payload-derived text. The text is built inside the
+ * `try` so nothing can throw past it.
  */
 export async function deliverOtp(
   channel: OtpChannel,
@@ -256,8 +238,7 @@ export async function deliverOtp(
       error instanceof CustomError &&
       SAFE_DELIVERY_MESSAGES.has(message)
     ) {
-      // A fresh error: only the message has been checked, and the serializer
-      // copies other fields a thrower can attach.
+      // Fresh: only the message was checked, and the serialiser copies other fields.
       throw new CustomError(message, HTTP_STATUS.INTERNAL_ERROR);
     }
 

@@ -47,7 +47,7 @@ export const AccountMenu = memo(() => {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className='w-56'>
-        <div className='flex items-center p-2 space-x-2'>
+        <div className='flex items-center gap-2 p-2'>
           <UserAvatar
             name={user.name}
             image={user.image}

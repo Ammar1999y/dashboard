@@ -28,10 +28,6 @@ import { availableReauthMethods } from './methods';
 
 const ADMIN_REAUTH_MAX_AGE_S = 900;
 
-/**
- * Opens the one session-bound window that guards self-service credentials, 2FA
- * management and administrative actions.
- */
 export async function mintAdminReauth(
   actorUserId: EntityID,
   sessionId: string,
@@ -72,12 +68,8 @@ export async function mintAdminReauth(
 }
 
 /**
- * Read without consuming: repeated actions share the window, but still require
- * this live session and their permissions.
- *
- * A caller already holding a transaction must pass it as `executor`: asking the
- * pool for another connection while holding a locked row stalls at pool
- * exhaustion and fails as 500.
+ * Not consumed: repeated actions share the window. ⚠️ A caller inside a
+ * transaction must pass it as `executor`, or the pool can deadlock.
  */
 export async function hasAdminReauth(
   sessionId: string,

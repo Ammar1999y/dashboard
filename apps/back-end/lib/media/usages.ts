@@ -104,10 +104,9 @@ export async function usedBy(
 }
 
 /**
- * Which KIND of owner holds each file: the `visibility` of every registered
- * source that references it. The link boundary decides eligibility from this —
- * a file a private record holds is that record's, whatever the caller may write
- * elsewhere — where `usedBy` answers the different question of who may be told.
+ * The link boundary decides eligibility from this: a file a private record
+ * holds is that record's, whatever the caller may write elsewhere. `usedBy`
+ * answers who may be told.
  */
 export async function usageVisibilities(
   fileIds: readonly EntityID[],
@@ -127,20 +126,13 @@ export function hasUsageSources(): boolean {
 }
 
 /**
- * `true` for a `files` row no registered owner references. Correlated to the
- * outer row, so it belongs inside a query over `files` — the "unfiled" scope,
- * the sweep that reaps it, and `mediaGoverned` all rest on it. An unregistered
- * referrer makes it lie, which is what `tests/integration/media-usages.test.ts`
- * exists to prevent; the composite FK still refuses the delete if one slips
- * through.
+ * Correlated to the outer row, so only inside a query over `files`. An
+ * unregistered referrer makes it lie (`tests/integration/media-usages.test.ts`
+ * guards that; the composite FK still refuses the delete).
  *
- * With no source registered — the shipped state of the starter kit — nothing is
- * known about who holds what, so this answers `false` rather than `true`: every
- * guard above it then reads "held by someone", which narrows the media API to
- * the library and leaves the reaper with nothing to collect. The opposite
- * default reads as safe and is not; it would hand the entity boundary and an
- * irreversible deleter every claimed entity upload in a project that has not
- * declared its tables yet.
+ * ⚠️ `false` while no source is registered, the kit's shipped state, so every
+ * guard reads "held by someone". The opposite default looks safe and would hand
+ * every claimed entity upload to the library and the reaper.
  */
 export function unreferenced(): SQL {
   if (!hasUsageSources()) return sql`false`;

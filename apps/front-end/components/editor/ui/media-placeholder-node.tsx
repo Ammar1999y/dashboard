@@ -200,7 +200,7 @@ function ImageProgress({
         src={objectUrl}
       />
       {progress < 100 && (
-        <div className='absolute bottom-1 flex items-center rounded-full bg-black/50 px-1 py-0.5 space-x-2 ltr:left-1 rtl:right-1'>
+        <div className='absolute bottom-1 flex items-center gap-2 rounded-full bg-black/50 px-1 py-0.5 ltr:left-1 rtl:right-1'>
           <Icon
             icon='lucide:loader-circle'
             className='size-3.5 animate-spin text-muted-foreground'

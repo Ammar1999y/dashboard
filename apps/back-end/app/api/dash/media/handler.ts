@@ -29,12 +29,10 @@ import { ENABLED_VISIBILITIES } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 /**
- * Server-owned filter contract for the file list. Keys are the allowlist;
- * `displayName` carries a trigram index (`db/migrations/002_media_trgm_indexes.sql`).
- * The three closed sets are PostgreSQL enums or the type table, so their members
- * are checked before any SQL is built — an unknown member is a 422, not a cast
- * error. `mimeType` is closed over what may EXIST rather than what may be
- * uploaded, so holding a type back does not hide the rows that already carry it.
+ * `displayName` has a trigram index (`db/migrations/002_media_trgm_indexes.sql`).
+ * Closed sets make an unknown member a 422, not a cast error. `mimeType` covers
+ * what may EXIST, not what may be uploaded, so holding a type back does not hide
+ * rows already of it.
  */
 export const MEDIA_FILTER_COLUMNS: FilterColumnSpecs = {
   displayName: { type: 'text' },
@@ -105,9 +103,7 @@ export const GET = withApiErrors(mediaMsg.fetchError, async (ctx) => {
     canPublish: permissions?.['media']?.['publish'] === true,
   };
 
-  // The library is the ACTIVE files that sit in a folder. Pending uploads,
-  // deleting rows and entity uploads a record holds are never listed; the
-  // unfiled scope is the active files in no folder that nobody holds.
+  // Pending, deleting and record-held rows are never listed.
   const active = eq(files.status, 'active');
   const filter =
     scope === 'all'

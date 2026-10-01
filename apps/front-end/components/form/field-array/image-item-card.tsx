@@ -28,7 +28,7 @@ const ImageItemCard = ({
   <div className='rounded-lg border bg-card px-4 py-4 shadow-md'>
     <div className='flex flex-col-reverse gap-x-4 gap-y-5 md2:flex-row'>
       <div className='flex-1'>{children}</div>
-      <div className='flex flex-[.7] flex-col space-y-2'>
+      <div className='flex flex-[.7] flex-col gap-2'>
         <FieldArrayItemActions
           index={index}
           onRemove={onRemove}

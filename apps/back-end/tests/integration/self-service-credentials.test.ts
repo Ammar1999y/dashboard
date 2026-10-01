@@ -28,7 +28,7 @@
  *    `forgot_password` proof seeded before the change, gone after it — and not
  *    inferred from a 200.
  * 3. The recovery endpoints are indistinguishable for a known and an unknown
- *    address — same status, same body, same 1500 ms floor — while only the
+ *    address — same status, same body, same `MINIMUM_RESPONSE_MS` floor — while only the
  *    known one actually dispatches a message. Both halves together are the
  *    enumeration boundary; either alone passes for the wrong reason.
  * 4. The new address of an email change is never written until the code sent to
@@ -94,8 +94,11 @@ import {
 } from '@app/shared/validation/otp';
 
 import { otpMsg } from '@/lib/auth/messages';
+import { MINIMUM_RESPONSE_MS } from '@/lib/http/timing-floor';
 import { generateUuidV7 } from '@/lib/id';
 import { userMsg } from '@/lib/users/messages';
+
+import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
@@ -128,7 +131,7 @@ const PEPPERED_HASH = /^p\d+:[^:]+:\$argon2id\$/;
 
 /**
  * 45 s, and it is not padding. Every OTP response carries `ensureMinDelay`'s
- * 1500 ms anti-timing floor, and the tests that prove a rotation end to end pay
+ * `MINIMUM_RESPONSE_MS` anti-timing floor, and the tests that prove a rotation end to end pay
  * two Argon2id hashes at 64 MiB plus two sign-in verifies on top. At Bun's 5 s
  * default the slow tests fail on the clock rather than on an assertion, which is
  * the least informative way for this file to break.
@@ -155,10 +158,6 @@ const PASSWORDLESS_SEND = '/api/auth/passwordless/send';
 function uniqueEmail(prefix: string): string {
   return `${prefix}.${generateUuidV7().replaceAll('-', '').slice(0, 16)}@gmail.com`;
 }
-
-/** `Array#toSorted` takes no default comparator; ids and purposes are text. */
-const compareText = (a: string, b: string): number =>
-  a === b ? 0 : a < b ? -1 : 1;
 
 interface ApiBody {
   success: boolean;
@@ -247,7 +246,7 @@ async function liveSessionIds(userId: string): Promise<string[]> {
     .select({ id: sessions.id })
     .from(sessions)
     .where(eq(sessions.userId, userId));
-  return rows.map((row) => row.id).toSorted(compareText);
+  return rows.map((row) => row.id).toSorted(compareCodeUnits);
 }
 
 async function userRow(userId: string) {
@@ -1155,8 +1154,8 @@ describe('POST /api/auth/forgot-password/send — the enumeration boundary', () 
       message: otpMsg.sendSuccess,
       data: { nextAllowedIn: 30 },
     });
-    expect(unknownElapsed).toBeGreaterThanOrEqual(1500);
-    expect(knownElapsed).toBeGreaterThanOrEqual(1500);
+    expect(unknownElapsed).toBeGreaterThanOrEqual(MINIMUM_RESPONSE_MS);
+    expect(knownElapsed).toBeGreaterThanOrEqual(MINIMUM_RESPONSE_MS);
 
     // And the difference that must stay invisible to the client is real: only
     // the known address was mailed, and only it grew a proof row.
@@ -1325,7 +1324,7 @@ describe('POST /api/auth/passwordless/send — the enumeration boundary', () => 
       message: otpMsg.sendSuccess,
       data: { nextAllowedIn: 30 },
     });
-    expect(unknownElapsed).toBeGreaterThanOrEqual(1500);
+    expect(unknownElapsed).toBeGreaterThanOrEqual(MINIMUM_RESPONSE_MS);
 
     expect(unknownMail).toEqual([]);
     await settleDelivery();
@@ -1337,7 +1336,7 @@ describe('POST /api/auth/passwordless/send — the enumeration boundary', () => 
     // purpose is part of the key, so a passwordless login code can never be
     // spent as a password reset.
     const rows = await proofRows(subject('enumKnown').userId);
-    expect(rows.map((row) => row.purpose).toSorted(compareText)).toEqual([
+    expect(rows.map((row) => row.purpose).toSorted(compareCodeUnits)).toEqual([
       'forgot_password',
       'passwordless_login',
     ]);

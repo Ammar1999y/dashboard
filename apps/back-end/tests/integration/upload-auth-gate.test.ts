@@ -40,7 +40,9 @@ import {
   MSG_LOGIN_REQUIRED,
 } from '@app/shared/api-messages';
 
+import { buildRequestMeta, withBodyPolicy } from '@/lib/http/request';
 import { mediaMsg, uploadMsg } from '@/lib/media/messages';
+import { acceptUpload } from '@/lib/media/upload';
 
 import { resetTables } from '../helpers/database';
 import { storeOps, storeOpsOf } from '../helpers/object-store';
@@ -697,5 +699,39 @@ describe('the body policy on the way past the gate', () => {
     expect(result.reads).toEqual(['formData']);
     expect(result.text).not.toContain('boundary');
     expect(storeOps()).toEqual([]);
+  });
+});
+
+describe('a public upload target', () => {
+  // `UPLOAD_PURPOSES` is empty in the starter kit, so no route reaches a public
+  // target yet; the boundary itself is what the next one will call.
+  test('needs the publish grant at `acceptUpload`, before the body is read', async () => {
+    const creator = await signedInUser({
+      permissions: { media: { view: true, create: true } },
+    });
+    const request = authedRequest(creator, '/api/upload/file', {
+      method: 'POST',
+      body: new FormData(),
+    });
+    const input = withBodyPolicy(buildRequestMeta(request), 'multipart');
+
+    await expect(
+      acceptUpload(
+        input,
+        {
+          userId: creator.user.userId,
+          email: creator.user.email,
+          meta: { ip: null, userAgent: null, apiPath: '/api/upload/file' },
+        },
+        {
+          field: 'files',
+          visibility: 'public',
+          kinds: ['image'],
+          folderId: null,
+          activate: false,
+        }
+      )
+    ).rejects.toMatchObject({ status: HTTP_STATUS.FORBIDDEN });
+    expect(request.bodyUsed).toBe(false);
   });
 });

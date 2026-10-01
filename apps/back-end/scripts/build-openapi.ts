@@ -22,7 +22,10 @@ import {
   OPENAPI_ARTIFACT_PATH,
   openApiArtifactFile,
 } from '@/lib/http/openapi/route';
-import { toPublishedManifest } from '@/lib/http/route-manifest';
+import {
+  toPublishedManifest,
+  toWithheldManifest,
+} from '@/lib/http/route-manifest';
 
 import { logLine } from '@/utils/log';
 
@@ -30,7 +33,7 @@ const OUTPUT = openApiArtifactFile();
 
 // The deployed document, whatever this machine's NODE_ENV is.
 const manifest = toPublishedManifest(ROUTES, true);
-const document = openApiDocument(manifest);
+const document = openApiDocument(manifest, toWithheldManifest(ROUTES));
 
 const paths = document.paths;
 if (

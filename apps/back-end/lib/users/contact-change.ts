@@ -1,6 +1,5 @@
-import type { Tx } from '@/db';
+import type { Executor, Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
-import type { HandlerCookie } from '@/lib/http/contract';
 import type { EntityID } from '@app/shared/types';
 import type { ContactKind, OtpChannel } from '@app/shared/validation/enums';
 
@@ -14,7 +13,6 @@ import { CustomError } from '@app/shared/error-class';
 import { contactKindOf } from '@app/shared/validation/enums';
 
 import { auditLog } from '@/lib/audit';
-import { auth } from '@/lib/auth';
 import { verifyLoginAttempt } from '@/lib/auth/login-guard';
 import { twoFactorMsg } from '@/lib/auth/messages';
 import { requireReauthWindow } from '@/lib/auth/reauth/window';
@@ -27,7 +25,6 @@ import {
   contactChangeStrandsTwoFactor,
   removeMethodIntent,
 } from '@/lib/auth/two-factor/methods';
-import { parseSetCookieHeaders } from '@/lib/http/cookies';
 import { notFoundError } from '@/lib/http/response';
 import { markContactVerified } from '@/lib/otp/contact';
 import { CONTACT_LABEL } from '@/lib/otp/content';
@@ -35,18 +32,16 @@ import { processOtpSend } from '@/lib/otp/send';
 import { insufficientPermissions } from '@/lib/permissions/checker';
 import { enforceOtpSurfaceSendQuota } from '@/lib/rate-limit';
 
-import { logSanitized } from '@/utils/log';
-
 import { asCurrentPasswordIncorrect } from './current-password';
 import { activeUser, liveUser } from './filters';
 import { userMsg } from './messages';
 
 export async function assertContactChangeKeepsFactor(
-  tx: Tx,
+  executor: Executor,
   userId: EntityID,
   contactKinds: readonly ContactKind[]
 ): Promise<void> {
-  if (await contactChangeStrandsTwoFactor(userId, contactKinds, tx))
+  if (await contactChangeStrandsTwoFactor(userId, contactKinds, executor))
     throw new CustomError(
       twoFactorMsg.contactChangeStrands,
       HTTP_STATUS.CONFLICT
@@ -54,20 +49,9 @@ export async function assertContactChangeKeepsFactor(
 }
 
 /**
- * The second-factor half of a contact change, at the boundary BOTH commits pass
- * through.
- *
- * ⚠️ Three rules:
- *
- *  1. `two_factor_enabled` is never touched. Invalidating the `otp` enrolment
- *     can leave a user enabled with an empty offered set, and clearing the flag
- *     to tidy that up makes an ordinary contact edit a 2FA disarm.
- *  2. The change is REFUSED when it would remove the last usable factor, which
- *     keeps rule 1 from stranding anyone; the way out is the administrative
- *     reset, with its permission and audit trail.
- *  3. Otherwise the OTP enrolment bound to the OLD contact is invalidated, or
- *     the factor would silently re-arm at the new address, which the user
- *     never chose as a second factor.
+ * ⚠️ Never touches `two_factor_enabled`: clearing it would make a contact edit a
+ * 2FA disarm. The old contact's OTP enrolment goes, or it would re-arm at the
+ * new address.
  */
 async function detachTwoFactorFromContact(
   tx: Tx,
@@ -78,32 +62,7 @@ async function detachTwoFactorFromContact(
   await removeMethodIntent(tx, userId, 'otp', contactKind);
 }
 
-/**
- * Reads uncached session state so a revoked email-change session clears its
- * cookies. Non-fatal: the revocation has already committed.
- */
-export async function refreshSessionCookies(
-  headers: Headers
-): Promise<HandlerCookie[] | undefined> {
-  try {
-    const refreshed = await auth.api.getSession({
-      headers,
-      query: { disableCookieCache: true },
-      returnHeaders: true,
-    });
-    const cookies = parseSetCookieHeaders(refreshed.headers.getSetCookie());
-    return cookies.length > 0 ? cookies : undefined;
-  } catch (e) {
-    logSanitized('error', { msg: 'session.cookieRefresh failed', error: e });
-    return undefined;
-  }
-}
-
-/**
- * The caller of a contact change proves it is still them: the supplied current
- * password, or an open re-authentication window when none is supplied. Run
- * before the mutation's transaction, so no row lock is held across Argon2.
- */
+// Before the mutation's transaction, so no row lock is held across Argon2.
 async function reauthenticateContactChange(opts: {
   userId: EntityID;
   sessionId: EntityID;
@@ -128,14 +87,8 @@ async function reauthenticateContactChange(opts: {
   }
 }
 
-/**
- * Every refusal a contact change owes before its code is sent or, under
- * OTP_AUTO_VERIFY, before it commits.
- *
- * A TAKEN value is not refused here: saying so before ownership is proven
- * would be an enumeration oracle. The unique index decides at commit (409);
- * only same-as-current, which reveals nothing, is refused.
- */
+// A taken value is not refused here — before ownership is proven that is an
+// enumeration oracle. The unique index decides at commit.
 export async function authorizeContactChange(opts: {
   kind: ContactKind;
   userId: EntityID;
@@ -170,23 +123,19 @@ export async function authorizeContactChange(opts: {
       isEmail ? userMsg.newEmailSameAsCurrent : userMsg.newPhoneSameAsCurrent,
       HTTP_STATUS.BAD_REQUEST
     );
+
+  // Only spares the send; the commit's check under the row lock is the gate.
+  await assertContactChangeKeepsFactor(db, opts.userId, [opts.kind]);
 }
 
-/**
- * AWAITED, unlike the anonymous surfaces, which defer delivery to keep a
- * constant-time generic 200. This caller is authenticated and waiting for the
- * code, so `otpSent: true` must mean the provider accepted it; the provider
- * calls are bounded, so the wait is too.
- */
+// Awaited, unlike anonymous sends: authenticated, so `otpSent: true` must mean
+// the provider accepted it. The provider calls are bounded, so the wait is too.
 export async function sendContactChangeCode(
   userId: EntityID,
   channel: OtpChannel,
   destination: string
 ): Promise<void> {
   const kind = contactKindOf(channel);
-  // Keyed on the contact kind: `sms` and `whatsapp` share one per-destination
-  // budget, so switching transport does not double the paid messages one
-  // number can be sent.
   await enforceOtpSurfaceSendQuota({
     channel,
     destination,
@@ -208,11 +157,7 @@ interface CommitContactChangeOpts {
   userId: EntityID;
   /** Auth session to preserve; all the user's other sessions are revoked. */
   keepSessionId?: string | null;
-  /**
-   * The verification session being consumed right now. It survives the
-   * sibling-proof purge so the caller can still stamp it verified/consumed;
-   * every other pending proof for this user is dropped.
-   */
+  /** Survives the purge so the caller can still stamp it consumed. */
   keepVerificationSessionId?: string | null;
   auditMeta: AuditMeta;
 }
@@ -225,15 +170,9 @@ interface CommitEmailChangeOpts extends Omit<
 }
 
 /**
- * Atomically commits a verified contact change, inside `processOtpVerify`'s
- * transaction or, under OTP_AUTO_VERIFY, a fresh one.
- *
- * Where the verified flag may be set true: alongside a NEW address only in the
- * one `UPDATE` below that writes the address, since splitting them would leave
- * a new address with the old flag; on an UNCHANGED address only through
- * `markContactVerified`. Clearing it is unrestricted.
- *
- * A unique violation (address taken) propagates; the caller maps it to 409.
+ * ⚠️ The verified flag is set true only in the same `UPDATE` as a new address,
+ * or via `markContactVerified` for an unchanged one. A unique violation
+ * propagates; the caller maps it to 409.
  */
 export async function commitEmailChange({
   tx,
@@ -242,8 +181,7 @@ export async function commitEmailChange({
   keepVerificationSessionId,
   auditMeta,
 }: CommitEmailChangeOpts): Promise<void> {
-  // A fresh read under FOR UPDATE: a concurrently deactivated or demoted user
-  // must not rotate their email inside the cookie-cache staleness window.
+  // Fresh, under lock: the cookie cache may predate a deactivation or demotion.
   const [current] = await tx
     .select({
       email: users.email,
@@ -257,8 +195,7 @@ export async function commitEmailChange({
   if (!current) throw notFoundError();
   if (!current.roleId) throw insufficientPermissions();
 
-  // Already committed (a duplicate verify after an auto-verify), so only the
-  // flag can be missing; `markContactVerified` writes its audit row.
+  // Already committed (a duplicate verify); only the flag can be missing.
   if (current.email === newEmail) {
     await markContactVerified(tx, {
       userId,
@@ -278,7 +215,7 @@ export async function commitEmailChange({
     .set({ email: newEmail, emailVerified: true })
     .where(eq(users.id, userId));
 
-  await unlinkGoogle(tx, userId, auditMeta);
+  await unlinkGoogle(tx, userId, { userId, email: newEmail }, auditMeta);
   await revokeOtherSessions(tx, userId);
   await revokePendingProofs(tx, userId, keepVerificationSessionId);
 
@@ -324,8 +261,7 @@ export async function commitPhoneChange({
   if (current.phoneNumber === newPhoneNumber) {
     await markContactVerified(tx, {
       userId,
-      // Any phone channel: `sms` and `whatsapp` name the same
-      // `phone_number_verified` flag.
+      // Any phone channel names the same flag.
       channel: 'sms',
       auditMeta,
       onMissing: () => {
@@ -342,8 +278,7 @@ export async function commitPhoneChange({
     .set({ phoneNumber: newPhoneNumber, phoneNumberVerified: true })
     .where(eq(users.id, userId));
 
-  // The phone is a passwordless login factor, so replacing it is a credential
-  // rotation: a session obtained through the OLD number must not outlive it.
+  // The phone is a passwordless factor, so this is a credential rotation.
   await revokeOtherSessions(tx, userId, keepSessionId);
   await revokePendingProofs(tx, userId, keepVerificationSessionId);
 

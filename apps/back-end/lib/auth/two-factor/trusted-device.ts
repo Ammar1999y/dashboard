@@ -1,16 +1,8 @@
 /**
- * Trusted devices: the one mechanism here that skips the second factor, and so
- * the one a user has to be able to see and revoke.
- *
- * The plugin's own version is a bare `verification` row holding a user id, whose
- * identifier rotates on every sign-in — nothing to list, and any companion
- * record would be orphaned within one login. `trustDevice` is therefore forced
- * off on the plugin's verify endpoints (`lib/auth/path-policy.ts`) and every
- * record that grants a skip is written here.
- *
- * The cookie keeps the plugin's format, `<hmac>!<identifier>` over
- * `<userId>!<identifier>`. Binding the user into the signature is what stops a
- * holder of one device's cookie naming another user's row.
+ * Replaces the plugin's trust rows, which rotate on every sign-in and cannot be
+ * listed; `trustDevice` is forced off on its verify endpoints
+ * (`path-policy.ts`). The cookie keeps the plugin's `<hmac>!<identifier>`
+ * format, signing the user id in so one cookie cannot name another user's row.
  */
 import crypto from 'node:crypto';
 import type { AuthContext } from '../context';
@@ -22,6 +14,7 @@ import { and, desc, eq, gt } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { trustedDevices } from '@/db/schema';
+import { createHMAC } from '@better-auth/utils/hmac';
 import { createAuthEndpoint, sessionMiddleware } from 'better-auth/api';
 import { expireCookie } from 'better-auth/cookies';
 
@@ -53,20 +46,11 @@ const TRUST_DEVICE_MAX_AGE_S = 30 * 24 * 60 * 60;
 
 const IDENTIFIER_BYTES = 24;
 
-/**
- * How long a completed second factor stays redeemable for a device-trust grant:
- * long enough for a "remember this device" click on the page that follows the
- * verification, short enough that a session cannot cash it in days later.
- */
+/** Long enough for the "remember this device" click after verification, no longer. */
 const TWO_FACTOR_PROOF_MAX_AGE_S = 600;
 
-/**
- * Records that THIS session was created by completing a second factor.
- *
- * `/two-factor/trust-device` consumes it, which is what binds a 30-day challenge
- * skip to a proof rather than to the mere possession of a session — including
- * one planted before the user enabled 2FA at all.
- */
+// Consumed by `/two-factor/trust-device`, binding trust to a proof rather than
+// to holding a session — possibly one planted before 2FA was enabled.
 export async function markTwoFactorProven(
   ctx: AuthContext,
   sessionId: string
@@ -91,25 +75,20 @@ async function consumeTwoFactorProof(
   return consumed?.value === sessionId;
 }
 
-/**
- * `node:crypto` rather than `@better-auth/utils/hmac`, a transitive dependency
- * this project does not declare. The encoding is pinned by the cookie format.
- */
-function signTrust(secret: string, userId: string, identifier: string): string {
-  return crypto
-    .createHmac('sha256', secret)
-    .update(`${userId}!${identifier}`, 'utf8')
-    .digest('base64url');
+/** The primitive the plugin signs this cookie format with, so the two cannot drift. */
+function signTrust(
+  secret: string,
+  userId: string,
+  identifier: string
+): Promise<string> {
+  return createHMAC('SHA-256', 'base64urlnopad').sign(
+    secret,
+    `${userId}!${identifier}`
+  );
 }
 
-/**
- * Whether this request carries trust for `userId`, refreshing it if so. Any
- * failure expires the cookie rather than leaving a value that fails again on
- * every later request.
- *
- * The identifier is deliberately not rotated on use: the row is already bounded
- * by `expiresAt`, revocable by the user, and dropped by credential rotation.
- */
+// The identifier is deliberately not rotated on use: the row is bounded by
+// `expiresAt`, user-revocable and dropped by credential rotation.
 export async function consumeDeviceTrust(
   ctx: AuthContext,
   userId: EntityID
@@ -126,7 +105,7 @@ export async function consumeDeviceTrust(
     return false;
   }
 
-  const expected = signTrust(ctx.context.secret, userId, identifier);
+  const expected = await signTrust(ctx.context.secret, userId, identifier);
   // Length-checked first: `timingSafeEqual` throws on differing lengths.
   const matches =
     token.length === expected.length &&
@@ -185,9 +164,7 @@ async function grantDeviceTrust(
       })
     );
   } catch (error) {
-    // Raised, not swallowed. The caller keeps its session either way, but
-    // answering `{ trusted: true }` with no row and no cookie tells the user
-    // this device is remembered when nothing recorded it.
+    // Raised, not swallowed: `{ trusted: true }` would claim a device nothing recorded.
     logSanitized('error', {
       msg: 'twoFactor.trustDevice.failed',
       userId,
@@ -201,7 +178,7 @@ async function grantDeviceTrust(
   });
   await ctx.setSignedCookie(
     cookie.name,
-    `${signTrust(ctx.context.secret, userId, identifier)}!${identifier}`,
+    `${await signTrust(ctx.context.secret, userId, identifier)}!${identifier}`,
     ctx.context.secret,
     cookie.attributes
   );
@@ -227,10 +204,6 @@ async function listTrustedDevices(userId: EntityID) {
     .orderBy(desc(trustedDevices.lastUsedAt));
 }
 
-/**
- * The ownership predicate is in the WHERE clause rather than a prior read: a
- * check-then-delete would let a concurrent request move the row between the two.
- */
 async function revokeTrustedDevice(
   tx: Tx,
   userId: EntityID,
@@ -245,7 +218,6 @@ async function revokeTrustedDevice(
   return Boolean(removed);
 }
 
-/** The session user, or the 401 every endpoint here answers without one. */
 function requireSessionUserId(ctx: {
   context: { session?: { user: { id: string } } | null };
 }): EntityID {
@@ -255,15 +227,11 @@ function requireSessionUserId(ctx: {
 }
 
 /**
- * Session-gated, plus `assertLiveSession` through `LIVE_SESSION_PATHS` in
- * `lib/auth/path-policy.ts`: Better Auth's own session resolution answers from
- * the cookie cache and asks nothing about whether the user is still active.
+ * Also behind `LIVE_SESSION_PATHS` (`path-policy.ts`): Better Auth's session
+ * resolution answers from the cookie cache without checking the user is active.
  *
- * Granting is its own endpoint rather than a `trustDevice` flag on each verify
- * call, because the plugin's verify endpoints have that flag forced off.
- *
- * ⚠️ FRONTEND: a "remember this device" checkbox on the 2FA prompt is TWO calls
- * — verify, then this — not a field on the first.
+ * ⚠️ FRONTEND: "remember this device" is two calls — verify, then
+ * `/two-factor/trust-device`.
  */
 export const trustedDevice = () =>
   ({
@@ -283,10 +251,6 @@ export const trustedDevice = () =>
           const sessionId = validID(ctx.context.session?.session.id);
           if (!sessionId) throw sessionRequired();
 
-          // A session alone is not enough. This grants a 30-day skip of the
-          // second factor, so it is redeemable only against a single-use proof
-          // that THIS session was created by completing one — otherwise a
-          // session planted before the user enabled 2FA could mint the skip.
           if (!(await consumeTwoFactorProof(ctx, sessionId)))
             throw authError(
               HTTP_STATUS.FORBIDDEN,
@@ -329,8 +293,7 @@ export const trustedDevice = () =>
           const removed = await withTransaction((tx) =>
             revokeTrustedDevice(tx, userId, deviceId)
           );
-          // A device that is not the caller's and one that does not exist answer
-          // identically, so the response cannot probe for other users' rows.
+          // Another user's device and a missing one answer identically.
           if (!removed) throw authError(HTTP_STATUS.NOT_FOUND, MSG_NOT_FOUND);
 
           return ctx.json({ success: true, data: { revoked: true } });

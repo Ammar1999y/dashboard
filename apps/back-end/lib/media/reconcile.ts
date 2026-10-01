@@ -18,10 +18,8 @@ const SAMPLE_SIZE = 20;
 /** A ceiling on one run's listing, so a runaway bucket cannot pin the process. */
 const MAX_LISTED_KEYS = 200_000;
 /**
- * `HeadObject` calls one run may spend per bucket, on rows whose key is not
- * under the listed prefix and on absences the listing suggested. A suspect is
- * confirmed by its own HEAD before it is reported; beyond the budget it is
- * counted as unchecked rather than guessed.
+ * Per bucket per run. Only a HEAD-confirmed absence is reported; past the
+ * budget a suspect counts as unchecked rather than guessed.
  */
 const MAX_HEAD_CHECKS = 200;
 /** Settled rows held in memory at once while they are compared with the listing. */
@@ -50,11 +48,6 @@ function sampled(keys: readonly string[]) {
   return { count: keys.length, sample: keys.slice(0, SAMPLE_SIZE) };
 }
 
-/**
- * Every listed key under the prefix, up to `MAX_LISTED_KEYS`, each page checked
- * against `files` as it arrives: no row at all is an orphan, a settled row
- * naming the other bucket makes this a stale copy.
- */
 async function listBucket(bucket: BucketType): Promise<{
   listed: Set<string>;
   orphans: string[];
@@ -105,14 +98,9 @@ async function listBucket(bucket: BucketType): Promise<{
 }
 
 /**
- * The settled rows of one bucket that deserve a `HeadObject`, and how many rows
- * this run left unchecked.
- *
- * Keyset pages rather than one unbounded `SELECT`: the comparison is against a
- * key set already capped by `MAX_LISTED_KEYS`, so paging bounds what a weekly
- * job sharing the process with live traffic holds at once, without making the
- * dangling verdict partial the way a truncated row query would. Suspects are
- * capped at the HEAD budget, since only a confirmed absence is ever reported.
+ * Keyset pages bound what a job sharing the process with live traffic holds at
+ * once, without making the dangling verdict partial the way a truncated row
+ * query would.
  */
 async function suspectKeys(
   bucket: BucketType,
@@ -156,15 +144,9 @@ async function suspectKeys(
 }
 
 /**
- * Read-only drift report between the two buckets and `files`. Nothing is
- * deleted here: an orphan object may be a request one second from committing
- * its row, and the report is what a human acts on.
- *
- * The listing covers the application's prefix; the row side is the rows whose
- * object must exist — `active`, no transition in flight. A `pending` row is the
- * sweep's business (its object may not be written yet, or may never be), and a
- * `deleting` row's object is on its way out. Rows whose key predates the prefix
- * cannot be compared with the listing and are checked one by one.
+ * Read-only: an orphan object may be a request one second from committing its
+ * row, and a human acts on the report. Only `active` rows with no transition
+ * must have an object; `pending` is the sweep's, `deleting` is on its way out.
  */
 export async function reconcileObjectStore(
   startedAt = Date.now()

@@ -47,32 +47,20 @@ import {
 } from '@/lib/rate-limit';
 import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
-/**
- * Argon2id hashes one address may buy per minute on this route, sized against
- * the process's hashing capacity rather than a request count. Floored by a real
- * reset: a user working through a mistyped code must meet the OTP quota before
- * this, and three verify cycles leave room for that one plus a fresh start.
- */
+// Argon2id hashes per IP per minute. Must stay above the OTP verify quota, so a
+// user retyping a code hits that quota first.
 const RESET_HASH_BUDGET_PER_MINUTE = OTP_MAX_VERIFY_ATTEMPTS * 3;
 
 /**
- * Forgot-password step 2: the code (purpose=forgot_password) is verified and,
- * in the same transaction, the new password set and ALL the user's sessions
- * revoked. Always a real code. Failures collapse to one generic error so the
- * endpoint cannot enumerate accounts.
- *
- * ⚠️ For an account with a second factor this DOES NOT write the password: a
- * recovery code proves one contact, and no single possession may satisfy both
- * proofs. It mints a short-lived recovery grant instead, and
- * `/forgot-password/complete` writes the password against a proven factor.
+ * ⚠️ With a second factor this does NOT write the password: it mints a recovery
+ * grant, and `/forgot-password/complete` writes it against a proven factor.
  */
 export const POST = withTimingFloor(
   otpMsg.passwordResetError,
-  async (ctx, floor) => {
+  async (ctx, startFloor) => {
     requireFeature(OTP_ENABLED);
 
-    // Per IP BEFORE the captcha, bounding the siteverify call; pre-lookup, so
-    // its 429 reveals nothing.
+    // Before the captcha, bounding siteverify; pre-lookup, so its 429 reveals nothing.
     await enforceRateLimit({
       scope: 'forgot.reset.ip',
       identifier: ipIdentifier(ctx.headers),
@@ -92,11 +80,8 @@ export const POST = withTimingFloor(
 
     await enforceOtpVerifyQuota({ channel, identifier, surface: 'recovery' });
 
-    // The pre-proof work, priced apart from the request that carries it: an
-    // outbound HIBP request and an Argon2id hash run for any valid body, before
-    // the lookup, deliberately (see below). Its own scope rather than a heavier
-    // `cost` on the admission counter, so cheap refusals cannot consume the
-    // expensive allowance. Per IP and account-independent: no existence oracle.
+    // Prices the HIBP call and hash below apart from admission, so cheap
+    // refusals cannot spend the expensive allowance. Per IP: no existence oracle.
     await enforceRateLimit({
       scope: 'forgot.reset.work.ip',
       identifier: ipIdentifier(ctx.headers),
@@ -104,10 +89,8 @@ export const POST = withTimingFloor(
       failClosed: true,
     });
 
-    // Screened and hashed BEFORE the lookup, which keeps them account-independent,
-    // and outside the transaction, so no row lock is held across Argon2id. A
-    // compromised password is answered as-is: it reveals nothing about the
-    // account.
+    // Before the lookup, so account-independent, and outside the transaction,
+    // so no row lock is held across Argon2id.
     try {
       await checkPasswordCompromise(newPassword);
     } catch (e) {
@@ -116,6 +99,7 @@ export const POST = withTimingFloor(
     }
     const hashedPassword = await hashPassword(newPassword);
 
+    const deadline = startFloor();
     const [userData] = await db
       .select({ id: users.id, email: users.email })
       .from(users)
@@ -126,8 +110,7 @@ export const POST = withTimingFloor(
 
     const auditMeta = getAuditMeta(ctx);
     const contactKind = contactKindOf(channel);
-    // Set inside the proof transaction and acted on after it commits: a failure
-    // to mint the grant must not roll back the consumption of a presented code.
+    // Acted on after commit: a failed grant mint must not un-consume the code.
     const pending: { secondFactor: OfferedOption[] | null } = {
       secondFactor: null,
     };
@@ -140,18 +123,16 @@ export const POST = withTimingFloor(
       identifier,
       code,
       auditMeta,
+      deadline,
       onVerified: async (tx, matched) => {
-        // Refused, not gated: when every second factor reaches the contact
-        // this code arrived on, or is one this flow cannot check, requiring it
-        // proves nothing. Inside the proof transaction, so the decision and
-        // the write cannot separate.
+        // Refused, not gated: a second factor on the contact this code
+        // arrived on, or one this flow cannot check, proves nothing.
         if (await recoveryDefeatsTwoFactor(userData.id, contactKind, tx))
           throw new CustomError(
             otpMsg.recoveryBlockedByTwoFactor,
             HTTP_STATUS.FORBIDDEN
           );
 
-        // The second-factor branch. Nothing about the password is written here.
         const state = await readEnrolmentState(userData.id, tx);
         if (state.enabled) {
           const options = recoveryOptions(state, contactKind);
@@ -189,8 +170,7 @@ export const POST = withTimingFloor(
           .set({ password: hashedPassword })
           .where(eq(accounts.id, account.id));
 
-        // Every session goes, and every pending proof but the one being
-        // consumed, which survives as an auditable single-use record.
+        // The consumed proof survives as an auditable single-use record.
         await revokeOtherSessions(tx, userData.id);
         await revokePendingProofs(
           tx,
@@ -218,7 +198,6 @@ export const POST = withTimingFloor(
         excludeContactKind: contactKind,
         options,
       });
-      await floor();
       return apiSuccess({
         message: otpMsg.recoverySecondFactorRequired,
         data: {
@@ -231,14 +210,12 @@ export const POST = withTimingFloor(
       });
     }
 
-    await floor();
     return apiSuccess({
       message: otpMsg.passwordResetSuccess,
       data: { reset: true },
     });
   },
-  // The two-factor refusal must reach the user, who holds a CORRECT code; safe
-  // because only a valid code reaches it.
+  // Safe to surface: only a valid code reaches the two-factor refusal.
   (error) =>
     collapseAnonymousVerifyError(error, otpMsg.invalidOrExpired, [
       HTTP_STATUS.FORBIDDEN,

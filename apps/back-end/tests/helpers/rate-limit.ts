@@ -16,3 +16,19 @@ import { getRateLimitStore } from '@/lib/rate-limit/store';
 export function resetRateLimits(): void {
   getRateLimitStore().db.exec('delete from rate_limit');
 }
+
+/**
+ * Deletes the windows a forward-moved clock wrote. Call it where the test puts
+ * the real clock back, never before: it compares against `Date.now()`.
+ *
+ * The store charges a caller whose window is older than the stored one to the
+ * stored one, so a row left in a future window throttles every real-clock
+ * caller on its key until real time reaches it — in this file and in every
+ * later file sharing the worker's store. A real clock never writes a future
+ * window, so this is safe in a file that asserts a limit.
+ */
+export function dropMockedClockWindows(): void {
+  getRateLimitStore().db.exec(
+    `delete from rate_limit where window_start > ${Date.now()}`
+  );
+}

@@ -30,6 +30,8 @@ import {
 
 import { generateUuidV7 } from '@/lib/id';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import { resetTables } from '../helpers/database';
 import { authedRequest, baseHeaders, signedInUser } from '../helpers/session';
 
@@ -66,8 +68,6 @@ function label(route: { method: string; path: string }): string {
 }
 
 /** Locale-independent ordering, so the comparison is stable. */
-const byText = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
-
 /**
  * Query strings a route needs before its permission check can even be named.
  * The upload route checks the grant on the page `?resource=` points at, so the
@@ -112,8 +112,8 @@ describe('the route table', () => {
     const publicMutating = MUTATING.filter(
       (route) => route.auth === 'public'
     ).map(label);
-    expect(publicMutating.toSorted(byText)).toEqual(
-      PUBLIC_MUTATING.toSorted(byText)
+    expect(publicMutating.toSorted(compareCodeUnits)).toEqual(
+      PUBLIC_MUTATING.toSorted(compareCodeUnits)
     );
   });
 

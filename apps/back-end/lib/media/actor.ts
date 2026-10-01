@@ -47,9 +47,11 @@ export function requestActor(
 /** The actor of a route whose grant may be the `Own` variant. */
 export function grantedActor(
   ctx: HandlerInput,
-  caller: AuthorisedCaller & { scope?: Actor['scope'] | null }
+  caller: AuthorisedCaller & { scope: Actor['scope'] | null }
 ): Actor {
-  return requestActor(ctx, caller, caller.scope ?? 'all');
+  if (caller.scope === null)
+    throw new Error('grantedActor: the caller holds no grant for this action');
+  return requestActor(ctx, caller, caller.scope);
 }
 
 export function withinScope(

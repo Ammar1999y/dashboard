@@ -28,6 +28,8 @@ import {
 import { filterColumns } from '@/lib/data-table/filter-columns';
 import { parseDataTableParams } from '@/lib/data-table/params';
 
+import { compareCodeUnits } from '@/utils/text';
+
 const ID = '01a02581-a7ee-723b-8000-000000000000';
 
 // No `id`: the admin update parses the BODY schema and takes the target from
@@ -322,9 +324,8 @@ describe('no client-facing validation message is Zod ASCII', () => {
       entries.map(([label]) => label.slice(0, label.lastIndexOf(' [')))
     );
 
-    const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-    expect([...covered].toSorted(byCodePoint)).toEqual(
-      Object.keys(REQUEST_BODIES).toSorted(byCodePoint)
+    expect([...covered].toSorted(compareCodeUnits)).toEqual(
+      Object.keys(REQUEST_BODIES).toSorted(compareCodeUnits)
     );
   });
 

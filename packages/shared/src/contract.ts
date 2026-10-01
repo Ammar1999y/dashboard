@@ -38,6 +38,7 @@ import { reauthPasskeySchema } from './validation/reauth';
 import { deleteSessionsSchema } from './validation/sessions';
 import {
   ownedRowSchema,
+  passkeyDeleteSchema,
   twoFactorBackupAcknowledgeBodySchema,
   twoFactorMethodDisableSchema,
   twoFactorMethodOptionSchema,
@@ -126,7 +127,7 @@ export const BETTER_AUTH_BODIES = {
   '/two-factor/methods/disable': twoFactorMethodDisableSchema,
   '/two-factor/methods/default': twoFactorMethodOptionSchema,
   '/two-factor/trusted-devices/revoke': ownedRowSchema,
-  '/passkey/delete-passkey': ownedRowSchema,
+  '/passkey/delete-passkey': passkeyDeleteSchema,
 } as const satisfies Record<`/${string}`, z.ZodType>;
 
 export type RequestRoute = keyof typeof REQUEST_BODIES;

@@ -6,13 +6,7 @@ import { auditLog } from '@/lib/audit';
 
 import { logSanitized } from '@/utils/log';
 
-/**
- * Records that a just-issued session was withdrawn before its cookie shipped.
- *
- * Best-effort and swallowed: the caller is already rethrowing the failure that
- * caused it, and a second fault here must not replace that one. A missing
- * compensating row leaves the same gap this closes, which is why it is logged.
- */
+// Swallowed: the caller is rethrowing the original failure, which must win.
 export async function recordAbandonedSession(params: {
   userId: string;
   userEmail: string;

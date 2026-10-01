@@ -47,7 +47,7 @@ const LOAD_TIME_NOTICES: ReadonlySet<string> = new Set([
   'media.usage-registry is empty',
 ]);
 
-function runChild(mode: 'drain' | 'timeout'): Promise<Outcome> {
+function runChild(mode: 'drain' | 'timeout' | 'elected'): Promise<Outcome> {
   const child = Bun.spawn(['bun', '--no-env-file', CHILD, mode], {
     cwd: path.join(import.meta.dir, '..', '..'),
     env: { ...process.env, NODE_ENV: 'development' },
@@ -91,7 +91,11 @@ function runChild(mode: 'drain' | 'timeout'): Promise<Outcome> {
 }
 
 describe('shutdown while a scheduled sweep is running', () => {
-  const both = Promise.all([runChild('drain'), runChild('timeout')]);
+  const both = Promise.all([
+    runChild('drain'),
+    runChild('timeout'),
+    runChild('elected'),
+  ]);
 
   test('a sweep inside the deadline finishes before the stores close', async () => {
     const [outcome] = await both;
@@ -133,5 +137,19 @@ describe('shutdown while a scheduled sweep is running', () => {
     expect(
       outcome.lines.find((line) => line.msg === 'drain returned')
     ).toMatchObject({ drained: false });
+  }, 120_000);
+
+  test('a shared job fired twice at once runs once and is skipped once', async () => {
+    const outcomes = await both;
+    const outcome = outcomes[2];
+    const count = (msg: string) =>
+      outcome.messages.filter((m) => m === msg).length;
+
+    expect(outcome.exitCode).toBe(0);
+    expect(count('probe started')).toBe(1);
+    expect(count('scheduled sweep completed')).toBe(1);
+    expect(count('scheduled sweep skipped')).toBe(1);
+    expect(outcome.messages).not.toContain('scheduled sweep failed');
+    expect(outcome.messages.at(-1)).toBe('stores closed');
   }, 120_000);
 });

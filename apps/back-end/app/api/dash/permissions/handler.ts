@@ -128,7 +128,7 @@ export const POST = withApiErrors(
 
     assertStandardRoleName(input.roleName);
 
-    if (actorPermissions && input.permissions?.length)
+    if (input.permissions?.length)
       validatePermissionScope(actorPermissions, input.permissions);
 
     const auditMeta = getAuditMeta(ctx);

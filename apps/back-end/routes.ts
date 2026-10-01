@@ -54,6 +54,7 @@ import * as devSignUp from '@/app/api/dev/sign-up/handler';
 import * as healthStorage from '@/app/api/health/storage/handler';
 import * as uploadFile from '@/app/api/upload/file/handler';
 
+import { PASSWORDLESS_ENABLED, PHONE_ENABLED } from '@app/shared/config';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
 import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
@@ -62,6 +63,7 @@ import {
   PURPOSE_NAME_MAX,
   PURPOSE_NAME_PATTERN,
 } from '@app/shared/validation/media';
+import { OTP_ENABLED } from '@app/shared/validation/otp';
 import {
   SESSION_CURSOR_MAX_LENGTH,
   SESSION_CURSOR_PATTERN,
@@ -74,6 +76,7 @@ import { openApiRouteHandler } from '@/lib/http/openapi/route';
 import {
   toPublishedManifest,
   toRegisteredRoutes,
+  toWithheldManifest,
 } from '@/lib/http/route-manifest';
 
 /**
@@ -120,6 +123,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: 'POST',
     path: '/api/auth/forgot-password/reset',
+    enabled: OTP_ENABLED,
     handler: authForgotReset.POST,
     ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
@@ -131,6 +135,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: 'POST',
     path: '/api/auth/forgot-password/second-factor/send',
+    enabled: OTP_ENABLED,
     handler: authForgotSecondFactorSend.POST,
     ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
@@ -139,6 +144,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: 'POST',
     path: '/api/auth/forgot-password/complete',
+    enabled: OTP_ENABLED,
     handler: authForgotComplete.POST,
     ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
@@ -147,6 +153,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: 'POST',
     path: '/api/auth/forgot-password/send',
+    enabled: OTP_ENABLED,
     handler: authForgotSend.POST,
     ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
@@ -157,6 +164,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: 'POST',
     path: '/api/auth/otp/send',
+    enabled: OTP_ENABLED,
     handler: authOtpSend.POST,
     ...PUBLIC_AUTH_ROUTE,
     preAuth: 'none',
@@ -165,6 +173,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: 'POST',
     path: '/api/auth/otp/verify',
+    enabled: OTP_ENABLED,
     handler: authOtpVerify.POST,
     ...PUBLIC_AUTH_ROUTE,
     preAuth: 'none',
@@ -173,6 +182,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: 'POST',
     path: '/api/auth/passwordless/send',
+    enabled: OTP_ENABLED && PASSWORDLESS_ENABLED,
     handler: authPasswordlessSend.POST,
     ...PUBLIC_AUTH_ROUTE,
     preAuth: 'ip-limit',
@@ -192,6 +202,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/permissions',
     handler: dashPermissions.POST,
     ...PERMISSION_ROUTE,
+    reauth: true,
     body: 'json',
   },
   {
@@ -206,6 +217,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/permissions/:id',
     handler: dashPermissionsId.PUT,
     ...PERMISSION_ROUTE,
+    reauth: true,
     body: 'json',
   },
   {
@@ -213,6 +225,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/permissions/:id',
     handler: dashPermissionsId.DELETE,
     ...PERMISSION_ROUTE,
+    reauth: true,
     body: 'none',
   },
   {
@@ -228,6 +241,8 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/users/me/change-email',
     handler: meChangeEmail.POST,
     ...SESSION_ROUTE,
+    reauth: true,
+    checksPassword: true,
     captcha: true,
     body: 'json',
   },
@@ -244,20 +259,26 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/users/me/change-password',
     handler: meChangePassword.POST,
     ...SESSION_ROUTE,
+    reauth: true,
+    checksPassword: true,
     captcha: true,
     body: 'json',
   },
   {
     method: 'POST',
     path: '/api/dash/users/me/change-phone',
+    enabled: PHONE_ENABLED,
     handler: meChangePhone.POST,
     ...SESSION_ROUTE,
+    reauth: true,
+    checksPassword: true,
     captcha: true,
     body: 'json',
   },
   {
     method: 'POST',
     path: '/api/dash/users/me/change-phone/verify',
+    enabled: PHONE_ENABLED,
     handler: meChangePhoneVerify.POST,
     ...SESSION_ROUTE,
     captcha: true,
@@ -293,6 +314,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/users',
     handler: dashUsers.POST,
     ...PERMISSION_ROUTE,
+    reauth: true,
     body: 'json',
   },
   {
@@ -307,6 +329,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/users/:id',
     handler: dashUsersId.PUT,
     ...PERMISSION_ROUTE,
+    reauth: true,
     body: 'json',
   },
   {
@@ -314,6 +337,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/users/:id',
     handler: dashUsersId.DELETE,
     ...PERMISSION_ROUTE,
+    reauth: true,
     body: 'none',
   },
   {
@@ -349,6 +373,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/auth/reauth',
     handler: dashAuthReauth.POST,
     ...SESSION_ROUTE,
+    checksPassword: true,
     captcha: false,
     body: 'json',
   },
@@ -357,6 +382,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     path: '/api/dash/users/:id/two-factor/reset',
     handler: dashUsersIdTwoFactor.POST,
     ...PERMISSION_ROUTE,
+    reauth: true,
     body: 'none',
   },
   // The only DELETE with a body: it takes the session ids to revoke.
@@ -570,7 +596,10 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: 'GET',
     path: '/openapi.json',
-    handler: openApiRouteHandler(() => toPublishedManifest(REGISTERED_ROUTES)),
+    handler: openApiRouteHandler(
+      () => toPublishedManifest(REGISTERED_ROUTES),
+      () => toWithheldManifest(ROUTES)
+    ),
     preAuth: 'ip-limit',
     auth: 'permission',
     captcha: false,
@@ -586,7 +615,8 @@ export const ROUTES: readonly RouteDefinition[] = [
  * The environment decision is taken ONCE, here, rather than inside each
  * development-only handler: outside development those paths are not registered at
  * all, so they answer 404 on every method with no `Allow` and no OPTIONS answer,
- * exactly like any other unknown path.
+ * exactly like any other unknown path. A row whose `enabled` is false is dropped
+ * the same way; its handler's `requireFeature` stays as the second check.
  */
 export const REGISTERED_ROUTES = toRegisteredRoutes(ROUTES);
 

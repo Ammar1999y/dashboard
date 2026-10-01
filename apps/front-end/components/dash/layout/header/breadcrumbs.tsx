@@ -40,7 +40,7 @@ const CrumbMenu = memo(
   }) => (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className='flex items-center rounded space-x-1'
+        className='flex items-center gap-1 rounded'
         aria-label={label}
       >
         {title ? (

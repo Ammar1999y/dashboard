@@ -9,9 +9,13 @@ import { verificationCodes, verificationSessions } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
-import { OTP_EXPIRY_MINUTES } from '@app/shared/validation/constants';
+import {
+  OTP_CODE_LENGTH,
+  OTP_EXPIRY_MINUTES,
+} from '@app/shared/validation/constants';
 import { contactKindOf } from '@app/shared/validation/enums';
 
+import { lockUser } from '@/lib/auth/user-eligibility';
 import { enforceOtpGlobalSendBudget } from '@/lib/rate-limit';
 
 import { logSanitized } from '@/utils/log';
@@ -29,7 +33,9 @@ import {
 } from './throttle';
 
 function generateOtpCode() {
-  return crypto.randomInt(100_000, 1_000_000).toString();
+  return crypto
+    .randomInt(10 ** (OTP_CODE_LENGTH - 1), 10 ** OTP_CODE_LENGTH)
+    .toString();
 }
 
 function calculateOtpExpiry(): Date {
@@ -38,34 +44,18 @@ function calculateOtpExpiry(): Date {
 
 interface ProcessOtpSendOptions {
   userId: EntityID;
-  /** The normalized contact the proof is bound to; verify must present the same value. */
+  /** Normalised; verify must present the same value. */
   identifier: string;
   channel: OtpChannel;
-  /**
-   * Reason the code is being issued. Bound into the session so a code proven
-   * for one purpose can never authorize a different sensitive action.
-   */
   purpose: OtpPurpose;
-  /**
-   * For contact-change purposes (change_email/change_phone): the NEW contact
-   * whose ownership is being proven. Persisted so verify can commit exactly
-   * that value. Must be null for every other purpose.
-   */
+  /** Contact-change purposes only: the NEW contact, which verify commits. */
   targetIdentifier?: string | null;
-  /** The phone number or email the code is delivered to. */
   sendTo: string;
-  /** Localized entity label used in error messages */
+  /** Localised label for error messages. */
   entityName: string;
   /**
-   * Hands the provider call to the caller to run AFTER its response is on the
-   * wire; without it the delivery is awaited inline and its failure thrown.
-   *
-   * **The anonymous send endpoints must pass it: it is what stops them being an
-   * existence oracle.** `ensureMinDelay` is a floor with no ceiling, so a
-   * provider call on the response path makes any response above the floor proof
-   * that the real branch ran — and no floor can exceed an unbounded third-party
-   * call. Off the path, a slow provider also cannot hit the route's idle timeout
-   * or hold `app.stop()` open during a deploy.
+   * ⚠️ Anonymous send endpoints must pass it: a provider call on the response
+   * path outruns any timing floor and makes the send an existence oracle.
    */
   deferDelivery?: (task: () => Promise<void>) => void;
 }
@@ -76,10 +66,14 @@ interface ProcessOtpSendResult {
 }
 
 async function refundFailedDelivery(
+  userId: EntityID,
   sessionId: EntityID,
   hashedCode: string
 ): Promise<void> {
   await withTransaction(async (tx) => {
+    // Not optional: unlocked, the code row is held here while the session row
+    // is awaited, which queues a verify behind a refund that waits on a send.
+    await lockUser(tx, userId);
     const [removed] = await tx
       .delete(verificationCodes)
       .where(
@@ -100,10 +94,6 @@ async function refundFailedDelivery(
   });
 }
 
-/**
- * Rate-limits, stores and delivers one code. Storage is a single transaction
- * under row locks; delivery runs after it commits.
- */
 export async function processOtpSend({
   userId,
   identifier,
@@ -114,10 +104,8 @@ export async function processOtpSend({
   entityName,
   deferDelivery,
 }: ProcessOtpSendOptions): Promise<ProcessOtpSendResult> {
-  // The session row is keyed on what is being proven, not on the transport.
   const contactKind = contactKindOf(channel);
 
-  // Before the locks: no work that can run earlier should run under a row lock.
   const otpCode = generateOtpCode();
   const hashedCode = hashOtpCode(otpCode);
 
@@ -125,11 +113,13 @@ export async function processOtpSend({
   let deferredError: CustomError | null = null;
 
   const result = await withTransaction(async (tx) => {
-    // Serializes concurrent sends for one row: FOR UPDATE locks nothing while
-    // the row does not exist yet, so two first sends would both INSERT. The
-    // two-argument form gives a 64-bit keyspace. Keyed on the contact KIND,
-    // matching the unique index, so an sms and a whatsapp send for one phone
-    // take the same lock.
+    // ⚠️ First, as `processOtpVerify` takes it: every writer of the user's proof
+    // rows queues on this one lock, so none holds a proof row while waiting for
+    // another.
+    await lockUser(tx, userId);
+
+    // FOR UPDATE locks nothing before the row exists, so two first sends would
+    // both INSERT. Keyed like the unique index, on contact kind.
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtext(${userId}), hashtext(${contactKind} || ':' || ${purpose}))`
     );
@@ -153,14 +143,12 @@ export async function processOtpSend({
       )
       .for('update');
 
-    // Captured BEFORE the clear below, so the max-attempts branch can preserve
-    // an existing send-side deadline instead of minting a new one.
+    // Before the clear below, so the max-attempts branch keeps the old deadline.
     const existingBlockedUntil = session?.isBlocked
       ? session.blockedUntil
       : null;
 
-    // A live block is CLEARED here, not thrown on — see
-    // `VERIFY_BLOCK_CLEARED_BY_RESEND` for why that does not weaken anything.
+    // Cleared, not thrown on — see `VERIFY_BLOCK_CLEARED_BY_RESEND`.
     if (session?.isBlocked && session.blockedUntil) {
       const [unblocked] = await tx
         .update(verificationSessions)
@@ -190,14 +178,11 @@ export async function processOtpSend({
       );
     }
 
-    // Checked before the increment, which `chk_attempt_number_max` would
-    // otherwise refuse as a raw constraint error. The throw is deferred so the
-    // block update COMMITS: throwing inside withTransaction rolls it back.
+    // Before the increment, which `chk_attempt_number_max` would refuse raw.
+    // The throw is deferred so the block commits.
     if (session && session.attemptNumber >= OTP_MAX_ATTEMPTS) {
-      // Stamped ONCE and then preserved: re-deriving it per request would turn
-      // the penalty into a rolling one anyone who knows the identifier can
-      // extend. `session.isBlocked` cannot be the guard, as it is on the verify
-      // side — the clear above has always reset it by now.
+      // Stamped once, or anyone knowing the identifier could roll the penalty.
+      // Not guarded on `isBlocked`: the clear above reset it.
       const blockedUntil =
         existingBlockedUntil && existingBlockedUntil > now
           ? existingBlockedUntil
@@ -216,9 +201,7 @@ export async function processOtpSend({
     const currentAttempts = session?.attemptNumber ?? 0;
     const nextAllowedAt = calculateNextAllowedAt(currentAttempts + 1, purpose);
 
-    // A resend resets the per-cycle `verifyAttemptNumber` but leaves
-    // `verifyAttemptDaily` and its window alone, so requesting a fresh code
-    // cannot reset the 24h bound.
+    // `verifyAttemptDaily` is left alone, so a fresh code cannot reset it.
     const [updatedSession] = await tx
       .insert(verificationSessions)
       .values({
@@ -241,8 +224,6 @@ export async function processOtpSend({
           verificationSessions.purpose,
         ],
         set: {
-          // The transport can change between resends (sms -> whatsapp) while the
-          // row stays the same; record the one actually used.
           channel,
           identifier,
           targetIdentifier,
@@ -263,8 +244,6 @@ export async function processOtpSend({
     if (!updatedSession)
       throw new CustomError(MSG_OTP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
 
-    // Replaces any older code: one code row per session
-    // (`ux_verification_codes_session`).
     await tx
       .insert(verificationCodes)
       .values({
@@ -280,10 +259,8 @@ export async function processOtpSend({
         },
       });
 
-    // Charged HERE and nowhere else, once eligibility is established. Charged
-    // earlier in the chain, requests naming addresses nobody owns could exhaust
-    // the whole deployment's daily OTP delivery. Inside the transaction so a
-    // rejection rolls back the code just stored.
+    // Only here: earlier, sends to unowned addresses could exhaust the global
+    // budget. In the transaction, so a rejection rolls back the stored code.
     await enforceOtpGlobalSendBudget({ channel });
 
     return {
@@ -295,12 +272,10 @@ export async function processOtpSend({
     };
   });
 
-  // A max-attempts block stored no code, so there is nothing to deliver.
   if (deferredError) throw deferredError;
 
-  // Delivery follows the commit so provider latency cannot hold row locks and a
-  // pool connection. A failed delivery removes and refunds only the matching
-  // code, so it cannot erase or refund a newer send.
+  // After the commit, so provider latency holds no locks. The refund matches
+  // this code only, never a newer send.
   if (!result)
     throw new CustomError(MSG_OTP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
   const deliver = async () => {
@@ -308,7 +283,7 @@ export async function processOtpSend({
       await deliverOtp(channel, sendTo, otpCode, purpose);
     } catch (error) {
       try {
-        await refundFailedDelivery(result.sessionId, hashedCode);
+        await refundFailedDelivery(userId, result.sessionId, hashedCode);
       } catch (refundError) {
         logSanitized('error', {
           msg: 'otp.delivery.refundFailed',

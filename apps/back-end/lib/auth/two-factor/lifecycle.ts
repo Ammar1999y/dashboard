@@ -16,11 +16,7 @@ import { revokeOtherSessions } from '../session/rotation';
 import { lockUser } from '../user-eligibility';
 import { recordEnabledMethod } from './methods';
 
-/**
- * Who changed what about a second factor, written INSIDE the transaction that
- * changed it. Every lifecycle transition writes one, including the OTP and
- * passkey enrolments served outside `./enrolment.ts`.
- */
+/** Written inside the transaction that made the change. */
 export async function auditLifecycle(
   tx: Tx,
   ctx: AuthContext,
@@ -39,12 +35,8 @@ export async function auditLifecycle(
   });
 }
 
-/**
- * The transition that turns a method on: intent row, flag, and the eviction of
- * every other session — the caller's own kept, so a completed enrolment evicts
- * an attacker already holding one. `./otp.ts` performs the same transition
- * inside its proof transaction.
- */
+// Evicts every other session, so an enrolment evicts an attacker already holding
+// one. `./otp.ts` repeats this transition inside its proof transaction.
 export async function enableMethod(
   tx: Tx,
   ctx: AuthContext,
@@ -63,16 +55,8 @@ export async function enableMethod(
 
 type PasskeyEnrolmentOutcome = 'recorded' | 'no-passkey' | 'failed';
 
-/**
- * Records a registered passkey as a second factor.
- *
- * ⚠️ Never throws: the plugin has already persisted the credential when this
- * runs, so the registration's own answer is the caller's to decide. The three
- * outcomes are distinguished because they are not the same event —
- * `'no-passkey'` means the credential is gone, `'failed'` means it exists and is
- * not offered — and the caller reports each as what it is. The write is one
- * transaction, so a failure adds nothing rather than half of something.
- */
+// Never throws: the plugin already persisted the credential, so the caller
+// decides the registration's answer.
 export async function recordPasskeyEnrolment(
   ctx: AuthContext,
   session: RequestSession,
@@ -83,12 +67,8 @@ export async function recordPasskeyEnrolment(
     return await withTransaction<PasskeyEnrolmentOutcome>(async (tx) => {
       await lockUser(tx, session.userId);
 
-      // ⚠️ THIS credential, not any credential. The plugin writes the row and
-      // returns; this runs afterwards and takes the lock only now, so
-      // `/passkey/delete-passkey` fits between the two. Asking whether the user
-      // still holds *a* passkey answers yes for an unrelated older one —
-      // `/two-factor/disable` deliberately keeps those — and the ceremony then
-      // reports that the key just presented was enrolled when it is gone.
+      // ⚠️ This credential, not any: a delete can land before the lock, and an
+      // older kept passkey would falsely confirm the new one.
       const owned = await tx
         .select({ id: passkeys.id })
         .from(passkeys)

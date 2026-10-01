@@ -26,12 +26,13 @@
 import type { FileSweepCount } from '@/lib/media/lifecycle';
 import type { SQL } from 'drizzle-orm';
 
-import { inArray, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 
-import { db } from '@/db';
+import { db, withTransaction } from '@/db';
 import {
   sessions,
   trustedDevices,
+  users,
   verificationCodes,
   verifications,
   verificationSessions,
@@ -183,11 +184,15 @@ type ExpiringTable =
  */
 function sweepExpired(table: ExpiringTable, cutoff: SQL): Promise<SweepCount> {
   return sweepBatched(async () => {
+    // Locked here, so a row another transaction holds is left for the next run:
+    // waiting on it while holding the batch's earlier rows queues that
+    // transaction's peers behind this sweep.
     const doomed = db
       .select({ id: table.id })
       .from(table)
       .where(lt(table.expiresAt, cutoff))
-      .limit(BATCH_SIZE);
+      .limit(BATCH_SIZE)
+      .for('update', { skipLocked: true });
 
     const deleted = await db
       .delete(table)
@@ -251,27 +256,44 @@ function sweepVerificationSessions(): Promise<SweepCount> {
     )
   `;
 
-  return sweepBatched(async () => {
-    const doomed = db
-      .select({ id: verificationSessions.id })
-      .from(verificationSessions)
-      .where(abandoned)
-      .limit(BATCH_SIZE);
+  return sweepBatched(() =>
+    withTransaction(async (tx) => {
+      // ⚠️ The owners are locked first and never waited for, as every other
+      // writer of these rows takes the user before them. Locking the proof rows
+      // alone would hold one while the delete waits on another's code, and
+      // that wait is a verify's, queued behind a row it never asked for.
+      const doomed = await tx
+        .select({ id: verificationSessions.id })
+        .from(verificationSessions)
+        .innerJoin(users, eq(users.id, verificationSessions.userId))
+        .where(abandoned)
+        .limit(BATCH_SIZE)
+        .for('no key update', { of: users, skipLocked: true });
 
-    // The predicate is repeated on the DELETE, not only used to pick ids.
-    // Selecting candidates and deleting by id is a check and a write with a gap
-    // between them, and `processOtpSend` fills exactly that gap — it takes an
-    // advisory lock and `FOR UPDATE`, so a row can become active while this
-    // statement waits behind it. Repeating the predicate makes PostgreSQL
-    // re-evaluate it against the row it actually locked, so a row that woke up
-    // is skipped instead of deleted.
-    const deleted = await db
-      .delete(verificationSessions)
-      .where(sql`${verificationSessions.id} IN ${doomed} AND (${abandoned})`)
-      .returning({ id: verificationSessions.id });
+      if (doomed.length === 0) return 0;
 
-    return deleted.length;
-  });
+      // The predicate is repeated on the DELETE, not only used to pick ids.
+      // Selecting candidates and deleting by id is a check and a write with a
+      // gap between them, and `processOtpSend` fills exactly that gap: a row
+      // can become active before this statement runs. Repeating the predicate
+      // makes PostgreSQL evaluate it against the row it deletes, so a row that
+      // woke up is skipped instead of deleted.
+      const deleted = await tx
+        .delete(verificationSessions)
+        .where(
+          and(
+            inArray(
+              verificationSessions.id,
+              doomed.map(({ id }) => id)
+            ),
+            sql`(${abandoned})`
+          )
+        )
+        .returning({ id: verificationSessions.id });
+
+      return deleted.length;
+    })
+  );
 }
 
 /**

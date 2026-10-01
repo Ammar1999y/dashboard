@@ -1,9 +1,6 @@
 /**
- * WebP re-encoding, sized down until it fits a byte target.
- *
- * `Bun.Image` cannot decode SVG or animated WebP; neither reaches this module:
- * `shouldOptimizeImage` excludes SVG, and `validateMagicBytes` refuses animated
- * WebP at the door.
+ * `Bun.Image` cannot decode SVG or animated WebP; `processImage` routes SVG to
+ * the sanitiser and `validateMagicBytes` refuses animated WebP before this.
  */
 import { inflateSync } from 'node:zlib';
 
@@ -16,6 +13,8 @@ import {
   MIB,
   SERVER_MAX_IMAGE_SIZE,
 } from '@app/shared/validation/constants';
+
+import { serverFault } from '@/lib/http/response';
 
 import { logLine } from '@/utils/log';
 
@@ -45,22 +44,20 @@ function toUploadError(error: unknown): CustomError {
     );
   if (code !== null && UNDECODABLE_CODES.has(code))
     return new CustomError(uploadMsg.undecodable, HTTP_STATUS.UNPROCESSABLE);
-  // The dimension guard below refuses this before the encoder is reached; this
-  // is the backstop for a limit the guard does not know about, and still a
-  // rejection of the input rather than a server fault.
+  // Backstop for an encoder limit the dimension guard below does not know
+  // about; still the input's fault, not the server's.
   if (code === 'ERR_IMAGE_ENCODE_FAILED')
     return new CustomError(
       uploadMsg.edgeTooLong(MAX_IMAGE_EDGE),
       HTTP_STATUS.UNPROCESSABLE
     );
 
-  return new CustomError(uploadMsg.uploadFailed, HTTP_STATUS.INTERNAL_ERROR);
+  return serverFault(uploadMsg.uploadFailed, error);
 }
 
 /**
- * Megapixels of decode work one request costs, at least 1, from the header
- * alone. Runs BEFORE the encoder slot is taken, which also moves the
- * pixel-bomb refusal ahead of the queue.
+ * From the header alone, and BEFORE the encoder slot is taken, so a pixel bomb
+ * is refused ahead of the queue.
  */
 export async function measureEncodeCost(input: Buffer): Promise<number> {
   try {
@@ -83,15 +80,11 @@ interface OptimizeImageOptions {
   widthStep?: number;
 }
 
-/** One encode attempt; the only place the encoder options are written. */
+/** The only place the encoder options are written. */
 async function encodeAttempt(input: Buffer, width: number, quality: number) {
-  // This re-encode is also what STRIPS image metadata: the output is built from
-  // decoded pixels and the encoder emits no `EXIF`/`XMP ` chunk. Skipping it for
-  // an input already under the byte ceiling would store and serve camera EXIF,
-  // location included.
+  // This re-encode is also what STRIPS `EXIF`/`XMP `: skipping it for an input
+  // already under the byte ceiling would serve camera EXIF, location included.
   const image = boundedImage(input)
-    // Height omitted keeps the aspect ratio; `withoutEnlargement` stops a small
-    // image being blown up to `initialWidth`.
     .resize(width, undefined, { withoutEnlargement: true })
     .webp({ quality });
   const buffer = await image.buffer();
@@ -118,11 +111,8 @@ const MAX_LADDER_RUNGS = 128;
 const MAX_ENCODE_ATTEMPTS = 16;
 
 /**
- * The ceiling a stored image cannot exceed, whatever the ladder reaches.
- *
- * `targetSize` is what the ladder AIMS at; this is what it may not pass. It
- * sits under `MAX_IMAGE_SIZE`, the ceiling on what may be uploaded, so anything
- * this pipeline stores can still be fed back through it.
+ * What the ladder may not pass (`targetSize` is only its aim). Kept under
+ * `MAX_IMAGE_SIZE` so anything stored can be fed back through the pipeline.
  */
 const MAX_STORED_IMAGE_BYTES = 800 * 1024;
 
@@ -141,16 +131,14 @@ interface LadderOptions {
 }
 
 /**
- * Every numeric option, checked before it can drive a loop: a step of `0`,
- * negative or `NaN` never reaches the floor, and `buildLadder` would spin
- * synchronously, taking the event loop with it.
+ * A step of `0`, negative or `NaN` never reaches the floor, and `buildLadder`
+ * would spin synchronously, taking the event loop with it.
  */
 function assertLadderOptions(opts: LadderOptions): void {
   for (const [name, value] of Object.entries(opts))
     if (!Number.isFinite(value) || value <= 0)
-      throw new CustomError(
-        `optimizeImage: ${name} must be a positive finite number`,
-        HTTP_STATUS.INTERNAL_ERROR
+      throw new Error(
+        `optimizeImage: ${name} must be a positive finite number`
       );
 }
 
@@ -188,8 +176,7 @@ async function optimizeImageWithinSlot(
 
   try {
     const metadata = await boundedImage(input).metadata();
-    // `MAX_IMAGE_PIXELS` bounds AREA and says nothing about a single side, so an
-    // image well inside it can still be one the output format cannot hold.
+    // `MAX_IMAGE_PIXELS` bounds area, not a side the output format cannot hold.
     if (metadata.width > MAX_IMAGE_EDGE || metadata.height > MAX_IMAGE_EDGE)
       throw new CustomError(
         uploadMsg.edgeTooLong(MAX_IMAGE_EDGE),
@@ -234,10 +221,8 @@ async function optimizeImageWithinSlot(
     };
 
     if (!fitting && ladder.length > 1) {
-      // The FLOOR before the search: when the target is unreachable every rung
-      // the search would visit ends in the same answer, and this settles it in
-      // two encodes. When the floor fits, the search still returns the EARLIEST
-      // fitting rung.
+      // The floor first settles an unreachable target in two encodes; when it
+      // fits, the search still returns the EARLIEST fitting rung.
       const floor = remember(await measure(ladder.length - 1));
       if (floor.size <= targetSize) {
         fitting = floor;
@@ -317,24 +302,18 @@ async function acquireEncoder(): Promise<() => void> {
 }
 
 /**
- * The one piece of input metadata `Bun.Image` carries into its output. Above
- * every profile in ordinary circulation, far below one that is interesting to
- * an attacker.
+ * The one input metadata `Bun.Image` carries into its output. Above ordinary
+ * profiles, far below a hostile one.
  */
 export const MAX_ICC_PROFILE_BYTES = 64 * 1024;
 
 /**
- * Refuse an ICC profile the encoder would copy and this application would then
- * publish.
- *
- * The pipeline prices a request in PIXELS, and a profile is not pixels: a small
- * PNG carrying a deflated huge profile makes every encode attempt as large.
- * Under the bound the profile is kept, because dropping it is a visible colour
- * shift on wide-gamut images.
+ * Requests are priced in pixels, yet a small PNG with a huge deflated profile
+ * makes every encode that large. Under the bound it is kept: dropping it
+ * visibly shifts wide-gamut colour.
  *
  * ⚠️ Must run BEFORE the encoder slot is taken, or a bomb holds the queue while
- * it is priced. `maxOutputLength` is what makes the expansion refuse rather than
- * allocate.
+ * it is priced; `maxOutputLength` makes the expansion refuse, not allocate.
  */
 function assertIccProfileBounded(input: Buffer): void {
   const profile = iccProfileChunk(input);
@@ -369,7 +348,3 @@ export async function optimizeImage(
     release();
   }
 }
-
-export const shouldOptimizeImage = (mimeType: string) =>
-  mimeType.startsWith('image/') &&
-  !(mimeType === 'image/svg+xml' || mimeType === 'image/gif');

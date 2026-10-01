@@ -24,7 +24,9 @@ export const DEFAULT_CACHE_CONTROL = 'no-store';
 interface ResponsePolicyOptions {
   /**
    * Milliseconds from request admission to response, emitted as
-   * `Server-Timing`. Omitted rather than reported as zero when unmeasured.
+   * `Server-Timing` in development only: elsewhere it would hand a timing
+   * probe a jitter-free measurement of the anonymous auth paths. Omitted
+   * rather than reported as zero when unmeasured.
    */
   durationMs?: number;
 }
@@ -55,6 +57,9 @@ function write(headers: Headers, options: ResponsePolicyOptions): void {
   if (!headers.has('cache-control'))
     headers.set('cache-control', DEFAULT_CACHE_CONTROL);
 
-  if (options.durationMs !== undefined)
+  if (
+    options.durationMs !== undefined &&
+    process.env.NODE_ENV === 'development'
+  )
     headers.set('server-timing', `app;dur=${options.durationMs.toFixed(1)}`);
 }

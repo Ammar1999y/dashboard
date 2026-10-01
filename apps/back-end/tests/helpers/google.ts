@@ -35,6 +35,8 @@ export async function startGoogle(
     cookie?: string;
     callbackURL?: string;
     token?: string;
+    /** Rewrites the signed token, to forge one the flow's own key did not sign. */
+    tamper?: (token: string) => string;
   } = {}
 ) {
   const started = await app.handle(
@@ -59,7 +61,7 @@ export async function startGoogle(
     .parse(await started.json());
   const url = new URL(body.data.url);
   const now = Math.floor(Date.now() / 1000);
-  const token =
+  const issued =
     options.token ??
     signGoogleToken({
       iss: 'https://accounts.google.com',
@@ -70,6 +72,7 @@ export async function startGoogle(
       email_verified: true,
       ...claims,
     });
+  const token = options.tamper ? options.tamper(issued) : issued;
   scriptEgress('www.googleapis.com', () =>
     Response.json({ keys: [publicKey] })
   );

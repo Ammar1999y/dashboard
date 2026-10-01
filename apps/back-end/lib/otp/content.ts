@@ -6,11 +6,7 @@ export const CONTACT_LABEL: Readonly<Record<ContactKind, string>> = {
   phone: 'رقم الهاتف',
 };
 
-/**
- * What the code is FOR, in the message that carries it: a user who cannot tell a
- * login code from a password-reset code will approve whichever an attacker
- * triggered.
- */
+// A user who cannot tell a login code from a reset code approves whichever an attacker triggered.
 const OTP_PURPOSE_LABEL: Readonly<Record<OtpPurpose, string>> = {
   verify_contact: 'تأكيد وسيلة التواصل',
   forgot_password: 'إعادة تعيين كلمة المرور',

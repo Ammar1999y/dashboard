@@ -16,6 +16,7 @@ import { CustomError } from '@app/shared/error-class';
 import { distinctIds, FILE_COLUMNS } from './files';
 import { claimFiles } from './lifecycle';
 import { mediaMsg } from './messages';
+import { requirePublishGrant } from './policy';
 import { usageVisibilities } from './usages';
 import { transitionFile } from './visibility';
 
@@ -23,6 +24,11 @@ interface LinkParams {
   ids: readonly EntityID[];
   purpose: UploadPurpose;
   actor: Actor;
+}
+
+interface PromoteParams extends LinkParams {
+  /** The owner route's request headers; the publish grant is read from its session. */
+  headers: Headers;
 }
 
 const LINK_COLUMNS = {
@@ -45,9 +51,9 @@ type LinkRow = Pick<MediaFileRow, keyof typeof LINK_COLUMNS>;
  * private file through here, a file the media routes answer 403 for. Three
  * cases, and nothing else:
  *
- * - a LIBRARY file (in a folder): visible to every media grant already, and
- *   promoting it for a public purpose is publication by linkage, not an
- *   escalation;
+ * - a LIBRARY file (in a folder): visible to every media grant already;
+ *   promoting it for a public purpose still takes `media.publish`
+ *   (`promoteForLink`);
  * - the caller's OWN pending upload: the form that uploaded it is saving now,
  *   and `claimFiles` checks the uploader again under the lock;
  * - a file only PUBLIC sources reference, for a public purpose: world-readable
@@ -136,7 +142,8 @@ async function checkLinkable(params: LinkParams): Promise<LinkRow[]> {
  * bucket copy must not run inside a transaction (`db/limits.ts`):
  *
  * - `promoteForLink`, outside any transaction, checks the whole batch and then
- *   moves private active files to the public bucket when the purpose is public.
+ *   moves private active files to the public bucket when the purpose is public,
+ *   which needs the caller's `media.publish`.
  * - `attachFiles`, inside the owner's transaction and under `FOR UPDATE`,
  *   claims pending uploads, re-checks that every file still has the purpose's
  *   visibility and is not mid-transition, and clears `unfiled_at`. The caller
@@ -155,21 +162,36 @@ async function checkLinkable(params: LinkParams): Promise<LinkRow[]> {
  *
  * `linkFiles` runs both halves for a caller with no transaction of its own.
  */
-export async function promoteForLink(params: LinkParams): Promise<void> {
+export async function promoteForLink(params: PromoteParams): Promise<void> {
   const ids = distinctIds(params.ids);
   if (ids.length === 0) return;
   const rows = await checkLinkable({ ...params, ids });
   if (params.purpose.visibility !== 'public') return;
-  for (const row of rows)
-    if (row.status === 'active' && row.bucketType === 'private')
-      // Authorised by the owner's write grant, not by a media scope, so the
-      // uploader narrowing does not apply.
-      await transitionFile({
-        id: row.id,
-        to: 'public',
-        actor: { ...params.actor, scope: 'all' },
-        authorizedByOwner: true,
-      });
+  const promoted = rows.filter(
+    (row) => row.status === 'active' && row.bucketType === 'private'
+  );
+  if (promoted.length === 0) return;
+
+  const actor = await publishingActor(params);
+  for (const row of promoted)
+    await transitionFile({
+      id: row.id,
+      to: 'public',
+      actor,
+      authorizedByOwner: true,
+    });
+}
+
+async function publishingActor({
+  headers,
+  actor,
+}: PromoteParams): Promise<Actor> {
+  const grant = await requirePublishGrant(headers);
+  if (grant.userId !== actor.userId)
+    throw new Error('promoteForLink: the actor is not the session user');
+  if (grant.scope === null)
+    throw new Error('promoteForLink: the publish grant has no scope');
+  return { ...actor, scope: grant.scope };
 }
 
 export async function attachFiles(tx: Tx, params: LinkParams): Promise<void> {
@@ -201,7 +223,7 @@ export async function attachFiles(tx: Tx, params: LinkParams): Promise<void> {
 }
 
 export async function linkFiles(
-  params: LinkParams & { write: (tx: Tx) => Promise<void> }
+  params: PromoteParams & { write: (tx: Tx) => Promise<void> }
 ): Promise<void> {
   await promoteForLink(params);
   await withTransaction(async (tx) => {

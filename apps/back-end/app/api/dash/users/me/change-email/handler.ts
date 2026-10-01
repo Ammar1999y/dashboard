@@ -12,11 +12,11 @@ import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
 import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
+import { refreshSessionCookies } from '@/lib/permissions/checker';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 import {
   authorizeContactChange,
   commitEmailChange,
-  refreshSessionCookies,
   sendContactChangeCode,
 } from '@/lib/users/contact-change';
 import { userMsg } from '@/lib/users/messages';

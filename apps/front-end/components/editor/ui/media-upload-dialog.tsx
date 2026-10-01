@@ -121,7 +121,7 @@ const MediaUploadForm = memo(({ dialog, type }: MediaUploadFormProps) => {
         <TabsTrigger value='link'>رابط خارجي</TabsTrigger>
       </TabsList>
 
-      <TabsContent value='upload' className='mt-4'>
+      <TabsContent value='upload'>
         <div
           {...getRootProps()}
           className={cn(
@@ -159,7 +159,7 @@ const MediaUploadForm = memo(({ dialog, type }: MediaUploadFormProps) => {
         </div>
       </TabsContent>
 
-      <TabsContent value='link' className='mt-4'>
+      <TabsContent value='link'>
         <form onSubmit={handleLinkSubmit} className='flex flex-col gap-4'>
           <div className='grid gap-2'>
             <Label htmlFor={urlInputId} title={`رابط ${config.label}`} />

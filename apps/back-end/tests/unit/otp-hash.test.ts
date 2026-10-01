@@ -5,8 +5,8 @@
  * Covers the three things that would fail silently: a malformed stored value
  * must be REJECTED rather than throw (a throw is a 500, and an error-shaped
  * response is an oracle), a code hashed under a retained-but-not-active key must
- * still verify (that is what makes rotation possible), and the legacy Argon2id
- * envelope must still verify while in-flight codes expire.
+ * still verify (that is what makes rotation possible), and a password-hash
+ * envelope must never verify as an OTP.
  *
  * Runs in a SUBPROCESS per keyring configuration: the keyring memoises its parse
  * on first use, so two different `OTP_HMAC_KEYRING` values cannot be exercised
@@ -24,7 +24,7 @@ const KEY_B = Buffer.alloc(32, 22).toString('base64url');
 
 const PEPPER = Buffer.alloc(32, 7).toString('base64url');
 
-/** `lib/auth/password/hash.ts` is imported by the module under test, so its keyring must parse. */
+/** The runner's `password-envelope` mode calls the real `hashPassword`, so its keyring must parse. */
 const BASE_ENV = {
   PASSWORD_PEPPER_ACTIVE_ID: 'p1',
   PASSWORD_PEPPER_KEYRING: `{"p1":{"generation":1,"secret":"${PEPPER}"}}`,
@@ -135,6 +135,7 @@ test.each([
   ['wrong version', 'o2:a:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],
   ['too few segments', 'o1:a'],
   ['too many segments', 'o1:a:AAAA:extra'],
+  ['malformed password envelope', 'p1:garbage'],
   ['empty key id', 'o1::AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],
   ['mac too short', 'o1:a:AAAA'],
   ['mac not base64url', 'o1:a:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'],
@@ -149,13 +150,11 @@ test.each([
   expect(JSON.parse(out)).toEqual({ valid: false });
 });
 
-test('a legacy p1 Argon2id envelope still verifies', async () => {
-  // Codes issued by the previous build must survive the deploy that swapped the
-  // primitive; they expire on their own within OTP_EXPIRY_MINUTES.
-  const { code, out, err } = await run(ONE_KEY, ['legacy']);
+test('a password-hash envelope is a wrong code, even for the code it hashes', async () => {
+  const { code, out, err } = await run(ONE_KEY, ['password-envelope']);
   expect(err).toBe('');
   expect(code).toBe(0);
-  expect(JSON.parse(out)).toEqual({ match: true, mismatch: false });
+  expect(JSON.parse(out)).toEqual({ match: false, mismatch: false });
 });
 
 test('a missing OTP keyring fails at load, naming the variable', async () => {

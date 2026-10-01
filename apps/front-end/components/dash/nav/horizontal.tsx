@@ -41,7 +41,7 @@ HorizontalItemContent.displayName = 'HorizontalItemContent';
 const HORIZONTAL: FlyoutNavVariant = {
   navClassName:
     'flex min-h-[--layout-nav-height-horizontal] items-center border-b border-dashed text-muted-foreground',
-  listClassName: 'flex items-center space-x-1',
+  listClassName: 'flex items-center gap-1',
   itemClassName: 'min-h-8 max-w-64 text-muted-foreground',
   menuSide: 'bottom',
   Content: HorizontalItemContent,

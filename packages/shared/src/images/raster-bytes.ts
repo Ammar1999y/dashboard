@@ -1,16 +1,9 @@
 /**
- * Byte-level facts about the raster formats this application admits.
- *
- * A leaf module because two boundaries must answer the same questions of the
- * same bytes: the back-end's upload pipeline checks an uploaded file, and
- * `images/svg-optimizer.ts` checks a raster inlined into an SVG as a `data:`
- * URI. A check living in only one of them admits through the other.
- *
- * `Uint8Array` rather than `Buffer`: the sanitizer half runs with no Node
- * globals.
+ * Shared by the upload pipeline and `images/svg-optimizer.ts` (rasters inlined
+ * as `data:` URIs): a check living in only one of them admits through the
+ * other. `Uint8Array`, not `Buffer`: the sanitizer runs with no Node globals.
  */
 
-/** The raster types this application stores, and the bytes that identify them. */
 const RASTER_MAGIC_BYTES = {
   'image/png': {
     bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
@@ -52,7 +45,6 @@ export function dataViewOf(bytes: Uint8Array): DataView {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
-/** Do these bytes carry the signature `mimeType` declares? */
 export function matchesMagicBytes(
   bytes: Uint8Array,
   mimeType: string
@@ -82,12 +74,8 @@ function fourCC(bytes: Uint8Array, offset: number): string {
 }
 
 /**
- * The pixel dimensions these bytes declare, or `null` when they cannot be read.
- *
- * Read from the header rather than by decoding: the point is to refuse a
- * decompression bomb BEFORE anything allocates its raster, and a 25 MP image is
- * ~100 MB of RGBA whoever decodes it. `null` means "not stated in a form this
- * knows", which every caller must treat as unusable rather than as unlimited.
+ * From the header, so a decompression bomb is refused BEFORE anything allocates
+ * its raster. ⚠️ `null` is unreadable: unusable, never unlimited.
  */
 export function rasterDimensions(
   bytes: Uint8Array,
@@ -110,12 +98,8 @@ function pngDimensions(
 }
 
 /**
- * WebP states its size three different ways, one per coding.
- *
- * `VP8 ` (lossy) carries 14-bit dimensions after a three-byte start code;
- * `VP8L` (lossless) packs `width-1` and `height-1` into 28 bits; `VP8X`
- * (extended) states a 24-bit canvas size minus one. A file whose first chunk is
- * none of the three is unreadable here, which is `null`.
+ * `VP8 ` has 14-bit sizes after a start code, `VP8L` packs `width-1`/`height-1`
+ * into 28 bits, `VP8X` states a 24-bit canvas size minus one.
  */
 function webpDimensions(
   bytes: Uint8Array
@@ -172,7 +156,6 @@ function readU24(bytes: Uint8Array, offset: number): number | null {
   );
 }
 
-/** One container chunk: its type, and where its payload starts and ends. */
 interface RasterChunk {
   type: string;
   start: number;
@@ -180,11 +163,8 @@ interface RasterChunk {
 }
 
 /**
- * `RIFF<size>WEBP` then 8-byte-headed chunks, each padded to an even length.
- *
- * A zero-length chunk is LEGAL — an empty `XMP ` is the ordinary case — so the
- * walk advances past its header rather than stopping, or a valid animated WebP
- * passes the animation check.
+ * ⚠️ A zero-length chunk is LEGAL (an empty `XMP `): stopping at one would let
+ * an animated WebP pass the animation check.
  */
 function* webpChunks(bytes: Uint8Array): Generator<RasterChunk> {
   let offset = 12;
@@ -196,9 +176,7 @@ function* webpChunks(bytes: Uint8Array): Generator<RasterChunk> {
   }
 }
 
-/**
- * An 8-byte signature, then `<4-byte big-endian length><4-byte type><data><CRC>`.
- */
+/** An 8-byte signature, then `<4-byte big-endian length><4-byte type><data><CRC>`. */
 function* pngChunks(bytes: Uint8Array): Generator<RasterChunk> {
   let offset = 8;
   while (offset + 8 <= bytes.length) {
@@ -212,10 +190,8 @@ function* pngChunks(bytes: Uint8Array): Generator<RasterChunk> {
 const WEBP_ANIMATION_FLAG = 0x02;
 
 /**
- * The flag lives in bit 1 of the first byte of the `VP8X` chunk, which a simple
- * (non-extended) WebP does not have at all — hence the chunk walk rather than a
- * fixed offset. `Bun.Image` cannot decode animated WebP, so this refusal is also
- * what keeps it from failing deep in the encoder.
+ * A chunk walk, since a simple WebP has no `VP8X` at all. `Bun.Image` cannot
+ * decode animated WebP, so this also keeps it from failing deep in the encoder.
  */
 function isAnimatedWebp(bytes: Uint8Array): boolean {
   for (const chunk of webpChunks(bytes)) {
@@ -228,13 +204,7 @@ function isAnimatedWebp(bytes: Uint8Array): boolean {
   return false;
 }
 
-/**
- * A PNG carrying an `acTL` chunk before the first `IDAT`: the APNG animation
- * control.
- *
- * Position matters — a decoder ignores `acTL` that appears after `IDAT`, so an
- * `acTL` there does not make the file animated.
- */
+/** A decoder ignores an `acTL` after the first `IDAT`. */
 function isAnimatedPng(bytes: Uint8Array): boolean {
   for (const chunk of pngChunks(bytes)) {
     if (chunk.type === 'acTL') return true;
@@ -251,15 +221,10 @@ export interface EmbeddedIccProfile {
 }
 
 /**
- * The ICC profile these bytes carry, unexpanded.
- *
- * `Bun.Image` COPIES this profile into its output, and it is the only metadata
- * that crosses the re-encode (`eXIf`, `zTXt`, `iTXt` and `XMP ` do not), so the
- * back-end's bound on it (`lib/media/image/optimize.ts`) is a complete policy
- * only while both hold — `tests/unit/upload-validation.test.ts` asserts them.
- *
- * Deliberately does NOT expand a deflated profile: the bound that decides
- * whether expanding is safe belongs to the caller that can afford `node:zlib`.
+ * `Bun.Image` copies this profile, and no other metadata, into its output, so
+ * the bound in `lib/media/image/optimize.ts` is complete only while both hold
+ * (`tests/unit/upload-validation.test.ts` asserts them). Left unexpanded: that
+ * bound belongs to the caller that has `node:zlib`.
  */
 export function iccProfileChunk(bytes: Uint8Array): EmbeddedIccProfile | null {
   const mimeType = rasterTypeOf(bytes);
@@ -287,12 +252,9 @@ export function iccProfileChunk(bytes: Uint8Array): EmbeddedIccProfile | null {
 }
 
 /**
- * Animated uploads are refused, declared ONCE for every admitted raster format:
- * an APNG is named `.png` and declared `image/png`, so a per-format check that
- * misses it flattens it to its first frame without a word.
- *
- * SVG is absent because it carries no magic bytes — `sanitizeSvg` refuses
- * `ANIMATION_ELEMENTS` and `processImage` maps that to the same message.
+ * ONCE for every admitted raster: an APNG is declared `image/png`, so a check
+ * that misses it flattens it to its first frame silently. SVG's check is
+ * `ANIMATION_ELEMENTS` in `sanitizeSvg`.
  */
 const ANIMATION_CHECKS = new Map<string, (bytes: Uint8Array) => boolean>([
   ['image/png', isAnimatedPng],

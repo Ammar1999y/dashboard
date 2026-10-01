@@ -12,20 +12,18 @@ import {
   MAX_IMAGE_PIXELS,
 } from '@app/shared/validation/constants';
 
-import { errorTypeOf, logSanitized, sanitizeForLog } from '@/utils/log';
+import { errorTypeOf, logSanitized } from '@/utils/log';
 
 import { FILE_TYPE_TABLE } from '../allowlist';
 import { sanitizeFilename } from '../filename';
 import { uploadMsg } from '../messages';
-import { boundedImage } from './bounded';
-import { optimizeImage, shouldOptimizeImage } from './optimize';
+import { optimizeImage } from './optimize';
 import { imageToRgba } from './rgba';
 import { sanitizeSvgServer, svgOptimizerServer } from './svg';
 
 /**
- * The image types this pipeline processes: the image entries of the type table,
- * in table order. `tests/unit/upload-validation.test.ts` walks it to prove every
- * one has a magic-byte check or is the SVG exemption.
+ * `tests/unit/upload-validation.test.ts` walks this to prove every entry has a
+ * magic-byte check or is the SVG exemption.
  */
 export const ALLOWED_IMAGE_TYPES: readonly string[] = FILE_TYPE_TABLE.entries()
   .filter(([, spec]) => spec.kind === 'image')
@@ -37,8 +35,8 @@ export function isAllowedImageType(mimeType: string): boolean {
 }
 
 /**
- * Validates file content matches its declared MIME type using magic bytes.
- * SVG is text-based and fully validated by `sanitizeSvgServer`.
+ * ⚠️ Fails open for a type with no signature entry; see `ALLOWED_IMAGE_TYPES`.
+ * SVG's check is `sanitizeSvgServer`.
  */
 export function validateMagicBytes(
   buffer: Buffer,
@@ -55,19 +53,15 @@ export function validateMagicBytes(
 }
 
 /**
- * Transparent pixels are composited onto this (white) before the blurhash is
- * computed: `blurhash.encode` ignores alpha, so without it the placeholder
- * depends on whatever colour the decoder leaves under a transparent pixel. With
- * it, the placeholder is what the image looks like on a light page.
+ * `blurhash.encode` ignores alpha, so transparency is composited onto this
+ * first; otherwise the placeholder shows whatever the decoder left underneath.
  */
 const BLURHASH_BACKGROUND = 0xff;
 
 /**
- * `undefined` rather than a throw when the pixels cannot be read: a blurhash is
- * a placeholder, `files.blurhash` is nullable, and an unreadable encoder output
- * is a defect on THIS side, not a reason to fail the upload.
- * `tests/unit/upload-validation.test.ts` pins the PNG shape `imageToRgba` reads,
- * so an encoder change fails there instead of silently dropping every
+ * Never fails the upload: the placeholder is nullable, and unreadable encoder
+ * output is our defect. `tests/unit/upload-validation.test.ts` pins the PNG
+ * shape `imageToRgba` reads, so an encoder change cannot silently drop every
  * placeholder.
  */
 async function generateBlurhash(
@@ -100,7 +94,6 @@ async function encodeBlurhash(imageBuffer: Buffer): Promise<string> {
   return encode(new Uint8ClampedArray(rgba), width, height, 4, 3);
 }
 
-/** An image after validation, optimisation and sanitisation, ready to store. */
 interface ProcessedImage {
   buffer: Buffer;
   mimeType: string;
@@ -137,7 +130,11 @@ export function validateSvgUpload(
       embeddedRasterMegapixels: result.embeddedRasterMegapixels,
     };
 
-  console.error('SVG sanitization failed:', sanitizeForLog(result.errors));
+  logSanitized('warn', {
+    msg: 'image.svg refused',
+    reason: result.reason,
+    errors: result.errors,
+  });
   throw new CustomError(
     result.reason === 'animated'
       ? uploadMsg.animatedNotAllowed(sanitizeFilename(fileName))
@@ -154,10 +151,7 @@ export function validateSvgUpload(
   );
 }
 
-/**
- * Validate, optimise, sanitise and fingerprint one image. Writes neither an
- * object nor a row; `lib/media/upload.ts` stores what this returns.
- */
+/** Writes neither an object nor a row; `lib/media/upload.ts` stores the result. */
 export async function processImage(
   input: UploadImageInput
 ): Promise<ProcessedImage> {
@@ -189,7 +183,7 @@ export async function processImage(
     finalExtension = 'svg';
     // No blurhash for SVG: `Bun.Image` cannot rasterise it, and consumers
     // already tolerate a null `files.blurhash`.
-  } else if (shouldOptimizeImage(mimeType)) {
+  } else {
     const optimized = await optimizeImage(buffer);
 
     buffer = optimized.buffer;
@@ -199,16 +193,6 @@ export async function processImage(
     height = optimized.height;
     blurhash = await generateBlurhash(buffer);
     finalExtension = 'webp';
-  } else {
-    // Unreachable while `shouldOptimizeImage` holds for every raster type in
-    // `ALLOWED_IMAGE_TYPES`; kept for the type that would change that.
-    blurhash = await generateBlurhash(buffer);
-    const metadata = await boundedImage(buffer).metadata();
-    width = metadata.width;
-    height = metadata.height;
-    // The stored extension comes from the resolved type, never from
-    // `file.name`: every other component of an object key is a row id.
-    finalExtension = FILE_TYPE_TABLE.get(finalMimeType)?.extension ?? 'webp';
   }
 
   return {

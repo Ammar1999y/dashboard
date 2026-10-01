@@ -287,6 +287,11 @@ export const normalizePasswordInput = (v: string) =>
  */
 const PASSWORD_DESCRIPTION = `Unicode-normalised (NFKC) before validation, so it may be sent as typed and every rule below measures the normalised form: ${PASSWORD_MIN} to ${PASSWORD_MAX} characters counted as Unicode code points, containing at least one ASCII lowercase letter (a-z), one ASCII uppercase letter (A-Z), one ASCII digit (0-9), and at least one character outside those three ranges. A character that NFKC folds into one of those ranges counts as it. The line terminators U+000A, U+000D, U+2028 and U+2029 are rejected anywhere in the value.`;
 
+/**
+ * ⚠️ Also checks EXISTING passwords, at sign-in, re-auth and `currentPassword`:
+ * tightening this or `PASSWORD_MIN` locks out stored passwords that no longer
+ * meet it.
+ */
 export const passwordSchema = z.preprocess(
   normalizePasswordInput,
   z

@@ -113,15 +113,15 @@ function clampLogString(value: string): string {
  * because a wrapper or a structured clone can copy `message` while dropping
  * those fields.
  */
-const QUERY_ERROR_MARKERS = ['Failed query:', 'params:'] as const;
+const QUERY_PARAMS_MARKER = 'params:';
+const QUERY_ERROR_MARKERS = ['Failed query:', QUERY_PARAMS_MARKER] as const;
 
 /**
  * A driver error whose message carries the statement's BOUND PARAMETERS.
  *
  * Drizzle throws `Failed query: <sql>\nparams: <values>`, and those values are
  * routinely secrets (session tokens, password hashes, contact details) that
- * key-based redaction cannot reach inside `message`. The message is
- * reconstructible from the code, so dropping it loses nothing.
+ * key-based redaction cannot reach inside `message`.
  */
 function isParameterBearingQueryError(error: object): boolean {
   if ('query' in error && 'params' in error) return true;
@@ -135,28 +135,33 @@ function isParameterBearingQueryError(error: object): boolean {
   );
 }
 
+const IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/;
+
 /**
- * Per-field shape checks on the metadata kept from a query error.
+ * Per-field shape checks on the metadata kept from a query error chain.
  *
- * SQLSTATE is exactly five uppercase alphanumerics, which is narrow enough to
- * be a real constraint. `constraint` is bounded to a lowercase identifier,
- * matching this schema's `ux_`/`idx_`/`chk_` naming.
+ * `errno` is the SQLSTATE `bun:sql` reports; `code` is the SQLSTATE of other
+ * PostgreSQL clients or Bun's own class (`ERR_POSTGRES_CONNECTION_CLOSED`).
+ * `detail`, `where` and `hint` are never kept: PostgreSQL puts row values and
+ * bound parameters there.
  *
  * Being precise about the limit: this bounds what a FABRICATED query-shaped
  * error could smuggle through — it does not eliminate it, because a token can
- * be shaped like an identifier. Only an allowlist of this schema's actual
- * constraint names would, and that would couple the logger to the schema. Real
- * driver metadata is safe; the residual risk is an attacker who can already
- * throw arbitrary objects into a log call, which is a larger problem than this.
+ * be shaped like an identifier. Real driver metadata is safe; the residual risk
+ * is an attacker who can already throw arbitrary objects into a log call.
  */
 const QUERY_ERROR_SAFE_FIELDS = {
-  // Two spellings of the SQLSTATE: `errno` is where `bun:sql` puts it, `code`
-  // where other PostgreSQL clients do. Bun's own `code`
-  // (`ERR_POSTGRES_SERVER_ERROR`) fails the pattern and is dropped, as intended.
-  code: /^[0-9A-Z]{5}$/,
+  code: DRIVER_ERROR_CODE,
   errno: /^[0-9A-Z]{5}$/,
-  constraint: /^[a-z][a-z0-9_]{0,62}$/,
+  constraint: IDENTIFIER,
+  table: IDENTIFIER,
+  // A string only: Bun also sets a numeric `column` for the JS source position.
+  column: IDENTIFIER,
+  routine: /^[A-Za-z_][A-Za-z0-9_]{0,62}$/,
 } as const;
+
+const ERROR_CLASS_NAME = /^[A-Z][A-Za-z0-9]{0,63}$/;
+const QUERY_MESSAGE_WITHHELD = '[withheld: query errors echo bound parameters]';
 
 function pickQuerySafeKeys(value: object): Record<string, unknown> {
   // Own properties only, into a prototype-free record — the same rule the
@@ -173,30 +178,83 @@ function pickQuerySafeKeys(value: object): Record<string, unknown> {
 }
 
 /**
- * Reduce a parameter-bearing query error to metadata only.
- *
- * Suppressing the wrapper's message is not enough. The driver `cause`
- * underneath it also echoes offending values — PostgreSQL `22P02` reports
- * `invalid input syntax for type uuid: "<the value>"` — so the whole chain has
- * to be reduced to hard-allowlisted fields rather than recursed into with the
- * ordinary rules. Nothing is lost: the wrapper's message is reconstructible
- * from the code, and SQLSTATE plus the constraint name is what actually
- * identifies the failure.
- *
- * The name is a fixed label, not the error's own: real `DrizzleQueryError`
- * instances report `name === 'Error'`, so copying it says nothing, and copying
- * an arbitrary name is one more untrusted string.
+ * `DrizzleQueryError` reports `name === 'Error'`, so the constructor is the
+ * informative half; anything not shaped like a class name gets `fallback`.
  */
-function serializeQueryError(error: object): Record<string, unknown> {
+function queryErrorClass(value: object, fallback: string): string {
+  const name: unknown = Reflect.get(value, 'name');
+  const ctor: unknown = Reflect.get(value, 'constructor');
+  const ctorName: unknown =
+    typeof ctor === 'function' ? Reflect.get(ctor, 'name') : undefined;
+  for (const candidate of [name, ctorName])
+    if (
+      typeof candidate === 'string' &&
+      candidate !== 'Error' &&
+      candidate !== 'Object' &&
+      ERROR_CLASS_NAME.test(candidate)
+    )
+      return candidate;
+  return fallback;
+}
+
+/** The SQL text survives; everything from the parameter list on does not. */
+function queryMessageWithoutParams(message: string): string {
+  const at = message.indexOf(QUERY_PARAMS_MARKER);
+  return at === -1
+    ? QUERY_MESSAGE_WITHHELD
+    : clampLogString(message.slice(0, at).trimEnd());
+}
+
+/**
+ * PostgreSQL quotes identifiers and echoed values alike, and writes an invalid
+ * byte sequence as `0x..`. A trailing `: "<value>"` is cut whole, because the
+ * value may itself contain a quote; any other quoted text survives only when
+ * shaped like an identifier, and an unpaired last quote cuts the rest.
+ */
+function driverMessageWithoutValues(message: string): string {
+  const tail = message.indexOf(': "');
+  const head = tail === -1 ? message : `${message.slice(0, tail)}: [redacted]`;
+  const balanced =
+    head.split('"').length % 2 === 1
+      ? head
+      : `${head.slice(0, head.lastIndexOf('"'))}[redacted]`;
+  const unquoted = balanced.replaceAll(/"([^"]*)"/g, (quoted, inner: string) =>
+    IDENTIFIER.test(inner) ? quoted : '[redacted]'
+  );
+  return clampLogString(unquoted.replaceAll(/0x[0-9a-f]{2}/gi, '[redacted]'));
+}
+
+/**
+ * A parameter-bearing query error, walked down its `cause` chain with its own
+ * rules rather than the ordinary ones: every level carries or echoes the bound
+ * values somewhere — the Drizzle message's `params:`, the driver message's
+ * quoted value, the driver's `detail` — so each keeps its class, its message
+ * with those parts cut, and allowlisted metadata only.
+ */
+function serializeQueryError(
+  error: object,
+  depth = 0,
+  fallbackName = 'QueryError'
+): Record<string, unknown> {
+  const message: unknown = Reflect.get(error, 'message');
+  let text: string | undefined;
+  if (isParameterBearingQueryError(error))
+    text =
+      typeof message === 'string'
+        ? queryMessageWithoutParams(message)
+        : QUERY_MESSAGE_WITHHELD;
+  else if (typeof message === 'string')
+    text = driverMessageWithoutValues(message);
+
   const out: Record<string, unknown> = {
-    name: 'QueryError',
-    message: '[withheld: query errors echo bound parameters]',
+    name: queryErrorClass(error, fallbackName),
+    ...(text !== undefined && { message: text }),
     ...pickQuerySafeKeys(error),
   };
 
   const cause: unknown = Reflect.get(error, 'cause');
-  if (cause && typeof cause === 'object')
-    out.cause = { name: 'DriverError', ...pickQuerySafeKeys(cause) };
+  if (cause && typeof cause === 'object' && depth < LOG_MAX_DEPTH)
+    out.cause = serializeQueryError(cause, depth + 1, 'DriverError');
 
   return out;
 }

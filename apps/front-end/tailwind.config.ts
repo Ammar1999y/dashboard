@@ -284,28 +284,8 @@ const config: Config = {
     plugin(function ({ matchUtilities, theme }) {
       matchUtilities(
         {
-          'space-x': (value) => ({
-            '& > :not([hidden]) ~ :not([hidden]):not([data-ignore])': {
-              'margin-inline-start': value,
-            },
-          }),
-        },
-        { values: theme('spacing') }
-      );
-      matchUtilities(
-        {
-          'space-x-e': (value) => ({
-            '& > *:not(:last-child)': {
-              'margin-inline-end': value,
-            },
-          }),
-        },
-        { values: theme('spacing') }
-      );
-      matchUtilities(
-        {
           'space-y': (value) => ({
-            '& > :not([hidden]) ~ :not([hidden]):not([data-ignore])': {
+            '& > :not([hidden]) ~ :not([hidden])': {
               'margin-top': value,
             },
           }),

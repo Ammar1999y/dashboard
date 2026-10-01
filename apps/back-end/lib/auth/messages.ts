@@ -12,22 +12,14 @@ export const otpMsg = {
   passwordResetSuccess: 'تم تعيين كلمة المرور الجديدة بنجاح',
   passwordResetError: 'حدث خطأ أثناء إعادة تعيين كلمة المرور',
   loginSuccess: 'تم تسجيل الدخول بنجاح',
-  /**
-   * Distinct rather than collapsed into the generic message: reaching it
-   * requires a VALID recovery code, so the caller already controls the contact
-   * and learns nothing new about the account.
-   */
+  // Not collapsed: only a valid recovery code reaches it.
   recoverySecondFactorRequired:
     'تم التحقق من الرمز. أكمل التحقق بخطوتين لتعيين كلمة المرور الجديدة',
   recoveryBlockedByTwoFactor:
     'لا يمكن إعادة تعيين كلمة المرور عبر هذه الوسيلة لأنها نفس وسيلة التحقق بخطوتين. استخدم طريقة تحقق أخرى أو تواصل مع الدعم',
 } as const;
 
-/**
- * Separate from `otpMsg` because the user is already known from the challenge
- * cookie or the session, so nothing here has to collapse into one
- * indistinguishable string to avoid revealing whether an account exists.
- */
+// The user is already known here, so these need not collapse like `otpMsg`.
 export const twoFactorMsg = {
   challengeMissing: 'انتهت جلسة التحقق. يرجى تسجيل الدخول من جديد',
   methodUnavailable: 'طريقة التحقق غير متاحة لحسابك',
@@ -43,30 +35,21 @@ export const twoFactorMsg = {
   verifySuccess: 'تم التحقق بنجاح',
   trustRequiresProof:
     'يجب إكمال التحقق بخطوتين على هذا الجهاز قبل حفظه كجهاز موثوق',
+  totpEnrolmentExpired:
+    'انتهت مهلة إعداد تطبيق المصادقة. يرجى بدء الإعداد من جديد',
   totpAlreadyEnrolled:
     'يوجد تطبيق مصادقة مُفعّل بالفعل. قم بإزالته أولاً قبل إضافة تطبيق جديد',
   passkeyNotUserVerifying:
     'هذا الجهاز لا يطلب التحقق من هويتك (بصمة أو رمز)، فلا يصلح كوسيلة تحقق ثانية. استخدم جهازاً يدعم التحقق البيومتري أو رمز PIN',
-  /**
-   * Refuses a contact change that would take away the target's last usable
-   * second factor. The same rule `/two-factor/methods/disable` applies to a user
-   * removing their own last method — an edit must not be a way around it.
-   */
   contactChangeStrands:
     'لا يمكن تغيير وسيلة التواصل لأن ذلك سيُفقد الحساب طريقة التحقق بخطوتين الوحيدة. أعد تعيين التحقق بخطوتين للحساب أولاً',
   twoFactorUnavailable:
     'تعذّر إكمال التحقق بخطوتين: لا توجد طريقة تحقق متاحة على حسابك حالياً. تواصل مع الدعم لاستعادة الوصول',
-  /**
-   * Two different states, and the difference is what the user has to DO about
-   * it. The credential is deleted (nothing was kept, so repeating the ceremony
-   * is the whole fix), or it is saved and not a factor (repeating would leave a
-   * second dead key in the list, so it has to be removed first).
-   */
+  // Distinct because the fix differs: retry, versus delete the dead key first.
   passkeyNotSaved:
     'لم يُحفظ مفتاح المرور، ولم يتم تفعيل التحقق بخطوتين. أعد تسجيل مفتاح المرور',
   passkeyNotEnrolled:
     'تم حفظ مفتاح المرور لكن تعذّر تفعيله كوسيلة تحقق ثانية. احذفه من قائمة مفاتيح المرور ثم سجّله من جديد',
-  /** The acknowledged set is not the set that exists — another tab regenerated. */
   staleBackupSet:
     'الرموز الاحتياطية التي تؤكّد حفظها لم تعد هي الحالية. تم توليد مجموعة أحدث؛ اعرضها واحفظها ثم أكّد حفظها',
 } as const;

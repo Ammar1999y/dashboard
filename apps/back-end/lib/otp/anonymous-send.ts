@@ -1,5 +1,6 @@
 import type { FlatResendPurpose } from './throttle';
 import type { HandlerInput } from '@/lib/http/contract';
+import type { StartTimingFloor } from '@/lib/http/timing-floor';
 import type { OtpSendSurface } from '@/lib/rate-limit';
 import type { EntityID } from '@app/shared/types';
 import type { OtpChannel } from '@app/shared/validation/enums';
@@ -22,12 +23,7 @@ import { CONTACT_LABEL } from './content';
 import { processOtpSend } from './send';
 import { OTP_BASE_RESEND_DELAY_S } from './throttle';
 
-/**
- * The body every anonymous send answers, real identifier or invented: no
- * per-identifier counters, so both paths return the same shape. The constant is
- * exact only because these purposes' resend ladder is flat
- * (`FLAT_RESEND_PURPOSES`, `./throttle.ts`).
- */
+// Exact only because these purposes' resend delay is flat (`./throttle.ts`).
 export const ANONYMOUS_SEND_DATA = { nextAllowedIn: OTP_BASE_RESEND_DELAY_S };
 
 export interface AnonymousSendTarget {
@@ -37,6 +33,7 @@ export interface AnonymousSendTarget {
 }
 
 interface AnonymousSendOptions {
+  startFloor: StartTimingFloor;
   surface: OtpSendSurface;
   purpose: FlatResendPurpose;
   failureLog: string;
@@ -57,14 +54,29 @@ async function findActiveRecipient(channel: OtpChannel, identifier: string) {
   return userData;
 }
 
-/**
- * The shared body of the anonymous send routes, after their own IP limiter and
- * captcha. Everything after the lookup settles the same way for a known and an
- * unknown identifier, so the caller answers `ANONYMOUS_SEND_DATA` either way.
- */
+async function settlesBefore(
+  deadline: number,
+  work: Promise<void>
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<false>((resolve) => {
+    timer = setTimeout(
+      () => resolve(false),
+      Math.max(0, deadline - Date.now())
+    );
+  });
+  try {
+    return await Promise.race([work.then(() => true as const), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Settles identically for known and unknown identifiers; callers answer `ANONYMOUS_SEND_DATA`.
 export async function sendAnonymousOtp(
   ctx: HandlerInput,
   {
+    startFloor,
     surface,
     purpose,
     failureLog,
@@ -94,14 +106,24 @@ export async function sendAnonymousOtp(
     surface,
   });
 
+  const deadline = startFloor();
   const recipient = await findRecipient(channel, identifier);
   if (!recipient) return;
 
-  try {
-    await issue({ userId: recipient.id, channel, identifier });
-  } catch (error) {
-    // A failure only a real account can reach must not answer differently
-    // from a fake one, or a provider outage becomes an existence oracle.
-    logSanitized('error', { msg: failureLog, error });
-  }
+  // ⚠️ `settlesBefore` is a timer, which a synchronous wait inside `issue` would
+  // hold past the deadline; nothing it awaits may block the thread.
+  const issuing = (async () => {
+    try {
+      await issue({ userId: recipient.id, channel, identifier });
+    } catch (error) {
+      // A failure only a real account can reach must not answer differently
+      // from a fake one, or a provider outage becomes an existence oracle.
+      logSanitized('error', { msg: failureLog, error });
+    }
+  })();
+
+  if (await settlesBefore(deadline, issuing)) return;
+  // Locks and the pool only a real account waits on are unbounded; waiting
+  // past the floor for them answers later than a fake identifier does.
+  enqueueAfterResponse(ctx.rawRequest, () => issuing);
 }

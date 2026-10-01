@@ -1,5 +1,7 @@
 import type { RoutePrefix, RoutePrefixPath } from '@/lib/http/route-manifest';
 
+import { PASSWORDLESS_ENABLED } from '@app/shared/config';
+import { OTP_ENABLED } from '@app/shared/validation/otp';
 import {
   isTwoFactorMethodEnabled,
   TWO_FACTOR_ENABLED,
@@ -13,10 +15,7 @@ interface EndpointGroup {
   endpoints: readonly RoutePrefixPath[];
 }
 
-/**
- * Every endpoint this codebase can serve, grouped by the switch that turns it
- * on. Row order is `BETTER_AUTH_ENDPOINTS`' order.
- */
+/** Row order is `BETTER_AUTH_ENDPOINTS`' order. */
 const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
   {
     enabled: true,
@@ -85,11 +84,8 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
   {
     enabled: true,
     endpoints: [
-      // GET only, although `getSession` declares `["GET", "POST"]`: its handler
-      // refuses POST unless `session.deferSessionRefresh` is enabled, and
-      // `lib/auth/index.ts` does not enable it. Enabling it is what would make
-      // POST belong here. The budget is separate from credential attempts for
-      // shared NATs.
+      // GET only: `getSession` refuses POST unless `session.deferSessionRefresh`
+      // is enabled in `lib/auth/index.ts`; enabling it makes POST belong here.
       {
         path: '/get-session',
         methods: ['GET'],
@@ -111,6 +107,11 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
         captcha: true,
         session: 'none',
       },
+    ],
+  },
+  {
+    enabled: OTP_ENABLED && PASSWORDLESS_ENABLED,
+    endpoints: [
       // Verifies its own captcha, rate limit and OTP.
       {
         path: '/passwordless/verify',
@@ -122,18 +123,9 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
     ],
   },
 
-  // The two-factor surface, gated per METHOD: a method that is off contributes
-  // no entry, so `app.ts` never forwards its path to Better Auth and the
-  // `before` hook rejects it a second time.
-  //
-  // `/two-factor/send-otp` and `/two-factor/verify-otp` are absent
-  // unconditionally — the plugin's OTP is not configured, so listing them would
-  // advertise an endpoint that answers `OTP_NOT_CONFIGURED`.
-  //
-  // ⚠️ `/two-factor/enable` is ABSENT and stays absent. It can only produce TOTP
-  // in this configuration, and it writes the flag and the credential outside the
-  // transaction that has to carry the intent row with them. Enrolment is
-  // `lib/auth/two-factor/enrolment.ts`.
+  // `/two-factor/send-otp` and `/two-factor/verify-otp` are absent: the
+  // plugin's OTP is not configured. ⚠️ `/two-factor/enable` stays absent; it
+  // writes the flag and credential outside the intent-row transaction.
   {
     enabled: TWO_FACTOR_ENABLED,
     endpoints: [
@@ -170,8 +162,7 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
         captcha: false,
         session: 'session',
       },
-      // Reachable with only the challenge cookie: the sign-in half of TOTP, not
-      // a management path. Its real budget is the per-challenge attempt counter.
+      // Its real budget is the per-challenge attempt counter.
       {
         path: '/two-factor/verify-totp',
         methods: ['POST'],
@@ -181,7 +172,6 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
       },
     ],
   },
-  // Not gated on any single method: this is how a user reaches all of them.
   {
     enabled: TWO_FACTOR_ENABLED,
     endpoints: [
@@ -236,8 +226,6 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
       },
     ],
   },
-  // Neither is anonymous — enrolment needs a session, sign-in a challenge
-  // cookie — so neither carries a captcha, and both credentials are published.
   {
     enabled: TWO_FACTOR_OTP_AVAILABLE,
     endpoints: [
@@ -280,9 +268,6 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
   {
     enabled: isTwoFactorMethodEnabled('passkey'),
     endpoints: [
-      // The POST re-authentication in front of the ceremony. The ceremony
-      // endpoints are the library's and take the library's bodies, so the
-      // password is proven here and spent there.
       {
         path: '/two-factor/passkey/grant',
         methods: ['POST'],
@@ -325,7 +310,6 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
         captcha: false,
         session: 'session',
       },
-      // Reachable only with a live 2FA challenge.
       {
         path: '/two-factor/passkey/options',
         methods: ['POST'],
@@ -341,30 +325,18 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
         session: 'challenge',
       },
       // ⚠️ `/passkey/generate-authenticate-options` and
-      // `/passkey/verify-authentication` are ABSENT, permanently and with no
-      // flag: the second resolves a credential by id alone and issues a session
-      // to whoever owns it. Adding either reopens an unauthenticated sign-in.
+      // `/passkey/verify-authentication` stay absent: an unauthenticated sign-in.
     ],
   },
 ];
 
 /**
- * The complete Better Auth surface this deployment exposes, per ENDPOINT.
+ * Kept free of Better Auth imports: `path-policy.ts`, `routes.ts`, `app.ts` and
+ * `lib/http/openapi/` all read it. Methods must match the library's own
+ * endpoint definitions.
  *
- * Kept free of Better Auth imports so every reader can load it: the `before`
- * hook (`lib/auth/path-policy.ts`) enforces it, `routes.ts` answers
- * 404-versus-405 from it, `app.ts` registers it and reads `preAuthLimit`, and
- * `lib/http/openapi/` publishes it. One table, so enforcement, admission and
- * advertisement cannot drift.
- *
- * Methods are per path, read from the dependency's own endpoint definitions
- * (`method:` in `better-auth/dist/api/routes/*.mjs`) and from the local plugin
- * endpoints. Declared once for the whole prefix, the 405 boundary would
- * advertise `Allow: GET` on POST-only paths.
- *
- * ⚠️ `password.verify` is replaced by a check that the `before` hook already ran
- * the real `verifyLoginAttempt`: a password-bearing path added here must also
- * be in `PASSWORD_PROOF_PATHS`, or it rejects every password.
+ * ⚠️ A password-bearing path added here must also be in `PASSWORD_PROOF_PATHS`,
+ * or it rejects every password.
  */
 export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] =
   ENDPOINT_GROUPS.filter((group) => group.enabled).flatMap(
@@ -372,14 +344,8 @@ export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] =
   );
 
 /**
- * Every Better Auth path this codebase can serve under SOME configuration, as
- * opposed to `BETTER_AUTH_ENDPOINTS`, which is what the current one serves.
- *
- * The contract builder needs the distinction: a documentation entry for a path
- * that is switched off is expected, one for a path that exists nowhere is a typo.
- *
- * ⚠️ Not used for enforcement — `BETTER_AUTH_ALLOWED_PATH_SET` decides that, and
- * it is derived from the enabled set alone.
+ * Every path under SOME configuration, so the contract builder can tell a
+ * switched-off path from a typo. ⚠️ Never for enforcement.
  */
 export const BETTER_AUTH_KNOWN_PATHS: ReadonlySet<string> = new Set(
   ENDPOINT_GROUPS.flatMap((group) =>
@@ -387,31 +353,17 @@ export const BETTER_AUTH_KNOWN_PATHS: ReadonlySet<string> = new Set(
   )
 );
 
-/**
- * Better Auth owns its own sub-routing under `/api/auth`, so it is a prefix
- * rather than a set of routes.
- *
- * The reachable surface is exact in both dimensions — path AND method. Not the
- * whole prefix and not one method set for all of it: Better Auth 404s every path
- * outside the list and every method a path does not declare, so anything broader
- * would make the 405 boundary claim operations the handler itself rejects.
- */
 export const BETTER_AUTH_ROUTE_PREFIX: RoutePrefix = {
   prefix: '/api/auth',
-  // Better Auth reads every path it serves as TEXT — JSON, or the
-  // URL-encoded form its sign-in also accepts. Nothing under here takes a
-  // file, so the prefix takes the parsed-into-memory ceiling and a caller
-  // cannot claim the upload allowance on `/sign-in/email`.
+  // Nothing here takes a file, so no caller can claim the upload allowance.
   body: 'json',
   paths: BETTER_AUTH_ENDPOINTS,
 };
 
-/** Membership test for the `before` hook, which decides on the PATH alone. */
 export const BETTER_AUTH_ALLOWED_PATH_SET: ReadonlySet<string> = new Set(
   BETTER_AUTH_ENDPOINTS.map((endpoint) => endpoint.path)
 );
 
-/** Path -> the methods it answers, for the 405 boundary and the document. */
 const SERVED_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   BETTER_AUTH_ENDPOINTS.map((endpoint) => [
     endpoint.path,
@@ -419,13 +371,7 @@ const SERVED_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   ])
 );
 
-/**
- * Does this deployment serve `path` under `method`? Drives the 405 boundary.
- *
- * `HEAD` is answered from the `GET` entry (RFC 9110 §9.3.2), as
- * `createRouteLookup` derives it for every table route: otherwise a GET path
- * would refuse HEAD while advertising `Allow: GET`.
- */
+// `HEAD` from the `GET` entry, as `createRouteLookup` does for table routes.
 export function betterAuthServes(path: string, method: string): boolean {
   const served = SERVED_METHODS.get(path);
   if (!served) return false;

@@ -19,15 +19,9 @@ import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
 import { contactOf } from '@/lib/users/contact';
 
 /**
- * Sends the second-factor code for a recovery grant.
- *
- * ⚠️ The destination comes from the USER ROW and the option must be one the
- * grant issued, so nothing here redirects a code: not to the contact the
- * recovery code arrived on, not to a contact the account does not hold.
- *
- * Its own send budget (`recovery_second_factor`): a shared one would let the
- * anonymous contact-verification surface exhaust the only channel a locked-out
- * user has left.
+ * ⚠️ Destination from the user row, option from the grant's issued set, so
+ * nothing can redirect a code. Its own send budget, or the anonymous
+ * verification surface could exhaust a locked-out user's last channel.
  */
 export const POST = withApiErrors(otpMsg.sendError, async (ctx) => {
   requireFeature(OTP_ENABLED);

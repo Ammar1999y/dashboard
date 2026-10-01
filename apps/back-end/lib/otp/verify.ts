@@ -7,6 +7,7 @@ import { and, eq, gt, sql } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
 import { users, verificationCodes, verificationSessions } from '@/db/schema';
+import { TransactionDeadlineError } from '@/db/transaction';
 
 import { HTTP_STATUS } from '@app/shared/api-messages';
 import { OTP_AUTO_VERIFY } from '@app/shared/config';
@@ -27,19 +28,13 @@ import {
   blockedError,
   blockSession,
   calculateBlockDuration,
+  invalidOrExpiredCode,
 } from './throttle';
 
 /**
- * Errors that represent a code that was actually COMPARED and rejected, as
- * opposed to a request that never reached a comparison.
- *
- * A `WeakSet` rather than another `code` value because `blockedError` already
- * spends `CustomError.code` on the disclosure marker, and both facts have to
- * travel on the same throw. Nothing here reaches the wire.
- *
- * The distinction exists for callers holding a budget of their own — the 2FA
- * challenge's attempts — which must be charged for guesses and refunded for
- * everything else. See `spendChallengeAttempt`.
+ * Throws from a code that was actually compared, for callers with their own
+ * budget (`spendChallengeAttempt`). A `WeakSet` because `blockedError` already
+ * spends `CustomError.code` on the disclosure marker.
  */
 const evaluatedGuesses = new WeakSet<object>();
 
@@ -48,7 +43,6 @@ function markEvaluatedGuess<E extends object>(error: E): E {
   return error;
 }
 
-/** Did `error` come from a submitted code losing a comparison? */
 export function otpGuessWasEvaluated(error: unknown): boolean {
   return (
     typeof error === 'object' && error !== null && evaluatedGuesses.has(error)
@@ -61,26 +55,20 @@ interface ProcessOtpVerifyOptions {
   userEmail?: string;
   /** Only has to agree with the proof's contact kind. */
   channel: OtpChannel;
-  /**
-   * Reason the code was issued. Bound into the locked lookup so a code proven
-   * for one purpose cannot be matched against a verify for another.
-   */
   purpose: OtpPurpose;
-  /**
-   * Normalized identifier (email/phone) submitted by the client. Bound into
-   * the locked session lookup so a stale session pointing at an old contact
-   * can't be matched against a verify for a different one.
-   */
+  /** Normalised; bound into the lookup so a proof for an old contact cannot match. */
   identifier: string;
   code: string;
-  /** When provided, OTP-block transitions are audited. */
   auditMeta?: AuditMeta;
   /**
-   * Runs inside the same transaction after a match. Receives the matched
-   * session's `targetIdentifier` so the committed value comes from the proven
-   * row, never from the request body. `verificationSessionId` lets a rotation
-   * purge the user's other pending proofs while preserving the one being
-   * consumed here.
+   * Anonymous callers only: a floor deadline (`floorDeadline`) the transaction
+   * may not outlast, its wait for a connection and every statement included.
+   * Past it nothing is committed and the answer is the unknown identifier's.
+   */
+  deadline?: number;
+  /**
+   * Runs in the same transaction after a match. Commit `targetIdentifier` from
+   * the proven row, never the request body.
    */
   onVerified?: (
     tx: Tx,
@@ -88,16 +76,22 @@ interface ProcessOtpVerifyOptions {
   ) => Promise<void>;
 }
 
+async function transactionWithin<T>(
+  fn: (tx: Tx) => Promise<T>,
+  deadline: number | undefined
+): Promise<T> {
+  try {
+    return await withTransaction(fn, undefined, deadline);
+  } catch (error) {
+    if (error instanceof TransactionDeadlineError) throw invalidOrExpiredCode();
+    throw error;
+  }
+}
+
 type VerifyOutcome =
   | { kind: 'matched' }
   | { kind: 'mismatch' }
   | { kind: 'no-code' }
-  /**
-   * `blockedUntil` travels out of the transaction so the 429 can carry an
-   * accurate `Retry-After`. Null only for a row blocked with no expiry, which
-   * the writes here never produce; `blockedError` then falls back to the full
-   * duration rather than omitting the header.
-   */
   | {
       kind: 'blocked';
       blockedUntil: Date | null;
@@ -105,10 +99,6 @@ type VerifyOutcome =
       evaluated: boolean;
     };
 
-/**
- * Verifies an OTP code and, on a match, runs `onVerified` atomically with the
- * proof bookkeeping.
- */
 export async function processOtpVerify({
   userId,
   userEmail,
@@ -117,19 +107,15 @@ export async function processOtpVerify({
   identifier,
   code,
   auditMeta,
+  deadline,
   onVerified,
 }: ProcessOtpVerifyOptions): Promise<void> {
-  // What this code proves, independent of how it was delivered. Every lookup
-  // and budget below keys on it, so switching sms -> whatsapp reaches the same
-  // row rather than a second allowance against the same phone number.
+  // Keyed on contact kind, so switching sms -> whatsapp buys no second allowance.
   const contactKind = contactKindOf(channel);
 
-  // The outcome is thrown only AFTER the commit, so the increment and block
-  // writes persist; throwing inside withTransaction rolls them back.
-  const outcome = await withTransaction<VerifyOutcome>(async (tx) => {
-    // `users` FIRST: every flow locks it before `verification_sessions`, and
-    // `onVerified` reaches `users` later, so the reverse order here would
-    // deadlock against email-change, admin-edit and user-delete.
+  // Thrown only after the commit, so the counter and block writes persist.
+  const outcome = await transactionWithin<VerifyOutcome>(async (tx) => {
+    // `users` first: the canonical lock order, and `onVerified` reaches it.
     await tx
       .select({ id: users.id })
       .from(users)
@@ -142,8 +128,7 @@ export async function processOtpVerify({
         isBlocked: verificationSessions.isBlocked,
         blockedUntil: verificationSessions.blockedUntil,
         targetIdentifier: verificationSessions.targetIdentifier,
-        // For the audit row: the request's `channel` only has to agree with
-        // the contact kind, so it could misreport how the code was delivered.
+        // For the audit row: the request's `channel` may misreport delivery.
         channel: verificationSessions.channel,
       })
       .from(verificationSessions)
@@ -166,7 +151,6 @@ export async function processOtpVerify({
     // A send-cap block can be set while the verify counters are under their
     // caps; without this, a leftover live code would still verify.
     if (session.isBlocked && session.blockedUntil) {
-      // Already locked — no code is looked at, so nothing is charged.
       if (session.blockedUntil > new Date())
         return {
           kind: 'blocked',
@@ -181,9 +165,8 @@ export async function processOtpVerify({
       session.isBlocked = false;
     }
 
-    // Read before any counter is charged: a request with no live code cannot
-    // be a guess, and charging it would let anyone turn an expired code into a
-    // full block that the send path then honours.
+    // Before any charge: otherwise anyone could turn an expired code into a
+    // block the send path honours.
     const [activeCode] = await tx
       .select({
         id: verificationCodes.id,
@@ -200,8 +183,7 @@ export async function processOtpVerify({
 
     if (!activeCode) return { kind: 'no-code' };
 
-    // Also before the counters, so a mis-timed key rotation cannot spend a
-    // user's budget. See `canEvaluateOtp` for why this is answered as expired.
+    // Before the counters, so a mis-timed key rotation spends no budget.
     if (!canEvaluateOtp(activeCode.code)) {
       // No identifier: the retired key id is in the stored envelopes.
       logLine('error', {
@@ -214,9 +196,7 @@ export async function processOtpVerify({
     }
 
     const auditBlockTransition = async (reason: string) => {
-      // Only the FIRST transition into blocked is audited; an already-blocked
-      // session would emit a misleading one. Requires userEmail
-      // (audit_logs.user_email NOT NULL).
+      // First transition only. `audit_logs.user_email` is NOT NULL.
       if (!auditMeta || !userEmail || session.isBlocked) return;
       await auditLog(tx, {
         userId,
@@ -230,9 +210,7 @@ export async function processOtpVerify({
       });
     };
 
-    // Stamps a block only on the FIRST transition: re-stamping `blockedUntil`
-    // on every later attempt would make it a rolling block an attacker could
-    // hold open indefinitely.
+    // Re-stamping would make a rolling block an attacker holds open forever.
     const blockOnce = async (reason: string): Promise<Date | null> => {
       if (session.isBlocked) return session.blockedUntil;
       const blockedUntil = calculateBlockDuration();
@@ -243,15 +221,9 @@ export async function processOtpVerify({
 
     const windowExpired = sql`NOW() - ${verificationSessions.verifyAttemptWindowStart} > INTERVAL '24 hours'`;
 
-    // 24h failure budget for THIS proof row. The filter is the row's unique
-    // key (ux_verification_sessions_user_contact_purpose), so the SUM reads one
-    // row; it is a SUM only to fold an aged-out window to zero in SQL. Scoped
-    // to the purpose deliberately: a wider scope would let failed
-    // verify_contact attempts deny the victim's forgot_password flow.
-    //
-    // NOT a rolling window — the row anchors its own 24h period at
-    // verifyAttemptWindowStart. Read-then-write is safe: `users` is held FOR
-    // UPDATE above, so verifies for this user are serialized.
+    // One row (the unique key); a SUM only to fold an aged-out window to zero.
+    // Per purpose on purpose: wider, failed verify_contact attempts would deny
+    // forgot_password. Read-then-write is safe under the `users` lock.
     const [dailyUsage] = await tx
       .select({
         used: sql<number>`COALESCE(SUM(CASE WHEN ${windowExpired} THEN 0 ELSE ${verificationSessions.verifyAttemptDaily} END), 0)`.mapWith(
@@ -268,8 +240,6 @@ export async function processOtpVerify({
       );
 
     const dailyUsed = dailyUsage?.used ?? 0;
-    // Budget already spent: the code is never read, so this request cannot be
-    // a guess and is not charged.
     if (dailyUsed >= OTP_MAX_DAILY_VERIFY_ATTEMPTS)
       return {
         kind: 'blocked',
@@ -277,18 +247,13 @@ export async function processOtpVerify({
         evaluated: false,
       };
 
-    // The per-cycle bound stays in the WHERE clause as defense in depth if the
-    // row lock is ever removed. The daily bound is NOT here — it is not a
-    // property of this row.
+    // The per-cycle bound in the WHERE is defence in depth if the lock goes.
     const [bumped] = await tx
       .update(verificationSessions)
       .set({
         verifyAttemptNumber: sql`${verificationSessions.verifyAttemptNumber} + 1`,
-        // Reset an EXPIRED anchored window — this does not slide it. If the
-        // anchor is older than 24h the counter restarts at 1 from a new anchor;
-        // otherwise it increments. So two full budgets can fall inside one
-        // moving 24-hour interval, one just before an anchor expires and one
-        // just after. That is the accepted limitation, not a rolling window.
+        // Anchored, not rolling: two full budgets can straddle an anchor's
+        // expiry. Accepted.
         verifyAttemptDaily: sql`CASE WHEN ${windowExpired} THEN 1 ELSE ${verificationSessions.verifyAttemptDaily} + 1 END`,
         verifyAttemptWindowStart: sql`CASE WHEN ${windowExpired} THEN NOW() ELSE ${verificationSessions.verifyAttemptWindowStart} END`,
       })
@@ -302,7 +267,6 @@ export async function processOtpVerify({
         verifyAttemptNumber: verificationSessions.verifyAttemptNumber,
       });
 
-    // The per-cycle cap was spent before this request; the code is never read.
     if (!bumped)
       return {
         kind: 'blocked',
@@ -316,14 +280,12 @@ export async function processOtpVerify({
     const blockUntil = shouldBlock ? calculateBlockDuration() : null;
     if (blockUntil) await blockSession(tx, session.id, blockUntil);
 
+    // ⚠️ The brute-force bound: every path that reaches this comparison has
+    // been charged above; only those that never read a code return earlier.
     const matched = await verifyOtpCode(code, activeCode.code);
 
     if (matched) {
-      // onVerified runs first so the sensitive action (e.g. committing the new
-      // email + flipping the verified flag) and the proof bookkeeping below
-      // commit atomically — there is no verify→action window.
-      // No block audit even if shouldBlock fired above: the user never actually
-      // got blocked from a usable session.
+      // No block audit even if `shouldBlock` fired: a correct code was never blocked.
       if (onVerified)
         await onVerified(tx, {
           targetIdentifier: session.targetIdentifier,
@@ -331,38 +293,16 @@ export async function processOtpVerify({
         });
 
       if (purpose === 'verify_contact') {
-        // Pure ownership proof — nothing downstream consumes it later.
         await tx
           .delete(verificationSessions)
           .where(eq(verificationSessions.id, session.id));
       } else {
-        // Sensitive-action proof (change_email/change_phone, passwordless,
-        // forgot_password): keep the row as an auditable single-use record,
-        // but drop the code so the same proof can never be replayed. The two
-        // writes are sequential rather than `Promise.all`: they share the
-        // transaction's one connection, so fanning out only obscures which
-        // one failed.
-        //
-        // The cycle is CLOSED here, so its counters reset:
-        //  - `shouldBlock` above may have stamped a block before the code was
-        //    even checked. On a correct code the user was never really
-        //    blocked, and leaving the flag set would lock the whole
-        //    (user, contactKind, purpose) slot for the full block duration.
-        //  - attemptNumber/nextAllowedAt are send-cycle state; left in place,
-        //    successful passwordless logins would walk the counter to its cap
-        //    and the next ordinary login would self-inflict a block.
-        //  - verifyAttemptDaily is REFUNDED, not reset. The column counts
-        //    FAILED verifies in a 24h anchored window (see db/schema.ts), but
-        //    the bound has to be charged before the code can be checked to
-        //    stay atomic; the refund is what makes it a failure counter
-        //    rather than a daily cap on successful logins. It commits with
-        //    this transaction, so unlike an external counter it cannot be
-        //    lost. The window is untouched, so resetting the budget still
-        //    requires knowing the code.
-        //
-        // Accepted tradeoff: a user who can complete verifies never accumulates
-        // the DB-side SEND throttle. Their remaining bound is the
-        // `otp.send.*` limiter chain — the bound moved, it did not disappear.
+        // Kept as an auditable single-use record; the code is dropped. The
+        // cycle closes, so its counters reset: a block stamped before the
+        // compare would lock the slot, and leftover send state would walk
+        // repeat logins into a self-inflicted block. `verifyAttemptDaily` is
+        // REFUNDED, not reset, which keeps it a failure counter. Accepted: a
+        // user who completes verifies is bounded by `otp.send.*` only.
         await tx
           .update(verificationSessions)
           .set({
@@ -384,16 +324,12 @@ export async function processOtpVerify({
       return { kind: 'matched' };
     }
 
-    // A wrong code WAS submitted and checked here, and it crossed a cap. The
-    // increment above already charged it — every path that reaches a code
-    // comparison charges, and only the ones that never look at a code
-    // (`no-code`, already-blocked, budget spent) return before it.
     if (shouldBlock) {
       await auditBlockTransition('threshold_crossed');
       return { kind: 'blocked', blockedUntil: blockUntil, evaluated: true };
     }
     return { kind: 'mismatch' };
-  });
+  }, deadline);
 
   if (outcome.kind === 'matched') return;
 
@@ -420,17 +356,13 @@ type OtpMatch = Parameters<
   NonNullable<ProcessOtpVerifyOptions['onVerified']>
 >[1];
 
-/**
- * `processOtpVerify`, or under OTP_AUTO_VERIFY `onVerified` alone in a fresh
- * transaction. `matched` is then `null`: no proof was consumed, so the request
- * body is the only source for what to commit.
- */
+/** Under `OTP_AUTO_VERIFY`, `matched` is `null`: no proof row was consumed. */
 export function verifyOtpOrAutoVerify(
   opts: Omit<ProcessOtpVerifyOptions, 'onVerified'> & {
     onVerified: (tx: Tx, matched: OtpMatch | null) => Promise<void>;
   }
 ): Promise<void> {
   return OTP_AUTO_VERIFY
-    ? withTransaction((tx) => opts.onVerified(tx, null))
+    ? transactionWithin((tx) => opts.onVerified(tx, null), opts.deadline)
     : processOtpVerify(opts);
 }

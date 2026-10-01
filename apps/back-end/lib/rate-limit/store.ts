@@ -11,6 +11,8 @@ import type { Migration } from '@/lib/sqlite/database';
 import type { SweepResult } from '@/lib/sqlite/sweep';
 
 import { RATE_LIMIT_DB_PATH } from '@/lib/env.server';
+import { BUSY_TIMEOUT_MS, withoutBusyWait } from '@/lib/sqlite/database';
+import { isSqliteBusy } from '@/lib/sqlite/driver';
 import { lazyStore } from '@/lib/sqlite/store';
 import { sweepInBatches } from '@/lib/sqlite/sweep';
 
@@ -53,12 +55,19 @@ if (RATE_LIMIT_SCHEMA_VERSION !== MIGRATIONS.length)
  * Fixed-window admission as ONE statement, atomic across processes with no
  * explicit transaction. The `CASE` rolls an expired window over in place.
  *
+ * Only a NEWER bound window rolls over, or one that ended before the stored
+ * window began (the clock stepped back past it). A stale one (computed before
+ * a boundary, committed after another process rolled the row) is charged to the
+ * stored window; rewriting the row back to it would let the next current
+ * caller roll over again and re-grant the whole budget.
+ *
  * The `WHERE` on `DO UPDATE` makes it max-aware: a request already at the
  * limit inside the current window writes nothing, so hammering an exhausted
  * key creates no writer-lock contention. A denied request therefore returns NO
- * row, which can only mean the row exists, is in the bound window and is at
- * `max`; the caller derives `retryAfter` from the `windowStart` it bound and
- * must not read the row back, which would race a concurrent rollover.
+ * row, which can only mean the row exists, is in the bound window or the next
+ * one, and is at `max`; the caller derives `retryAfter` from the `windowStart`
+ * it bound and must not read the row back, which would race a concurrent
+ * rollover.
  *
  * `cost` is the units this admission spends. Neither the INSERT nor the
  * rollover branch can refuse, so the caller must reject `cost > max` first.
@@ -69,12 +78,20 @@ const SQL_CONSUME = `
   INSERT INTO rate_limit (key, window_start, count, expires_at)
   VALUES (?, ?, ?, ?)
   ON CONFLICT(key) DO UPDATE SET
-    count        = CASE WHEN rate_limit.window_start = excluded.window_start
-                        THEN rate_limit.count + excluded.count
-                        ELSE excluded.count END,
-    window_start = excluded.window_start,
-    expires_at   = excluded.expires_at
-  WHERE rate_limit.window_start <> excluded.window_start
+    count        = CASE WHEN excluded.window_start > rate_limit.window_start
+                          OR rate_limit.window_start > excluded.expires_at
+                        THEN excluded.count
+                        ELSE rate_limit.count + excluded.count END,
+    window_start = CASE WHEN excluded.window_start > rate_limit.window_start
+                          OR rate_limit.window_start > excluded.expires_at
+                        THEN excluded.window_start
+                        ELSE rate_limit.window_start END,
+    expires_at   = CASE WHEN excluded.window_start > rate_limit.window_start
+                          OR rate_limit.window_start > excluded.expires_at
+                        THEN excluded.expires_at
+                        ELSE MAX(rate_limit.expires_at, excluded.expires_at) END
+  WHERE excluded.window_start > rate_limit.window_start
+     OR rate_limit.window_start > excluded.expires_at
      OR rate_limit.count + excluded.count <= ?
   RETURNING count, window_start`;
 
@@ -126,6 +143,33 @@ export function admitWindow(
     admission.expiresAt,
     admission.limit
   );
+}
+
+const BUSY_RETRY_MIN_MS = 5;
+const BUSY_RETRY_MAX_MS = 50;
+
+/**
+ * `admitWindow` that waits out a held writer lock without blocking the thread:
+ * each attempt fails at once and the retry is a timer, so every other request
+ * keeps running. Gives up with the lock error after `BUSY_TIMEOUT_MS`, as the
+ * blocking wait does. For a caller whose own timing must not depend on another
+ * writer, which a blocked event loop would make it.
+ */
+export async function admitWindowWithoutBlocking(
+  store: ReturnType<typeof getRateLimitStore>,
+  admission: Parameters<typeof admitWindow>[1]
+): Promise<ConsumeRow | null> {
+  const giveUpAt = Date.now() + BUSY_TIMEOUT_MS;
+  let delay = BUSY_RETRY_MIN_MS;
+  for (;;) {
+    try {
+      return withoutBusyWait(store.db, () => admitWindow(store, admission));
+    } catch (error) {
+      if (!isSqliteBusy(error) || Date.now() >= giveUpAt) throw error;
+    }
+    await Bun.sleep(delay);
+    delay = Math.min(delay * 2, BUSY_RETRY_MAX_MS);
+  }
 }
 
 /**

@@ -13,16 +13,9 @@ export interface RequestSession {
 }
 
 /**
- * The session behind this request, resolved the way the library resolves it.
- *
- * ⚠️ The one discriminator for every path that serves both enrolment and
- * sign-in. The plugin's `verifyTwoFactor` reads a session FIRST and only falls
- * back to the challenge cookie, so a caller holding both is an enrolment to it;
- * anything of ours that branches on the cookie instead guards the other branch
- * — the one where the caller also holds a live session for that user.
- *
- * `getSessionFromCtx` memoises onto `ctx.context.session`, so calling it here
- * makes the plugin reuse this answer rather than recompute one that can differ.
+ * ⚠️ The one enrolment-vs-sign-in discriminator: the plugin reads a session
+ * FIRST, so a caller holding both is an enrolment. `getSessionFromCtx` memoises,
+ * so the plugin reuses this answer.
  */
 export async function resolveRequestSession(
   ctx: AuthContext

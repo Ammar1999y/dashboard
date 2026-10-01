@@ -39,7 +39,7 @@ export function bodyTooLargeResponse(maxBytes: number): JsonSchema {
   );
 }
 
-const RETRY_AFTER_HEADER: JsonSchema = {
+export const RETRY_AFTER_HEADER: JsonSchema = {
   description: 'Seconds until the caller should retry.',
   schema: { type: 'integer', minimum: 1 },
 };

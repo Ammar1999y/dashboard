@@ -77,8 +77,8 @@ const { drainAfterResponse, pendingAfterResponse } =
 const { closeRateLimitStore } = await import('./lib/rate-limit/store');
 const { closeCacheStore } = await import('./lib/cache');
 const { closeDatabase } = await import('./db');
-const { startSchedule } = await import('./lib/maintenance/schedule');
-const { acquireWriterLock } = await import('./lib/sqlite/writer-lock');
+const { scheduleWhenOwner } = await import('./lib/maintenance/ownership');
+const { tryAcquireWriterLock } = await import('./lib/sqlite/writer-lock');
 const { SQLITE_DIR } = await import('./lib/env.server');
 const {
   createShutdown,
@@ -86,10 +86,6 @@ const {
   shutdownTimeoutMs,
   stopServerGracefully,
 } = await import('./lib/shutdown');
-
-// Claimed BEFORE `startSchedule`: this lock is what elects the single owner of
-// the per-process scheduled sweeps.
-const writerLock = acquireWriterLock(SQLITE_DIR);
 
 const IDLE_TIMEOUT_SECONDS = 60;
 
@@ -107,10 +103,13 @@ const stopServer = (budgetMs: number) =>
     error: (line) => logLine('error', line),
   });
 
+// Before listening: a broken SQLITE_DIR must fail the boot, not a bound port.
+const claimWriterLock = () => tryAcquireWriterLock(SQLITE_DIR);
+const writerLock = claimWriterLock();
+
 app.listen({ port, idleTimeout: IDLE_TIMEOUT_SECONDS }, (server) => {
   logLine('log', {
     msg: 'server started',
-    // Report the bound port because the kernel may choose it.
     port: server.port,
     hostname: server.hostname,
     env: nodeEnv,
@@ -124,7 +123,7 @@ app.listen({ port, idleTimeout: IDLE_TIMEOUT_SECONDS }, (server) => {
   });
 });
 
-const schedule = startSchedule();
+const schedule = scheduleWhenOwner(writerLock, claimWriterLock);
 
 const shutdown = createShutdown(
   {
@@ -152,7 +151,7 @@ async function closeStores(): Promise<void> {
     await closeStore('rate-limit', closeRateLimitStore),
     await closeStore('cache', closeCacheStore),
     // Keep ownership until every protected store has closed.
-    await closeStore('writer-lock', writerLock.release),
+    await closeStore('writer-lock', schedule.release),
   ].filter((failure) => failure !== null);
 
   if (failures.length > 0)

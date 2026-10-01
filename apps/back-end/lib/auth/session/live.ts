@@ -13,14 +13,9 @@ import { validID } from '@app/shared/utils';
 import { lockEligibleAuthUser } from '../user-eligibility';
 
 /**
- * Proves the session row behind a cached session still exists, for a user who
- * is still active and not deleted.
- *
- * `auth.api.getSession` answers from the cookie cache, which outlives the row,
- * and joins `users` without asking about `is_active` or `deleted_at`. Every
- * revocation in this codebase DELETES rows, so any authorization entry point
- * that skips this check honours a revoked or suspended session until
- * `sessions.expiresAt`.
+ * ⚠️ `auth.api.getSession` answers from the cookie cache, which outlives the
+ * row and ignores `is_active` / `deleted_at`; an entry point skipping this
+ * honours a revoked or suspended session until it expires.
  */
 export async function assertLiveSession(
   sessionId: string | null | undefined,
@@ -48,10 +43,6 @@ export async function assertLiveSession(
   return validSessionId;
 }
 
-/**
- * Locks the login-eligible user, then reads whether `sessionId` is still one of
- * their unexpired sessions. `null` when either no longer holds.
- */
 export async function lockSessionOwner(
   tx: Tx,
   userId: EntityID,

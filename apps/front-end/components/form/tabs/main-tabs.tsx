@@ -26,11 +26,8 @@ const underlineTransition: Transition = {
 const MainTabs = memo(({ tabs }: { tabs: readonly TabConfig[] }) => {
   return (
     <ScrollArea viewportClassName='pb-3 pt-1 px-1'>
-      <div className='relative flex items-center space-x-e-2'>
-        <div
-          data-ignore
-          className='absolute inset-x-0 -bottom-1.5 h-0.5 w-full bg-border'
-        />
+      <div className='relative flex items-center gap-2'>
+        <div className='absolute inset-x-0 -bottom-1.5 h-0.5 w-full bg-border' />
 
         {tabs.map((tab, i) => (
           <TabButton key={tab.id} tab={tab} index={i} />

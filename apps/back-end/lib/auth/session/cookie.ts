@@ -2,16 +2,22 @@ import type { AuthContext } from '../context';
 
 import { expireCookie, setSessionCookie } from 'better-auth/cookies';
 
-/**
- * Delivers a freshly minted session's cookie under the user's remember choice.
- * `setSessionCookie` SETS the "do not remember" marker and never clears it
- * when the answer changes, so the positive case has to.
- */
+// `setSessionCookie` sets the "do not remember" marker but never clears it.
 export async function deliverSessionCookie(
   ctx: AuthContext,
   issued: Parameters<typeof setSessionCookie>[1],
   rememberMe: boolean
 ): Promise<void> {
   await setSessionCookie(ctx, issued, !rememberMe);
-  if (rememberMe) expireCookie(ctx, ctx.context.authCookies.dontRememberToken);
+  if (rememberMe) expireDontRememberMarker(ctx);
+}
+
+/** `onlyIfSent` skips the `Set-Cookie` when the request carries no marker. */
+export function expireDontRememberMarker(
+  ctx: AuthContext,
+  options: { onlyIfSent?: boolean } = {}
+): void {
+  const marker = ctx.context.authCookies.dontRememberToken;
+  if (options.onlyIfSent && ctx.getCookie(marker.name) === null) return;
+  expireCookie(ctx, marker);
 }

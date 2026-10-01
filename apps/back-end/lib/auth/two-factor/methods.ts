@@ -1,7 +1,3 @@
-/**
- * A user's second factors: what they turned on (intent), what they could
- * complete (capability), and what a challenge therefore offers.
- */
 import type { Executor, Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type {
@@ -26,6 +22,8 @@ import {
   isTwoFactorOtpChannelEnabled,
 } from '@app/shared/validation/two-factor';
 
+import { revokePendingTwoFactorCodes } from '@/lib/otp/revoke';
+
 export interface EnrolledMethod {
   method: TwoFactorMethod;
   /** Set for `otp` and nothing else, per `chk_two_factor_method_channel`. */
@@ -48,12 +46,8 @@ export interface EnrolmentState {
   };
 }
 
-/**
- * What the user is offered, as a STABLE identity rather than a method name: a
- * name cannot tell an OTP to the email from an OTP to the phone, and those are
- * different possessions. Everything downstream (the challenge response, the
- * default, send, verify, removal, the companion record) keys on `id`.
- */
+// Everything downstream keys on `id`: a method name cannot tell an OTP to the
+// email from one to the phone, which are different possessions.
 export interface OfferedOption {
   id: string;
   method: TwoFactorMethod;
@@ -73,7 +67,6 @@ export function asContactKind(value: unknown): ContactKind | null {
   return CONTACT_KINDS.find((kind) => kind === value) ?? null;
 }
 
-/** Whether `entry` is the enrolment `method` names; `otp` is one per contact kind. */
 export function matchesEnrolment(
   entry: EnrolledMethod,
   method: TwoFactorMethod,
@@ -85,10 +78,7 @@ export function matchesEnrolment(
   );
 }
 
-/**
- * System priority. `backup_code` is last AND excluded from auto-routing, so a
- * routine login never spends recovery material.
- */
+// `backup_code` is also excluded from auto-routing, so a routine login never spends recovery material.
 const METHOD_PRIORITY: Readonly<Record<TwoFactorMethod, number>> = {
   passkey: 0,
   totp: 1,
@@ -112,8 +102,7 @@ export async function listEnrolledMethods(
     })
     .from(twoFactorMethods)
     .where(eq(twoFactorMethods.userId, userId))
-    // Deterministic, because the response order is the order a client offers
-    // and a default the database reorders between requests is not a default.
+    // Deterministic: clients offer methods in response order.
     .orderBy(twoFactorMethods.method, twoFactorMethods.contactKind);
   return rows.map((row) => ({
     method: row.method,
@@ -123,12 +112,8 @@ export async function listEnrolledMethods(
   }));
 }
 
-/**
- * ⚠️ A caller inside a transaction must pass it as `executor`: reading through
- * the module-level `db` from there acquires a second pooled connection, and the
- * pool deadlocks once every connection is held by a transaction waiting for
- * another.
- */
+// ⚠️ A caller inside a transaction must pass it as `executor`, or a second pooled
+// connection is taken and the pool can deadlock.
 export async function readEnrolmentState(
   userId: EntityID,
   executor: Executor = db
@@ -168,11 +153,8 @@ export async function readEnrolmentState(
     capability: {
       totpVerified:
         Boolean(credential?.secret) && credential?.verified === true,
-      // ⚠️ Three conditions, and dropping any one advertises recovery material
-      // the user does not have: the acknowledgement must belong to the CURRENT
-      // set (regeneration replaces every code), and the set must still hold an
-      // unspent code. Both ids are NULL on a row that has never generated a
-      // set, where equality alone would read as "acknowledged".
+      // ⚠️ Dropping any condition advertises codes the user does not have. The
+      // null check matters: a row with no set has both ids NULL.
       backupCodesReady:
         credential?.acknowledgedSetId != null &&
         credential.acknowledgedSetId === credential.setId &&
@@ -185,13 +167,7 @@ export async function readEnrolmentState(
 }
 
 /**
- * The user's intent, intersected with capability and with the deployment's
- * enabled methods and OTP channels.
- *
- * `excludeContactKind` is the possession the first factor already proved — a
- * passwordless sign-in passes the contact kind its code reached, and an OTP
- * second factor aimed at the same kind proves nothing. Password sign-in passes
- * nothing: a knowledge factor leaves every contact a real second factor.
+ * `excludeContactKind` is the possession the first factor already proved.
  *
  * ⚠️ `scripts/check-two-factor-rollout.ts` mirrors this intersection in SQL.
  */
@@ -234,8 +210,6 @@ export function offeredMethods(
       isDefault: row.isDefault,
     }))
     .toSorted((a, b) => {
-      // The user's own default first, then system priority, then a stable tie
-      // break on the identity itself so the order cannot move between requests.
       if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
       const byPriority = METHOD_PRIORITY[a.method] - METHOD_PRIORITY[b.method];
       return byPriority === 0 ? a.id.localeCompare(b.id) : byPriority;
@@ -248,36 +222,19 @@ export function offeredMethods(
     }));
 }
 
-/**
- * The distinct method NAMES of an offered set, for the published
- * `twoFactorMethods` field. Two OTP channels collapse to one `otp` here, which
- * is why the server never keys on it.
- */
+// OTP channels collapse to one `otp`, which is why the server never keys on it.
 export function offeredMethodNames(
   options: OfferedOption[]
 ): TwoFactorMethod[] {
   return [...new Set(options.map((option) => option.method))];
 }
 
-/**
- * Where the challenge routes with no choice from the user. `null` means "ask":
- * the only thing left is recovery material, which is never auto-routed.
- */
+/** `null` means "ask": only recovery material is left. */
 export function defaultOption(options: OfferedOption[]): string | null {
   return options.find(AUTO_ROUTABLE)?.id ?? null;
 }
 
-/**
- * The options a password reset may ask for as a second factor. Two
- * subtractions from the offered set:
- *
- *  - the CONTACT the recovery code arrived on, because a second code to the same
- *    mailbox proves nothing the first did not — a property of the
- *    authentication chain rather than of the enrolled set;
- *  - `passkey`, because this flow has no request context to run a WebAuthn
- *    ceremony in, and an option that cannot be checked would either hang the
- *    reset or let it run unproven.
- */
+// `passkey` is dropped: the reset flow has no WebAuthn ceremony to check it with.
 export function recoveryOptions(
   state: EnrolmentState,
   contactKind: ContactKind
@@ -287,41 +244,25 @@ export function recoveryOptions(
   );
 }
 
-/**
- * Would resetting the password through `contactKind` leave the reset nothing
- * to ask for as a second factor?
- *
- * Refused rather than gated when nothing is left: the account keeps its second
- * factor and the route back is the administrative reset. When something IS
- * left, `lib/auth/recovery/grant.ts` carries the reset to a second request that
- * proves it first.
- */
+// True means the reset is refused; the route back is the administrative reset.
 export async function recoveryDefeatsTwoFactor(
   userId: EntityID,
   contactKind: ContactKind,
   executor: Executor = db
 ): Promise<boolean> {
   const state = await readEnrolmentState(userId, executor);
-  // Capability, not intent: a user whose capability is gone is already refused
-  // at sign-in, so refusing recovery too would leave them no route at all.
+  // A user with no capability is already refused at sign-in; refusing recovery
+  // too would leave no route at all.
   if (!state.enabled || offeredMethods(state).length === 0) return false;
   return recoveryOptions(state, contactKind).length === 0;
 }
 
 /**
- * Would changing these contacts leave this user with no factor they can
- * complete?
+ * Asked before the write. False for a user already at zero, so an operator can
+ * still correct their contact.
  *
- * `offeredMethods` reads the user row's verified flags, so a write that clears
- * one — or moves the address an OTP enrolment points at — takes that option out
- * of the offered set. Asked BEFORE the write, and only true when the change is
- * what removes the last usable factor: a user already at zero is refused at
- * sign-in regardless, and blocking the edit would leave an operator unable to
- * correct their contact at all.
- *
- * ⚠️ `contactKinds` is a SET, asked ONCE. Asked per kind against unmodified
- * state, a request changing both contacts of a user with two OTP enrolments
- * passes both checks and strands the user anyway.
+ * ⚠️ `contactKinds` is a set, asked once: asked per kind, changing both
+ * contacts passes both checks and strands the user anyway.
  */
 export async function contactChangeStrandsTwoFactor(
   userId: EntityID,
@@ -347,16 +288,8 @@ export async function contactChangeStrandsTwoFactor(
   return offeredMethods(stranded).length === 0;
 }
 
-/**
- * Would removing this enrolment leave the user with no factor a challenge would
- * offer?
- *
- * Asked against the OFFERED set, not the intent rows: a row whose channel was
- * dropped, whose contact is unverified or whose backup set is spent is still a
- * row, and must not stand in for the last usable method. Only true when the
- * removal is what empties the set: a user already at zero is refused at sign-in
- * regardless, and blocking their cleanup would leave them no better off.
- */
+// Against the offered set, not intent rows: an unusable row must not stand in
+// for the last usable method. False for a user already at zero.
 export function removalStrandsTwoFactor(
   state: EnrolmentState,
   method: TwoFactorMethod,
@@ -373,9 +306,8 @@ export function removalStrandsTwoFactor(
 }
 
 /**
- * Idempotent: the call site is "a verification succeeded", true both at
- * enrolment and at every later sign-in. Failing to write it at enrolment
- * silently disables the whole feature for that user.
+ * Idempotent. Failing to write it at enrolment silently disables the whole
+ * feature for that user.
  */
 async function recordMethodIntent(
   tx: Tx,
@@ -392,12 +324,9 @@ async function recordMethodIntent(
     channel,
   };
 
-  // ⚠️ Two conflict targets, matching the two partial indexes in `db/schema.ts`
-  // exactly. An `otp` row's identity is its CONTACT KIND, so re-enrolling
-  // `sms` over `whatsapp` updates the delivery preference of the phone
-  // enrolment while an `email` enrolment is a separate row. Every other method
-  // is one row per user; a single `(user_id, method)` target would make a
-  // second OTP channel replace the first.
+  // ⚠️ Must match the two partial indexes in `db/schema.ts`: an `otp` row's
+  // identity is its contact kind, so one `(user_id, method)` target would make
+  // a second OTP contact replace the first.
   if (params.method === 'otp') {
     await tx
       .insert(twoFactorMethods)
@@ -420,7 +349,6 @@ async function recordMethodIntent(
     });
 }
 
-/** The intent row, and the user's `twoFactorEnabled` flag with it. */
 export async function recordEnabledMethod(
   tx: Tx,
   params: {
@@ -447,13 +375,14 @@ export async function clearTwoFactorEnrolment(
     .where(eq(twoFactorCredentials.userId, userId));
   if (options.deletePasskeys)
     await tx.delete(passkeys).where(eq(passkeys.userId, userId));
+  await revokePendingTwoFactorCodes(tx, userId);
   await tx
     .update(users)
     .set({ twoFactorEnabled: false })
     .where(eq(users.id, userId));
 }
 
-/** The intent row(s) `method` names; `contactKind` narrows `otp` to ONE of a user's two. */
+/** Without `contactKind`, `otp` matches both of a user's OTP rows. */
 export function enrolmentRows(
   userId: EntityID,
   method: TwoFactorMethod,
@@ -479,5 +408,7 @@ export async function removeMethodIntent(
     .delete(twoFactorMethods)
     .where(enrolmentRows(userId, method, contactKind))
     .returning({ id: twoFactorMethods.id });
+  if (method === 'otp')
+    await revokePendingTwoFactorCodes(tx, userId, contactKind);
   return removed.length;
 }

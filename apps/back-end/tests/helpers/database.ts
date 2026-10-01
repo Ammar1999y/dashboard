@@ -13,6 +13,8 @@ import { PgTable } from 'drizzle-orm/pg-core';
 import { db } from '@/db';
 import * as schema from '@/db/schema';
 
+import { compareCodeUnits } from '@/utils/text';
+
 import { isHarnessDatabase } from './names';
 
 /**
@@ -31,7 +33,7 @@ export function schemaTableNames(): string[] {
   // still the discriminator; the loop just keeps the narrowing local.
   for (const value of Object.values(schema))
     if (is(value, PgTable)) names.push(getTableName(value as PgTable));
-  return names.toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+  return names.toSorted(compareCodeUnits);
 }
 
 /** Memoised: one round trip per process, not one per `resetTables` call. */

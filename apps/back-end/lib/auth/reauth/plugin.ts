@@ -3,6 +3,7 @@ import type { BetterAuthPlugin } from 'better-auth';
 import { and, eq } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
+import { isDeadlock } from '@/db/errors';
 import { passkeys, verifications } from '@/db/schema';
 import { createAuthEndpoint } from 'better-auth/api';
 import * as z from 'zod';
@@ -19,7 +20,12 @@ import { auditLog } from '@/lib/audit';
 import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta } from '../context';
-import { asAuthError, authenticationDenied, toAuthApiError } from '../errors';
+import {
+  asAuthError,
+  authenticationDenied,
+  databaseContended,
+  toAuthApiError,
+} from '../errors';
 import {
   advancePasskeyCounter,
   passkeyOptions,
@@ -196,6 +202,7 @@ export const reauthentication = () =>
               // Unlike the options endpoint: any other failure is a denial.
               if (error instanceof CustomError)
                 throw toAuthApiError(error, MSG_REAUTH_FAILED);
+              if (isDeadlock(error)) throw databaseContended(error);
               throw authenticationDenied();
             }
           }
