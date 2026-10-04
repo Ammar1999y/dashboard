@@ -1,33 +1,31 @@
 import type { OtpChannel, OtpPurpose } from '@app/shared/validation/enums';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
-import { OTP_EXPIRY_MINUTES } from '@app/shared/validation/constants';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import {
+  otpHtmlFor,
+  otpMsg,
+  otpSubjectFor,
+  otpTextFor,
+} from '@app/shared/messages/otp';
 
 import { sendMailWithDeadline } from '@/lib/smtp';
 
 import { logSanitized } from '@/utils/log';
 
 import { OTP_DELIVERY_OUTBOX } from './config';
-import { otpSubjectFor, otpTextFor } from './content';
 import { recordOutboxDelivery } from './outbox';
 
 export const PROVIDER_TIMEOUT_MS = 5000;
 
 // Every error leaving `deliverOtp` carries one of these, never text derived
-// from a provider response.
-export const MSG_OTP_SEND_FAILED = 'حدثت مشكلة اثناء إرسال رمز التحقق';
-const MSG_SMS_SEND_FAILED = 'حدثت مشكلة اثناء إرسال رمز التحقق عبر SMS';
-const MSG_WHATSAPP_SEND_FAILED = MSG_OTP_SEND_FAILED;
-const MSG_EMAIL_SEND_FAILED =
-  'حدثت مشكلة اثناء إرسال رمز التحقق عبر البريد الإلكتروني';
-
-// Membership, not `instanceof CustomError`, which says nothing about where the text came from.
+// from a provider response. Membership, not `instanceof CustomError`, which
+// says nothing about where the text came from.
 const SAFE_DELIVERY_MESSAGES: ReadonlySet<string> = new Set([
-  MSG_OTP_SEND_FAILED,
-  MSG_SMS_SEND_FAILED,
-  MSG_EMAIL_SEND_FAILED,
+  otpMsg.sendError,
+  otpMsg.smsSendError,
+  otpMsg.emailSendError,
 ]);
 
 // Client-set codes from a fixed vocabulary, unlike `message` / `response`,
@@ -102,7 +100,7 @@ async function sendOtpSms(phoneNumber: string, text: string) {
 
   if (!response.ok) {
     logProviderFailure('sms', response);
-    throw new CustomError(MSG_SMS_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+    throw new CustomError(otpMsg.smsSendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 }
 
@@ -124,7 +122,7 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
 
   if (!response.ok) {
     logProviderFailure('whatsapp', response);
-    throw new CustomError(MSG_WHATSAPP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 
   // A non-JSON 2xx body makes `response.json()` throw a SyntaxError that
@@ -138,7 +136,7 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
       channel: 'whatsapp',
       status: response.status,
     });
-    throw new CustomError(MSG_WHATSAPP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 
   if (
@@ -149,7 +147,7 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
   ) {
     // Application-level rejection on a 2xx; nothing from `data` is logged.
     logProviderFailure('whatsapp', response);
-    throw new CustomError(MSG_WHATSAPP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 }
 
@@ -169,11 +167,7 @@ async function sendOtpEmail(
         to: email,
         subject: otpSubjectFor(purpose),
         text,
-        html: `<div dir="rtl" style="font-family: sans-serif; text-align: center; padding: 20px;">
-      <h2>رمز التحقق</h2>
-      <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 20px 0;">${code}</p>
-      <p>صالح لمدة ${OTP_EXPIRY_MINUTES} دقائق</p>
-    </div>`,
+        html: otpHtmlFor(code),
       },
       PROVIDER_TIMEOUT_MS
     );
@@ -187,7 +181,7 @@ async function sendOtpEmail(
       smtpCode:
         rawCode !== null && SMTP_ERROR_CODES.has(rawCode) ? rawCode : 'UNKNOWN',
     });
-    throw new CustomError(MSG_EMAIL_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+    throw new CustomError(otpMsg.emailSendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 
   // A per-recipient refusal resolves instead of throwing; with one recipient it
@@ -199,7 +193,7 @@ async function sendOtpEmail(
       // A count, never the address: nothing payload-derived leaves here.
       rejected: info.rejected.length,
     });
-    throw new CustomError(MSG_EMAIL_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+    throw new CustomError(otpMsg.emailSendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 }
 
@@ -248,6 +242,6 @@ export async function deliverOtp(
       channel,
       errorName: readErrorField(error, 'name') ?? 'Unknown',
     });
-    throw new CustomError(MSG_OTP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 }

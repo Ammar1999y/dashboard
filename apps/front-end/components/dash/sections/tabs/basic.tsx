@@ -70,7 +70,7 @@ const RichDescription = memo(({ label }: { label: string }) => {
 
   const handleChange = useCallback(
     (value: unknown) => {
-      setValue('description', value as CreateSectionInput['description']);
+      setValue('description', value);
     },
     [setValue]
   );

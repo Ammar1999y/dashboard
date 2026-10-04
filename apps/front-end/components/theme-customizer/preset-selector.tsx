@@ -63,7 +63,9 @@ const PRESET_OPTIONS = [
     label: themePresets[name]?.label ?? name,
     swatches: SWATCH_KEYS.map((key) => ({
       key,
-      style: { backgroundColor: colorFormatter(light[key], 'hsl', '4') },
+      style: {
+        backgroundColor: colorFormatter(light[key], 'hsl', '4') ?? undefined,
+      },
     })),
   };
 });

@@ -17,8 +17,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import { validID } from '@app/shared/utils';
 import { SESSIONS_PAGE_SIZE } from '@app/shared/validation/sessions';
 

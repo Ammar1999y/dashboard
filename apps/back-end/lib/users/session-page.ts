@@ -5,8 +5,9 @@ import { and, desc, eq, gt, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { sessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { userMsg } from '@app/shared/messages/users';
 import { safeDate } from '@app/shared/time';
 import { positiveInt, validID } from '@app/shared/utils';
 import {
@@ -14,8 +15,6 @@ import {
   SESSIONS_MAX_PAGE_SIZE,
   SESSIONS_PAGE_SIZE,
 } from '@app/shared/validation/sessions';
-
-import { userMsg } from './messages';
 
 /**
  * One canonical form, `formatCursor`'s: `new Date()` normalises instead of
@@ -93,7 +92,7 @@ export function parseLimit(raw: string | null): number {
 
 function invalidLimit(): never {
   throw new CustomError(
-    userMsg.invalidSessionsLimit,
+    userMsg.invalidSessionsLimit(SESSIONS_MAX_PAGE_SIZE),
     HTTP_STATUS.UNPROCESSABLE
   );
 }

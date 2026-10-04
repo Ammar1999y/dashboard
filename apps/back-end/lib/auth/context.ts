@@ -3,7 +3,7 @@ import type { GenericEndpointContext } from '@better-auth/core';
 import type { createAuthMiddleware } from 'better-auth/api';
 import type * as z from 'zod';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { boundedAuditMeta } from '@/lib/audit';
 import { getClientIp } from '@/lib/http/client-ip';

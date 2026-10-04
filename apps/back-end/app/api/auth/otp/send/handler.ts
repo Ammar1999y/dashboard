@@ -6,10 +6,10 @@ import { db, withTransaction } from '@/db';
 import { users } from '@/db/schema';
 
 import { OTP_AUTO_VERIFY } from '@app/shared/config';
+import { otpMsg } from '@app/shared/messages/otp';
 import { OTP_ENABLED } from '@app/shared/validation/otp';
 
 import { getAuditMeta } from '@/lib/audit';
-import { otpMsg } from '@/lib/auth/messages';
 import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import {
   apiSuccess,

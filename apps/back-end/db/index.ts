@@ -23,12 +23,13 @@ export type { Tx } from './transaction';
  * Module-private on purpose: one pool per process, reachable only through `db`,
  * `withTransaction` and `closeDatabase`, so nothing can open a second one.
  *
- * No `statement_timeout`, deliberately: a ceiling below a real query's duration
+ * No pool-wide `statement_timeout`, deliberately: a ceiling below a real query's duration
  * turns a slow request into a failed one, and no query here has been profiled
  * against the target host. Add one only with a measured p99 for the slowest
  * legitimate query — the data-table routes under an `allowScanOnly` filter —
  * and set it well above that. Until then a runaway query holds one of
  * `MAX_POOL_CONNECTIONS` until it finishes or the client disconnects.
+ * Transactions given a deadline apply a transaction-local limit per statement.
  */
 const client = new SQL(DATABASE_URL, { max: MAX_POOL_CONNECTIONS });
 
@@ -48,8 +49,9 @@ export const withTransaction = transactionRunner(client);
  * sleep abandons the query without stopping it, and the abandoned probe then
  * delays the auth and dashboard queries it exists to report on.
  *
- * `statement_timeout` is scoped to this pool only; see `client` for why the
- * application pool has none. `select 1` needs no profiling.
+ * This pool has a default `statement_timeout`; the application pool applies
+ * transaction-local limits only when a caller supplies a deadline. `select 1`
+ * needs no profiling.
  */
 export const PROBE_TIMEOUT_MS = 2000;
 

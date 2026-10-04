@@ -146,54 +146,87 @@ const eslintConfig = [
       ],
     },
   },
-  // TODO: fix it later and then uncomment it
-  // {
-  //   // Dependency direction: infrastructure sits below the UI. A component that
-  //   // needs `lib/` logic imports it, not the reverse.
-  //   files: ['lib/**/*.{ts,tsx}', 'hooks/**/*.{ts,tsx}'],
-  //   rules: {
-  //     'no-restricted-imports': [
-  //       'error',
-  //       {
-  //         patterns: [
-  //           {
-  //             group: ['@/components', '@/components/**', '**/components/**'],
-  //             message:
-  //               'lib/ and hooks/ are below the UI and must not import components/. Move the component into components/ and let it import this module instead.',
-  //           },
-  //         ],
-  //       },
-  //     ],
-  //   },
-  // },
-  // {
-  //   // Stricter still: `utils/` is pure functions, so it may not reach app
-  //   // services either. Anything that logs, caches module state or touches the
-  //   // DOM belongs in `lib/`. This block replaces the one above for `utils/**`,
-  //   // so it has to restate the components patterns.
-  //   files: ['utils/**/*.{ts,tsx}'],
-  //   rules: {
-  //     'no-restricted-imports': [
-  //       'error',
-  //       {
-  //         patterns: [
-  //           {
-  //             group: [
-  //               '@/components',
-  //               '@/components/**',
-  //               '**/components/**',
-  //               '@/lib',
-  //               '@/lib/**',
-  //               '**/lib/**',
-  //             ],
-  //             message:
-  //               'utils/ holds pure functions: it may not import app services from lib/ or UI from components/.',
-  //           },
-  //         ],
-  //       },
-  //     ],
-  //   },
-  // },
+  {
+    // Dependency direction: infrastructure sits below the UI. A component that
+    // needs `lib/` logic imports it, not the reverse.
+    files: ['lib/**/*.{ts,tsx}', 'hooks/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/components', '@/components/**', '**/components/**'],
+              message:
+                'lib/ and hooks/ are below the UI and must not import components/. Move the component into components/ and let it import this module instead.',
+            },
+            {
+              group: ['@/mocks', '@/mocks/**', '**/mocks/**'],
+              message:
+                'mocks/ is a dev-only stand-in for the API that only pages/_app.tsx loads. Import the contract it serves instead.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['types/**/*.{ts,tsx,js}', 'constants/**/*.{ts,tsx,js}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '@/components',
+                '@/components/**',
+                '**/components/**',
+                '@/lib',
+                '@/lib/**',
+                '**/lib/**',
+                '@/mocks',
+                '@/mocks/**',
+                '**/mocks/**',
+              ],
+              message:
+                'types/ and constants/ hold shapes and data: they may not import UI from components/, app services from lib/ or the dev mocks.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Stricter still: `utils/` is pure functions, so it may not reach app
+    // services either. Anything that logs, caches module state or touches the
+    // DOM belongs in `lib/`.
+    files: ['utils/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '@/components',
+                '@/components/**',
+                '**/components/**',
+                '@/lib',
+                '@/lib/**',
+                '**/lib/**',
+                '@/mocks',
+                '@/mocks/**',
+                '**/mocks/**',
+              ],
+              message:
+                'utils/ holds pure functions: it may not import app services from lib/, UI from components/ or the dev mocks.',
+            },
+          ],
+        },
+      ],
+    },
+  },
   {
     files: ['components/**/*.{ts,tsx}', 'pages/**/*.{ts,tsx}'],
     plugins: { tailwind: tailwindConventions },

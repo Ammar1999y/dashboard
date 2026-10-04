@@ -1,5 +1,3 @@
-import type { EntityID } from '@/types';
-
 import { defineEntity } from '../shared/entity';
 
 export const permissionEntity = defineEntity({
@@ -9,11 +7,6 @@ export const permissionEntity = defineEntity({
   noun: 'الصلاحية',
 });
 
-/** A role as the user form's picker lists it: active ones only, scoped to the viewer. */
-export interface RoleOption {
-  id: EntityID;
-  roleName: string;
-}
-
+/** The user form's role picker: active roles only, scoped to the viewer. */
 export const ROLE_OPTIONS_KEY = ['roles'];
 export const ROLE_OPTIONS_HREF = '/api/dash/roles';

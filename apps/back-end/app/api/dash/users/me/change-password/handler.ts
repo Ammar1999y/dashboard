@@ -5,8 +5,10 @@ import { and, eq } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
 
-import { HTTP_STATUS, MSG_UPDATE_ERROR } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_UPDATE_ERROR } from '@app/shared/messages/common';
+import { userMsg } from '@app/shared/messages/users';
 import { changePasswordSchema } from '@app/shared/validation/auth';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
@@ -28,7 +30,6 @@ import { insufficientPermissions } from '@/lib/permissions/checker';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 import { asCurrentPasswordIncorrect } from '@/lib/users/current-password';
 import { liveUser } from '@/lib/users/filters';
-import { userMsg } from '@/lib/users/messages';
 
 export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
   const { session, userId, sessionId } = await requireSession(ctx);

@@ -20,18 +20,16 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { auditLogs, folders } from '@/db/schema';
 
-import {
-  HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-} from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
+import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
+import { mediaValidationMsg } from '@app/shared/messages/validation';
 import {
   FOLDER_MAX_CHILDREN,
   FOLDER_MAX_DEPTH,
 } from '@app/shared/validation/constants';
-import { mediaValidationMsg } from '@app/shared/validation/media';
 
 import { updateFolder } from '@/lib/media/folders';
-import { mediaMsg } from '@/lib/media/messages';
 
 import { compareCodeUnits } from '@/utils/text';
 

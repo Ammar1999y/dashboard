@@ -5,8 +5,10 @@ import { users } from '@/db/schema';
 import { createAuthEndpoint } from 'better-auth/api';
 import * as z from 'zod';
 
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@app/shared/api-messages';
 import { PASSWORDLESS_ENABLED } from '@app/shared/config';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
+import { otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 import {
   OTP_ENABLED,
@@ -29,7 +31,6 @@ import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta, parseAuthBody, requestHeaders } from './context';
 import { asAuthError, authError } from './errors';
-import { otpMsg } from './messages';
 import { envelopeResponse } from './plugin-openapi';
 import { recordAbandonedSession } from './session/audit';
 import { deliverSessionCookie } from './session/cookie';

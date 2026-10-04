@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 
 import * as z from 'zod';
 
+import { mediaValidationMsg } from '@app/shared/messages/validation';
 import {
   FOLDER_NAME_MAX,
   IDS_ARRAY_MAX,
@@ -18,7 +19,6 @@ import {
   deleteFilesSchema,
   displayNameSchema,
   folderNameSchema,
-  mediaValidationMsg,
   updateFileSchema,
   updateFolderSchema,
 } from '@app/shared/validation/media';
@@ -73,15 +73,18 @@ describe('an unpaired UTF-16 surrogate', () => {
   // PostgreSQL stored it as U+FFFD in `varchar`, so the name kept was not the
   // one validated, and refused it in the `jsonb` audit insert, a 500.
   test.each([
-    ['folder', folderNameSchema],
-    ['display', displayNameSchema],
-  ] as const)('is refused in a %s name, at either end', (_name, schema) => {
-    for (const bad of ['a\u{D83D}', '\u{DE00}b', 'a\u{DE00}\u{D83D}b'])
-      expect(firstMessage(schema.safeParse(bad)), JSON.stringify(bad)).toBe(
-        mediaValidationMsg.folderNameInvalid
-      );
-    expect(schema.parse('a \u{1F600}')).toBe('a \u{1F600}');
-  });
+    ['folder', folderNameSchema, mediaValidationMsg.folderNameInvalid],
+    ['display', displayNameSchema, mediaValidationMsg.displayNameInvalid],
+  ] as const)(
+    'is refused in a %s name, at either end',
+    (_name, schema, message) => {
+      for (const bad of ['a\u{D83D}', '\u{DE00}b', 'a\u{DE00}\u{D83D}b'])
+        expect(firstMessage(schema.safeParse(bad)), JSON.stringify(bad)).toBe(
+          message
+        );
+      expect(schema.parse('a \u{1F600}')).toBe('a \u{1F600}');
+    }
+  );
 });
 
 describe('display names', () => {

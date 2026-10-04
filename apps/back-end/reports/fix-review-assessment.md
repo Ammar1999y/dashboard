@@ -10,73 +10,6 @@ Status labels:
 
 ## Defects
 
-### [Medium] `<use>` blow-up bypasses the rendered-node cap; the new id renaming bails out silently and lets it through
-
-- **Where:**
-  - `packages/shared/src/images/svg-optimizer.ts:285`: `resolve` in `renderedNodeCount` uses `safeDecodeURI`, which decodes twice.
-  - `packages/shared/src/images/svg-ids.ts:51-58`: `fragmentId` decodes once, as the renderer does.
-  - `svg-ids.ts:159-160`: `renameReferencedIds` renames nothing at all if any reference can't be restated.
-- **Problem:**
-  - The renderer resolves `href="#%254C0"` to id `%4C0`. The counter resolves it to `L0`. A cheap `<g id="L0"/>` decoy therefore undercounts every level.
-  - The new renaming would hide this, except that one extra element switches it off: `<rect fill="url('#%254C0') /**/ url(https://x.example/a)"/>`. The `/**/` makes `restateCss` return null, the plan is skipped, and the sweep strips that `fill` anyway. The document is accepted.
-- **Evidence:**
-  - Probe: 20 levels of `<g id="%4Ck">`, each with two `<use href="#%254C(k-1)">`, plus the `L*` decoys.
-  - Without the extra element, the upload is refused ("expands to more than 5000").
-  - With it, `sanitizeSvgServer` returns valid and the svgo output keeps the chain, about 2²⁰ instances.
-  - Not checked in a browser.
-- **Scope:** `resolve` is unchanged from the index. But this is the MEDIA-1 class (decoding a reference differently from the renderer), and the new rename step adds a silent failure mode on top of it.
-- **Status:** CONFIRMED by probe (server side).
-- **Fix:**
-  - Resolve fragments in `renderedNodeCount` (and `markerReference`, `:232`) with `fragmentId`, so the renamer, the counter and the renderer model share one decoder.
-  - When a rename plan can't be applied, refuse the document instead of skipping it.
-
-### [Medium] New CSS converter writes invalid declarations and ignores overriding shorthands
-
-- **Where:** `packages/shared/src/images/svg-style.ts:366` (declaration conversion), `:639` (attribute writes), `svg-optimizer.ts:618` (integration).
-- **Problem:**
-  - The converter checks property names but not values. It then writes the winning declaration over any existing presentation attribute.
-  - It ignores the `all` and `font` shorthands while applying the longhands they override.
-  - CSS drops an invalid declaration before the cascade is decided ([css-cascade-5 §filtering](https://www.w3.org/TR/css-cascade-5/#filtering)). The converter doesn't, so the stored file renders differently from what was uploaded.
-- **Evidence (probe through `sanitizeSvgServer`):**
-
-  | Input | Stored | Renders as authored | Renders stored |
-  | --- | --- | --- | --- |
-  | `<rect fill="blue" style="fill:bogus"/>` | `fill="bogus"` | blue | black |
-  | `style="fill:red;fill:bogus"` | `fill="bogus"` | red | black |
-  | `style="opacity:.4;opacity:bogus"` | `opacity="bogus"` | 0.4 | 1 |
-  | `<style>rect{fill:red} *{all:initial!important}</style><rect/>` | `fill="red"` | black | red |
-  | `<text style="font-size:12px;font:20px serif">` | `font-size="12px"` | 20px | 12px |
-
-  The last two columns follow from the CSS rules and were not checked in a browser.
-- **Status:** CONFIRMED by probe (stored output).
-- **Fix:** drop declarations whose value is invalid for the property before choosing winners, and account for `all` and `font`. Where an exact conversion can't be established, refuse the upload clearly instead of applying a partial cascade.
-
-### [Medium] Any declaration containing `var()` deletes the authored attribute
-
-- **Where:** `packages/shared/src/images/svg-style.ts:374` (`var(` → `null`) and `:635` (a `null` removes the attribute).
-- **Problem:** fallbacks and defined custom properties are not resolved. A declaration that uses `var()` erases the presentation attribute it would override.
-- **Evidence (probe):**
-  - `<rect fill="blue" style="fill:var(--missing, red)"/>` is stored as `<rect width="1" height="1"/>`. The authored SVG renders red ([css-variables-1 fallback](https://www.w3.org/TR/css-variables-1/#using-variables)); the stored one renders black.
-  - `<rect fill="blue" style="--c:green;fill:var(--c)"/>` is also stored with no `fill`.
-- **Status:** CONFIRMED by probe.
-- **Impact:** ordinary exporter or theme output loses explicit colours.
-- **Fix:** resolve custom properties and their fallbacks (with inheritance and cycle handling), or refuse the conversion explicitly. Never erase an authored attribute just because the declaration contains `var()`.
-
-### [Medium] Browser preprocessing still deletes SVG definitions, and the new converter widens it
-
-- **Where:**
-  - `apps/front-end/utils/images/config.ts:13-16`: `cleanupIds` `minify: true`.
-  - `apps/front-end/utils/images/client.ts:22-25`: shared `sanitizeSvg`, then `svgo/browser` `optimize`.
-  - Server side: `apps/back-end/lib/media/image/svg.ts:19-24`, where `minify` is now `false`.
-- **Problem:**
-  - The svgo `cleanupIds` bug (the double `.replace` in `svgo/plugins/cleanupIds.js:240-242`) was disabled on the server only.
-  - The shared sanitizer now turns `style="filter:url(#f) url(#fx)"` into a presentation attribute in the browser. The browser optimizer then rewrites it to `filter="url('#a') url('#ax')"` and deletes the `#fx` definition.
-  - The server keeps the dangling `#ax`. The back-end fix can't restore a definition the client already dropped.
-- **Who hits it:** every normal upload, through `components/shared/file-upload/file-upload.tsx:129` and `components/editor/hooks/use-upload-file.ts:76`. Uploads lose authored effects permanently, and server-only tests can't detect it.
-- **Rule broken:** consumer tracing and one implementation per concern. `packages/shared` runs in both consumers.
-- **Status:** CONFIRMED by probe with the front-end config. Plain-attribute references were already affected before this change.
-- **Fix:** one optimizer policy shared by browser and server (`minify: false` on both), plus a test of the full browser → server pipeline with several references and overlapping ids. The front-end edit belongs to the front-end session.
-
 ### [Medium] A verify cut by the deadline tells a user with a correct code that it is wrong, and nothing logs it
 
 - **Where:** `db/transaction.ts:191-193` and `lib/otp/verify.ts:79-89`.
@@ -163,16 +96,6 @@ Status labels:
 - **Status:** Read. No lock cycle was found; every writer of verification rows that was checked takes the user first.
 - **Fix:** lock with `FOR NO KEY UPDATE`. It still serialises with verify's `FOR UPDATE` but lets foreign-key inserts through.
 
-### [Low] `statement_timeout` introduced against a documented owner deferral; the deferral comment is now false
-
-- **Where:**
-  - `db/transaction.ts:112`: `set_config('statement_timeout', …, true)`.
-  - `db/index.ts:26-31`: "No `statement_timeout`, deliberately…".
-  - `reports/should-ignore.md` known issue #2.
-- **Problem:** anonymous verify transactions now run under a ceiling of about 2.25 s. That turns a slow request into a failed one, which is exactly what the deferral warns against. The agent's report doesn't mention the conflict.
-- **Status:** CONFIRMED (code and comment read).
-- **Fix:** get the owner's sign-off. Then add one clause to `db/index.ts` and to issue #2 that names the scoped exception.
-
 ### [Low] `REAUTH_REQUIRED` 401 published on table routes only, not on the Better Auth endpoints that throw it
 
 - **Where:** `lib/http/openapi/better-auth-tables.ts:49-50` and `lib/http/openapi/better-auth.ts:338-347`. Only `/two-factor/totp/confirm` gets a per-path detail.
@@ -187,18 +110,9 @@ Status labels:
   - `/two-factor/otp/send`
 
   Their published 401 still reads "Credentials refused, or the session … not allowed to exist". The review's fix was "derived from the route's `reauth` flag so the whole class gets it", and `docs/two-factor-flow.md` §6 is about exactly these endpoints.
+
 - **Status:** Read.
 - **Fix:** add the 401 detail for every path in `BETTER_AUTH_PASSWORD_LOCKOUT_PATHS`, and add an assertion to `openapi-contract.test.ts`.
-
-### [Low] `url()` tokenizer doesn't model CSS comments; only an svgo-compatibility step blocks the bypass
-
-- **Where:** `packages/shared/src/images/config.ts:198-267` (`urlFunctionSpans`) and `:277-282` (`isDangerousValue`).
-- **Problem:**
-  - Take `fill="/*url('#*/url(https://evil.example/x)/*')*/"`. CSS reads a comment, then a real `url(https://evil.example/x)`.
-  - The tokenizer opens a string at the `'` inside the comment and reads one local target, `#*/url(…)/*`.
-  - `isDangerousAttribute` returns `false`. The document is refused only because `canonicalLocalUrls` (strict, `:450-454`) returns null. That step exists for svgo compatibility, covers presentation attributes only, and is not documented as a security boundary.
-- **Status:** CONFIRMED by probe (`isDangerousAttribute('fill', v) === false`).
-- **Fix:** skip `/* … */` outside strings and url tokens in `urlFunctionSpans`, or at minimum state at `canonicalLocalUrls` that its strictness is what blocks this.
 
 ### [Low] HTTP-2 sweep incomplete: two sites still log twice for one 5xx
 
@@ -219,13 +133,6 @@ Status labels:
   - The agent's stated reason (keeping later numbers stable) doesn't require a stub: the list numbers are literal in the source, and references are made by literal number.
   - The departure is not listed in `fix-review-disagreements.md`.
 - **Fix:** delete lines 132-133.
-
-### [Low] Known issue #15 expanded with a more serious consequence and filed as accepted
-
-- **Where:** `reports/should-ignore.md:273-274`.
-- **Problem:** the edited entry now says a session that only reads "keeps a revoked read grant until it expires, not for #5's 5 minutes". If that is true, revoked access can last a whole session. It was filed under owner-accepted issues without an owner decision. `fix-review.md` did not ask for this edit.
-- **Status:** the cookie-name-only check (`checker.ts:179-194`) supports the claim. "Until it expires" was not verified.
-- **Fix:** revert the expansion and raise it with the owner as an open finding.
 
 ### [Low] Stale or false documentation left by the change
 
@@ -285,16 +192,6 @@ Status labels:
 - **Impact:** no effect today, because `UPLOAD_PURPOSES` is empty.
 - **Fix:** export a `requireTargetGrant` that routes call before admission and `acceptUpload` re-asserts, or document the new order.
 
-### [Low] New per-element attribute limit counts `=` in text content
-
-- **Where:** `packages/shared/src/images/svg-optimizer.ts:472-486, 561-564`.
-- **Problem:** counting runs from `<` to the next `<`, so text and quoted values are counted.
-- **Evidence (probe):**
-  - A `<text>` holding 300 `a = b;` is refused with "an element in the SVG has 300 attributes (max 256)".
-  - `<text>` followed by 257 `=` is refused the same way, and so is the `<metadata>` variant. The index version accepts both.
-- **Status:** CONFIRMED by probe.
-- **Fix:** count only inside opening tags (up to their `>`), outside quoted values, comments, CDATA and processing instructions, in one bounded linear scan.
-
 ### [Low] Passkey re-auth: the new deadlock 503 invites a retry that cannot succeed
 
 - **Where:** `lib/auth/reauth/plugin.ts:146-149` (the challenge is consumed outside the transaction) and `:205` (`isDeadlock` → `databaseContended`). The published text for the 503 is "retry after `Retry-After`".
@@ -317,7 +214,6 @@ Status labels:
 - **`lib/otp/throttle.ts:112-118`:** "None depends on whether the account exists" also covers 500 and 503. Only a known account reaches a fault inside `processOtpVerify`'s transaction, and that includes the new 40P01 → 503. The comment should claim only 429, 422, and 5xx raised before the lookup.
 - **`lib/auth/index.ts:116-117`:** the review asked for this comment to be corrected. It is byte-identical to the index version and still doesn't say that the library's `error` level carries caller-triggered refusals, which the callback demotes.
 - **Rules broken (comments):**
-  - `config.ts:395`: "`encodeURIComponent` leaves the apostrophe alone" describes language behaviour.
   - `rate-limit/index.ts:66-67`: "one line, not two" is a change note.
   - `lib/auth/oauth/id-token.ts:48-59`: the docblock lists the checks, which restates the code. Only the first sentence and the `kid` trap are worth keeping.
   - `plugin.ts:521` and `:559-560`: the same Location comment appears twice.
@@ -338,18 +234,10 @@ Status labels:
 
 ### [Low] Duplicated logic introduced against "one implementation per concern"
 
-- There are three `url()` parsers that disagree with each other:
-  - `urlFunctionSpans` (`config.ts:198`);
-  - `markerReference` (`svg-optimizer.ts:219-234`);
-  - `stringEnd`/`bareUrlEnd` (`svg-style.ts:159-187`).
-
-  `markerReference` reads `url(\22#m\22)` as local `#m`, where `urlTargets` reads it as external. It also double-decodes, so `marker-start="url(#%2561)"` is stored retargeted when renaming is off. No breakage today, because the sweep runs first.
 - `tests/process/sql-migration-ledger.test.ts:119-128` copies `runMigrate`'s spawn-and-collect (`:63-76`).
 - `db/migration-ledger.ts:219-225` repeats the `to_regclass(...) is not null` probe from `scripts/migrate.ts:127-134`.
-- `config.ts:136-137` and `:167-168` write the same padding-trim loop twice.
 - `lib/auth/passwordless.ts:68, 96, 117, 216-218` hand-rolls `startFloor`/`floorDeadline`/pad instead of sharing `withTimingFloor`'s logic.
 - **Fix:**
-  - Build `markerReference` on `urlFunctionSpans` plus `fragmentId`.
   - Extend `runMigrate` to return stderr.
   - Export one `tableExists(client, name)`.
 
@@ -362,39 +250,13 @@ Status labels:
 - **indisvalid "fails closed" for anything not read in full:** false for Unicode whitespace and `\r` comments.
 - **Re-auth flags: "a new indirect caller fails until it is listed":** overstated. See the `route-auth-flags.test.ts` entry.
 - **#57 "its number is kept, so the later entries … still point where they did":** keeping the number doesn't require keeping a stub. The owner said delete.
-- **"You also chose to convert `style=` to presentation attributes":** can't be checked against `fix-review.md`, which never asks for it. See the out-of-scope table.
 
 ## Out-of-scope changes (not required by `fix-review.md`)
 
-| File | Change | Impact | Keep / revert |
-| --- | --- | --- | --- |
-| `lib/otp/anonymous-send.ts:57-129`, `lib/http/timing-floor.ts:51-53` | Sends answer at the floor; issuance finishes after the response | Known and unknown sends take the same time even with unbounded PostgreSQL waits. Issuance failures were already swallowed into the generic success in the index version. | Keep |
-| `lib/http/after-response.ts:19-40` | A task enqueued after the queue drained now runs at once and is tracked for shutdown; such tasks were silently dropped before | Required by the row above; its only caller is the anonymous send | Keep |
-| `db/transaction.ts` (deadline, `cutAt`, `TransactionDeadlineError`), `lib/otp/verify.ts:79-89` | Verify transactions are cut at the deadline and answered as an unknown identifier | Rolled back with no attempt charged; `set_config(…, true)` is transaction-local; savepoints covered. Overrides the `statement_timeout` deferral. | Keep after the logging, owner sign-off and typing fixes above |
-| `lib/otp/send.ts:76, 119` | `lockUser` first in send and refund | Users-first order; foreign-key inserts block (see entry) | Keep, using `FOR NO KEY UPDATE` |
-| `lib/rate-limit/store.ts:148-173`, `fixed-window.ts`, `index.ts:167`, `lib/sqlite/database.ts:51-64`, `driver.ts:66-75` | The global budget charge retries on a timer instead of a blocking busy wait; `isSqliteBusy` is shared | Required by the cut-off | Keep |
-| `db/transaction.ts:53-58`, `db/limits.ts:29` | Pool 503 now carries `Retry-After: 2` | Additive contract change | Keep |
-| `lib/maintenance/database.ts:190-195` (`sweepExpired`, called at `:323-334`) | Candidate subquery gains `FOR UPDATE SKIP LOCKED` for every caller: `verification_codes`, `verifications`, `trusted_devices` and `sessions`, not only the OTP proof rows the contention work needed | Locked expired rows survive until a later run; a batch below `BATCH_SIZE` can end the loop with `hasMore: false` while rows remain | Keep; document `hasMore` as "nothing deletable right now" and rely on the periodic sweeps |
-| `lib/maintenance/database.ts:259-296` (`sweepVerificationSessions`) | A transaction that takes `FOR NO KEY UPDATE OF users SKIP LOCKED` on up to 500 owners | The nightly sweep briefly blocks sign-in and writes for those users. Correct only if every `verification_sessions` writer locks the user first (not verified for all). | Keep only together with the verify-deadline rework |
-| `package.json:52`, `bun.lock`, new `lib/auth/oauth/id-token.ts` | Google ID tokens verified in-house with `jose`, replacing `verifyGoogleIdToken` | Same checks as Better Auth 1.7.3, and nonce is now always required. A JWKS outage becomes 500 instead of 401. Duplicate matching keys, or a token with no `kid`, are refused instead of trying every candidate key. An unsupported `crit` is misread as an outage (see entry). Security-sensitive code is now owned here; `jose@6.2.12` was already installed as a transitive dependency. | Owner decision. Keep only if the owner wants its own verifier; otherwise revert. |
-| `lib/auth/oauth/plugin.ts:153-187, 388-398` | `invalid_grant` → 401 refusal at `warn`; other token-endpoint errors and 5xx → 500 | Misconfiguration (`invalid_client`) no longer reads as a refused sign-in | Keep |
-| `lib/auth/oauth/plugin.ts:118-143, 519-537` | Infrastructure faults classified first: 500/503 with no `Location`, even when a `callbackURL` exists | A browser hitting a transient fault now lands on raw JSON at the callback (the REC-3 symptom), where before it was redirected | Keep the classification; the owner decides whether faults need a landing page |
-| `lib/auth/errors.ts:43-53`, `response.ts:136-145`, `reauth/plugin.ts:205` | 40P01 → 503 with `Retry-After` at every boundary | The lock-order backstop. A deadlock in the OAuth path logs two `error` lines. | Keep |
-| `lib/auth/oauth/plugin.ts:347` | `state` narrowed from 1-128 characters to `^[\w-]{32}$` | A malformed state answers 400 JSON with no lost-state redirect | Keep; fix the comment |
-| `lib/auth/oauth/plugin.ts:375-385` | Named refusal reasons; a user cancelling at Google logs `warn`, not `error` | Log level only | Keep |
-| `lib/auth/index.ts:47-71` | "Failed to parse state" demoted by `StateError` code | Same class as AUTH-1, narrowly matched | Keep |
-| `oauth-review-regressions.test.ts` | Two tests flipped (302 → 500, 401 → 500) | Follows the fault classification | Keep with it |
-| `packages/shared/src/images/config.ts` | `%` read literally in `url()`; escaped quotes open no string | `url(%23a)` and `url(\22#a\22)` are now stripped (both are relative fetches in CSS) | Keep |
-| `svg-optimizer.ts:711-724` | Tokenizer plus `canonicalLocalUrls` refusal | New 400s for inputs accepted before (`fill="url(#a"`, or a comment next to `url(`) | Keep (load-bearing for the comment-bypass entry) |
-| `config.ts:31-32`, `svg-style.ts:55-64` | New limits: 10,000 attributes per document, 256 per element, 2M style offers, plus 1,000 selectors and 4,000 selector parts or entries per sheet | Attribute and offer limits refuse the upload. A sheet over its selector or entry limits is silently not converted, so its styling is dropped. The per-element count is wrong (see entry). | Keep with the counting fix; refuse an over-limit sheet clearly instead of dropping its styling |
-| new `svg-style.ts` (644 lines; runs in the browser too) | `style=` and `<style>` converted to presentation attributes, where the index version stripped them | Exporter colours survive, but the converter writes invalid values, ignores `all`/`font` and erases attributes on `var()` (the three Medium entries above). Probes found no URL bypass. | Revert until those defects are fixed and verified, unless the owner confirms they asked for it; `fix-review.md` did not |
-| new `svg-ids.ts` | Non-plain referenced ids renamed to `sid-N`, and local `href`/`url()` references rewritten | Stored ids differ from the upload; the silent bail-out enables the Medium bypass | Keep with the refuse-on-bail-out fix; document the stored-id contract |
-| `lib/media/image/svg.ts:19-24`, `config.ts:433` (`canonicalLocalUrls`) | svgo `cleanupIds` `minify: false`; local `url()` references parsed and restated in a canonical spelling | Stored ids and attribute text change. The svgo bug is real. Extends the raster canonicalisation the review asked for to every local reference. | Keep; apply the same policy on the front end (see the browser-preprocessing entry) |
-| `svg-optimizer.ts:404-428, 787` | `withDefaultNamespaceRoot`: the root is rebuilt in the default namespace and redundant `svg:` prefix bindings are dropped | Inkscape files with `xmlns:svg` are accepted again; serialised namespace declarations differ from the upload | Keep; namespace-specific sanitizer checks must still run on the original form |
-| `rate-limit/index.ts:63-81`, `tests/unit/client-ip.test.ts:229-230` | `ipIdentifier` context moved into the 503's `cause` | Logged once; every caller reaches `handleApiError` | Keep |
-| `permissions/[id]/handler.ts:346-351` | Member lock is unconditional and id-ordered (previously only under `REQUIRE_ROLE_FOR_LOGIN`) | More rows locked when the flag is off | Keep |
-| `lockActor` in role PUT, role DELETE and user POST | The actor's row is held `FOR KEY SHARE` for the whole transaction | The actor's own sign-in and self-service writes wait behind that admin write | Keep (it is what makes users → roles hold) |
-| `users/[id]/sessions/handler.ts:206` | Self revocation now takes `FOR SHARE` on the caller's row | Waits behind the same user's sign-in or password change; closes a real cycle | Keep |
-| `lib/auth/session/rotation.ts:202-209` | `forUserId` added to the unlink audit metadata | Audit row shape changes | Keep (needed for 2FA-5) |
-| `reports/should-ignore.md` #15 | Entry rewritten with a new, more serious consequence | Files an open security question under accepted issues | Revert; raise with the owner |
-| `reports/coolify-deployment.md:1720-1735` (§8d) | New VPS measurement step | Routing is right; content is stale | Keep the step, rewrite the content |
+| File                                                                         | Change                                                                                                                                                                                              | Impact                                                                                                                                                                 | Keep / revert                                                                             |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `lib/maintenance/database.ts:190-195` (`sweepExpired`, called at `:323-334`) | Candidate subquery gains `FOR UPDATE SKIP LOCKED` for every caller: `verification_codes`, `verifications`, `trusted_devices` and `sessions`, not only the OTP proof rows the contention work needed | Locked expired rows survive until a later run; a batch below `BATCH_SIZE` can end the loop with `hasMore: false` while rows remain                                     | Keep; document `hasMore` as "nothing deletable right now" and rely on the periodic sweeps |
+| `lib/maintenance/database.ts:259-296` (`sweepVerificationSessions`)          | A transaction that takes `FOR NO KEY UPDATE OF users SKIP LOCKED` on up to 500 owners                                                                                                               | The nightly sweep briefly blocks sign-in and writes for those users. Correct only if every `verification_sessions` writer locks the user first (not verified for all). | Keep only together with the verify-deadline rework                                        |
+| `lib/auth/oauth/plugin.ts:347`                                               | `state` narrowed from 1-128 characters to `^[\w-]{32}$`                                                                                                                                             | A malformed state answers 400 JSON with no lost-state redirect                                                                                                         | Keep; fix the comment                                                                     |
+| `lib/auth/index.ts:47-71`                                                    | "Failed to parse state" demoted by `StateError` code                                                                                                                                                | Same class as AUTH-1, narrowly matched                                                                                                                                 | Keep                                                                                      |
+| `reports/coolify-deployment.md:1720-1735` (§8d)                              | New VPS measurement step                                                                                                                                                                            | Routing is right; content is stale                                                                                                                                     | Keep the step, rewrite the content                                                        |

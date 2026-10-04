@@ -1,5 +1,5 @@
-import type { FilterColumnSpecs } from './column-specs';
 import type { RouteDefinition } from '@/lib/http/route-manifest';
+import type { FilterColumnSpecs } from '@app/shared/data-table/column-specs';
 
 import { dataTableConfig } from '@app/shared/data-table/config';
 import {

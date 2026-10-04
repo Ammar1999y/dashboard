@@ -3,7 +3,7 @@ import type { PermissionAction } from '@app/shared/permissions/constants';
 
 import {
   DEFAULT_PAGE_PERMISSIONS,
-  PERMISSION_ACTIONS,
+  PERMISSION_ACTION_NAMES,
 } from '@app/shared/permissions/constants';
 
 /**
@@ -13,7 +13,7 @@ import {
 export type Matrix = readonly (readonly boolean[])[];
 
 export const PAGES = DEFAULT_PAGE_PERMISSIONS;
-export const ACTIONS = Object.keys(PERMISSION_ACTIONS) as PermissionAction[];
+export const ACTIONS = PERMISSION_ACTION_NAMES;
 
 /**
  * Write actions and the read actions any one of which they need. Mirrors the

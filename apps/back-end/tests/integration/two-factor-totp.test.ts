@@ -36,7 +36,7 @@ import {
   symmetricEncrypt,
 } from 'better-auth/crypto';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { auth } from '@/lib/auth';
 import { decodeBackupCodes } from '@/lib/auth/two-factor/backup-codes';

@@ -3,13 +3,13 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
+import { otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 import {
   OTP_ENABLED,
   recoverySecondFactorSendSchema,
 } from '@app/shared/validation/otp';
 
-import { otpMsg } from '@/lib/auth/messages';
 import { resolveRecoveryOption } from '@/lib/auth/recovery/grant';
 import { sendTwoFactorCode } from '@/lib/auth/two-factor/otp';
 import { readJsonBody } from '@/lib/http/input';

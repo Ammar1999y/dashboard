@@ -15,11 +15,11 @@ import {
 } from '@/db/schema';
 import { TransactionDeadlineError } from '@/db/transaction';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 
 import { credentialAccountOf } from '@/lib/auth/credential-account';
-import { otpMsg } from '@/lib/auth/messages';
 import { lockUser } from '@/lib/auth/user-eligibility';
 import { RATE_LIMIT_DB_PATH } from '@/lib/env.server';
 import { MINIMUM_RESPONSE_MS } from '@/lib/http/timing-floor';
@@ -1237,7 +1237,7 @@ describe('a refund of a failed delivery', () => {
       channel: 'email',
       purpose: 'verify_contact',
       sendTo: user.email,
-      entityName: 'البريد الإلكتروني',
+      entityName: CONTACT_LABEL.email,
       deferDelivery: (task) => {
         captured.task = task;
       },

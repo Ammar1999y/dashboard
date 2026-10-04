@@ -13,12 +13,10 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 
 import { files } from '@/db/schema';
 
+import { MSG_INVALID_FILTER } from '@app/shared/messages/data-table';
 import { FILE_KINDS as fileKindEnum } from '@app/shared/validation/enums';
 
-import {
-  filterColumns,
-  MSG_INVALID_FILTER,
-} from '@/lib/data-table/filter-columns';
+import { filterColumns } from '@/lib/data-table/filter-columns';
 
 const dialect = new PgDialect();
 

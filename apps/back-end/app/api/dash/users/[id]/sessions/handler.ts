@@ -1,6 +1,6 @@
 import type { Executor } from '@/db';
 import type { HandlerInput } from '@/lib/http/contract';
-import type { ActorPermissions } from '@/lib/permissions/checker';
+import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
 import { and, eq, inArray, ne } from 'drizzle-orm';
@@ -13,7 +13,7 @@ import {
   MSG_DELETED,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
-} from '@app/shared/api-messages';
+} from '@app/shared/messages/common';
 import { deleteSessionsSchema } from '@app/shared/validation/sessions';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';

@@ -1,11 +1,10 @@
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { otpMsg } from '@app/shared/messages/otp';
 import {
   CAPTCHA_HEADER,
   CAPTCHA_TOKEN_MAX_LENGTH,
 } from '@app/shared/validation/auth';
-
-import { otpMsg } from '@/lib/auth/messages';
 
 import { logLine, logSanitized } from '@/utils/log';
 

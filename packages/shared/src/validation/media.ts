@@ -1,12 +1,12 @@
 import * as z from 'zod';
 
-import { validID } from '../utils';
+import { mediaValidationMsg } from '../messages/validation';
 import {
   FOLDER_NAME_MAX,
   IDS_ARRAY_MAX,
   MEDIA_DISPLAY_NAME_MAX,
 } from './constants';
-import { idSchema, idStringSchema, strictTextMaximum } from './rules';
+import { idSchema, nullableIdSchema, strictTextMaximum } from './rules';
 
 /**
  * `folder`: one folder's view. `all`: every library file, plus folders by name.
@@ -20,17 +20,6 @@ export type MediaScope = (typeof MEDIA_SCOPES)[number];
 export const PURPOSE_NAME_MAX = 50;
 /** One segment, ASCII, so it can travel in a query string without encoding. */
 export const PURPOSE_NAME_PATTERN = '^[a-z][a-zA-Z0-9_-]{0,49}$';
-
-export const mediaValidationMsg = {
-  folderNameRequired: 'اسم المجلد مطلوب',
-  folderNameTooLong: `اسم المجلد يجب أن لا يتجاوز ${FOLDER_NAME_MAX} حرفاً`,
-  folderNameInvalid: 'اسم المجلد يحتوي على أحرف غير مسموحة',
-  displayNameRequired: 'اسم الملف مطلوب',
-  displayNameTooLong: `اسم الملف يجب أن لا يتجاوز ${MEDIA_DISPLAY_NAME_MAX} حرفاً`,
-  idsRequired: 'يجب تحديد ملف واحد على الأقل',
-  idsTooMany: `يمكن تحديد ${IDS_ARRAY_MAX} ملفاً كحد أقصى في الطلب الواحد`,
-  nothingToUpdate: 'لا يوجد ما يتم تحديثه',
-};
 
 /**
  * Path separators and every control or format character. A name is a display
@@ -118,7 +107,7 @@ export const displayNameSchema = z.preprocess(
     .max(MEDIA_DISPLAY_NAME_MAX, mediaValidationMsg.displayNameTooLong)
     .refine(
       (name) => !FORBIDDEN_NAME_CHARACTERS.test(name),
-      mediaValidationMsg.folderNameInvalid
+      mediaValidationMsg.displayNameInvalid
     )
     .meta({
       minLength: undefined,
@@ -126,12 +115,6 @@ export const displayNameSchema = z.preprocess(
       pattern: NAME_PATTERN,
       description: `${NAME_DESCRIPTION}. ${strictTextMaximum(MEDIA_DISPLAY_NAME_MAX)}`,
     })
-);
-
-/** `null` means the root; a missing key means "unchanged" where that applies. */
-const nullableIdSchema = z.preprocess(
-  (value: string | null) => (value == null ? null : validID(value) || 0),
-  idStringSchema.nullable()
 );
 
 export const createFolderSchema = z

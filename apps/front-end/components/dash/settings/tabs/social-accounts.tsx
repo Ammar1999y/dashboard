@@ -3,26 +3,15 @@ import type { SettingsInput } from '@/utils/validation/settings';
 
 import { memo } from 'react';
 
-import { generateUUIDv7 } from '@/utils';
-
 import SortableFieldArray from '@/components/form/field-array';
 import ImageItemCard from '@/components/form/field-array/image-item-card';
 
-import { KeyedLinkFields } from './keyed-link-fields';
-
-const createItem = () => ({
-  id: generateUUIDv7(),
-  key: '',
-  title: '',
-  link: '',
-  isActive: true,
-  order: 0,
-});
+import { createKeyedLinkItem, KeyedLinkFields } from './keyed-link-fields';
 
 const SocialAccountsSection = memo(() => (
   <SortableFieldArray<SettingsInput, 'socialAccounts'>
     name='socialAccounts'
-    createItem={createItem}
+    createItem={createKeyedLinkItem}
     Item={SocialAccountItem}
     addLabel='إضافة حساب'
     emptyText='لا توجد حسابات تواصل بعد'

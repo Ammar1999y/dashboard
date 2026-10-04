@@ -208,7 +208,7 @@ async function runChecks(health: Response): Promise<Check[]> {
         missing.status === 404 &&
         missingBody.success &&
         !missingBody.data.success,
-      detail: `HTTP ${missing.status} body=${JSON.stringify(missingRaw)}`,
+      detail: `HTTP ${missing.status} ${missing.headers.get('content-type') ?? 'no content-type'} envelope=${String(missingBody.success)}`,
     },
     {
       name: 'better auth handler is mounted',

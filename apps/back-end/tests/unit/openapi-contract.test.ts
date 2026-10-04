@@ -5,10 +5,13 @@ import type { RouteManifestEntry } from '@/lib/http/route-manifest';
 import type { PaginationMeta } from '@app/shared/types/api';
 
 import { MEDIA_FILTER_COLUMNS } from '@/app/api/dash/media/handler';
-import { PERMISSIONS_FILTER_COLUMNS } from '@/app/api/dash/permissions/handler';
-import { USERS_FILTER_COLUMNS } from '@/app/api/dash/users/handler';
 import { ROUTES } from '@/routes';
 
+import { operatorsForSpec } from '@app/shared/data-table/column-specs';
+import {
+  PERMISSIONS_FILTER_COLUMNS,
+  USERS_FILTER_COLUMNS,
+} from '@app/shared/data-table/filterable-columns';
 import {
   MAX_FILTER_ITEMS,
   MAX_FILTER_VALUES,
@@ -32,7 +35,6 @@ import {
   BETTER_AUTH_ENDPOINTS,
   betterAuthServes,
 } from '@/lib/auth/allowed-paths';
-import { operatorsForSpec } from '@/lib/data-table/column-specs';
 import { BETTER_AUTH_OVERRIDDEN_RESPONSES } from '@/lib/http/openapi/better-auth';
 import { BETTER_AUTH_TRUSTED_RESPONSES } from '@/lib/http/openapi/better-auth-tables';
 import { openApiDocument } from '@/lib/http/openapi/document';

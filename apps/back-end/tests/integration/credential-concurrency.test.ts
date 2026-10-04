@@ -14,8 +14,9 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { users, verificationCodes, verificationSessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { CONTACT_LABEL } from '@app/shared/messages/otp';
 
 import {
   LoginRejected,
@@ -126,7 +127,7 @@ describe('two first sends for one identifier at once', () => {
         channel: 'email',
         purpose: 'verify_contact',
         sendTo: user.email,
-        entityName: 'البريد الإلكتروني',
+        entityName: CONTACT_LABEL.email,
       });
 
     const outcomes = await Promise.allSettled([send(), send()]);

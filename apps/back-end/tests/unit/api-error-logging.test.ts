@@ -2,20 +2,27 @@
  * A 5xx `CustomError` is a server fault, so `handleApiError` logs it; a 4xx is
  * the client's and stays out of the error channel. The response is the same
  * either way. A 5xx `APIError` was logged where it was raised; any other
- * `APIError` reaching here is unmapped and is.
+ * `APIError` reaching here is unmapped and is. No line carries the answer's
+ * own text: it is user-facing, and the logs are English.
  */
 import { expect, spyOn, test } from 'bun:test';
 
 import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import { APIError } from 'better-auth/api';
 
-import { HTTP_STATUS, MSG_SERVICE_UNAVAILABLE } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
+import {
+  MSG_INTERNAL_ERROR,
+  MSG_SERVICE_UNAVAILABLE,
+} from '@app/shared/messages/common';
 
 import { handleApiError } from '@/lib/http/response';
 
-test('a 5xx CustomError is logged with its status, class and cause', () => {
-  const error = new CustomError('failed', HTTP_STATUS.INTERNAL_ERROR);
+test('a 5xx CustomError is logged with its status, class, throw site and cause', () => {
+  const error = new CustomError(MSG_INTERNAL_ERROR, HTTP_STATUS.INTERNAL_ERROR);
   error.cause = new TypeError('library fault');
 
   const logged = spyOn(console, 'error').mockImplementation(() => {});
@@ -24,14 +31,15 @@ test('a 5xx CustomError is logged with its status, class and cause', () => {
 
     expect(output).toEqual({
       status: HTTP_STATUS.INTERNAL_ERROR,
-      body: { success: false, message: 'failed', data: null },
+      body: { success: false, message: MSG_INTERNAL_ERROR, data: null },
     });
     expect(logged).toHaveBeenCalledTimes(1);
     const line = String(logged.mock.calls[0]?.[0]);
     expect(line).toContain('"status":500');
-    expect(line).toContain('"message":"failed"');
+    expect(line).not.toContain(MSG_INTERNAL_ERROR);
     expect(line).toContain('"errorClass":"CustomError"');
     expect(line).toContain('library fault');
+    expect(line).toMatch(/"thrownAt":"[^"]*api-error-logging\.test\.ts:\d+/);
   } finally {
     logged.mockRestore();
   }
@@ -63,13 +71,22 @@ test('a 5xx APIError is answered 500 without a second log line', () => {
   }
 });
 
-test('an unmapped 4xx APIError is answered 500 and logged', () => {
+test('an unmapped 4xx APIError is answered 500 and logged without its message', () => {
   const logged = spyOn(console, 'error').mockImplementation(() => {});
   try {
-    const output = handleApiError(new APIError('UNAUTHORIZED'));
+    const output = handleApiError(
+      new APIError('UNAUTHORIZED', {
+        message: MSG_LOGIN_REQUIRED,
+        code: CUSTOM_AUTH_CODE,
+      })
+    );
 
     expect(output.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
     expect(logged).toHaveBeenCalledTimes(1);
+    const line = String(logged.mock.calls[0]?.[0]);
+    expect(line).toContain('"status":401');
+    expect(line).toContain(`"authCode":"${CUSTOM_AUTH_CODE}"`);
+    expect(line).not.toContain(MSG_LOGIN_REQUIRED);
   } finally {
     logged.mockRestore();
   }

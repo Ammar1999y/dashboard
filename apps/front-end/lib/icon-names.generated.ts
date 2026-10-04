@@ -78,7 +78,6 @@ export type IconName =
   | 'solar:upload-minimalistic-linear'
   | 'solar:user-bold-duotone'
   | 'solar:video-frame-play-horizontal-bold-duotone'
-  | 'solar:zip-file-bold-duotone'
   | 'lucide:apple'
   | 'lucide:arrow-left-right'
   | 'lucide:arrow-left-to-line'

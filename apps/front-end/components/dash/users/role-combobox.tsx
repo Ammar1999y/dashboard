@@ -1,5 +1,5 @@
-import type { RoleOption } from '../permissions/entity';
 import type { ComboboxOption } from '@/components/form/form-combobox';
+import type { RoleSummary } from '@/types/permission';
 
 import { memo } from 'react';
 
@@ -9,7 +9,7 @@ import FormCombobox from '@/components/form/form-combobox';
 
 import { ROLE_OPTIONS_HREF, ROLE_OPTIONS_KEY } from '../permissions/entity';
 
-const toOption = (role: RoleOption): ComboboxOption => ({
+const toOption = (role: RoleSummary): ComboboxOption => ({
   id: role.id,
   label: role.roleName,
 });

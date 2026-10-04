@@ -3,6 +3,13 @@ import type { OtpChannel } from './enums';
 import * as z from 'zod';
 
 import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '../config';
+import { MSG_CHANNEL_DISABLED } from '../messages/otp';
+import {
+  MSG_OTP_DIGITS_ONLY,
+  MSG_OTP_REQUIRED,
+  MSG_OTP_WRONG_LENGTH,
+  MSG_RECOVERY_CODE_INVALID,
+} from '../messages/validation';
 import { OTP_CODE_LENGTH } from './constants';
 import {
   EMAIL_OTP_CHANNELS,
@@ -59,8 +66,6 @@ export function isChannelEnabled(channel: string): channel is OtpChannel {
 export const EMAIL_OTP_AVAILABLE = EMAIL_OTP_CHANNELS.some(isChannelEnabled);
 export const PHONE_OTP_AVAILABLE = PHONE_OTP_CHANNELS.some(isChannelEnabled);
 
-export const MSG_CHANNEL_DISABLED = 'طريقة الإرسال غير مسموحة حالياً';
-
 /**
  * The requested channel must be enabled — on the SEND schemas only, the single
  * place this is enforced. A send selects a provider and spends money at one. A
@@ -80,9 +85,9 @@ function channelEnabledRefine(data: { channel: string }, ctx: z.RefinementCtx) {
 export const otpCodeSchema = z.preprocess(
   sanitizeStrictSingleLine,
   z
-    .string('رمز التحقق مطلوب')
-    .length(OTP_CODE_LENGTH, `رمز التحقق يجب أن يكون ${OTP_CODE_LENGTH} أرقام`)
-    .regex(/^[0-9]+$/, 'رمز التحقق يجب أن يحتوي على أرقام فقط')
+    .string(MSG_OTP_REQUIRED)
+    .length(OTP_CODE_LENGTH, MSG_OTP_WRONG_LENGTH)
+    .regex(/^[0-9]+$/, MSG_OTP_DIGITS_ONLY)
     // The one sanitized leaf whose rule a raw-input `pattern` can carry, so it
     // does: `length()` publishes an exact 6 that refuses the pasted ` 123456 `
     // this schema trims and accepts — the common shape for a code copied out of
@@ -181,7 +186,7 @@ export const recoveryCompleteSchema = recoveryGrantSchema.extend({
     z
       .string()
       .trim()
-      .regex(/^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}$/u, 'رمز الاسترجاع غير صحيح')
+      .regex(/^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}$/u, MSG_RECOVERY_CODE_INVALID)
   ),
   newPassword: passwordSchema,
 });

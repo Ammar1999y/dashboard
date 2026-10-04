@@ -11,10 +11,10 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { accounts, roles, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
-
-import { permissionMsg } from '@/lib/permissions/messages';
-import { userMsg } from '@/lib/users/messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { permissionMsg } from '@app/shared/messages/permissions';
+import { userMsg } from '@app/shared/messages/users';
+import { MSG_UNRECOGNIZED_KEYS } from '@app/shared/messages/validation';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';
@@ -109,7 +109,10 @@ describe('case-variant path ids keep identity guards closed', () => {
       status: HTTP_STATUS.UNPROCESSABLE,
       body: {
         success: false,
-        message: 'حقول غير معروفة في الطلب: email، roleId، isActive، password',
+        message: MSG_UNRECOGNIZED_KEYS(
+          ['email', 'roleId', 'isActive', 'password'],
+          0
+        ),
         data: null,
       },
     };

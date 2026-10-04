@@ -1,61 +1,81 @@
 import type { Entity } from './entity';
-import type { EntityID } from '@/types';
-import type { CreatedResponse, UpdatedResponse } from '@/utils/mutation';
+import type { CreatedResponse, StoredRow, UpdatedResponse } from '@/types/api';
+import type { EntityID } from '@app/shared/types';
 
 import { useRouter } from 'next/router';
 import { useCallback } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-
-import { mutate } from '@/utils/mutation';
-import { cacheCreated, cacheUpdated } from '@/utils/query-cache';
+import { hasErrorCode } from '@/lib/api/fetch';
+import { COMMITTED_CODE, mutate } from '@/lib/api/mutation';
+import { cacheCreated, cacheUpdated } from '@/lib/api/query-cache';
 
 interface Row {
   id: EntityID;
 }
 
 /** What the server generated for a new row, plus the time this client saw it. */
-export interface CreatedRow {
-  id: EntityID;
-  createdAt: string;
-}
+export type CreatedRow = StoredRow;
 
 /**
  * The create and update of a dashboard form: the request, the cache patch, the
  * toast and the return to the list. A rejected request throws for the form's
  * submit handler to toast.
  *
- * The body is the caller's `payload` — never the form values as they are, since
- * update bodies take the id in the path only and are rejected with one.
+ * The body is the caller's `payload`. An update body takes the id in the path
+ * only and is rejected with one, so an edit form holds exactly its fields.
  * `after*` runs with the cache writes, so a failure there reports as "saved,
- * but the view could not be refreshed" rather than as a failed save.
+ * but the view could not be refreshed" rather than as a failed save — and still
+ * leaves the form, which would otherwise submit the write again.
  */
 export function useEntityMutations<TRow extends Row>(entity: Entity) {
   const queryClient = useQueryClient();
   const router = useRouter();
 
+  const leaveAfter = useCallback(
+    async <T>(write: Promise<T>) => {
+      try {
+        return await write;
+      } catch (error) {
+        if (hasErrorCode(error, COMMITTED_CODE)) void router.push(entity.route);
+        throw error;
+      }
+    },
+    [entity.route, router]
+  );
+
   const create = useCallback(
     async <TPayload>(
       payload: TPayload,
       toRow: (created: CreatedRow) => TRow,
-      afterCreate?: (row: TRow) => void
+      afterCreate?: (row: TRow) => void,
+      afterUnreadCreate?: () => void
     ) => {
-      const result = await mutate<CreatedResponse, TPayload>({
-        href: entity.href,
-        method: 'POST',
-        data: payload,
-        onSuccess: ({ id }) => {
-          const row = toRow({ id, createdAt: new Date().toISOString() });
-          cacheCreated<TRow>(queryClient, entity.keys, row);
-          afterCreate?.(row);
-        },
-      });
+      const result = await leaveAfter(
+        mutate<CreatedResponse, TPayload>({
+          href: entity.href,
+          method: 'POST',
+          data: payload,
+          onSuccess: ({ id }) => {
+            const now = new Date().toISOString();
+            const row = toRow({ id, createdAt: now, updatedAt: now });
+            cacheCreated<TRow>(queryClient, entity.keys, row);
+            afterCreate?.(row);
+          },
+          // The id came with the lost answer, so the row exists only on the
+          // server: the lists refetch to show it.
+          onUnreadAnswer: () => {
+            afterUnreadCreate?.();
+            void queryClient.invalidateQueries({ queryKey: entity.keys.list });
+          },
+        })
+      );
 
-      toast.success(result.message || `تم إنشاء ${entity.noun} بنجاح`);
+      toast.success(result.message);
       void router.push(entity.route);
     },
-    [entity, queryClient, router]
+    [entity, leaveAfter, queryClient, router]
   );
 
   const update = useCallback(
@@ -65,27 +85,26 @@ export function useEntityMutations<TRow extends Row>(entity: Entity) {
       toPatch: (updatedAt: string) => Partial<TRow>,
       afterUpdate?: () => void
     ) => {
-      const result = await mutate<UpdatedResponse, TPayload>({
-        href: entity.itemHref(id),
-        method: 'PUT',
-        data: payload,
-        onSuccess: ({ updatedAt }) => {
-          cacheUpdated<TRow>(queryClient, entity.keys, id, toPatch(updatedAt));
-          afterUpdate?.();
-        },
-      });
+      const write = (updatedAt: string) => {
+        cacheUpdated<TRow>(queryClient, entity.keys, id, toPatch(updatedAt));
+        afterUpdate?.();
+      };
 
-      toast.success(result.message || `تم تحديث ${entity.noun} بنجاح`);
+      const result = await leaveAfter(
+        mutate<UpdatedResponse, TPayload>({
+          href: entity.itemHref(id),
+          method: 'PUT',
+          data: payload,
+          onSuccess: ({ updatedAt }) => write(updatedAt),
+          onUnreadAnswer: () => write(new Date().toISOString()),
+        })
+      );
+
+      toast.success(result.message);
       void router.push(entity.route);
     },
-    [entity, queryClient, router]
+    [entity, leaveAfter, queryClient, router]
   );
 
   return { create, update };
 }
-
-/** The form values as an update body: the id travels in the path. */
-export const withoutId = <T extends { id?: unknown }>({
-  id: _id,
-  ...rest
-}: T): Omit<T, 'id'> => rest;

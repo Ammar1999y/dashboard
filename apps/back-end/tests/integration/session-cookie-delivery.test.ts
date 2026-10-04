@@ -24,7 +24,7 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { sessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { auth } from '@/lib/auth';
 import { parseSetCookieHeaders } from '@/lib/http/cookies';

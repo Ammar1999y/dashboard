@@ -2,8 +2,7 @@ import type { ChangeEvent, KeyboardEvent } from 'react';
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 
-import { useDataTableStore } from '@/utils/store/data-table-store';
-
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 import { Icon } from '@/components/ui/icon';
 import { Input } from '@/components/ui/input';
 

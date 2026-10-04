@@ -4,7 +4,9 @@ import type { SlateEditor, Value } from 'platejs';
 import { MarkdownPlugin } from '@platejs/markdown';
 import { KEYS } from 'platejs';
 import { getEditorDOMFromHtmlString, serializeHtml } from 'platejs/static';
-import { downloadBlob } from '@/lib/download';
+import { CustomError } from '@app/shared/error-class';
+import { MSG_POPUP_BLOCKED } from '@/constants/messages';
+import { downloadBlob, openBlob } from '@/lib/files/download';
 
 import { createPublishedEditor } from '../published';
 import { DEFAULT_CONTENT_DIR, EXPORT_MEDIA_CARD_CLASS } from '../styles';
@@ -135,16 +137,9 @@ export async function printEditorDocument(
   options?: ExportOptions
 ) {
   const html = await buildEditorDocument(value, options);
-  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-  const printWindow = window.open(url, '_blank');
-  if (!printWindow) {
-    URL.revokeObjectURL(url);
-    throw new Error('the print window was blocked');
-  }
-  printWindow.addEventListener('load', () => {
-    printWindow.addEventListener('afterprint', () => URL.revokeObjectURL(url));
-    printWindow.print();
-  });
+  const printWindow = openBlob(new Blob([html], { type: 'text/html' }));
+  if (!printWindow) throw new CustomError(MSG_POPUP_BLOCKED);
+  printWindow.addEventListener('load', () => printWindow.print());
 }
 
 const CAPTURE_WIDTH = 800;

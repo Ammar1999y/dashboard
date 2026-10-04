@@ -1,26 +1,5 @@
-import type { EntityID } from '.';
+import type { StoredRow } from './api';
+import type { CreateSectionOutput } from '@/utils/validation/sections';
 
-interface Item {
-  id: EntityID;
-  title?: string;
-  subtitle?: string;
-  description?: string;
-  isActive?: boolean;
-  order?: number;
-}
-
-interface SectionClient {
-  id: EntityID;
-  title?: string;
-  subtitle?: string;
-  shortDescription?: string;
-  description?: unknown | null; // Rich text content
-
-  isActive?: boolean;
-  createdAt: string | null;
-  updatedAt?: string | null;
-  items?: Item[] | null;
-  slug?: string;
-}
-
-export type { SectionClient, Item };
+/** Served by the mocks only until the back-end has it. */
+export type SectionClient = CreateSectionOutput & StoredRow;

@@ -1,9 +1,12 @@
 import { memo, useCallback, useId, useState } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
+import * as z from 'zod';
+import { CustomError } from '@app/shared/error-class';
+import { MSG_FETCH_ERROR } from '@app/shared/messages/common';
+import { MSG_LOADING, MSG_NO_RESULTS } from '@/constants/messages';
+import { fetchOnline, invalidResponse } from '@/lib/api/fetch';
 import { cn } from '@/lib/utils';
-
-import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -14,6 +17,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { ErrorState } from '@/components/ui/error-state';
 import { Icon } from '@/components/ui/icon';
 import { Label } from '@/components/ui/label';
 import {
@@ -23,9 +27,22 @@ import {
 } from '@/components/ui/popover';
 
 const GOOGLE_FONTS_KEY = ['google-fonts'];
+const GOOGLE_FONTS_PATH = '/js/google-fonts.json';
 
-interface GoogleFontsResponse {
-  data: string[];
+const googleFontsSchema = z.object({ data: z.array(z.string()) });
+
+async function fetchGoogleFonts({ signal }: { signal: AbortSignal }) {
+  const response = await fetchOnline(GOOGLE_FONTS_PATH, { signal });
+  if (!response.ok) throw new CustomError(MSG_FETCH_ERROR, response.status);
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    if (signal.aborted) throw error;
+  }
+  const parsed = googleFontsSchema.safeParse(body);
+  if (!parsed.success) throw invalidResponse();
+  return parsed.data.data;
 }
 
 interface FontComboboxProps {
@@ -106,33 +123,26 @@ interface ContentProps {
 }
 
 const Content = memo(({ selectedValue, onSelect, isOpen }: ContentProps) => {
-  const { data, isLoading } = useQuery<GoogleFontsResponse>({
+  const {
+    data: fonts,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: GOOGLE_FONTS_KEY,
-    queryFn: async () => {
-      const response = await fetch('/js/google-fonts.json');
-      if (!response.ok) {
-        throw new Error('Failed to fetch Google fonts');
-      }
-      return response.json();
-    },
+    queryFn: fetchGoogleFonts,
     enabled: isOpen,
-    staleTime: Infinity, // Fonts list doesn't change often
+    // A file shipped with the build: it changes only with a deploy.
+    staleTime: Infinity,
   });
-
-  const fonts = data?.data || [];
 
   return (
     <Command data-lenis-prevent>
       <CommandInput placeholder='ابحث عن الخط...' className='h-input' />
       <CommandList>
-        {isLoading ? (
-          <div className='flex h-20 items-center justify-center font-semibold'>
-            جاري التحميل...
-          </div>
-        ) : (
+        {fonts && (
           <>
             <CommandEmpty className='flex h-20 items-center justify-center font-semibold'>
-              {NO_RESULTS_MESSAGE}
+              {MSG_NO_RESULTS}
             </CommandEmpty>
             <CommandGroup>
               {fonts.map((font) => (
@@ -145,6 +155,18 @@ const Content = memo(({ selectedValue, onSelect, isOpen }: ContentProps) => {
               ))}
             </CommandGroup>
           </>
+        )}
+        {!fonts && error && (
+          <ErrorState
+            error={error}
+            refetch={refetch}
+            className='m-1 py-4 text-sm'
+          />
+        )}
+        {!fonts && !error && (
+          <div className='flex h-20 items-center justify-center font-semibold'>
+            {MSG_LOADING}
+          </div>
         )}
       </CommandList>
     </Command>

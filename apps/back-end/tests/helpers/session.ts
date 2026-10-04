@@ -36,6 +36,7 @@ import {
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,
 } from '@app/shared/permissions/constants';
+import { CUSTOM_ROLE_NAME_PREFIX } from '@app/shared/permissions/roles';
 
 import {
   CREDENTIAL_ISSUER,
@@ -43,7 +44,6 @@ import {
 } from '@/lib/auth/credential';
 import { hashPassword } from '@/lib/auth/password/hash';
 import { generateUuidV7 } from '@/lib/id';
-import { CUSTOM_ROLE_NAME_PREFIX } from '@/lib/permissions/roles';
 
 import { assertHarnessDatabase } from './database';
 

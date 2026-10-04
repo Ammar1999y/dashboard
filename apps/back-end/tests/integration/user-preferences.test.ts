@@ -14,7 +14,7 @@ import { db } from '@/db';
 import { getConstraintName } from '@/db/errors';
 import { userPreferences } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import { DEFAULT_PREFERENCES } from '@app/shared/validation/preferences';
 
 import { resetTables } from '../helpers/database';

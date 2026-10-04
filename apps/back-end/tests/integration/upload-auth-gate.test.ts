@@ -34,14 +34,12 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { files, sessions } from '@/db/schema';
 
-import {
-  HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-  MSG_LOGIN_REQUIRED,
-} from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
+import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
+import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 
 import { buildRequestMeta, withBodyPolicy } from '@/lib/http/request';
-import { mediaMsg, uploadMsg } from '@/lib/media/messages';
 import { acceptUpload } from '@/lib/media/upload';
 
 import { resetTables } from '../helpers/database';

@@ -42,7 +42,8 @@ import {
   rolePermissions,
 } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
 import { DOC_MIME_TYPE } from '@app/shared/validation/media-types';
 
@@ -52,7 +53,6 @@ import { FILE_TYPES } from '@/lib/media/allowlist';
 import { downloadFilename, downloadUrl } from '@/lib/media/files';
 import { claimFiles, sweepFiles } from '@/lib/media/lifecycle';
 import { attachFiles, linkFiles, promoteForLink } from '@/lib/media/link';
-import { mediaMsg } from '@/lib/media/messages';
 import {
   ORPHAN_DRAIN_BATCH,
   sweepOrphanedObjects,

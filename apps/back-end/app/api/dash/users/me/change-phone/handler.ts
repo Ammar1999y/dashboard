@@ -1,8 +1,10 @@
 import { withTransaction } from '@/db';
 
-import { HTTP_STATUS, MSG_UPDATE_ERROR } from '@app/shared/api-messages';
 import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@app/shared/config';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_UPDATE_ERROR } from '@app/shared/messages/common';
+import { userMsg } from '@app/shared/messages/users';
 import { changePhoneSchema } from '@app/shared/validation/auth';
 import { isChannelEnabled } from '@app/shared/validation/otp';
 
@@ -18,7 +20,6 @@ import {
   commitPhoneChange,
   sendContactChangeCode,
 } from '@/lib/users/contact-change';
-import { userMsg } from '@/lib/users/messages';
 
 /**
  * Initiates a phone-number change; like email, the new number is written only

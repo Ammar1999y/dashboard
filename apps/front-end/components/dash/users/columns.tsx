@@ -2,6 +2,7 @@ import type { UserClient } from '@/types/user';
 import type { ColumnDef } from '@tanstack/react-table';
 
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
+import { findCached } from '@/lib/api/query-cache';
 
 import {
   dateColumn,
@@ -9,6 +10,7 @@ import {
   textColumn,
 } from '@/components/ui/data-table';
 
+import { cacheRoleUsersCount } from '../permissions/cache';
 import { rowActionsColumn } from '../shared/row-actions';
 import { userEntity } from './entity';
 
@@ -39,5 +41,14 @@ export const columns: ColumnDef<UserClient>[] = [
   statusColumn('حالة المستخدم', { size: 220 }),
   dateColumn('createdAt', 'تاريخ الإنشاء'),
   dateColumn('updatedAt', 'تاريخ التحديث'),
-  rowActionsColumn(userEntity, (user) => user.name),
+  rowActionsColumn(
+    userEntity,
+    (user) => user.name,
+    (queryClient, id) =>
+      cacheRoleUsersCount(
+        queryClient,
+        findCached<UserClient>(queryClient, userEntity.keys, id)?.roleId,
+        -1
+      )
+  ),
 ];

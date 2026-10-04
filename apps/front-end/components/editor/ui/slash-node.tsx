@@ -5,8 +5,7 @@ import type { PlateElementProps } from 'platejs/react';
 
 import { KEYS } from 'platejs';
 import { PlateElement } from 'platejs/react';
-
-import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
+import { MSG_NO_RESULTS } from '@/constants/messages';
 
 import { Icon } from '@/components/ui/icon';
 import { INSERT_GROUPS } from '@/components/editor/block-types';
@@ -38,7 +37,7 @@ export function SlashInputElement(
         <InlineComboboxInput />
 
         <InlineComboboxContent>
-          <InlineComboboxEmpty>{NO_RESULTS_MESSAGE}</InlineComboboxEmpty>
+          <InlineComboboxEmpty>{MSG_NO_RESULTS}</InlineComboboxEmpty>
 
           {SLASH_GROUPS.map((group) => (
             <InlineComboboxGroup key={group.label}>

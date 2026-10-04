@@ -27,7 +27,7 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { TWO_FACTOR_ALLOWED_ATTEMPTS } from '@/lib/auth/two-factor/challenge';
 import { PUBLIC_ORIGIN } from '@/lib/env';

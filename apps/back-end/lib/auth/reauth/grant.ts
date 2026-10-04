@@ -2,7 +2,8 @@
 import type { AuthContext } from '../context';
 import type { EntityID } from '@app/shared/types';
 
-import { HTTP_STATUS, MSG_INVALID_CREDENTIALS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import { validID } from '@app/shared/utils';
 
 import { authAuditMeta, bodyRecord } from '../context';

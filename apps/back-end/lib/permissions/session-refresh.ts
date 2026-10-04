@@ -11,9 +11,9 @@ import { eq, sql } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { roles, users } from '@/db/schema';
 
-import { liveUser } from '@/lib/users/filters';
+import { sanitizePermissions } from '@app/shared/permissions/matrix';
 
-import { sanitizePermissions } from './matrix';
+import { liveUser } from '@/lib/users/filters';
 
 /**
  * Merges `patch` into the permission cache of every unexpired session whose

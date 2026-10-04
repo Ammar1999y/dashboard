@@ -1,6 +1,7 @@
 import type { SetupWorker } from 'msw/browser';
 
 import { http, HttpResponse } from 'msw';
+import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
 
 import { clearMockData } from './lib/db';
 import { api, fail } from './lib/http';
@@ -14,7 +15,7 @@ export const latency = { get: () => latencyMs };
 function createControls(worker: SetupWorker) {
   return {
     /** Every method on `path` (`/api/dash/users`, `/api/dash/users/:id`) answers `status`. */
-    fail: (path: string, status = 500, message = 'حدث خطأ في الخادم') => {
+    fail: (path: string, status = 500, message = MSG_INTERNAL_ERROR) => {
       worker.use(http.all(api(path), () => fail(status, message)));
     },
     /** `path` fails the way a dropped connection does. */

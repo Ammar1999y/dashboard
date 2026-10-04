@@ -1,31 +1,40 @@
-import type { MockUser } from './store';
+import type { MockRole, MockUser, MockUserRole } from './store';
 import type { CategoryClient } from '@/types/categories';
-import type { PagePermission, PermissionClient } from '@/types/permission';
+import type { PagePermission } from '@/types/permission';
 import type { ProjectClient } from '@/types/projects';
 import type { SectionClient } from '@/types/sections';
 import type { SettingsClient } from '@/types/settings';
 
-import { APP_NAME } from '@/constants';
 import {
   CUSTOM_ROLE_VALUE,
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,
 } from '@app/shared/permissions/constants';
+import { phoneSchema } from '@app/shared/validation/rules';
+import { APP_NAME } from '@/constants';
 
 const MOCK_PASSWORD = 'Admin@1234';
 const MOCK_ADMIN_EMAIL = 'admin@gmail.com';
 export const CUSTOM_ROLE_NAME = 'صلاحيات مخصصة';
 
+/** Bump when a seeded shape changes: data saved under an older one is dropped. */
+export const SEED_VERSION = 3;
+
 let seedCounter = 0;
 /**
- * Deterministic, so a role or category id a seeded row points at is the same
- * id whichever table was seeded and saved first.
+ * Deterministic, and every seeded row takes its id once, when this module
+ * loads: a table seeded later, or seeded again after a reset, gets the same
+ * ids, so a seeded row's reference to another always resolves and no two
+ * seeded rows share one.
  */
 const seedId = () =>
   `01900000-0000-7000-8000-${(++seedCounter).toString(16).padStart(12, '0')}`;
 
 const daysAgo = (days: number) =>
   new Date(Date.now() - days * 86_400_000).toISOString();
+
+/** The canonical form the server stores. */
+const phone = (input: string) => phoneSchema.parse(input);
 
 const grant = (
   pick: (name: PagePermission['name'], action: string) => boolean
@@ -37,23 +46,35 @@ const grant = (
     ),
   }));
 
-const adminRole: PermissionClient = {
+/** The `role` a user row embeds. */
+export const roleRef = ({
+  id,
+  roleName,
+  scope,
+  createdBy,
+}: MockRole): MockUserRole => ({ id, roleName, scope, createdBy });
+
+const ADMIN_USER_ID = seedId();
+
+const adminRole: MockRole = {
   id: seedId(),
   roleName: 'مدير النظام',
   description: 'صلاحيات كاملة على كل الصفحات',
   isActive: true,
   scope: ROLE_SCOPE.SYSTEM,
+  createdBy: null,
   createdAt: daysAgo(120),
   updatedAt: daysAgo(120),
   permissions: grant(() => true),
 };
 
-const editorRole: PermissionClient = {
+const editorRole: MockRole = {
   id: seedId(),
   roleName: 'محرر',
   description: 'عرض وتعديل المستخدمين دون حذفهم',
   isActive: true,
   scope: ROLE_SCOPE.STANDARD,
+  createdBy: ADMIN_USER_ID,
   createdAt: daysAgo(90),
   updatedAt: daysAgo(30),
   permissions: grant(
@@ -62,22 +83,19 @@ const editorRole: PermissionClient = {
   ),
 };
 
-const viewerRole: PermissionClient = {
+const viewerRole: MockRole = {
   id: seedId(),
   roleName: 'مشاهد',
   description: 'عرض فقط',
   isActive: false,
   scope: ROLE_SCOPE.STANDARD,
+  createdBy: ADMIN_USER_ID,
   createdAt: daysAgo(60),
   updatedAt: daysAgo(60),
   permissions: grant((_, action) => action === 'view'),
 };
 
-export const seedRoles = (): PermissionClient[] => [
-  viewerRole,
-  editorRole,
-  adminRole,
-];
+const ROLES: MockRole[] = [viewerRole, editorRole, adminRole];
 
 const NAMES = [
   'أحمد علي',
@@ -104,58 +122,53 @@ const NAMES = [
   'رنا بسام',
 ];
 
-const roleRef = (role: PermissionClient) => ({
-  id: role.id,
-  roleName: role.roleName,
-  scope: role.scope,
-});
+const admin: MockUser = {
+  id: ADMIN_USER_ID,
+  name: 'مدير النظام',
+  email: MOCK_ADMIN_EMAIL,
+  emailVerified: true,
+  phoneNumber: phone('0500000000'),
+  phoneNumberVerified: true,
+  isActive: true,
+  roleId: adminRole.id,
+  role: roleRef(adminRole),
+  createdBy: null,
+  createdAt: daysAgo(120),
+  updatedAt: daysAgo(10),
+  password: MOCK_PASSWORD,
+};
 
-export const seedUsers = (): MockUser[] => {
-  const admin: MockUser = {
+const others = NAMES.map((name, i): MockUser => {
+  const isCustom = i % 3 === 2;
+  const role = i % 3 === 0 ? editorRole : viewerRole;
+  return {
     id: seedId(),
-    name: 'مدير النظام',
-    email: MOCK_ADMIN_EMAIL,
-    emailVerified: true,
-    phoneNumber: '+966500000000',
-    phoneNumberVerified: true,
-    isActive: true,
-    roleId: adminRole.id,
-    role: roleRef(adminRole),
-    createdAt: daysAgo(120),
-    updatedAt: daysAgo(10),
+    name,
+    email: `user${i + 1}@gmail.com`,
+    emailVerified: i % 2 === 0,
+    phoneNumber: i % 4 === 0 ? null : phone(`050${1_000_000 + i}`),
+    phoneNumberVerified: i % 4 === 1,
+    isActive: i % 5 !== 4,
+    ...(isCustom
+      ? {
+          roleId: CUSTOM_ROLE_VALUE,
+          role: {
+            id: seedId(),
+            roleName: CUSTOM_ROLE_NAME,
+            scope: ROLE_SCOPE.CUSTOM,
+            createdBy: ADMIN_USER_ID,
+          },
+          permissions: grant((page) => page === 'home'),
+        }
+      : { roleId: role.id, role: roleRef(role) }),
+    createdBy: ADMIN_USER_ID,
+    createdAt: daysAgo(100 - i * 4),
+    updatedAt: daysAgo(Math.max(0, 50 - i * 2)),
     password: MOCK_PASSWORD,
   };
+});
 
-  const others = NAMES.map((name, i): MockUser => {
-    const isCustom = i % 3 === 2;
-    const role = i % 3 === 0 ? editorRole : viewerRole;
-    return {
-      id: seedId(),
-      name,
-      email: `user${i + 1}@gmail.com`,
-      emailVerified: i % 2 === 0,
-      phoneNumber: i % 4 === 0 ? null : `+96650${String(1_000_000 + i)}`,
-      phoneNumberVerified: i % 4 === 1,
-      isActive: i % 5 !== 4,
-      ...(isCustom
-        ? {
-            roleId: CUSTOM_ROLE_VALUE,
-            role: {
-              id: seedId(),
-              roleName: CUSTOM_ROLE_NAME,
-              scope: ROLE_SCOPE.CUSTOM,
-            },
-            permissions: grant((page) => page === 'home'),
-          }
-        : { roleId: role.id, role: roleRef(role) }),
-      createdAt: daysAgo(100 - i * 4),
-      updatedAt: daysAgo(Math.max(0, 50 - i * 2)),
-      password: MOCK_PASSWORD,
-    };
-  });
-
-  return [...[...others].reverse(), admin];
-};
+const USERS: MockUser[] = [...[...others].reverse(), admin];
 
 const webCategory: CategoryClient = {
   id: seedId(),
@@ -181,13 +194,13 @@ const designCategory: CategoryClient = {
   updatedAt: daysAgo(40),
 };
 
-export const seedCategories = (): CategoryClient[] => [
+const CATEGORIES: CategoryClient[] = [
   designCategory,
   mobileCategory,
   webCategory,
 ];
 
-export const seedProjects = (): ProjectClient[] => [
+const PROJECTS: ProjectClient[] = [
   {
     id: seedId(),
     title: 'متجر إلكتروني',
@@ -212,14 +225,15 @@ export const seedProjects = (): ProjectClient[] => [
     id: seedId(),
     title: 'هوية شركة ناشئة',
     description: 'شعار ودليل استخدام الهوية',
+    link: '',
     categoryId: designCategory.id,
     isActive: false,
     createdAt: daysAgo(55),
-    updatedAt: null,
+    updatedAt: daysAgo(55),
   },
 ];
 
-export const seedSections = (): SectionClient[] => [
+const SECTIONS: SectionClient[] = [
   {
     id: seedId(),
     slug: 'services',
@@ -234,6 +248,7 @@ export const seedSections = (): SectionClient[] => [
       {
         id: seedId(),
         title: 'تطوير المواقع',
+        subtitle: '',
         description: 'مواقع سريعة ومتجاوبة',
         isActive: true,
         order: 0,
@@ -241,6 +256,7 @@ export const seedSections = (): SectionClient[] => [
       {
         id: seedId(),
         title: 'تطبيقات الجوال',
+        subtitle: '',
         description: 'تطبيقات iOS و Android',
         isActive: true,
         order: 1,
@@ -256,12 +272,12 @@ export const seedSections = (): SectionClient[] => [
     description: null,
     isActive: true,
     createdAt: daysAgo(45),
-    updatedAt: null,
-    items: [],
+    updatedAt: daysAgo(45),
+    items: null,
   },
 ];
 
-export const seedSettings = (): SettingsClient => ({
+const SETTINGS: SettingsClient = {
   id: seedId(),
   siteTitle: APP_NAME,
   siteDescription: 'حلول تقنية متكاملة للشركات',
@@ -274,9 +290,23 @@ export const seedSettings = (): SettingsClient => ({
     lineHeight: 1,
     fontSizeMultiplier: 1,
   },
-  socialAccounts: [],
-  contactInfo: [],
-  navLinks: [],
+  socialAccounts: null,
+  contactInfo: null,
+  navLinks: null,
   createdAt: daysAgo(120),
   updatedAt: daysAgo(7),
-});
+};
+
+/**
+ * A copy, since a table edits the array it is handed in place. Through JSON,
+ * the form storage keeps it in: `structuredClone` is newer than the targets.
+ */
+// eslint-disable-next-line unicorn/prefer-structured-clone
+const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+
+export const seedRoles = () => copy(ROLES);
+export const seedUsers = () => copy(USERS);
+export const seedCategories = () => copy(CATEGORIES);
+export const seedProjects = () => copy(PROJECTS);
+export const seedSections = () => copy(SECTIONS);
+export const seedSettings = () => copy(SETTINGS);

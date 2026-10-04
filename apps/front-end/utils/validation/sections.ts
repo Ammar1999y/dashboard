@@ -2,88 +2,70 @@ import type { SectionClient } from '@/types/sections';
 import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
-
 import {
   idSchema,
-  orderedListSchema,
-  orderSchema,
   richTextSchema,
   sanitizeStrict,
   sanitizeStrictSingleLine,
   slugSchema,
-} from './rules';
+} from '@app/shared/validation/rules';
+import {
+  MSG_ITEM_DESCRIPTION_TOO_LONG,
+  MSG_ITEM_SUBTITLE_TOO_LONG,
+  MSG_ITEM_TITLE_REQUIRED,
+  MSG_ITEM_TITLE_TOO_LONG,
+  MSG_ITEMS_INVALID,
+  MSG_SECTION_SHORT_DESCRIPTION_TOO_LONG,
+  MSG_SECTION_SUBTITLE_TOO_LONG,
+  MSG_SECTION_TITLE_TOO_LONG,
+  MSG_SECTION_TITLE_TOO_SHORT,
+} from '@/constants/messages';
 
-// Constants
+import { optionalTextSchema, orderedListSchema } from './rules';
+
 const SECTION_TITLE_MIN = 2;
 const SECTION_TITLE_MAX = 100;
 const SECTION_SUBTITLE_MAX = 200;
 const SECTION_DESCRIPTION_MAX = 1000;
 
-// Section title schema with sanitization and validation
 const sectionTitleSchema = z.preprocess(
   sanitizeStrictSingleLine,
   z
     .string()
-    .min(
-      SECTION_TITLE_MIN,
-      `عنوان القسم يجب أن يكون ${SECTION_TITLE_MIN} أحرف على الأقل`
-    )
-    .max(
-      SECTION_TITLE_MAX,
-      `عنوان القسم يجب أن لا يتجاوز ${SECTION_TITLE_MAX} حرفاً`
-    )
+    .min(SECTION_TITLE_MIN, MSG_SECTION_TITLE_TOO_SHORT(SECTION_TITLE_MIN))
+    .max(SECTION_TITLE_MAX, MSG_SECTION_TITLE_TOO_LONG(SECTION_TITLE_MAX))
 );
 
-// Section subtitle schema with sanitization and validation (optional)
-const sectionSubtitleSchema = z.preprocess(
+const sectionSubtitleSchema = optionalTextSchema(
   sanitizeStrictSingleLine,
-  z
-    .string()
-    .max(
-      SECTION_SUBTITLE_MAX,
-      `العنوان الفرعي يجب أن لا يتجاوز ${SECTION_SUBTITLE_MAX} حرفاً`
-    )
+  SECTION_SUBTITLE_MAX,
+  MSG_SECTION_SUBTITLE_TOO_LONG(SECTION_SUBTITLE_MAX)
 );
 
-// Short description schema (optional)
-const shortDescriptionSchema = z.preprocess(
+const shortDescriptionSchema = optionalTextSchema(
   sanitizeStrictSingleLine,
-  z
-    .string()
-    .max(
-      SECTION_DESCRIPTION_MAX,
-      `الوصف المختصر يجب أن لا يتجاوز ${SECTION_DESCRIPTION_MAX} حرفاً`
-    )
-);
-
-const itemDescriptionSchema = z.preprocess(
-  sanitizeStrict,
-  z
-    .string()
-    .max(
-      SECTION_DESCRIPTION_MAX,
-      `وصف العنصر يجب أن لا يتجاوز ${SECTION_DESCRIPTION_MAX} حرفاً`
-    )
+  SECTION_DESCRIPTION_MAX,
+  MSG_SECTION_SHORT_DESCRIPTION_TOO_LONG(SECTION_DESCRIPTION_MAX)
 );
 
 const itemTitleSchema = z.preprocess(
   sanitizeStrictSingleLine,
   z
-    .string()
-    .max(
-      SECTION_SUBTITLE_MAX,
-      `عنوان العنصر يجب أن لا يتجاوز ${SECTION_SUBTITLE_MAX} حرفاً`
-    )
+    .string(MSG_ITEM_TITLE_REQUIRED)
+    .min(1, MSG_ITEM_TITLE_REQUIRED)
+    .max(SECTION_SUBTITLE_MAX, MSG_ITEM_TITLE_TOO_LONG(SECTION_SUBTITLE_MAX))
 );
 
-const itemSubtitleSchema = z.preprocess(
+const itemSubtitleSchema = optionalTextSchema(
   sanitizeStrictSingleLine,
-  z
-    .string()
-    .max(
-      SECTION_SUBTITLE_MAX,
-      `عنوان العنصر الفرعي يجب أن لا يتجاوز ${SECTION_SUBTITLE_MAX} حرفاً`
-    )
+  SECTION_SUBTITLE_MAX,
+  MSG_ITEM_SUBTITLE_TOO_LONG(SECTION_SUBTITLE_MAX)
+);
+
+const itemDescriptionSchema = optionalTextSchema(
+  sanitizeStrict,
+  SECTION_DESCRIPTION_MAX,
+  MSG_ITEM_DESCRIPTION_TOO_LONG(SECTION_DESCRIPTION_MAX)
 );
 
 const itemSchema = z.object({
@@ -92,41 +74,36 @@ const itemSchema = z.object({
   subtitle: itemSubtitleSchema,
   description: itemDescriptionSchema,
   isActive: z.boolean().default(true),
-  order: orderSchema,
 });
 
-const itemsSchema = orderedListSchema(
-  itemSchema,
-  'قم بإدخال العناصر بشكل صحيح'
-);
+const itemsSchema = orderedListSchema(itemSchema, MSG_ITEMS_INVALID);
 
-// Create section schema
 export const createSectionSchema = z.object({
   title: sectionTitleSchema,
   subtitle: sectionSubtitleSchema,
   shortDescription: shortDescriptionSchema,
-  description: richTextSchema,
-
+  // `z.unknown()` still requires the key in the type, and an untouched editor
+  // sends none.
+  description: richTextSchema.optional(),
   slug: slugSchema,
-
   isActive: z.boolean().default(true),
-
   items: itemsSchema,
 });
 
-// Update section schema (extends create schema with id)
-export const updateSectionSchema = createSectionSchema.extend({
-  id: idSchema,
-  // Read-only after creation: its disabled input submits nothing, and an
-  // absent slug must stay absent rather than be sent as `''`.
-  slug: slugSchema.optional(),
-});
+/** See the note on updateCategoryBodySchema in ./categories. */
+export const updateSectionBodySchema = createSectionSchema
+  .extend({
+    isActive: z.boolean(),
+    // Read-only after creation: its disabled input submits nothing, and an
+    // absent slug must stay absent rather than be sent as `''`.
+    slug: slugSchema.optional(),
+  })
+  .strict();
 
-// Type inference
 export type CreateSectionInput = z.input<typeof createSectionSchema>;
-export type UpdateSectionInput = z.input<typeof updateSectionSchema>;
+export type UpdateSectionInput = z.input<typeof updateSectionBodySchema>;
 export type CreateSectionOutput = z.output<typeof createSectionSchema>;
-export type UpdateSectionOutput = z.output<typeof updateSectionSchema>;
+export type UpdateSectionOutput = z.output<typeof updateSectionBodySchema>;
 
 /** See the note on DEFAULT_CATEGORY in ./categories. */
 export const DEFAULT_SECTION: DefaultValues<CreateSectionInput> = {
@@ -141,19 +118,17 @@ export const DEFAULT_SECTION: DefaultValues<CreateSectionInput> = {
 
 /** See the note on toCategoryForm in ./categories. */
 export const toSectionForm = (record: SectionClient): UpdateSectionInput => ({
-  id: record.id,
-  title: record.title ?? '',
+  title: record.title,
   subtitle: record.subtitle ?? '',
   shortDescription: record.shortDescription ?? '',
-  description: record.description ?? undefined,
-  slug: record.slug ?? '',
-  isActive: record.isActive ?? true,
+  description: record.description,
+  slug: record.slug,
+  isActive: record.isActive,
   items: (record.items ?? []).map((item) => ({
     id: item.id,
-    title: item.title ?? '',
+    title: item.title,
     subtitle: item.subtitle ?? '',
     description: item.description ?? '',
-    isActive: item.isActive ?? true,
-    order: item.order ?? 0,
+    isActive: item.isActive,
   })),
 });

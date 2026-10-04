@@ -3,7 +3,7 @@ import type { CreateSectionInput } from '@/utils/validation/sections';
 
 import { memo } from 'react';
 
-import { generateUUIDv7 } from '@/utils';
+import { generateEntityId } from '@/utils/generate-id';
 
 import SortableFieldArray from '@/components/form/field-array';
 import ImageItemCard from '@/components/form/field-array/image-item-card';
@@ -11,12 +11,11 @@ import FormInput from '@/components/form/form-input';
 import FormTextarea from '@/components/form/form-textarea';
 
 const createItem = () => ({
-  id: generateUUIDv7(),
+  id: generateEntityId(),
   title: '',
   subtitle: '',
   description: '',
   isActive: true,
-  order: 0,
 });
 
 const ItemsSection = memo(() => (

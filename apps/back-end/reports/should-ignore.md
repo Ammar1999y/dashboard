@@ -217,9 +217,10 @@
    - **Locations:** `lib/auth.ts`, `lib/auth/passwordless.ts`, `app/api/auth/forgot-password/reset/handler.ts`, `utils/otp.ts`
    - **Summary:** Proof validation (password / OTP) and session insertion do not share an atomic validity check (`authVersion`). If credentials are rotated concurrently, a pre-verified proof can still create an active session or execute a password reset immediately after existing sessions were revoked. Planned fix introduces an incremental `authVersion` check across rotation boundaries.
 
-2. **No Explicit Database `statement_timeout` Configured**
-   - **Locations:** `db/index.ts` / connection settings
-   - **Summary:** PostgreSQL connections do not enforce a runtime `statement_timeout`. Runaway or unindexed queries under heavy load could hold pooled connections indefinitely. Deferred until p99 production query durations are measured to set an appropriate ceiling.
+2. **No Default Application-Pool `statement_timeout` Configured**
+   - **Locations:** `db/index.ts`, `db/transaction.ts`, `lib/http/timing-floor.ts`
+   - **Summary:** The application pool has no default `statement_timeout`; runaway or unindexed queries outside transactions given a deadline can hold pooled connections indefinitely. A general ceiling remains deferred until p99 query durations are measured on the deployment host.
+   - **Accepted scoped limits:** The owner authorized transaction deadlines. Transactions given a deadline set a transaction-local `statement_timeout` for each statement from the remaining budget, including anonymous OTP verification. The readiness probe uses a separate pool with its own timeout.
 
 3. **No Optimistic Locking on Concurrent Entity Updates**
    - **Locations:** All admin update endpoints (`PUT /api/dash/*`)
@@ -271,7 +272,8 @@
 
 15. **Sign-in Racing a Role Edit Can Persist a Stale Permission Snapshot**
     - **Locations:** `lib/auth/session/hooks.ts` (sign-in snapshot), `lib/permissions/session-refresh.ts` (`refreshRoleSessions`), `lib/permissions/checker.ts` (`resolveGrants`, `hasSessionCookieCache`)
-    - **Summary:** The sign-in hook reads the role's permissions, then a role edit commits `refreshRoleSessions` before the new session row exists, and the row is saved with the pre-edit snapshot. Nothing locks the two against each other. The window is a few milliseconds between the hook's read and the session insert, so it is rare. The stale snapshot stays until something repairs it, and today only a database check of the caller's grants (`liveGrants`) does. Every permission-checked write takes that path, so only reads are exposed. Reads skip it whenever a cookie named like the cache is present, even an expired one, and `/api/auth/get-session` re-mints the cache from the stale row. A session that only reads therefore keeps a revoked read grant until it expires, not for #5's 5 minutes. This race is the only known source of a drifted row, because role edits and user edits refresh or revoke sessions inside their own transactions. Planned fix: make the snapshot read and the session insert atomic against role edits, so a concurrent edit waits for the new row and then refreshes it.
+    - **Summary:** The sign-in hook reads the role's permissions, then a role edit commits `refreshRoleSessions` before the new session row exists, and the row is saved with the pre-edit snapshot. Nothing locks the two against each other. The window is a few milliseconds between the hook's read and the session insert, so it is rare. Reads can continue using that stale snapshot beyond #5's 5-minute cookie-cache window: reads skip `liveGrants` whenever a cookie named like the cache is present, even an expired one, and `/api/auth/get-session` can re-mint the cache from the stale row. This does not mean access persists forever or necessarily until session expiry. A database permission check (`liveGrants`, used by every permission-checked write and checks with `forceDB`) detects drift and attempts to resync the session; a later role edit refreshes existing session snapshots, and relevant user edits refresh or revoke sessions inside their own transactions. This race is the only known source of a drifted row.
+    - **Owner decision:** The current read behaviour is accepted for now. Keep this under known issue #15 and defer implementation until the owner chooses to address it. Planned fix: make the snapshot read and the session insert atomic against role edits, so a concurrent edit waits for the new row and then refreshes it.
 
 ### [Medium] 2FA-2 (OTP side): a concurrent OTP send can restore a proof that method removal just revoked
 

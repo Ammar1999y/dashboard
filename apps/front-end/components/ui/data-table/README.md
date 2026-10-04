@@ -2,7 +2,7 @@
 
 The list table behind every dashboard list page: server-paged (`users`, `permissions`) or loaded whole and paged in the browser (`categories`, `projects`, `sections`).
 
-Read this before changing anything here, or anything it depends on outside this folder: the column files of each feature, `utils/store/data-table-store.ts`, `utils/query.ts`, `lib/data-table/query.ts`, `mocks/lib/data-table.ts`, `styles/table.css` and `@app/shared/data-table/*`. Most rules below exist because breaking them once made the header or rows stop updating, or made the table slow at 100 rows.
+Read this before changing anything here, or anything it depends on outside this folder: the column files of each feature, `store/url-store.ts`, `lib/api/query.ts`, `lib/data-table/query.ts`, `mocks/lib/data-table.ts`, `styles/table.css` and `@app/shared/data-table/*`. Most rules below exist because breaking them once made the header or rows stop updating, or made the table slow at 100 rows.
 
 ## Using it
 
@@ -26,10 +26,10 @@ Build columns from the presets in `index.ts` (`textColumn`, `statusColumn`, `dat
 
 There are two stores, and they own different things:
 
-| State                                    | Owner                                                                                                | Lifetime                                                |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| page, page size, sort, filters, search   | `useDataTableStore` (`utils/store/data-table-store.ts`), synced to the URL by `filters/url-sync.tsx` | one module singleton, bound to the route by `initTable` |
-| column order, visibility, pinning, sizes | the column store (`store/column-store.ts`), saved to `localStorage` under `storageKey`               | one per mounted `DataTableView`                         |
+| State                                    | Owner                                                                                   | Lifetime                                                |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| page, page size, sort, filters, search   | `useDataTableStore` (`store/url-store.ts`), synced to the URL by `filters/url-sync.tsx` | one module singleton, bound to the route by `initTable` |
+| column order, visibility, pinning, sizes | the column store (`store/column-store.ts`), saved to `localStorage` under `storageKey`  | one per mounted `DataTableView`                         |
 
 - `DataTable` picks the data source: the server one, or `queryRows` over the whole list (`lib/data-table/query.ts`, which the mocks use too). It then renders `DataTableView`.
 - `DataTableView` creates the column store and renders the frame.
@@ -96,7 +96,7 @@ Measure performance on a profiling production build, not in `next dev`:
 
 ```sh
 NEXT_PUBLIC_API_MOCKING=enabled bun --bun next build --profile --webpack
-bun run start   # http://localhost:3123/dev/data-table-lab
+bun run start:mock   # http://localhost:3123/dev/data-table-lab
 ```
 
 `--profile` keeps React's Profiler working in production, which the lab's render timings need. After the lab, open the five list pages in mock mode and check that they render without console errors.

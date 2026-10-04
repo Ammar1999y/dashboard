@@ -1,5 +1,7 @@
 import { memo } from 'react';
 
+import { generateEntityId } from '@/utils/generate-id';
+
 import FormInput from '@/components/form/form-input';
 
 import { KeyInput } from './key-input';
@@ -8,6 +10,14 @@ interface KeyedLinkFieldsProps {
   name: 'contactInfo' | 'socialAccounts';
   index: number;
 }
+
+export const createKeyedLinkItem = () => ({
+  id: generateEntityId(),
+  key: '',
+  title: '',
+  link: '',
+  isActive: true,
+});
 
 /** The fields of a contact-info or social-account row, which share a shape. */
 const KeyedLinkFields = memo(({ name, index }: KeyedLinkFieldsProps) => (

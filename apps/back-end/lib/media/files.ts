@@ -10,8 +10,9 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { files } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import { normalizeMimeType } from '@app/shared/validation/media-types';
 
 import {
@@ -25,7 +26,6 @@ import { auditAs, withinScope } from './actor';
 import { FILE_TYPE_TABLE } from './allowlist';
 import { requireFolder } from './folders';
 import { getContentDisposition } from './headers';
-import { mediaMsg } from './messages';
 import { unreferenced } from './usages';
 
 /** The select shape every media read uses, so no two routes disagree on it. */

@@ -2,10 +2,11 @@ import type { PermissionAction } from '../permissions/constants';
 
 import * as z from 'zod';
 
+import { permissionValidationMsg } from '../messages/validation';
 import {
   DASHBOARD_PAGE_NAMES,
   getAvailablePermissions,
-  PERMISSION_ACTIONS,
+  PERMISSION_ACTION_NAMES,
 } from '../permissions/constants';
 import {
   PERMISSIONS_ARRAY_MAX,
@@ -21,28 +22,14 @@ import {
   strictTextMaximum,
 } from './rules';
 
-const ERROR_MESSAGES = {
-  roleNameMaxLength: `اسم الدور يجب أن لا يتجاوز ${ROLE_NAME_MAX} حرفاً`,
-  descriptionMaxLength: `الوصف يجب أن لا يتجاوز ${ROLE_DESCRIPTION_MAX} حرفاً`,
-  pageNameRequired: 'اسم الصفحة مطلوب',
-  roleNameRequired: 'اسم الدور مطلوب',
-  descriptionRequired: 'الوصف مطلوب',
-  pagePermissionRequired: 'الصلاحيات مطلوبه',
-  permissionsMaxLength: `عدد الصلاحيات يجب أن لا يتجاوز ${PERMISSIONS_ARRAY_MAX} صلاحيات`,
-  permissionsRequired: 'الصلاحيات مطلوبه',
-  duplicatePageNames: 'أسماء الصفحات يجب أن لا تتكرر',
-  viewRequiredForWrite:
-    'يجب تفعيل صلاحية العرض عند تفعيل أي صلاحية كتابة (إنشاء، تعديل، حذف)',
-};
-
 // `.strict()`, so a misspelled `dleete` is a 422 rather than a grant silently
 // never written. Real but unavailable actions are handled by value in
 // `normalizeActionsForPage`.
 const permissionSchema = z
   .object(
-    Object.keys(PERMISSION_ACTIONS).reduce(
+    PERMISSION_ACTION_NAMES.reduce(
       (acc, action) => {
-        acc[action as PermissionAction] = z.boolean();
+        acc[action] = z.boolean();
         return acc;
       },
       {} as Record<PermissionAction, z.ZodBoolean>
@@ -78,7 +65,7 @@ function normalizeActionsForPage(
   const { name, permissions } = value;
   const available = getAvailablePermissions(name);
   // Safe to write by key: `permissionSchema` is `.strict()` over
-  // `PERMISSION_ACTIONS`, so every surviving key is one of ours.
+  // `PERMISSION_ACTION_NAMES`, so every surviving key is one of ours.
   const kept: Partial<Record<PermissionAction, boolean>> = {};
 
   for (const [action, granted] of Object.entries(permissions)) {
@@ -90,7 +77,7 @@ function normalizeActionsForPage(
     ctx.addIssue({
       code: 'custom',
       path: ['permissions', action],
-      message: `الصلاحية "${action}" غير متاحة لصفحة "${name}"`,
+      message: permissionValidationMsg.actionUnavailableForPage(action, name),
     });
   }
 
@@ -112,7 +99,7 @@ export const pagePermissionSchema = rawPagePermissionSchema
       ctx.addIssue({
         code: 'custom',
         path: ['permissions', 'view'],
-        message: ERROR_MESSAGES.viewRequiredForWrite,
+        message: permissionValidationMsg.viewRequiredForWrite,
       });
       return;
     }
@@ -125,7 +112,7 @@ export const pagePermissionSchema = rawPagePermissionSchema
       ctx.addIssue({
         code: 'custom',
         path: ['permissions', 'viewOwn'],
-        message: ERROR_MESSAGES.viewRequiredForWrite,
+        message: permissionValidationMsg.viewRequiredForWrite,
       });
     }
   });
@@ -135,7 +122,7 @@ function noDuplicatePageNames(items: { name: string }[], ctx: z.RefinementCtx) {
   if (new Set(names).size !== names.length) {
     ctx.addIssue({
       code: 'custom',
-      message: ERROR_MESSAGES.duplicatePageNames,
+      message: permissionValidationMsg.duplicatePageNames,
     });
   }
 }
@@ -146,7 +133,7 @@ function noDuplicatePageNames(items: { name: string }[], ctx: z.RefinementCtx) {
  */
 const pageMatrix = (array: z.ZodArray<typeof pagePermissionSchema>) =>
   array
-    .max(PERMISSIONS_ARRAY_MAX, ERROR_MESSAGES.permissionsMaxLength)
+    .max(PERMISSIONS_ARRAY_MAX, permissionValidationMsg.permissionsMaxLength)
     .superRefine(noDuplicatePageNames);
 
 export const permissionsArraySchema = pageMatrix(z.array(pagePermissionSchema));
@@ -156,8 +143,8 @@ export const createPermissionSchema = z.object({
     sanitizeStrictSingleLine,
     z
       .string()
-      .min(ROLE_NAME_MIN, ERROR_MESSAGES.roleNameRequired)
-      .max(ROLE_NAME_MAX, ERROR_MESSAGES.roleNameMaxLength)
+      .min(ROLE_NAME_MIN, permissionValidationMsg.roleNameRequired)
+      .max(ROLE_NAME_MAX, permissionValidationMsg.roleNameMaxLength)
       .meta({
         maxLength: undefined,
         description: `${STRICT_SINGLE_LINE_DESCRIPTION} ${strictTextMaximum(ROLE_NAME_MAX)}`,
@@ -168,7 +155,7 @@ export const createPermissionSchema = z.object({
       sanitizeStrict,
       z
         .string()
-        .max(ROLE_DESCRIPTION_MAX, ERROR_MESSAGES.descriptionMaxLength)
+        .max(ROLE_DESCRIPTION_MAX, permissionValidationMsg.descriptionMaxLength)
         .meta({
           maxLength: undefined,
           description: `${STRICT_TEXT_DESCRIPTION}. ${strictTextMaximum(ROLE_DESCRIPTION_MAX)}`,
@@ -179,7 +166,9 @@ export const createPermissionSchema = z.object({
     .optional()
     .nullish(),
   permissions: pageMatrix(
-    z.array(pagePermissionSchema).min(1, ERROR_MESSAGES.permissionsRequired)
+    z
+      .array(pagePermissionSchema)
+      .min(1, permissionValidationMsg.permissionsRequired)
   ),
   isActive: z.boolean(),
 });

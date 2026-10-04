@@ -1,5 +1,6 @@
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import { updateFileSchema } from '@app/shared/validation/media';
 
 import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
@@ -13,7 +14,6 @@ import {
   toMediaFile,
   updateFile,
 } from '@/lib/media/files';
-import { mediaMsg } from '@/lib/media/messages';
 import { usedBy, viewablePages } from '@/lib/media/usages';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 

@@ -15,8 +15,10 @@ import type { OtpChannel, TwoFactorMethod } from './enums';
 import * as z from 'zod';
 
 import { PHONE_ENABLED } from '../config';
+import { MSG_CHANNEL_DISABLED } from '../messages/otp';
+import { MSG_TWO_FACTOR_CONTACT_REQUIRED } from '../messages/validation';
 import { CONTACT_KINDS, isPhoneChannel, TWO_FACTOR_METHODS } from './enums';
-import { MSG_CHANNEL_DISABLED, otpCodeSchema } from './otp';
+import { otpCodeSchema } from './otp';
 import { idSchema, reauthPasswordSchema } from './rules';
 import {
   assertTwoFactorListsCoherent,
@@ -146,7 +148,7 @@ export const twoFactorMethodOptionSchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['contactKind'],
-        message: 'يجب تحديد وسيلة الإرسال (البريد أو الهاتف)',
+        message: MSG_TWO_FACTOR_CONTACT_REQUIRED,
       });
   });
 

@@ -79,24 +79,24 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
+import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@app/shared/config';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_INVALID_CREDENTIALS,
-  MSG_INVALID_INPUT,
   MSG_LOGIN_REQUIRED,
   MSG_PASSWORD_COMPROMISED,
-} from '@app/shared/api-messages';
-import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@app/shared/config';
+} from '@app/shared/messages/auth';
+import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
+import { otpMsg } from '@app/shared/messages/otp';
+import { userMsg } from '@app/shared/messages/users';
 import { PASSWORD_MAX } from '@app/shared/validation/constants';
 import {
   EMAIL_OTP_AVAILABLE,
   PHONE_OTP_AVAILABLE,
 } from '@app/shared/validation/otp';
 
-import { otpMsg } from '@/lib/auth/messages';
 import { MINIMUM_RESPONSE_MS } from '@/lib/http/timing-floor';
 import { generateUuidV7 } from '@/lib/id';
-import { userMsg } from '@/lib/users/messages';
 
 import { compareCodeUnits } from '@/utils/text';
 

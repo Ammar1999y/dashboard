@@ -14,9 +14,8 @@ import {
   useElement,
   useReadOnly,
 } from 'platejs/react';
+import { MSG_NO_RESULTS } from '@/constants/messages';
 import { cn } from '@/lib/utils';
-
-import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -128,7 +127,7 @@ function CodeBlockCombobox() {
             placeholder='البحث عن اللغات'
             value={search}
           />
-          <CommandEmpty>{NO_RESULTS_MESSAGE}</CommandEmpty>
+          <CommandEmpty>{MSG_NO_RESULTS}</CommandEmpty>
 
           <CommandList className='h-80 overflow-y-auto'>
             <CommandGroup>

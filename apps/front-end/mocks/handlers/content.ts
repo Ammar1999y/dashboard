@@ -1,57 +1,91 @@
 import type { SettingsClient } from '@/types/settings';
 
-import { generateUUIDv7 } from '@/utils';
-import { delay, http } from 'msw';
+import { http } from 'msw';
+import { MSG_UPDATED } from '@app/shared/messages/common';
+
+import { generateEntityId } from '@/utils/generate-id';
+import {
+  createCategorySchema,
+  updateCategoryBodySchema,
+} from '@/utils/validation/categories';
+import {
+  createProjectSchema,
+  updateProjectBodySchema,
+} from '@/utils/validation/projects';
+import {
+  createSectionSchema,
+  updateSectionBodySchema,
+} from '@/utils/validation/sections';
+import { settingsSchema } from '@/utils/validation/settings';
 
 import { crud } from '../lib/crud';
 import { now } from '../lib/db';
-import { api, fail, MSG, ok, readBody } from '../lib/http';
+import { api, ok, readJsonBody } from '../lib/http';
+import { contentMsg } from '../lib/messages';
 import { categories, projects, sections, settings } from '../store';
 
-async function toDataUrl(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCodePoint(byte);
-  return `data:${file.type};base64,${btoa(binary)}`;
-}
+/** A nav link the section picker wrote names the section by `#slug`. */
+const linksToSection = (slug: string) =>
+  !!settings.get()?.navLinks?.some(({ link }) => link === `#${slug}`);
 
+// No back-end serves these yet: the mocks are their only implementation, and
+// they parse bodies with the forms' schemas and hold the integrity rules as
+// that back-end will. Swapping in the real routes needs no front-end change if
+// they keep this contract.
 export const contentHandlers = [
   // Ahead of projects: `/api/dash/projects/:id` would also match `categories`.
-  ...crud('/api/dash/projects/categories', categories),
-  ...crud('/api/dash/projects', projects),
-  ...crud('/api/dash/sections', sections),
+  ...crud(
+    '/api/dash/projects/categories',
+    categories,
+    { create: createCategorySchema, update: updateCategoryBodySchema },
+    {
+      referencedBy: [
+        {
+          inUse: ({ id }) => projects.all().some((p) => p.categoryId === id),
+          message: contentMsg.categoryHasProjects,
+        },
+      ],
+    }
+  ),
+  ...crud(
+    '/api/dash/projects',
+    projects,
+    { create: createProjectSchema, update: updateProjectBodySchema },
+    { references: [{ field: 'categoryId', table: categories }] }
+  ),
+  ...crud(
+    '/api/dash/sections',
+    sections,
+    { create: createSectionSchema, update: updateSectionBodySchema },
+    {
+      unique: [{ field: 'slug', message: contentMsg.slugExists }],
+      referencedBy: [
+        {
+          inUse: ({ slug }) => linksToSection(slug),
+          message: contentMsg.sectionInNavLinks,
+        },
+      ],
+    }
+  ),
 
   http.get(api('/api/dash/settings'), () => ok(settings.get())),
 
+  // An upsert, answered as the server answers its own: 200 whether or not a
+  // row existed.
   http.post(api('/api/dash/settings'), async ({ request }) => {
-    const { id: _, ...body } = await readBody<SettingsClient>(request);
+    const input = await readJsonBody(request, settingsSchema);
     const current = settings.get();
     const timestamp = now();
-    const next = {
-      ...current,
-      ...body,
-      id: current?.id ?? generateUUIDv7(),
+    const next: SettingsClient = {
+      ...input,
+      id: current?.id ?? generateEntityId(),
       createdAt: current?.createdAt ?? timestamp,
       updatedAt: timestamp,
-    } as SettingsClient;
+    };
     settings.set(next);
     return ok(
       { id: next.id, createdAt: next.createdAt, updatedAt: next.updatedAt },
-      MSG.updated
+      MSG_UPDATED
     );
-  }),
-
-  http.post(api('/api/upload'), async ({ request }) => {
-    await delay();
-    const form = await request.formData();
-    const file = form.get('file');
-    if (!(file instanceof File)) return fail(422, MSG.invalidInput);
-    // A data URL, not a blob URL: a saved record still shows it after a reload.
-    return ok({
-      url: await toDataUrl(file),
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    });
   }),
 ];

@@ -1,10 +1,10 @@
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
+import { otpMsg } from '@app/shared/messages/otp';
 import { OTP_ENABLED, verifyOtpSchema } from '@app/shared/validation/otp';
 
 import { getAuditMeta } from '@/lib/audit';
-import { otpMsg } from '@/lib/auth/messages';
 import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import { readJsonBody } from '@/lib/http/input';
 import {

@@ -30,11 +30,12 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { auditLogs, roles, sessions, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { betterAuthMsg } from '@app/shared/messages/auth';
 import { PASSWORD_MAX } from '@app/shared/validation/constants';
 
 import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
-import { BASE_ERROR_CODES, CUSTOM_AUTH_CODE } from '@/lib/auth/errors';
 import {
   LOCK_DURATION_SECONDS,
   MAX_FAILED_ATTEMPTS,
@@ -427,7 +428,7 @@ describe('a refused or unavailable Turnstile verification', () => {
     // untranslated. `localiseAuthError` in `app.ts` is the only position
     // downstream of the whole plugin chain, and it maps them there.
     expect(JSON.parse(body)).toEqual({
-      message: BASE_ERROR_CODES.VERIFICATION_FAILED,
+      message: betterAuthMsg.VERIFICATION_FAILED,
       code: CUSTOM_AUTH_CODE,
     });
     expect(response.headers.get('content-type')).toStartWith(
@@ -460,7 +461,7 @@ describe('a refused or unavailable Turnstile verification', () => {
     // Translated at the prefix handler like the other two captcha outcomes; the
     // STATUS is the fail-closed assertion and it is unchanged.
     expect(await response.json()).toEqual({
-      message: BASE_ERROR_CODES.UNKNOWN_ERROR,
+      message: betterAuthMsg.UNKNOWN_ERROR,
       code: CUSTOM_AUTH_CODE,
     });
     expect(response.headers.getSetCookie()).toEqual([]);
@@ -524,7 +525,7 @@ describe('outbound captcha admission', () => {
       'application/json'
     );
     expect(await response.json()).toEqual({
-      message: BASE_ERROR_CODES.MISSING_RESPONSE,
+      message: betterAuthMsg.MISSING_RESPONSE,
       code: CUSTOM_AUTH_CODE,
     });
     expect(egressCallsTo(TURNSTILE_HOST)).toEqual([]);

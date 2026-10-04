@@ -1,12 +1,5 @@
-import type { EntityID } from '.';
+import type { StoredRow } from './api';
+import type { CreateProjectOutput } from '@/utils/validation/projects';
 
-export interface ProjectClient {
-  id: EntityID;
-  title: string;
-  description?: string;
-  link?: string;
-  categoryId?: EntityID | null;
-  isActive?: boolean;
-  createdAt: string | null;
-  updatedAt?: string | null;
-}
+/** Served by the mocks only until the back-end has it. */
+export type ProjectClient = CreateProjectOutput & StoredRow;

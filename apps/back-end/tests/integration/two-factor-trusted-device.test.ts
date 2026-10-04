@@ -15,7 +15,7 @@ import { db } from '@/db';
 import { sessions, trustedDevices, twoFactorCredentials } from '@/db/schema';
 import { symmetricDecrypt } from 'better-auth/crypto';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { auth } from '@/lib/auth';
 import { PUBLIC_ORIGIN } from '@/lib/env';

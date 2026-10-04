@@ -28,8 +28,8 @@ import {
   test,
 } from 'bun:test';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { getClientIp, TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
 import { handleApiError } from '@/lib/http/response';

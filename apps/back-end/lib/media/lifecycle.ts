@@ -11,8 +11,9 @@ import { db, withTransaction } from '@/db';
 import { isForeignKeyViolation } from '@/db/errors';
 import { files, folders as foldersTable } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
 
 import { purgeUrls } from '@/lib/cloudflare/purge';
@@ -28,7 +29,6 @@ import { logSanitized } from '@/utils/log';
 import { auditAs, withinScope } from './actor';
 import { distinctIds, governedIds } from './files';
 import { lockFolderFor, lockTree, rowCount, subtreeFolders } from './folders';
-import { mediaMsg } from './messages';
 import { unreferenced, usedBy } from './usages';
 
 /**

@@ -5,14 +5,14 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { accounts, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 import { OTP_ENABLED, resetPasswordSchema } from '@app/shared/validation/otp';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import { credentialAccountOf } from '@/lib/auth/credential-account';
-import { otpMsg } from '@/lib/auth/messages';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword } from '@/lib/auth/password/hash';
 import { issueRecoveryGrant } from '@/lib/auth/recovery/grant';

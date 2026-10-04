@@ -55,6 +55,10 @@ import * as healthStorage from '@/app/api/health/storage/handler';
 import * as uploadFile from '@/app/api/upload/file/handler';
 
 import { PASSWORDLESS_ENABLED, PHONE_ENABLED } from '@app/shared/config';
+import {
+  PERMISSIONS_FILTER_COLUMNS,
+  USERS_FILTER_COLUMNS,
+} from '@app/shared/data-table/filterable-columns';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
 import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
@@ -195,7 +199,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     handler: dashPermissions.GET,
     ...PERMISSION_ROUTE,
     body: 'none',
-    query: dataTableQuery(dashPermissions.PERMISSIONS_FILTER_COLUMNS),
+    query: dataTableQuery(PERMISSIONS_FILTER_COLUMNS),
   },
   {
     method: 'POST',
@@ -307,7 +311,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     handler: dashUsers.GET,
     ...PERMISSION_ROUTE,
     body: 'none',
-    query: dataTableQuery(dashUsers.USERS_FILTER_COLUMNS),
+    query: dataTableQuery(USERS_FILTER_COLUMNS),
   },
   {
     method: 'POST',

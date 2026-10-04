@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { MSG_FONT_LOAD_FAILED } from '@/constants/messages';
+
 import { AutosizeTextarea } from '@/components/ui/auto-resize-textarea';
 import { Label } from '@/components/ui/label';
 
@@ -114,9 +116,7 @@ export const FontPreview = memo(
           <p className='text-xs text-muted-foreground'>جاري تحميل الخط...</p>
         )}
         {loadState === 'failed' && (
-          <p className='text-xs text-destructive'>
-            تعذر تحميل الخط، تحقق من الاتصال أو اختر خطاً آخر
-          </p>
+          <p className='text-xs text-destructive'>{MSG_FONT_LOAD_FAILED}</p>
         )}
       </div>
     );

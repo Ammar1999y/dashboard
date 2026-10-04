@@ -1,5 +1,5 @@
 import type { DataTableCta } from './page-header';
-import type { EntityID } from '@/types';
+import type { EntityID } from '@app/shared/types';
 import type { ExtendedColumnSort } from '@app/shared/types/data-table';
 import type {
   ColumnDef,
@@ -9,10 +9,11 @@ import type {
 
 import { useMemo } from 'react';
 
+import { CustomError } from '@app/shared/error-class';
+import { useQueryData, useServerDataTable } from '@/lib/api/query';
 import { queryRows } from '@/lib/data-table/query';
 
-import { useQueryData, useServerDataTable } from '@/utils/query';
-import { useTableUrlState } from '@/utils/store/data-table-store';
+import { useTableUrlState } from '@/components/ui/data-table/store/url-store';
 
 import { DataTableView } from './data-table-view';
 import { DataTablePageHeader } from './page-header';
@@ -71,29 +72,43 @@ const ClientTableInner = <TData extends object>({
     href,
   });
 
-  const searchFields = useMemo(
+  const searchableColumns = useMemo(
     () => textColumnIds(view.columns),
     [view.columns]
   );
-  const result = useMemo(
-    () =>
-      data &&
-      queryRows(
+  // A filter the server would refuse with a 422 shows that error here too.
+  const result = useMemo(() => {
+    if (!data) return;
+    try {
+      const rows = queryRows(
         data,
         { page, perPage, sort, filters, joinOperator, search },
-        { searchFields }
-      ),
-    [data, page, perPage, sort, filters, joinOperator, search, searchFields]
-  );
+        { searchableColumns }
+      );
+      return { rows, refusal: null };
+    } catch (refusal) {
+      if (refusal instanceof CustomError) return { rows: undefined, refusal };
+      throw refusal;
+    }
+  }, [
+    data,
+    page,
+    perPage,
+    sort,
+    filters,
+    joinOperator,
+    search,
+    searchableColumns,
+  ]);
 
   return (
     <DataTableView
       {...view}
       defaultSort={defaultSort}
-      data={result?.data}
-      pageCount={result?.meta.pageCount ?? 1}
+      data={result?.rows?.data}
+      pageCount={result?.rows?.meta.pageCount ?? 1}
       isLoading={isLoading}
-      error={error}
+      error={error ?? result?.refusal ?? null}
       refetch={refetch}
     />
   );

@@ -1,7 +1,7 @@
 import type { PresetName } from './constants';
 import type { DateRange } from './types';
 
-import { calendarDayInZone, safeDate } from '@/utils/time';
+import { calendarDayInZone, safeDate } from '@app/shared/time';
 
 import { DEFAULT_DATE_LOCALE } from './constants';
 

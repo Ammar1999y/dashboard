@@ -2,10 +2,12 @@ import type { CategoryClient } from '@/types/categories';
 import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
+import { sanitizeStrictSingleLine } from '@app/shared/validation/rules';
+import {
+  MSG_CATEGORY_TITLE_TOO_LONG,
+  MSG_CATEGORY_TITLE_TOO_SHORT,
+} from '@/constants/messages';
 
-import { idSchema, sanitizeStrictSingleLine } from './rules';
-
-// Constants
 const TITLE_MIN = 2;
 const TITLE_MAX = 150;
 
@@ -13,8 +15,8 @@ const titleSchema = z.preprocess(
   sanitizeStrictSingleLine,
   z
     .string()
-    .min(TITLE_MIN, `عنوان الفئة يجب أن يكون ${TITLE_MIN} أحرف على الأقل`)
-    .max(TITLE_MAX, `عنوان الفئة يجب أن لا يتجاوز ${TITLE_MAX} حرفاً`)
+    .min(TITLE_MIN, MSG_CATEGORY_TITLE_TOO_SHORT(TITLE_MIN))
+    .max(TITLE_MAX, MSG_CATEGORY_TITLE_TOO_LONG(TITLE_MAX))
 );
 
 export const createCategorySchema = z.object({
@@ -22,15 +24,18 @@ export const createCategorySchema = z.object({
   isActive: z.boolean().default(true),
 });
 
-export const updateCategorySchema = createCategorySchema.extend({
-  id: idSchema,
-});
+/**
+ * Strict, and `isActive` has no default: a misspelled or omitted field must
+ * fail rather than reactivate the row, as in the users and roles update bodies.
+ */
+export const updateCategoryBodySchema = createCategorySchema
+  .extend({ isActive: z.boolean() })
+  .strict();
 
-// Type inference
 export type CreateCategoryInput = z.input<typeof createCategorySchema>;
-export type UpdateCategoryInput = z.input<typeof updateCategorySchema>;
+export type UpdateCategoryInput = z.input<typeof updateCategoryBodySchema>;
 export type CreateCategoryOutput = z.output<typeof createCategorySchema>;
-export type UpdateCategoryOutput = z.output<typeof updateCategorySchema>;
+export type UpdateCategoryOutput = z.output<typeof updateCategoryBodySchema>;
 
 /**
  * The empty form, shared by the create page and the edit page — the edit page
@@ -43,16 +48,15 @@ export const DEFAULT_CATEGORY: DefaultValues<CreateCategoryInput> = {
 };
 
 /**
- * A stored record as the edit form's `values`. Explicit per field because the
- * API marks most of them optional while the form needs every input to have a
- * value from its first render — spreading the record instead would leave an
- * input `undefined` and make React switch it to controlled on the first
- * keystroke.
+ * A stored record as the edit form's `values`: exactly the update body's
+ * fields, since that schema is strict and the id travels in the path. Explicit
+ * per field so every input has a value from its first render — spreading the
+ * record would leave an absent optional field `undefined` and make React switch
+ * it to controlled on the first keystroke.
  */
 export const toCategoryForm = (
   record: CategoryClient
 ): UpdateCategoryInput => ({
-  id: record.id,
-  title: record.title ?? '',
-  isActive: record.isActive ?? true,
+  title: record.title,
+  isActive: record.isActive,
 });

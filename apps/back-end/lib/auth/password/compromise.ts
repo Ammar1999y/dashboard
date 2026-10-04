@@ -2,11 +2,9 @@ import { createHash } from 'node:crypto';
 
 import { betterFetch } from '@better-fetch/fetch';
 
-import {
-  HTTP_STATUS,
-  MSG_PASSWORD_COMPROMISED,
-} from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_PASSWORD_COMPROMISED } from '@app/shared/messages/auth';
 
 import { logSanitized } from '@/utils/log';
 

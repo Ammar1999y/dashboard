@@ -1,6 +1,6 @@
 import { memo } from 'react';
 
-import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
+import { MSG_NO_RESULTS } from '@/constants/messages';
 
 import EmptyIcon from '@/components/icons/empty';
 
@@ -12,7 +12,7 @@ const DataTableEmptyState = memo(() => {
       <TableCell className='min-h-24 text-center'>
         <div className='flex flex-col items-center justify-center gap-6 py-6 text-foreground'>
           <EmptyIcon />
-          <span>{NO_RESULTS_MESSAGE}</span>
+          <span>{MSG_NO_RESULTS}</span>
         </div>
       </TableCell>
     </TableRow>

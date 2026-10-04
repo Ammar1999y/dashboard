@@ -1,7 +1,7 @@
-import type { UploadedFile } from '@/types/upload';
+import type { MediaFile } from '@/lib/files/upload';
 
 export interface FileWithPreview {
   id: string;
-  file: File | UploadedFile;
+  file: File | MediaFile;
   preview?: string;
 }

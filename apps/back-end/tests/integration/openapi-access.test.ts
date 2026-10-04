@@ -7,7 +7,7 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, baseHeaders, signedInUser } from '../helpers/session';

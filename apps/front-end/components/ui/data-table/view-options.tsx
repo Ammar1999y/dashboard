@@ -3,9 +3,8 @@ import type { Column } from '@tanstack/react-table';
 
 import { memo, useCallback, useMemo, useState } from 'react';
 
+import { MSG_NO_RESULTS } from '@/constants/messages';
 import { cn } from '@/lib/utils';
-
-import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -198,7 +197,7 @@ const DataTableViewOptionsInner = <TData,>({
             onValueChange={setSearch}
           />
           <CommandList>
-            <CommandEmpty>{NO_RESULTS_MESSAGE}</CommandEmpty>
+            <CommandEmpty>{MSG_NO_RESULTS}</CommandEmpty>
             <CommandGroup>
               {term ? (
                 visibleEntries.map((entry) => (

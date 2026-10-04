@@ -8,13 +8,15 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { CONTACT_LABEL } from '@app/shared/messages/otp';
+import { userMsg } from '@app/shared/messages/users';
 import { contactKindOf } from '@app/shared/validation/enums';
 
 import { auditLog } from '@/lib/audit';
 import { verifyLoginAttempt } from '@/lib/auth/login-guard';
-import { twoFactorMsg } from '@/lib/auth/messages';
 import { requireReauthWindow } from '@/lib/auth/reauth/window';
 import {
   revokeOtherSessions,
@@ -27,14 +29,12 @@ import {
 } from '@/lib/auth/two-factor/methods';
 import { notFoundError } from '@/lib/http/response';
 import { markContactVerified } from '@/lib/otp/contact';
-import { CONTACT_LABEL } from '@/lib/otp/content';
 import { processOtpSend } from '@/lib/otp/send';
 import { insufficientPermissions } from '@/lib/permissions/checker';
 import { enforceOtpSurfaceSendQuota } from '@/lib/rate-limit';
 
 import { asCurrentPasswordIncorrect } from './current-password';
 import { activeUser, liveUser } from './filters';
-import { userMsg } from './messages';
 
 export async function assertContactChangeKeepsFactor(
   executor: Executor,

@@ -24,10 +24,11 @@ import {
 } from '@/db/schema';
 import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { otpMsg } from '@app/shared/messages/otp';
 
 import { auth } from '@/lib/auth';
-import { otpMsg, twoFactorMsg } from '@/lib/auth/messages';
 import { totpEnrolmentKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { hashOtpCode } from '@/lib/otp/hash';

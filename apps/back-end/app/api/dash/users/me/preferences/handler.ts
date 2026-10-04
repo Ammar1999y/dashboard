@@ -3,14 +3,14 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { userPreferences } from '@/db/schema';
 
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
   MSG_UPDATE_ERROR,
   MSG_UPDATED,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/common';
 import {
   preferencesSchema,
   sanitizePreferences,

@@ -6,8 +6,6 @@ import { memo, useCallback, useId, useMemo, useRef, useState } from 'react';
 import { dataTableConfig } from '@app/shared/data-table/config';
 import { cn } from '@/lib/utils';
 
-import { useDataTableStore } from '@/utils/store/data-table-store';
-
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,6 +16,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 import { Icon } from '@/components/ui/icon';
 import {
   Popover,

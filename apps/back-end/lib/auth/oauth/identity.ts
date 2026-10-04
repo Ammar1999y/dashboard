@@ -7,14 +7,15 @@ import { accounts, users } from '@/db/schema';
 import { APIError } from 'better-auth/api';
 import * as z from 'zod';
 
-import { HTTP_STATUS, MSG_INVALID_CREDENTIALS } from '@app/shared/api-messages';
+import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import { emailSchema } from '@app/shared/validation/rules';
 
 import { auditLog } from '@/lib/audit';
 import { markContactVerified } from '@/lib/otp/contact';
 
 import { GOOGLE_PROVIDER_ID } from '../credential';
-import { CUSTOM_AUTH_CODE } from '../errors';
 import { lockEligibleAuthUser } from '../user-eligibility';
 
 export class GoogleIdentityDenied extends APIError {

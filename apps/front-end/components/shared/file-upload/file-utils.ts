@@ -1,46 +1,55 @@
 import type { FileWithPreview } from './file-types';
 import type { IconName } from '@/components/ui/icon';
-import type { FileError, FileRejection } from 'react-dropzone';
+import type { AcceptMap, Preparation } from '@/lib/files/accept';
+import type { MediaFile } from '@/lib/files/upload';
+import type { FileKind } from '@app/shared/validation/enums';
+import type { FileRejection } from 'react-dropzone';
 
 import { ErrorCode } from 'react-dropzone';
 import { toast } from 'sonner';
-import { downloadBlob, downloadUrl } from '@/lib/download';
-
+import { sanitizeFilename } from '@app/shared/filename';
 import {
-  fileInvalidTypeMessage,
-  fileRejectedMessage,
-  fileTooLargeMessage,
+  XLS_MIME_TYPE,
+  XLSX_MIME_TYPE,
+} from '@app/shared/validation/media-types';
+import {
   joinFormats,
-  tooManyFilesMessage,
-} from '@/utils/file-messages';
+  MSG_FILE_INVALID_TYPE,
+  MSG_FILE_REJECTED,
+  MSG_SUPPORTED_FORMATS,
+  MSG_TOO_MANY_FILES,
+} from '@/constants/messages';
+import {
+  INPUT_MAX_SIZE_MB,
+  inputTypeOf,
+  preparationsOf,
+  resolveFileType,
+} from '@/lib/files/accept';
+import { downloadBlob, downloadUrl } from '@/lib/files/download';
+
+interface SizeLimit {
+  label: string;
+  maxMB: number;
+}
 
 export interface UploadLimits {
-  maxSizeMB: number;
   maxFiles: number;
   /** From `getAcceptedFormats`; empty when `accept` names no concrete format. */
   formats: readonly string[];
+  /** From `getSizeLimits`. */
+  sizes: readonly SizeLimit[];
 }
 
 const TOO_MANY_FILES_TOAST = 'file-upload-too-many';
 
 export function notifyTooManyFiles(maxFiles: number) {
-  toast.error(tooManyFilesMessage(maxFiles), { id: TOO_MANY_FILES_TOAST });
+  toast.error(MSG_TOO_MANY_FILES(maxFiles), { id: TOO_MANY_FILES_TOAST });
 }
 
-function rejectionMessage(file: File, error: FileError, limits: UploadLimits) {
-  switch (error.code) {
-    case ErrorCode.FileTooLarge: {
-      return fileTooLargeMessage(file.name, limits.maxSizeMB);
-    }
-    case ErrorCode.FileInvalidType: {
-      return fileInvalidTypeMessage(file.name, limits.formats);
-    }
-    default: {
-      return fileRejectedMessage(file.name);
-    }
-  }
-}
-
+/**
+ * The dropzone checks type and count only: the size limit is per kind, and
+ * `prepareFile` words it.
+ */
 export function toastRejections(
   rejections: readonly FileRejection[],
   limits: UploadLimits
@@ -51,72 +60,99 @@ export function toastRejections(
       errors.find(({ code }) => code === ErrorCode.FileInvalidType) ??
       errors[0];
     if (!error) continue;
+    const safeName = sanitizeFilename(file.name);
     if (error.code === ErrorCode.TooManyFiles)
       notifyTooManyFiles(limits.maxFiles);
-    else toast.error(rejectionMessage(file, error, limits));
+    else if (error.code === ErrorCode.FileInvalidType)
+      toast.error(MSG_FILE_INVALID_TYPE(safeName, limits.formats));
+    else toast.error(MSG_FILE_REJECTED(safeName));
   }
 }
 
-export function getHelperText({ maxSizeMB, maxFiles, formats }: UploadLimits) {
+const SIZE_LABELS: Readonly<Record<Preparation, string>> = {
+  raster: 'الصور',
+  svg: 'SVG',
+  document: 'المستندات',
+};
+
+/** The limit `prepareFile` holds each listed kind to. */
+export function getSizeLimits(accept: AcceptMap): SizeLimit[] {
+  return preparationsOf(accept).map((preparation) => ({
+    label: SIZE_LABELS[preparation],
+    maxMB: INPUT_MAX_SIZE_MB[preparation],
+  }));
+}
+
+function sizeText(sizes: readonly SizeLimit[]) {
+  const [first] = sizes;
+  if (!first) return false;
+  return sizes.every(({ maxMB }) => maxMB === first.maxMB)
+    ? `${first.maxMB} MB`
+    : joinFormats(sizes.map(({ label, maxMB }) => `${label} ${maxMB} MB`));
+}
+
+export function getHelperText({ maxFiles, formats, sizes }: UploadLimits) {
+  const size = sizeText(sizes);
   return [
-    `أقصى حجم: ${maxSizeMB} MB`,
+    size && `أقصى حجم: ${size}`,
     maxFiles > 1 && `أقصى عدد: ${maxFiles}`,
-    formats.length > 0 && `الصيغ المدعومة: ${joinFormats(formats)}`,
+    formats.length > 0 && MSG_SUPPORTED_FORMATS(formats),
   ]
     .filter(Boolean)
     .join(' • ');
 }
 
+interface FileFacts {
+  name: string;
+  size: number;
+  mimeType: string;
+  kind: FileKind | undefined;
+}
+
+/** A picked `File` or a stored `MediaFile`, as a card shows it. */
+export function describeFile(file: File | MediaFile): FileFacts {
+  if (!(file instanceof File))
+    return {
+      name: file.displayName,
+      size: file.sizeBytes,
+      mimeType: file.mimeType,
+      kind: file.kind,
+    };
+  const mimeType = resolveFileType(file);
+  return {
+    name: file.name,
+    size: file.size,
+    mimeType,
+    kind: inputTypeOf(mimeType)?.kind,
+  };
+}
+
+export const isImageFile = (file: File | MediaFile) =>
+  describeFile(file).kind === 'image';
+
 export function getPreviewUrl({ file, preview }: FileWithPreview) {
   return preview || (file instanceof File ? undefined : file.url);
 }
 
-export function isImageFile({ file }: FileWithPreview) {
-  return file.type.startsWith('image/');
-}
+const KIND_ICONS: Readonly<Record<FileKind, IconName>> = {
+  image: 'solar:gallery-bold-duotone',
+  document: 'solar:document-text-bold-duotone',
+};
 
-const FILE_ICONS: { icon: IconName; types: string[]; extensions: string[] }[] =
-  [
-    {
-      icon: 'solar:document-text-bold-duotone',
-      types: ['pdf'],
-      extensions: ['.pdf', '.doc', '.docx'],
-    },
-    {
-      icon: 'solar:zip-file-bold-duotone',
-      types: ['zip', 'archive'],
-      extensions: ['.zip', '.rar'],
-    },
-    {
-      icon: 'solar:file-spreadsheet-bold-duotone',
-      types: ['excel'],
-      extensions: ['.xls', '.xlsx'],
-    },
-    {
-      icon: 'solar:video-frame-play-horizontal-bold-duotone',
-      types: ['video/'],
-      extensions: [],
-    },
-    {
-      icon: 'solar:music-note-2-bold-duotone',
-      types: ['audio/'],
-      extensions: [],
-    },
-    { icon: 'solar:gallery-bold-duotone', types: ['image/'], extensions: [] },
-  ];
+const TYPE_ICONS: ReadonlyMap<string, IconName> = new Map([
+  [XLSX_MIME_TYPE, 'solar:file-spreadsheet-bold-duotone'],
+  [XLS_MIME_TYPE, 'solar:file-spreadsheet-bold-duotone'],
+]);
 
-export function getFileIcon({ file }: FileWithPreview): IconName {
-  const name = file.name.toLowerCase();
-  const match = FILE_ICONS.find(
-    ({ types, extensions }) =>
-      types.some((type) => file.type.includes(type)) ||
-      extensions.some((extension) => name.endsWith(extension))
+export function getFileIcon({ mimeType, kind }: FileFacts): IconName {
+  return (
+    TYPE_ICONS.get(mimeType) ??
+    (kind ? KIND_ICONS[kind] : 'solar:file-bold-duotone')
   );
-  return match?.icon ?? 'solar:file-bold-duotone';
 }
 
 /** What `accept` lists, as users name it: `.jpg` → `JPG`, `application/pdf` → `PDF`. */
-export function getAcceptedFormats(accept: Record<string, string[]>): string[] {
+export function getAcceptedFormats(accept: AcceptMap): string[] {
   const formats = Object.entries(accept).flatMap(([mime, extensions]) => {
     if (extensions.length > 0)
       return extensions.map((ext) => ext.replace(/^\./, ''));
@@ -129,15 +165,7 @@ export function getAcceptedFormats(accept: Record<string, string[]>): string[] {
   ];
 }
 
-export function getFileExtension(name: string): string | undefined {
-  const dot = name.lastIndexOf('.');
-  return dot > 0 ? name.slice(dot + 1).toUpperCase() : undefined;
-}
-
-export function getDropzoneText(
-  accept: Record<string, string[]>,
-  maxFiles: number
-): string {
+export function getDropzoneText(accept: AcceptMap, maxFiles: number): string {
   const imagesOnly = Object.keys(accept).every((type) =>
     type.startsWith('image/')
   );
@@ -147,5 +175,5 @@ export function getDropzoneText(
 
 export function downloadFile({ file }: FileWithPreview) {
   if (file instanceof File) downloadBlob(file, file.name);
-  else downloadUrl(file.url, file.name);
+  else downloadUrl(file.url, file.displayName);
 }

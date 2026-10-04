@@ -29,9 +29,10 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { betterAuthMsg } from '@app/shared/messages/auth';
 
-import { BASE_ERROR_CODES, CUSTOM_AUTH_CODE } from '@/lib/auth/errors';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
@@ -204,7 +205,7 @@ describe.each([...PATHS])(
 
         expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
         expect(await response.json()).toEqual({
-          message: BASE_ERROR_CODES.INVALID_ORIGIN,
+          message: betterAuthMsg.INVALID_ORIGIN,
           code: CUSTOM_AUTH_CODE,
         });
         expect(response.headers.getSetCookie()).toEqual([]);
@@ -273,7 +274,7 @@ describe.each([...PATHS])(
 
       expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
       expect(await response.json()).toEqual({
-        message: BASE_ERROR_CODES.INVALID_ORIGIN,
+        message: betterAuthMsg.INVALID_ORIGIN,
         code: CUSTOM_AUTH_CODE,
       });
       expect(await credentialState(user.userId)).toEqual(UNTOUCHED);

@@ -1,12 +1,12 @@
-import type { EntityID } from '@/types';
+import type { EntityID } from '@app/shared/types';
 import type { ReactNode } from 'react';
 
 import { memo, useCallback, useId, useMemo, useState } from 'react';
 
 import { useController } from 'react-hook-form';
+import { MSG_LOADING, MSG_NO_RESULTS } from '@/constants/messages';
+import { useQueryData } from '@/lib/api/query';
 import { cn } from '@/lib/utils';
-
-import { useQueryData } from '@/utils/query';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -17,6 +17,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { ErrorState } from '@/components/ui/error-state';
 import { Icon } from '@/components/ui/icon';
 import {
   Popover,
@@ -73,7 +74,7 @@ function FormCombobox<T>({
   } = useController({ name });
   const [open, setOpen] = useState(false);
 
-  const { data, isLoading, isFetching, refetch } = useQueryData<T[]>({
+  const { data, isFetching, error, refetch } = useQueryData<T[]>({
     queryKey,
     href,
   });
@@ -141,27 +142,33 @@ function FormCombobox<T>({
           <Command data-lenis-prevent>
             <CommandInput placeholder={searchPlaceholder} className='h-input' />
             <CommandList>
-              {isLoading ? (
-                <div className='flex h-20 items-center justify-center font-semibold'>
-                  جاري التحميل...
-                </div>
-              ) : (
-                <>
-                  <CommandEmpty className='flex h-20 items-center justify-center font-semibold'>
-                    لاتوجد نتائج
-                  </CommandEmpty>
-                  <CommandGroup>
-                    {options.map((option) => (
-                      <OptionItem
-                        key={option.id}
-                        option={option}
-                        isSelected={option.id === selected}
-                        onSelect={handleSelect}
-                      />
-                    ))}
-                  </CommandGroup>
-                </>
+              {data && (
+                <CommandEmpty className='flex h-20 items-center justify-center font-semibold'>
+                  {MSG_NO_RESULTS}
+                </CommandEmpty>
               )}
+              {!data && error && (
+                <ErrorState
+                  error={error}
+                  refetch={refetch}
+                  className='m-1 py-4 text-sm'
+                />
+              )}
+              {!data && !error && (
+                <div className='flex h-20 items-center justify-center font-semibold'>
+                  {MSG_LOADING}
+                </div>
+              )}
+              <CommandGroup>
+                {options.map((option) => (
+                  <OptionItem
+                    key={option.id}
+                    option={option}
+                    isSelected={option.id === selected}
+                    onSelect={handleSelect}
+                  />
+                ))}
+              </CommandGroup>
             </CommandList>
             {footer}
           </Command>

@@ -9,12 +9,12 @@ import { generateState, parseState } from 'better-auth/oauth2';
 import { google } from 'better-auth/social-providers';
 import * as z from 'zod';
 
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_INTERNAL_ERROR,
   MSG_INVALID_INPUT,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/common';
 import {
   googleStartSchema,
   OAUTH_PROVIDERS,

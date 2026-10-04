@@ -1,7 +1,24 @@
 import * as z from 'zod';
 
-import { MSG_INVALID_INPUT } from '../api-messages';
-import { safeDate } from '../time';
+import { MSG_INVALID_INPUT } from '../messages/common';
+import {
+  idRequired,
+  ISSUE_FALLBACKS,
+  MSG_COLOR_INVALID,
+  MSG_EMAIL_INVALID,
+  MSG_EMAIL_PROVIDER_NOT_ACCEPTED,
+  MSG_EMAIL_TOO_LONG,
+  MSG_PASSWORD_INVALID,
+  MSG_PASSWORD_REQUIRED,
+  MSG_PASSWORD_TOO_LONG,
+  MSG_PASSWORD_TOO_SHORT,
+  MSG_PHONE_INVALID,
+  MSG_PHONE_REQUIRED,
+  MSG_SLUG_DIGITS_ONLY,
+  MSG_SLUG_INVALID_CHARACTERS,
+  MSG_SLUG_TOO_LONG,
+  MSG_UNRECOGNIZED_KEYS,
+} from '../messages/validation';
 import {
   normalizeArabicDigits,
   UUID_V7_FRAGMENT,
@@ -74,30 +91,6 @@ export const STRICT_SINGLE_LINE_DESCRIPTION = `${STRICT_TEXT_DESCRIPTION}. Line 
 export const strictTextMaximum = (max: number) =>
   `After that it must be at most ${max} characters.`;
 
-export const idRequired =
-  'رقم المعرف غير صحيح، اعد تحميل الصفحة ثم حاول مرة اخرى';
-
-/**
- * A server-owned Arabic message per issue code, for every schema node that did
- * not author one.
- *
- * An issue code absent from this map takes `MSG_INVALID_INPUT` from the `??`
- * below, so `invalid_union` needs no entry — that is the message it would carry.
- *
- * Mapped HERE rather than at each node, because a node is exactly where it gets
- * forgotten, and a Zod default is an English message in an Arabic dashboard.
- */
-const ISSUE_FALLBACKS: Readonly<Record<string, string>> = {
-  invalid_type: 'قيمة الحقل مفقودة أو من نوع غير صحيح',
-  invalid_value: 'قيمة الحقل غير مسموحة',
-  invalid_format: 'تنسيق قيمة الحقل غير صحيح',
-  invalid_key: 'أحد مفاتيح الطلب غير صالح',
-  invalid_element: 'أحد عناصر القائمة غير صالح',
-  too_big: 'القيمة أكبر من الحد المسموح',
-  too_small: 'القيمة أصغر من الحد المسموح',
-  not_multiple_of: 'القيمة غير صحيحة',
-};
-
 /**
  * Does this message come from this project, or from Zod?
  *
@@ -124,30 +117,39 @@ function reflectPath(path: readonly PropertyKey[]): string {
 }
 
 /**
- * First-issue message for a failed `safeParse`, with a localized message for
- * `.strict()` rejections. Zod's built-in unknown-key message is English and
- * would be the only non-Arabic string a client ever sees; naming the offending
- * keys is also what turns a silently-stripped typo into an actionable 422.
+ * The server's message for an issue no schema node authored: the code's entry
+ * in `ISSUE_FALLBACKS` with the field path, which Zod's own defaults do not
+ * name, or the offending keys of a `.strict()` rejection. Zod's built-in
+ * unknown-key message is English and would be the only non-Arabic string a
+ * client ever sees; naming the keys is also what turns a silently-stripped typo
+ * into an actionable 422.
  *
- * A message the schema authored wins. Anything else is replaced from
- * `ISSUE_FALLBACKS` and annotated with the field path, which Zod's own defaults
- * do not name.
+ * Takes the raw issue too, so a client can install it as Zod's `customError`
+ * and word every unauthored issue exactly as this server does.
  */
+export function localizedIssueMessage(
+  issue: z.core.$ZodIssue | z.core.$ZodRawIssue
+): string {
+  if (issue.code === 'unrecognized_keys')
+    return unrecognizedKeysMessage(issue.keys);
+  return `${ISSUE_FALLBACKS[issue.code] ?? MSG_INVALID_INPUT}${reflectPath(issue.path ?? [])}`;
+}
+
+/** First-issue message for a failed `safeParse`. A message the schema authored wins. */
 export function zodIssueMessage(error: z.ZodError): string {
   const issue = error.issues[0];
   if (!issue) return MSG_INVALID_INPUT;
-  if (issue.code === 'unrecognized_keys')
-    return `حقول غير معروفة في الطلب: ${reflectKeys(issue.keys)}`;
-  if (ARABIC_LETTER.test(issue.message)) return issue.message;
-  return `${ISSUE_FALLBACKS[issue.code] ?? MSG_INVALID_INPUT}${reflectPath(issue.path)}`;
+  if (issue.code !== 'unrecognized_keys' && ARABIC_LETTER.test(issue.message))
+    return issue.message;
+  return localizedIssueMessage(issue);
 }
 
-function reflectKeys(keys: readonly PropertyKey[]): string {
+function unrecognizedKeysMessage(keys: readonly PropertyKey[]): string {
   const named = keys
     .slice(0, MAX_REFLECTED_KEYS)
     .map((key) => String(key).slice(0, MAX_REFLECTED_KEY_LENGTH));
   const hidden = keys.length - named.length;
-  return hidden > 0 ? `${named.join('، ')} (+${hidden})` : named.join('، ');
+  return MSG_UNRECOGNIZED_KEYS(named, hidden);
 }
 
 export const ID_DESCRIPTION =
@@ -171,6 +173,12 @@ export const idSchema = z.preprocess(
   // the right type is answered as `invalid_type` instead of as a bad format.
   (v: string) => validID(v) || '',
   idStringSchema
+);
+
+/** `null` means "none"; where a key may be omitted, a missing one means "unchanged". */
+export const nullableIdSchema = z.preprocess(
+  (value: string | null) => (value == null ? null : validID(value) || 0),
+  idStringSchema.nullable()
 );
 
 /**
@@ -241,12 +249,9 @@ export const emailSchema = z.preprocess(
   (v: string) =>
     typeof v === 'string' ? v.replaceAll(/\s+/g, ' ').trim().toLowerCase() : '',
   z
-    .email('يرجى إدخال بريد إلكتروني صحيح')
-    .max(EMAIL_MAX, `يجب أن لا يتجاوز البريد الإلكتروني ${EMAIL_MAX} حرفاً`)
-    .regex(
-      EMAIL_ALLOWLIST_PATTERN,
-      'نعتذر، حالياً نقبل التسجيل فقط عبر بريد Gmail أو Outlook أو Hotmail أو Yahoo. يرجى استخدام أحد هذه العناوين.'
-    )
+    .email(MSG_EMAIL_INVALID)
+    .max(EMAIL_MAX, MSG_EMAIL_TOO_LONG)
+    .regex(EMAIL_ALLOWLIST_PATTERN, MSG_EMAIL_PROVIDER_NOT_ACCEPTED)
     // The document's whole request rule for this field: `pattern` REPLACES the
     // `allOf` the two checks above convert to. See `EMAIL_INPUT_PATTERN`.
     //
@@ -287,6 +292,61 @@ export const normalizePasswordInput = (v: string) =>
  */
 const PASSWORD_DESCRIPTION = `Unicode-normalised (NFKC) before validation, so it may be sent as typed and every rule below measures the normalised form: ${PASSWORD_MIN} to ${PASSWORD_MAX} characters counted as Unicode code points, containing at least one ASCII lowercase letter (a-z), one ASCII uppercase letter (A-Z), one ASCII digit (0-9), and at least one character outside those three ranges. A character that NFKC folds into one of those ranges counts as it. The line terminators U+000A, U+000D, U+2028 and U+2029 are rejected anywhere in the value.`;
 
+/** Every rule `passwordSchema` applies, in the order a client lists them. */
+export const PASSWORD_RULES = [
+  'length',
+  'digit',
+  'lowercase',
+  'uppercase',
+  'other',
+  'singleLine',
+] as const;
+
+export type PasswordRule = (typeof PASSWORD_RULES)[number];
+
+const PASSWORD_CHARACTER_CLASSES: Record<
+  Exclude<PasswordRule, 'length' | 'singleLine'>,
+  RegExp
+> = {
+  digit: /[0-9]/,
+  lowercase: /[a-z]/,
+  uppercase: /[A-Z]/,
+  other: /[^a-zA-Z0-9]/,
+};
+
+/**
+ * `.` matches anything but the four line terminators `PASSWORD_DESCRIPTION`
+ * names. It is also the `.*$` that closes `PASSWORD_PATTERN`.
+ */
+const PASSWORD_SINGLE_LINE = /^.*$/;
+
+/* eslint-disable-next-line security/detect-non-literal-regexp -- built from the
+   module-local literals above, which no caller can influence */
+const PASSWORD_PATTERN = new RegExp(
+  `^${Object.values(PASSWORD_CHARACTER_CLASSES)
+    .map((pattern) => `(?=.*${pattern.source})`)
+    .join('')}.*$`
+);
+
+/**
+ * Which of `PASSWORD_RULES` a typed value meets, measured as `passwordSchema`
+ * measures it: after NFKC, with the length in code points.
+ */
+export function checkPasswordRules(
+  value: string
+): Record<PasswordRule, boolean> {
+  const normalized = value.normalize('NFKC');
+  const length = [...normalized].length;
+  return {
+    length: length >= PASSWORD_MIN && length <= PASSWORD_MAX,
+    digit: PASSWORD_CHARACTER_CLASSES.digit.test(normalized),
+    lowercase: PASSWORD_CHARACTER_CLASSES.lowercase.test(normalized),
+    uppercase: PASSWORD_CHARACTER_CLASSES.uppercase.test(normalized),
+    other: PASSWORD_CHARACTER_CLASSES.other.test(normalized),
+    singleLine: PASSWORD_SINGLE_LINE.test(normalized),
+  };
+}
+
 /**
  * ⚠️ Also checks EXISTING passwords, at sign-in, re-auth and `currentPassword`:
  * tightening this or `PASSWORD_MIN` locks out stored passwords that no longer
@@ -295,12 +355,10 @@ const PASSWORD_DESCRIPTION = `Unicode-normalised (NFKC) before validation, so it
 export const passwordSchema = z.preprocess(
   normalizePasswordInput,
   z
-    .string('كلمة المرور مطلوبة')
-    .min(PASSWORD_MIN, `كلمة المرور يجب أن تكون ${PASSWORD_MIN} أحرف على الأقل`)
-    .max(PASSWORD_MAX, `كلمة المرور يجب أن لا تتجاوز ${PASSWORD_MAX} حرفاً`)
-    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^a-zA-Z0-9]).*$/, {
-      error: 'تحقق من صحة كلمة المرور',
-    })
+    .string(MSG_PASSWORD_REQUIRED)
+    .min(PASSWORD_MIN, MSG_PASSWORD_TOO_SHORT)
+    .max(PASSWORD_MAX, MSG_PASSWORD_TOO_LONG)
+    .regex(PASSWORD_PATTERN, { error: MSG_PASSWORD_INVALID })
     // ⚠️ None of the four rules above survives into the document, because each
     // would refuse requests this schema accepts. NFKC folds an unbounded,
     // non-enumerable set of characters into the ASCII classes — a fullwidth or
@@ -331,8 +389,6 @@ export const reauthPasswordSchema = passwordSchema
 
 // Saudi phone: strips non-digits, accepts 966XXXXXXXXX / 05XXXXXXXX / 5XXXXXXXX
 const phoneCleanupRegex = /[^\d]/g;
-const saudiPhoneEmptyError = 'رقم الهاتف مطلوب';
-const saudiPhoneFormatError = 'يرجى إدخال رقم هاتف سعودي صحيح';
 
 export const phoneSchema = z.preprocess(
   // `string | number` is what the published `anyOf` below accepts, so it is also
@@ -343,10 +399,10 @@ export const phoneSchema = z.preprocess(
     return normalizeArabicDigits(v).replaceAll(phoneCleanupRegex, '');
   },
   z
-    .string(saudiPhoneEmptyError)
-    .min(1, saudiPhoneEmptyError)
-    .max(PHONE_NUMBER_MAX, saudiPhoneFormatError)
-    .regex(/^(?:9665\d{8}|05\d{8}|5\d{8})$/, saudiPhoneFormatError)
+    .string(MSG_PHONE_REQUIRED)
+    .min(1, MSG_PHONE_REQUIRED)
+    .max(PHONE_NUMBER_MAX, MSG_PHONE_INVALID)
+    .regex(/^(?:9665\d{8}|05\d{8}|5\d{8})$/, MSG_PHONE_INVALID)
     .transform((val) => {
       // Normalize to 9665XXXXXXXX
       if (val.startsWith('966')) return val;
@@ -387,54 +443,39 @@ export const optionalPhoneSchema = z
       'Saudi mobile number, as accepted by the required form. `null` or an empty string clears it; omitting the key on an update leaves it unchanged.',
   });
 
+/**
+ * Passes a non-string through for the same reason as `slugPreprocess`.
+ * @knipignore
+ */
+export const trimed = (v: string) => (typeof v === 'string' ? v.trim() : v);
 /** @knipignore */
-export const trimed = (v: string) => (typeof v === 'string' ? v.trim() : '');
-/** @knipignore */
-export const richTextSchema = z.any();
-/** @knipignore */
-export const datePreprocess = (val: unknown) => {
-  const accepted =
-    typeof val === 'string' || typeof val === 'number' || val instanceof Date;
-  const date = accepted ? safeDate(val) : null;
-  return date ? date.toISOString() : null;
-};
-/** @knipignore */
-export const fileUploadSchema = ({
-  max,
-  withPdf = false,
-}: {
-  /** Maximum file size in bytes */
-  max: number;
-  withPdf?: boolean;
-}) =>
-  z
-    .file(`قم برفع صور ${withPdf ? 'أو ملف PDF' : ''} صحيحة`)
-    .min(1000, `حجم الصورة  ${withPdf ? 'أو ملف PDF' : ''} صغير للغايه`)
-    // A client may accept larger files only if it downsizes them before upload.
-    .max(max, `حجم الصورة  ${withPdf ? 'أو ملف PDF' : ''} كبير للغايه`)
-    .mime(['image/png', 'image/webp', ...(withPdf ? ['application/pdf'] : [])]);
+export const richTextSchema = z.unknown();
 
 // eslint-disable-next-line security/detect-unsafe-regex
 const colorRegex = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
-const colorError = 'قم بادخال لون صحيح';
+const opaqueColorRegex = /^#[0-9A-Fa-f]{6}$/;
 
 /** @knipignore */
 export const getColorSchema = (
   props: {
     optional?: boolean;
+    alpha?: boolean;
   } = {}
 ) => {
-  const { optional = false } = props;
+  const { optional = false, alpha = true } = props;
 
-  const schema = z.string(colorError).regex(colorRegex, colorError);
+  const schema = z
+    .string(MSG_COLOR_INVALID)
+    .regex(alpha ? colorRegex : opaqueColorRegex, MSG_COLOR_INVALID);
+
+  const empty = optional ? null : '';
 
   return z.preprocess(
-    (v: string | null | undefined) =>
-      typeof v === 'string'
-        ? v.replaceAll(/\s+/g, '').toUpperCase() || (optional ? null : '')
-        : optional
-          ? null
-          : '',
+    (v: string | null | undefined) => {
+      if (typeof v === 'string')
+        return v.replaceAll(/\s+/g, '').toUpperCase() || empty;
+      return v ?? empty;
+    },
     optional ? schema.nullish() : schema
   );
 };
@@ -446,7 +487,7 @@ const SLUG_MAX = 150;
  * Passes a non-string through rather than coercing it to `''`, which would
  * satisfy the inner schema's `v === ''` escape hatches and accept `123`.
  */
-const slugPreprocess = (v: string) => {
+export const slugPreprocess = (v: string) => {
   if (typeof v !== 'string') return v;
 
   return v
@@ -461,19 +502,16 @@ export const slugSchema = z.preprocess(
   slugPreprocess,
   z
     .string()
-    .max(SLUG_MAX, 'الـ slug طويل جداً')
+    .max(SLUG_MAX, MSG_SLUG_TOO_LONG)
     .meta({
       maxLength: undefined,
       description: `Lowercased, trimmed, and whitespace and repeated hyphens collapsed to single hyphens before validation, so it may be sent as typed. ${strictTextMaximum(SLUG_MAX)}`,
     })
     .refine(
       (v) => v === '' || /^[a-z0-9-]+$/.test(v),
-      'الـ slug يحتوي على أحرف غير مسموحة'
+      MSG_SLUG_INVALID_CHARACTERS
     )
-    .refine(
-      (v) => v === '' || /[a-z]/.test(v),
-      'الـ slug لا يمكن أن يكون أرقام فقط'
-    )
+    .refine((v) => v === '' || /[a-z]/.test(v), MSG_SLUG_DIGITS_ONLY)
 );
 // ⚠️ Nothing in this module may import from `../images/`. `svg-optimizer`
 // imports `isomorphic-dompurify`, whose Node entry constructs a jsdom window at

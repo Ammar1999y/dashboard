@@ -265,7 +265,10 @@ export function createDialog<T = void>(
     // Not `??`: a payload that is `null` while open must not fall through to
     // what the dialog showed last time.
     usePayload: () => useStore((s) => (s.state ? s.state.payload : s.rendered)),
-    getPayload: () => useStore.getState().state?.payload ?? null,
+    getPayload: () => {
+      const { state } = useStore.getState();
+      return state ? state.payload : null;
+    },
     restoreFocus: (event) => {
       const target = opener;
       opener = null;

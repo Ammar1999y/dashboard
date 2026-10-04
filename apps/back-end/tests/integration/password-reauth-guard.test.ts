@@ -27,16 +27,19 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
-import { HTTP_STATUS, MSG_INVALID_CREDENTIALS } from '@app/shared/api-messages';
+import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import {
+  MSG_INVALID_CREDENTIALS,
+  twoFactorMsg,
+} from '@app/shared/messages/auth';
+import { userMsg } from '@app/shared/messages/users';
 
-import { CUSTOM_AUTH_CODE } from '@/lib/auth/errors';
 import {
   LOCK_DURATION_SECONDS,
   MAX_FAILED_ATTEMPTS,
 } from '@/lib/auth/login-guard';
-import { twoFactorMsg } from '@/lib/auth/messages';
 import { PUBLIC_ORIGIN } from '@/lib/env';
-import { userMsg } from '@/lib/users/messages';
 
 import { resetTables } from '../helpers/database';
 import { sentMail, settleDelivery } from '../helpers/mailbox';

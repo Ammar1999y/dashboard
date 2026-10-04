@@ -11,14 +11,14 @@ import { useForm } from 'react-hook-form';
 
 import {
   toProjectForm,
-  updateProjectSchema,
+  updateProjectBodySchema,
 } from '@/utils/validation/projects';
 
 import { Form } from '@/components/form/form';
 
 import { EditRecord } from '../shared/edit-record';
 import { FormHeader } from '../shared/form-header';
-import { useEntityMutations, withoutId } from '../shared/use-entity-mutations';
+import { useEntityMutations } from '../shared/use-entity-mutations';
 import { projectEntity } from './entity';
 import { ProjectFields } from './fields';
 
@@ -28,19 +28,14 @@ export default function EditProject() {
 
 const ProjectEditForm = memo(({ record }: { record: ProjectClient }) => {
   const methods = useForm<UpdateProjectInput, unknown, UpdateProjectOutput>({
-    resolver: zodResolver(updateProjectSchema),
+    resolver: zodResolver(updateProjectBodySchema),
     defaultValues: toProjectForm(record),
   });
   const { update } = useEntityMutations<ProjectClient>(projectEntity);
 
   const onSubmit = useCallback(
-    (data: UpdateProjectOutput) => {
-      const payload = withoutId(data);
-      return update(record.id, payload, (updatedAt) => ({
-        ...payload,
-        updatedAt,
-      }));
-    },
+    (data: UpdateProjectOutput) =>
+      update(record.id, data, (updatedAt) => ({ ...data, updatedAt })),
     [record.id, update]
   );
 

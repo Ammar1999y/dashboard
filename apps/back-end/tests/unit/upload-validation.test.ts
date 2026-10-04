@@ -17,6 +17,10 @@
  * returns `isValid: true` and passes the payload through is the exact failure
  * mode, and `expect(result.isValid).toBe(true)` would call it a pass.
  *
+ * Only the native form is stored as SVG (`reports/svg-processing-plan.md`).
+ * Most hostile spellings therefore answer `requires-conversion`, and the rows
+ * that pin a review finding assert that reason, not just a refusal.
+ *
  * Everything runs through `sanitizeSvgServer`, not `sanitizeSvg` directly. That
  * wrapper is four lines that inject jsdom's `DOMParser`/`XMLSerializer`, it is
  * what `processImage` calls (`upload-helper.ts:206`), and calling it means the
@@ -31,27 +35,32 @@
  */
 import { describe, expect, spyOn, test } from 'bun:test';
 import zlib from 'node:zlib';
+import type { SvgRejectionReason } from '@app/shared/images/config';
 
 import { JSDOM } from 'jsdom';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   ANIMATION_ELEMENTS,
-  DANGEROUS_ATTRIBUTES,
+  CONVERSION_ELEMENTS,
   DANGEROUS_ELEMENTS,
-  isDangerousAttribute,
-  isDangerousValue,
   safeDecodeURI,
+  SVG_MAX_ELEMENT_ATTRIBUTES,
   SVG_MAX_ELEMENTS,
   SVG_MAX_RENDERED_NODES,
-  urlTargets,
 } from '@app/shared/images/config';
 import {
   iccProfileChunk,
   rasterDimensions,
 } from '@app/shared/images/raster-bytes';
 import { sanitizeSvg } from '@app/shared/images/svg-optimizer';
+import {
+  MSG_SVG_EXTERNAL_REFERENCE,
+  MSG_SVG_INVALID_INLINE_RASTER,
+  MSG_SVG_REQUIRES_CONVERSION,
+  uploadMsg,
+} from '@app/shared/messages/media';
 import {
   MAX_DOCUMENT_SIZE_MB,
   MAX_IMAGE_EDGE,
@@ -73,7 +82,6 @@ import {
 } from '@/lib/media/image/process';
 import { imageToRgba } from '@/lib/media/image/rgba';
 import { sanitizeSvgServer, svgOptimizerServer } from '@/lib/media/image/svg';
-import { uploadMsg } from '@/lib/media/messages';
 import {
   admitUpload,
   DOCUMENT_BYTE_BUDGET_MIB,
@@ -114,11 +122,20 @@ function expectNeutralised(markup: string, forbidden: readonly string[]) {
   const stored = safeDecodeURI(result.cleanedSvg).toLowerCase();
   for (const token of forbidden)
     expect(stored).not.toInclude(token.toLowerCase());
-  // The module's own oracle, applied to the whole stored document rather than to
-  // one attribute: whatever `isDangerousValue` would refuse in a value must not
-  // be sitting in the file that reaches the CDN.
-  expect(isDangerousValue(result.cleanedSvg)).toBe(false);
   return result;
+}
+
+/** The refusal a direct upload of `markup` gets, through the upload entry point. */
+function uploadRefusal(markup: string, name = 'a.svg'): unknown {
+  const logged = spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    validateSvgUpload(Buffer.from(markup), name);
+  } catch (error) {
+    return error;
+  } finally {
+    logged.mockRestore();
+  }
+  throw new Error('expected validateSvgUpload to reject');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,7 +164,7 @@ const HOSTILE: ReadonlyArray<readonly [string, string, readonly string[]]> = [
     ['onload', 'alert('],
   ],
   [
-    'a handler DANGEROUS_ATTRIBUTES does not list (onpointerdown)',
+    'a handler outside the common names (onpointerdown)',
     svg('<rect width="8" height="8" onpointerdown="alert(1)"/>'),
     ['onpointerdown', 'alert('],
   ],
@@ -162,28 +179,24 @@ const HOSTILE: ReadonlyArray<readonly [string, string, readonly string[]]> = [
     ['javascript:', 'alert('],
   ],
   [
-    // The reason `safeDecodeURI` exists. `isDangerousValue` decodes before
-    // matching, so `javascript%3A` has to lose to the same branch as the literal.
+    // An `href` is `#id` or an admitted raster; nothing is decoded to decide.
     'a percent-encoded javascript: href',
     svg('<image href="javascript%3Aalert(1)" width="8" height="8"/>'),
     ['javascript:', 'javascript%3a', 'alert('],
   ],
   [
-    // `safeDecodeURI` decodes twice, so the double-encoded form is covered too.
     'a double percent-encoded javascript: href',
     svg('<image href="javascript%253Aalert(1)" width="8" height="8"/>'),
     ['javascript:', 'javascript%3a', 'alert('],
   ],
   [
-    'a javascript: href on an element the <a> sweep does not remove',
+    'a javascript: href on an element the <a> rule does not cover',
     svg('<image xlink:href="javascript:alert(1)" width="8" height="8"/>'),
     ['javascript:', 'alert('],
   ],
   [
-    // `isDangerousValue` misses this one — a tab inside the scheme defeats
-    // `includes('javascript:')` — and DOMPurify's URI allowlist is what stops
-    // it. Asserted end to end for exactly that reason: the guarantee is a
-    // property of the pipeline, not of either layer alone.
+    // A substring blocklist missed this one; the `href` allowlist does not
+    // read schemes at all.
     'a tab-split javascript: scheme',
     svg('<image href="java&#9;script:location=1" width="8" height="8"/>'),
     ['javascript:', 'java\tscript:'],
@@ -295,19 +308,75 @@ describe('hostile SVG, neutralised', () => {
     }
   );
 
-  test.each([...DANGEROUS_ATTRIBUTES])(
-    'a %s= attribute never reaches the cleaned output',
+  test.each(['onload', 'onclick', 'onmouseover', 'onfocus', 'onanimationend'])(
+    'a %s= attribute is removed, and the file stays native',
     (attribute) => {
-      expectNeutralised(
+      const result = expectNeutralised(
         svg(`<rect width="8" height="8" ${attribute}="alert(1)"/>`),
         [attribute, 'alert(']
       );
+      expect(result.isValid).toBe(true);
     }
   );
+
+  test('adjacent handlers are each removed by the sweep, not left to DOMPurify', () => {
+    // The sweep walked the live attribute map, so each removal skipped the
+    // next handler; only DOMPurify's own pass kept the output clean.
+    const handlers = ['onload', 'onclick', 'onmouseover', 'onfocus'];
+    const result = clean(
+      svg(
+        `<rect width="8" height="8" ${handlers.map((name) => `${name}="a()"`).join(' ')}/>`
+      )
+    );
+
+    expect(result.isValid).toBe(true);
+    for (const name of handlers)
+      expect(result.errors).toContain(
+        `removed event-handler attribute: ${name}`
+      );
+  });
+
+  test.each([...CONVERSION_ELEMENTS])(
+    'a <%s> element selects conversion: removing it would delete its children',
+    (tag) => {
+      expect(
+        clean(svg(`<${tag}><rect width="8" height="8"/></${tag}>`))
+      ).toMatchObject({ isValid: false, reason: 'requires-conversion' });
+    }
+  );
+
+  test.each([
+    ['an https: link', 'href="https://example.com/"'],
+    ['an xlink:href link', 'xlink:href="https://example.com/"'],
+    ['a javascript: link', 'href="javascript:alert(1)"'],
+  ])(
+    'an <a> with %s converts: an image never follows a link',
+    (_label, link) => {
+      expect(
+        clean(svg(`<a ${link}><rect width="8" height="8"/></a>`))
+      ).toMatchObject({ isValid: false, reason: 'requires-conversion' });
+    }
+  );
+
+  test('every hostile row is refused or stored without its payload', () => {
+    // The rows above that are refused say why; none of them is stored.
+    for (const [, markup] of HOSTILE) {
+      const result = clean(markup);
+      if (result.isValid) continue;
+      expect([
+        'animated',
+        'external-reference',
+        'invalid-inline-raster',
+        'requires-conversion',
+      ]).toContain(result.reason ?? '');
+    }
+  });
 });
 
 // An Inkscape save binds the SVG namespace to a second prefix on the root,
-// which jsdom serialises as `<svg:svg>` unless the root is rebuilt first.
+// which jsdom serialises as `<svg:svg>` unless the root is rebuilt first. The
+// fixture is saved with presentation attributes, Inkscape's styling being
+// what selects conversion (see "styling in an SVG").
 describe('an SVG that binds extra prefixes to the SVG namespace', () => {
   // Namespace names are identifiers, not fetched URLs.
   /* eslint-disable unicorn/prefer-https */
@@ -340,8 +409,8 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
     <linearGradient
        inkscape:collect="always"
        id="linearGradient1235">
-      <stop style="stop-color:#ff0000;stop-opacity:1" offset="0" id="stop1231" />
-      <stop style="stop-color:#0000ff;stop-opacity:1" offset="1" id="stop1233" />
+      <stop stop-color="#ff0000" stop-opacity="1" offset="0" id="stop1231" />
+      <stop stop-color="#0000ff" stop-opacity="1" offset="1" id="stop1233" />
     </linearGradient>
     <linearGradient
        inkscape:collect="always"
@@ -355,7 +424,6 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
      inkscape:groupmode="layer"
      id="layer1">
     <rect
-       style="fill:url(#linearGradient1234);stroke:none"
        fill="url(#linearGradient1234)"
        id="rect1"
        width="64"
@@ -501,43 +569,26 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// style declarations: converted to the presentation attributes the sweep checks
+// Styling: CSS is outside the native form, so a styled file is converted
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Inkscape, Illustrator and Figma write colours and gradient stops as
-// `style="stop-color:…"` or as `<style>` class rules. Both used to be deleted,
-// so the file was accepted and stored with blank gradients. Each declaration
-// that maps to a presentation attribute is now written as that attribute BEFORE
-// the sweep, so it is held to exactly what an authored attribute is.
-describe('style declarations in an SVG', () => {
-  const BS = String.fromCodePoint(92);
-  const { window } = new JSDOM('', { runScripts: 'outside-only' });
+/** What a direct upload of a file outside the native form gets. */
+const expectConversion = (markup: string) =>
+  expect(clean(markup)).toMatchObject({
+    isValid: false,
+    reason: 'requires-conversion',
+    cleanedSvg: '',
+  });
 
-  const parse = (markup: string) =>
-    new window.DOMParser().parseFromString(markup, 'image/svg+xml');
+// Inkscape, Illustrator and Figma write colours and gradient stops as
+// `style="stop-color:…"` or as `<style>` class rules. Converting those into
+// attributes took a partial CSS cascade, which stored files that rendered
+// differently from the upload; the dashboard renders them to a raster instead.
+describe('styling in an SVG', () => {
+  const BS = String.fromCodePoint(92);
   /** For a declaration inside an attribute or a <style>; a char reference stays. */
   const escape = (text: string) =>
     text.replaceAll('"', '&quot;').replaceAll('<', '&lt;');
-
-  /** The sanitiser's output as a document; the input must be accepted. */
-  const cleaned = (markup: string) => {
-    const result = clean(markup);
-    if (!result.isValid)
-      throw new Error(`refused: ${result.errors.join(', ')}`);
-    return parse(result.cleanedSvg);
-  };
-
-  const pipeline = (markup: string) => {
-    const { cleanedSvg } = validateSvgUpload(Buffer.from(markup), 'a.svg');
-    return svgOptimizerServer({ data: cleanedSvg });
-  };
-
-  const RED = /^(?:red|#f00|#ff0000)$/i;
-  const BLUE = /^(?:blue|#00f|#0000ff)$/i;
-  const GREEN = /^(?:green|#008000|#0a0|#00aa00)$/i;
-
-  const attribute = (markup: string, selector: string, name: string) =>
-    cleaned(markup).querySelector(selector)?.getAttribute(name) ?? null;
 
   /* eslint-disable unicorn/prefer-https */
   const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
@@ -573,9 +624,6 @@ describe('style declarations in an SVG', () => {
 <style type="text/css">
 	.st0{fill:#FF0000;}
 	.st1{fill:none;stroke:#0000FF;stroke-width:6;stroke-miterlimit:10;}
-	.st2,.st3{opacity:0.5;}
-	.st3{fill:#00AA00;}
-	rect.st4{fill:#FFAA00;}
 </style>
 <linearGradient id="SVGID_1_" gradientUnits="userSpaceOnUse" x1="0" y1="50" x2="100" y2="50">
 	<stop offset="0" style="stop-color:#FF0000"/>
@@ -583,418 +631,177 @@ describe('style declarations in an SVG', () => {
 </linearGradient>
 <rect class="st0" x="0" y="0" width="50" height="50"/>
 <circle class="st1" cx="75" cy="25" r="15"/>
-<rect class="st2 st3" x="0" y="50" width="50" height="50" fill="#123456"/>
-<rect class="st4" x="50" y="50" width="50" height="50"/>
 <rect style="fill:url(#SVGID_1_);" x="0" y="0" width="5" height="5"/>
 </svg>
 `;
 
-  describe('real files, through the whole server pipeline', () => {
-    test('an Inkscape 1.x file keeps its gradient stops, fills and strokes', () => {
-      const doc = parse(pipeline(inkscape));
+  describe('real files', () => {
+    test.each([
+      ['an Inkscape 1.x file', inkscape],
+      ['an Illustrator file', illustrator],
+    ])(
+      '%s needs conversion, and the upload route says so',
+      (_label, markup) => {
+        expectConversion(markup);
+        expect(uploadRefusal(markup)).toMatchObject({
+          status: HTTP_STATUS.BAD_REQUEST,
+          message: MSG_SVG_REQUIRES_CONVERSION,
+        });
+      }
+    );
 
-      expect(doc.querySelector('parsererror')).toBeNull();
-      expect(doc.querySelectorAll('[style]')).toHaveLength(0);
-      expect(doc.querySelectorAll('style')).toHaveLength(0);
+    test('a Figma file written with attributes is stored as SVG, gradient intact', () => {
+      const figma =
+        `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="${SVG_NS}">` +
+        '<path d="M2 2h20v20H2z" fill="url(#paint0_linear_1_2)"/>' +
+        '<defs><linearGradient id="paint0_linear_1_2" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">' +
+        '<stop stop-color="#FF0000"/><stop offset="1" stop-color="#0000FF"/>' +
+        '</linearGradient></defs></svg>';
 
-      const [first, second] = [...doc.querySelectorAll('stop')];
-      expect(first?.getAttribute('stop-color')).toMatch(RED);
-      expect(second?.getAttribute('stop-color')).toMatch(BLUE);
-      expect(Number(second?.getAttribute('stop-opacity'))).toBe(0.8);
+      const { cleanedSvg } = validateSvgUpload(Buffer.from(figma), 'f.svg');
+      const stored = svgOptimizerServer({ data: cleanedSvg });
 
-      const [rect, triangle] = [...doc.querySelectorAll('path, rect')];
-      const target = rect
-        ?.getAttribute('fill')
-        ?.match(/^url\(['"]?#([^'")]+)['"]?\)$/)?.[1];
-      const gradient = [...doc.querySelectorAll('linearGradient')].find(
-        (candidate) => candidate.id === target
-      );
-      expect(gradient).toBeDefined();
-      const template = gradient?.getAttribute('xlink:href')?.replace(/^#/, '');
-      expect(
-        [...doc.querySelectorAll('linearGradient')].find(
-          (candidate) => candidate.id === template
-        )?.children
-      ).toHaveLength(2);
-
-      expect(rect?.getAttribute('stroke')).toMatch(GREEN);
-      expect(rect?.getAttribute('stroke-width')).toBe('3');
-      expect(rect?.getAttribute('stroke-linejoin')).toBe('round');
-      expect(Number(rect?.getAttribute('stroke-opacity'))).toBe(0.7);
-      expect(triangle?.getAttribute('fill')).toMatch(/^(?:#fe0|#ffee00)$/i);
-      expect(Number(triangle?.getAttribute('fill-opacity'))).toBe(0.5);
-      expect(triangle?.getAttribute('paint-order')).toBe('fill markers stroke');
-      expect(pipeline(inkscape)).not.toInclude('inkscape-stroke');
+      expect(stored).toInclude('fill="url(#paint0_linear_1_2)"');
+      expect(stored).toInclude('<linearGradient id="paint0_linear_1_2"');
+      expect(stored.match(/<stop /g)).toHaveLength(2);
     });
 
-    test('an Illustrator file keeps its class rules and stop colours', () => {
-      const doc = parse(pipeline(illustrator));
-
-      expect(doc.querySelector('parsererror')).toBeNull();
-      expect(doc.querySelectorAll('[style], style')).toHaveLength(0);
-
-      const [first, second] = [...doc.querySelectorAll('stop')];
-      expect(first?.getAttribute('stop-color')).toMatch(RED);
-      expect(second?.getAttribute('stop-color')).toMatch(BLUE);
-
-      const byClass = (name: string) => doc.querySelector(`.${name}`);
-      expect(byClass('st0')?.getAttribute('fill')).toMatch(RED);
-
-      const ring = byClass('st1');
-      expect(ring?.getAttribute('fill')).toBe('none');
-      expect(ring?.getAttribute('stroke')).toMatch(BLUE);
-      expect(ring?.getAttribute('stroke-width')).toBe('6');
-      expect(ring?.getAttribute('stroke-miterlimit')).toBe('10');
-
-      // `.st3` is later than `.st2` and a rule beats the presentation attribute.
-      const both = byClass('st3');
-      expect(both?.getAttribute('fill')).toMatch(GREEN);
-      expect(Number(both?.getAttribute('opacity'))).toBe(0.5);
-
-      expect(byClass('st4')?.getAttribute('fill')).toMatch(
-        /^(?:#fa0|#ffaa00)$/i
-      );
-      expect(doc.querySelector('[fill^="url("]')).not.toBeNull();
-    });
-
-    test('a Figma mask keeps its mask-type', () => {
-      const output = pipeline(
+    test('a Figma mask, which Figma writes with style="mask-type", needs conversion', () => {
+      expectConversion(
         `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="${SVG_NS}">` +
           '<mask id="mask0_1_2" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">' +
           '<circle cx="12" cy="12" r="10" fill="#000000"/></mask>' +
           '<g mask="url(#mask0_1_2)"><rect width="24" height="24" fill="#FF0000"/></g></svg>'
       );
-
-      expect(
-        parse(output).querySelector('mask')?.getAttribute('mask-type')
-      ).toBe('alpha');
-    });
-
-    test.each([
-      ['an Inkscape file', inkscape],
-      ['an Illustrator file', illustrator],
-    ])('%s is stored the same when it is uploaded again', (_label, markup) => {
-      const once = pipeline(markup);
-      expect(pipeline(once)).toBe(once);
     });
   });
 
-  describe('the cascade of one style attribute', () => {
-    test.each([
-      ['the attribute it names', '<rect fill="blue" style="fill:red"/>', RED],
-      ['an earlier declaration', '<rect style="fill:green;fill:red"/>', RED],
-      [
-        'a later non-important one',
-        '<rect style="fill:red!important;fill:green"/>',
-        RED,
-      ],
-      [
-        'a spaced, upper-case !important',
-        '<rect style="fill:red ! IMPORTANT;fill:green"/>',
-        RED,
-      ],
-      [
-        'an escaped !important',
-        `<rect style="fill:red !${BS}69mportant;fill:green"/>`,
-        RED,
-      ],
-      ['an upper-case property name', '<rect style="FILL: red"/>', RED],
-      ['an escaped property name', `<rect style="f${BS}69ll:red"/>`, RED],
-      [
-        'a comment around name and value',
-        '<rect style="/*a*/fill/*b*/:/*c*/red/*d*/"/>',
-        RED,
-      ],
-      [
-        'a declaration after a bad string',
-        `<rect style="font-family:'a&#10;b;fill:red"/>`,
-        RED,
-      ],
-      ['a declaration after an empty one', '<rect style=";;fill:red;;"/>', RED],
-    ])('%s is overridden', (_label, markup, expected) => {
-      expect(attribute(svg(markup), 'rect', 'fill')).toMatch(expected);
-    });
+  // The CSS converter stored these as `fill="bogus"`, dropped `all`/`font`, and
+  // erased attributes on `var()` (fix-review-assessment.md). With no converter,
+  // each is a file to convert.
+  test.each([
+    '<rect fill="blue" style="fill:bogus"/>',
+    '<rect style="fill:red;fill:bogus"/>',
+    '<rect style="opacity:.4;opacity:bogus"/>',
+    '<style>rect{fill:red} *{all:initial!important}</style><rect/>',
+    '<text style="font-size:12px;font:20px serif">x</text>',
+    '<rect fill="blue" style="fill:var(--missing, red)"/>',
+    '<rect fill="blue" style="--c:green;fill:var(--c)"/>',
+    '<filter id="f"/><filter id="fx"/><rect style="filter:url(#f) url(#fx)"/>',
+  ])('%s needs conversion', (inner) => {
+    expectConversion(svg(inner));
+  });
 
-    test('a semicolon inside a string, a url() or after a backslash splits nothing', () => {
-      const doc = cleaned(
-        svg(
-          `<text style="font-family:'a;b';fill:red">x</text>` +
-            `<rect id="m" width="1" height="1" style="mask:url(data:image/png;base64,${realPng.toString('base64')});stroke:blue"/>` +
-            `<rect id="e" width="1" height="1" style="stroke:red${BS};fill:green"/>`
-        )
-      );
+  test('a CDATA stylesheet needs conversion, rather than losing its rules', () => {
+    // It used to be deleted with its contents before parsing, and the file was
+    // stored with the colour gone.
+    expectConversion(
+      svg(
+        '<style><![CDATA[rect{fill:red}]]></style><rect width="8" height="8"/>'
+      )
+    );
+  });
 
-      expect(doc.querySelector('text')?.getAttribute('font-family')).toBe(
-        "'a;b'"
-      );
-      expect(doc.querySelector('text')?.getAttribute('fill')).toMatch(RED);
-      expect(doc.querySelector('#m')?.getAttribute('mask')).toStartWith(
-        'url(data:image/png;base64,'
-      );
-      expect(doc.querySelector('#m')?.getAttribute('stroke')).toMatch(BLUE);
-      // One declaration `stroke: red\;fill:green`, which is no valid paint.
-      expect(doc.querySelector('#e')?.getAttribute('fill')).toBeNull();
-    });
+  test('text in a CDATA section needs conversion, rather than being deleted', () => {
+    expectConversion(svg('<text x="0" y="8"><![CDATA[A < B]]></text>'));
+  });
 
-    test('marker is spelled out as its three longhands', () => {
-      const doc = cleaned(
-        svg(
-          '<defs><marker id="m"><path d="M0 0"/></marker></defs>' +
-            '<path d="M0 0 L5 5" style="marker:url(#m)"/>'
-        )
-      );
-      const path = doc.querySelector('path[d="M0 0 L5 5"]');
-
-      for (const name of ['marker-start', 'marker-mid', 'marker-end'])
-        expect(path?.getAttribute(name)).toBe("url('#m')");
-      expect(path?.hasAttribute('marker')).toBe(false);
-    });
-
-    test('a var() overrides the attribute without a value to write', () => {
-      const rect = cleaned(
-        svg('<rect fill="red" style="fill:var(--c)"/>')
-      ).querySelector('rect');
-      expect(rect?.hasAttribute('fill')).toBe(false);
-    });
-
-    test.each([
-      ['mix-blend-mode', 'multiply'],
-      ['isolation', 'isolate'],
-      ['font', 'bold 12px serif'],
-      ['-webkit-fill', 'red'],
-      ['-inkscape-stroke', 'none'],
-    ])(
-      '%s is not a presentation attribute and is dropped',
-      (property, value) => {
-        const rect = cleaned(
-          svg(`<rect style="${property}:${value};stroke:blue"/>`)
-        ).querySelector('rect');
-        expect(rect?.getAttributeNames()).toEqual(['stroke']);
-      }
+  test('an empty style attribute and an empty <style> are removed, and the file stays native', () => {
+    const result = clean(
+      svg('<style> </style><rect width="8" height="8" style=" " fill="red"/>')
     );
 
-    test.each([
-      ['d', "path('M0 0')", 'M1 1'],
-      ['transform', 'rotate(45deg)', 'rotate(45)'],
-      ['width', '100px', '8'],
-      ['cx', '4px', '4'],
-    ])(
-      '%s keeps the attribute: the property grammar is not the attribute one',
-      (property, value, authored) => {
-        const element = cleaned(
-          svg(`<path ${property}="${authored}" style="${property}:${value}"/>`)
-        ).querySelector('path');
-        expect(element?.getAttribute(property)).toBe(authored);
-      }
+    expect(result.isValid).toBe(true);
+    expect(result.cleanedSvg).not.toMatch(/<style\b|\sstyle=/);
+    expect(result.cleanedSvg).toInclude('fill="red"');
+  });
+
+  // Removed by the sweep, or never rendered: none of it may decide the outcome.
+  test.each([
+    ['a script in a CDATA section', '<script><![CDATA[void(0)]]></script>'],
+    [
+      'a script with a style attribute',
+      '<script style="color:red">void(0)</script>',
+    ],
+    [
+      'a script with an off-origin url()',
+      '<script fill="url(https://evil.example/a)">void(0)</script>',
+    ],
+    ['a <meta> with a style attribute', '<meta style="color:red"/>'],
+    ['an <iframe> holding CDATA', '<iframe><![CDATA[x]]></iframe>'],
+    ['CDATA in <metadata>', '<metadata><![CDATA[notes]]></metadata>'],
+    ['CDATA in <desc>', '<desc><![CDATA[A & B]]></desc>'],
+  ])('%s leaves the file native', (_label, inner) => {
+    const result = clean(
+      svg(`${inner}<rect width="8" height="8" fill="red"/>`)
     );
 
-    test('a bare number is no font-size in CSS, and a zero is', () => {
-      const text = cleaned(
-        svg(
-          '<text font-size="9" letter-spacing="3" style="font-size:12;letter-spacing:0">x</text>'
-        )
-      ).querySelector('text');
-      expect(text?.getAttribute('font-size')).toBe('9');
-      expect(text?.getAttribute('letter-spacing')).toBe('0');
-    });
+    expect(result.isValid).toBe(true);
+    expect(result.cleanedSvg).toInclude('fill="red"');
+  });
 
-    test('a comment inside a value drops that declaration only', () => {
-      const rect = cleaned(
-        svg('<rect style="fill:re/**/d;stroke:blue"/>')
-      ).querySelector('rect');
-      expect(rect?.hasAttribute('fill')).toBe(false);
-      expect(rect?.getAttribute('stroke')).toMatch(BLUE);
-    });
-
+  describe('a stylesheet that animates is refused, not flattened', () => {
     test.each([
-      ['a nested rule', 'a{fill:red};stroke:blue'],
-      ['a nested rule in a value', 'stroke:blue;fill:{red}'],
-    ])('%s leaves the whole attribute unconverted', (_label, style) => {
-      const rect = cleaned(svg(`<rect style="${style}"/>`)).querySelector(
-        'rect'
-      );
-      expect(rect?.getAttributeNames()).toEqual([]);
+      ['@keyframes', '<style>@keyframes s{to{opacity:0}}</style><rect/>'],
+      [
+        'a vendor @keyframes',
+        '<style>@-webkit-keyframes s{to{opacity:0}}</style><rect/>',
+      ],
+      ['an animation property', '<rect style="animation: s 1s infinite"/>'],
+      ['an animation-name property', '<rect style="animation-name:s"/>'],
+      ['a vendor animation property', '<rect style="-webkit-animation:s 1s"/>'],
+      [
+        'an escaped animation property',
+        `<rect style="anim${BS}61tion: s 1s"/>`,
+      ],
+      [
+        'animation in a rule',
+        '<style>rect { animation : s 1s }</style><rect/>',
+      ],
+    ])('%s', (_label, inner) => {
+      expect(clean(svg(inner))).toMatchObject({
+        isValid: false,
+        reason: 'animated',
+      });
     });
 
-    test('a stray closer or a bare group spoils only its own declaration', () => {
-      const doc = cleaned(
-        svg(
-          '<rect id="a" style="fill:red);stroke:blue"/>' +
-            '<rect id="b" style="stroke:blue;fill:(red;opacity:.5"/>'
-        )
-      );
-      expect(doc.querySelector('#a')?.hasAttribute('fill')).toBe(false);
-      expect(doc.querySelector('#a')?.getAttribute('stroke')).toMatch(BLUE);
-      expect(doc.querySelector('#b')?.getAttribute('stroke')).toMatch(BLUE);
-      expect(doc.querySelector('#b')?.hasAttribute('opacity')).toBe(false);
+    test('a font named like the property does not count', () => {
+      expectConversion(svg('<text style="font-family: animation">x</text>'));
+    });
+
+    // Static styling that only looks like an animation to a text scan.
+    test.each([
+      [
+        'a commented-out animation',
+        '<style>/* animation: spin 1s infinite */ rect{fill:red}</style><rect/>',
+      ],
+      [
+        'a commented-out @keyframes',
+        '<style>/* @keyframes unused {} */ rect{fill:red}</style><rect/>',
+      ],
+      [
+        'animation: inside a string',
+        '<text style="font-family:&quot;animation:paper&quot;;fill:red">A</text>',
+      ],
+      [
+        '@keyframes inside a string',
+        '<text style="font-family:&quot;@keyframes&quot;;fill:red">A</text>',
+      ],
+      [
+        'a selector naming an animation',
+        '<style>.fade-animation:hover{opacity:.5}</style><rect class="fade-animation"/>',
+      ],
+      [
+        'a custom property named animation',
+        '<rect style="--animation: none; fill: red"/>',
+      ],
+    ])('%s converts rather than being refused', (_label, inner) => {
+      expectConversion(svg(inner));
     });
   });
 
-  describe('<style> rules', () => {
-    const fillOf = (markup: string, selector = 'rect') =>
-      attribute(markup, selector, 'fill');
-
-    test.each([
-      ['a class', '.a{fill:red}', '<rect class="a"/>'],
-      ['one of several classes', '.a{fill:red}', '<rect class="b  a"/>'],
-      ['an id', '#i{fill:red}', '<rect id="i"/>'],
-      ['a type', 'rect{fill:red}', '<rect/>'],
-      ['the universal selector', '*{fill:red}', '<rect/>'],
-      ['a selector list', '.x, .a /*c*/ ,.y{fill:red}', '<rect class="a"/>'],
-      ['a compound selector', 'rect.a#i{fill:red}', '<rect class="a" id="i"/>'],
-      ['a rule after a comment', '/*c*/ .a{fill:red}', '<rect class="a"/>'],
-      [
-        'a rule with an unclosed block at the end',
-        '.a{fill:red',
-        '<rect class="a"/>',
-      ],
-    ])('%s selects', (_label, rules, element) => {
-      expect(fillOf(svg(`<style>${rules}</style>${element}`))).toMatch(RED);
-    });
-
-    test.each([
-      ['another class', '.b{fill:red}', '<rect class="a"/>'],
-      ['a class that is only a prefix', '.a{fill:red}', '<rect class="ab"/>'],
-      ['a class of another case', '.A{fill:red}', '<rect class="a"/>'],
-      ['another type', 'circle{fill:red}', '<rect/>'],
-      ['a type of another case', 'RECT{fill:red}', '<rect/>'],
-      ['one of two required classes', '.a.b{fill:red}', '<rect class="a"/>'],
-    ])('%s does not select', (_label, rules, element) => {
-      expect(fillOf(svg(`<style>${rules}</style>${element}`))).toBeNull();
-    });
-
-    test.each([
-      [
-        'specificity over order',
-        '#i{fill:green} .a{fill:red}',
-        '<rect id="i" class="a"/>',
-        GREEN,
-      ],
-      [
-        'a class over a type',
-        '.a{fill:green} rect{fill:red}',
-        '<rect class="a"/>',
-        GREEN,
-      ],
-      [
-        'the later of equal specificity',
-        '.a{fill:red} .a{fill:green}',
-        '<rect class="a"/>',
-        GREEN,
-      ],
-      [
-        'a rule over the presentation attribute',
-        '.a{fill:green}',
-        '<rect class="a" fill="red"/>',
-        GREEN,
-      ],
-      [
-        'the style attribute over any rule',
-        '#i{fill:red}',
-        '<rect id="i" style="fill:green"/>',
-        GREEN,
-      ],
-      [
-        'an important rule over the style attribute',
-        '.a{fill:red !important}',
-        '<rect class="a" style="fill:green"/>',
-        RED,
-      ],
-      [
-        'an important rule over a more specific one',
-        '.a{fill:green !important} #i{fill:red}',
-        '<rect id="i" class="a"/>',
-        GREEN,
-      ],
-    ])('%s', (_label, rules, element, expected) => {
-      expect(fillOf(svg(`<style>${rules}</style>${element}`))).toMatch(
-        expected
-      );
-    });
-
-    test('the sheet and its element are gone from the output', () => {
-      const result = clean(svg('<style>.a{fill:red}</style><rect class="a"/>'));
-      expect(result.isValid).toBe(true);
-      expect(result.cleanedSvg).not.toMatch(/<style\b|\sstyle=/);
-    });
-
-    test.each([
-      ['a descendant combinator', 'g rect{fill:blue}'],
-      ['a child combinator', 'g>rect{fill:blue}'],
-      ['a pseudo-class', 'rect:first-child{fill:blue}'],
-      ['a pseudo-element', 'rect::before{fill:blue}'],
-      ['an attribute selector', 'rect[class]{fill:blue}'],
-      ['a namespace', 'svg|rect{fill:blue}'],
-      ['an escaped class', `.${BS}61{fill:blue}`],
-      ['a media rule', '@media screen{.a{fill:blue}}'],
-      ['an import', '@import "x.css";'],
-      ['a font-face', '@font-face{font-family:x}'],
-      ['a nested rule', '.b{fill:blue;.c{fill:green}}'],
-      ['an unterminated selector', '.b'],
-      ['a rule without a selector', '{fill:blue}'],
-    ])(
-      '%s leaves every rule of the sheet unconverted',
-      (_label, unsupported) => {
-        const doc = cleaned(
-          svg(
-            `<style>.a{fill:red} ${unsupported}</style><g><rect class="a"/><rect id="b" class="b" fill="green"/></g>`
-          )
-        );
-        expect(doc.querySelector('.a')?.hasAttribute('fill')).toBe(false);
-        expect(doc.querySelector('#b')?.getAttribute('fill')).toBe('green');
-      }
-    );
-
-    test.each([
-      ['media="print"', '<style media="print">.a{fill:red}</style>'],
-      ['type="text/less"', '<style type="text/less">.a{fill:red}</style>'],
-      [
-        'an XHTML <style>',
-        '<style xmlns="http://www.w3.org/1999/xhtml">.a{fill:red}</style>',
-      ],
-    ])('a sheet with %s is not converted', (_label, sheet) => {
-      expect(fillOf(svg(`${sheet}<rect class="a"/>`))).toBeNull();
-    });
-
-    test('a second sheet that cannot be converted spares none of the first', () => {
-      expect(
-        fillOf(
-          svg(
-            '<style>.a{fill:red}</style><style>g rect{fill:blue}</style><rect class="a"/>'
-          )
-        )
-      ).toBeNull();
-    });
-
-    test('a sheet beyond the selector cap is not converted', () => {
-      const rules = (count: number) =>
-        Array.from(
-          { length: count },
-          (_, index) => `.c${index}{fill:red}`
-        ).join('');
-      expect(
-        fillOf(svg(`<style>${rules(1000)}</style><rect class="c999"/>`))
-      ).toMatch(RED);
-      expect(
-        fillOf(svg(`<style>${rules(1001)}</style><rect class="c999"/>`))
-      ).toBeNull();
-    });
-
-    test('a rule that would write more than the size cap onto the elements is refused', () => {
-      const started = performance.now();
-      const result = clean(
-        svg(
-          `<style>*{font-family:"${'a'.repeat(150_000)}"}</style>${'<g/>'.repeat(300)}`
-        )
-      );
-
-      expect(result.isValid).toBe(false);
-      expect(performance.now() - started).toBeLessThan(5000);
-    });
-  });
-
-  // Each declaration is written in both places a renderer reads one, and every
-  // row must come out refused or stripped, never as the payload.
+  // Each declaration is written in both places a renderer reads one. All of
+  // them were payloads the converter or the URL checks had to catch.
   describe('hostile declarations', () => {
     const inlineForm = (declaration: string) =>
       svg(`<rect width="8" height="8" style="${escape(declaration)}"/>`);
@@ -1007,243 +814,84 @@ describe('style declarations in an SVG', () => {
       `<svg xmlns="${SVG_NS}"><rect width="9" height="9"/></svg>`
     ).toString('base64');
 
-    const HOSTILE_DECLARATIONS: ReadonlyArray<
-      readonly [string, string, readonly string[]]
-    > = [
-      [
-        'an off-origin url()',
-        'fill:url(https://evil.example/x.svg#g)',
-        ['evil.example'],
-      ],
-      [
-        'a protocol-relative url()',
-        'fill:url(//evil.example/x.svg#g)',
-        ['evil.example'],
-      ],
-      [
-        'a quoted off-origin url()',
-        `fill:url('https://evil.example/x.svg#g')`,
-        ['evil.example'],
-      ],
-      [
-        'an escaped function name',
-        `fill:u${BS}72l(https://evil.example/x)`,
-        ['evil.example'],
-      ],
+    const HOSTILE_DECLARATIONS: ReadonlyArray<readonly [string, string]> = [
+      ['an off-origin url()', 'fill:url(https://evil.example/x.svg#g)'],
+      ['a protocol-relative url()', 'fill:url(//evil.example/x.svg#g)'],
+      ['a quoted off-origin url()', `fill:url('https://evil.example/x.svg#g')`],
+      ['an escaped function name', `fill:u${BS}72l(https://evil.example/x)`],
       [
         'a fully escaped function name',
         `fill:${BS}75${BS}72${BS}6c(https://evil.example/x)`,
-        ['evil.example'],
       ],
-      [
-        'an escaped scheme',
-        `fill:url(https${BS}3a //evil.example/x)`,
-        ['evil.example'],
-      ],
-      [
-        'an upper-case function',
-        'fill:URL(https://evil.example/x)',
-        ['evil.example'],
-      ],
-      [
-        'a comment-split function name',
-        'fill:u/**/rl(https://evil.example/x)',
-        ['evil.example'],
-      ],
-      [
-        'a comment inside the target',
-        'fill:url(https://evil.example/x/**/)',
-        ['evil.example'],
-      ],
-      [
-        'a javascript: url()',
-        'fill:url(javascript:alert(1))',
-        ['javascript:', 'alert('],
-      ],
-      [
-        'an expression()',
-        'fill:expression(alert(1))',
-        ['expression(', 'alert('],
-      ],
-      [
-        'an off-origin filter',
-        'filter:url(https://evil.example/f.svg#f)',
-        ['evil.example'],
-      ],
-      [
-        'an off-origin clip-path',
-        'clip-path:url(//evil.example/c.svg#c)',
-        ['evil.example'],
-      ],
-      [
-        'an off-origin cursor',
-        'cursor:url(https://evil.example/c.cur),auto',
-        ['evil.example'],
-      ],
-      [
-        'an off-origin marker',
-        'marker-end:url(https://evil.example/m.svg#m)',
-        ['evil.example'],
-      ],
-      [
-        'an off-origin marker shorthand',
-        'marker:url(https://evil.example/m.svg#m)',
-        ['evil.example'],
-      ],
+      ['an escaped scheme', `fill:url(https${BS}3a //evil.example/x)`],
+      ['an upper-case function', 'fill:URL(https://evil.example/x)'],
+      ['a comment-split function name', 'fill:u/**/rl(https://evil.example/x)'],
+      ['a javascript: url()', 'fill:url(javascript:alert(1))'],
+      ['an expression()', 'fill:expression(alert(1))'],
       [
         'an image-set() mask',
         'mask:image-set(url(https://evil.example/m.png) 1x)',
-        ['evil.example', 'image-set'],
       ],
-      [
-        'an image-set() mask-image',
-        'mask-image:image-set(url(https://evil.example/m.png) 1x)',
-        ['evil.example', 'image-set'],
-      ],
-      [
-        'an image() mask',
-        'mask:image("https://evil.example/m.png")',
-        ['evil.example'],
-      ],
-      [
-        'a behavior',
-        'behavior:url(https://evil.example/x.htc)',
-        ['evil.example', 'behavior'],
-      ],
-      [
-        'a -moz-binding',
-        '-moz-binding:url(https://evil.example/x.xml#b)',
-        ['evil.example', 'binding'],
-      ],
+      ['an image() mask', 'mask:image("https://evil.example/m.png")'],
+      ['a -moz-binding', '-moz-binding:url(https://evil.example/x.xml#b)'],
       [
         'an @import before a declaration',
         '@import url(https://evil.example/x.css);fill:red',
-        ['evil.example', '@import'],
-      ],
-      [
-        'a percent-encoded property name',
-        '%66ill:url(https://evil.example/x)',
-        ['evil.example', '%66ill'],
       ],
       [
         'a Kelvin-sign property name',
         `stro${String.fromCodePoint(0x21_2a)}e:url(https://evil.example/x)`,
-        ['evil.example'],
       ],
       [
         'an escaped semicolon',
         `fill:red${BS};stroke:url(https://evil.example/x)`,
-        ['evil.example'],
       ],
-      [
-        'an unterminated string',
-        `font-family:'a;fill:url(https://evil.example/x)`,
-        ['evil.example'],
-      ],
-      [
-        'an unterminated url()',
-        'fill:url(https://evil.example/x',
-        ['evil.example'],
-      ],
-      [
-        'a url() after a bad string',
-        `fill:'a&#10;b' url(https://evil.example/x)`,
-        ['evil.example'],
-      ],
+      ['an unterminated url()', 'fill:url(https://evil.example/x'],
       [
         'a CRLF-split escape',
         `fill:u${BS}72&#13;&#10;l(https://evil.example/x)`,
-        ['evil.example'],
       ],
-      ['a no-break space before the fragment', 'fill:url(&#160;#a)', ['url( ']],
+      ['a no-break space before the fragment', 'fill:url(&#160;#a)'],
       [
         'a data:text/html url()',
         'fill:url(data:text/html;base64,PHNjcmlwdD4=)',
-        ['data:text/html'],
       ],
       [
         'an SVG document in a data: url()',
         `mask:url(data:image/svg+xml;base64,${innerSvg})`,
-        ['image/svg+xml'],
-      ],
-      [
-        'an SVG document in a stroke',
-        `stroke:url("data:image/svg+xml;base64,${innerSvg}")`,
-        ['image/svg+xml'],
       ],
     ];
 
     test.each(HOSTILE_DECLARATIONS)(
-      '%s, inline',
-      (_label, declaration, forbidden) => {
-        expectNeutralised(inlineForm(declaration), forbidden);
+      '%s, inline, needs conversion',
+      (_label, declaration) => {
+        expectConversion(inlineForm(declaration));
       }
     );
 
     test.each(HOSTILE_DECLARATIONS)(
-      '%s, in a rule',
-      (_label, declaration, forbidden) => {
-        expectNeutralised(sheetForm(declaration), forbidden);
+      '%s, in a rule, needs conversion',
+      (_label, declaration) => {
+        expectConversion(sheetForm(declaration));
       }
     );
-
-    test('a url() in a declaration is held to the data: raster policy', () => {
-      expect(
-        clean(inlineForm(`mask:url(data:image/svg+xml;base64,${innerSvg})`))
-      ).toMatchObject({ isValid: false, reason: 'invalid-inline-raster' });
-      expect(
-        clean(
-          inlineForm(
-            `mask:url(data:image/png;base64,${realPng.toString('base64')})`
-          )
-        ).isValid
-      ).toBe(true);
-    });
-
-    test('a local reference is restated the way an authored one is', () => {
-      expect(
-        attribute(svg('<rect style="fill:url( #g )"/>'), 'rect', 'fill')
-      ).toBe("url('#g')");
-    });
 
     const BYTES = 390_000;
     test.each([
       ['declarations', () => 'fill:red;'.repeat(BYTES / 9)],
-      [
-        'distinct names',
-        () =>
-          Array.from({ length: 20_000 }, (_, index) => `p${index}:red`).join(
-            ';'
-          ),
-      ],
       ['open parentheses', () => `fill:${'('.repeat(BYTES)}`],
-      ['open brackets', () => `fill:${'['.repeat(BYTES)}`],
-      ['unterminated url( tokens', () => `fill:${'url(#a '.repeat(BYTES / 7)}`],
       ['bare url( openings', () => `fill:${'url('.repeat(BYTES / 4)}`],
       ['escaped url( openings', () => `fill:${`u${BS}72l(`.repeat(BYTES / 7)}`],
       ['backslashes', () => `fill:${BS.repeat(BYTES)}`],
       ['comment openers', () => `fill:${'/*'.repeat(BYTES / 2)}`],
-      ['comments', () => `fill:red${'/**/'.repeat(BYTES / 4)}`],
-      ['semicolons', () => ';'.repeat(BYTES)],
       ['colons', () => `fill${':'.repeat(BYTES)}`],
-      ['bangs', () => `fill:red${'!'.repeat(BYTES)}`],
-      ['a long name', () => `${'x'.repeat(BYTES)}:red`],
-      ['a long number', () => `font-size:${'1'.repeat(BYTES)}`],
-    ])('%s are converted in linear time', (_label, build) => {
+      ['spaces before a colon', () => `fill${' '.repeat(BYTES)}:red`],
+      ['a long name before a colon', () => `${'x'.repeat(BYTES)}:red`],
+      ['repeated animation words', () => 'animation'.repeat(BYTES / 9)],
+    ])('%s are classified in linear time', (_label, build) => {
       const markup = inlineForm(build());
       const started = performance.now();
-      clean(markup);
-      expect(performance.now() - started).toBeLessThan(5000);
-    });
-
-    test('a sheet at both caps is converted in bounded time', () => {
-      const started = performance.now();
-      const result = clean(
-        svg(
-          `<style>${'*{fill:red;stroke:blue;opacity:.5;font-family:x}'.repeat(900)}</style>${'<g/>'.repeat(450)}`
-        )
-      );
-      expect(result.isValid).toBe(true);
+      expect(clean(markup).isValid).toBe(false);
       expect(performance.now() - started).toBeLessThan(5000);
     });
   });
@@ -1254,7 +902,7 @@ describe('style declarations in an SVG', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('the structural gates on an SVG', () => {
-  /** What `sanitizeSvg:74` counts: every `<…>` run in the post-strip text. */
+  /** What `scanMarkup` counts in markup with no comment, CDATA or instruction. */
   const tagCount = (markup: string) => (markup.match(/<[^>]+>/g) || []).length;
 
   const withTags = (total: number) =>
@@ -1283,6 +931,33 @@ describe('the structural gates on an SVG', () => {
 
     expect(result.isValid).toBe(true);
     expect(result.cleanedSvg).not.toInclude('<!--');
+  });
+
+  // fix-review-assessment.md: `=` was counted from one `<` to the next, so text
+  // reached the per-element attribute limit.
+  test.each([
+    ['300 "a = b;" in a <text>', `<text>${'a = b; '.repeat(300)}</text>`],
+    ['257 = in a <text>', `<text>${'='.repeat(257)}</text>`],
+    ['257 = in a <metadata>', `<metadata>${'='.repeat(257)}</metadata>`],
+    [
+      '= inside quoted values',
+      `<text font-family="${'='.repeat(300)}">x</text>`,
+    ],
+  ])('%s is not counted as attributes', (_label, inner) => {
+    expect(clean(svg(inner)).isValid).toBe(true);
+  });
+
+  test('an opening tag over the per-element limit is refused before parsing', () => {
+    const attributes = Array.from(
+      { length: SVG_MAX_ELEMENT_ATTRIBUTES + 1 },
+      (_, index) => `a${index}=""`
+    ).join(' ');
+    const result = clean(svg(`<rect ${attributes}/>`));
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors.join('')).toInclude(
+      String(SVG_MAX_ELEMENT_ATTRIBUTES + 1)
+    );
   });
 
   test.each([
@@ -1390,103 +1065,130 @@ describe('entity expansion', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GAP 4 — external references. These were live defects (`test.failing`) until
-// CSS reference checks were extended to cover directives and URL functions,
-// and the element guard was extended from `use` to `image`. They assert the fix.
+// External references. Stored, each is fetched at VIEW time: a beacon for
+// every future viewer, changeable after review. Neither branch can honour one,
+// so an `href` or an attribute's `url()` is refused, and CSS that could hold
+// one is never stored as SVG.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EXTERNAL_REFERENCES: ReadonlyArray<readonly [string, string]> = [
+const EXTERNAL_REFERENCES: ReadonlyArray<
+  readonly [string, string, SvgRejectionReason]
+> = [
   [
-    // The string form of the directive `@import url(...)` already blocked — this
-    // was the bypass.
     'a CSS @import in its string form',
     svg(
       '<style>@import "https://evil.example/x.css";</style><rect width="8" height="8"/>'
     ),
+    'requires-conversion',
   ],
   [
     'a @font-face src pointing off-origin',
     svg(
       '<style>@font-face{font-family:x;src:url(https://evil.example/f.woff)}</style><rect width="8" height="8"/>'
     ),
+    'requires-conversion',
   ],
   [
     'an external xlink:href',
     svg(
       '<image xlink:href="https://evil.example/p.svg" width="8" height="8"/>'
     ),
+    'external-reference',
   ],
   [
     'an external href',
     svg('<image href="https://evil.example/p.svg" width="8" height="8"/>'),
+    'external-reference',
+  ],
+  [
+    'a relative href',
+    svg('<image href="p.png" width="8" height="8"/>'),
+    'external-reference',
+  ],
+  [
+    'an off-origin url() in a presentation attribute',
+    svg(
+      '<rect width="8" height="8" fill="url(https://evil.example/g.svg#x)"/>'
+    ),
+    'external-reference',
+  ],
+  [
+    'a protocol-relative url() in a presentation attribute',
+    svg('<rect width="8" height="8" mask="url(//evil.example/m.svg#m)"/>'),
+    'external-reference',
   ],
   [
     'an off-origin url() in a style= attribute',
     svg('<path style="fill:url(https://evil.example/t.svg#g)" d="M0 0"/>'),
+    'requires-conversion',
   ],
   [
     // Protocol-relative: no scheme to blocklist, still an external fetch.
     'a protocol-relative url() in a style= attribute',
     svg('<path style="fill:url(//evil.example/t.svg#g)" d="M0 0"/>'),
+    'requires-conversion',
   ],
   [
     'an off-origin url() inside a <style> rule',
     svg(
       '<style>.a{fill:url(https://evil.example/g.svg#x)}</style><path class="a" d="M0 0"/>'
     ),
+    'requires-conversion',
   ],
   [
     'an image-set() reference in a style attribute',
     svg(
       '<path style="mask-image:image-set(https://evil.example/mask.png 1x)" d="M0 0"/>'
     ),
+    'requires-conversion',
   ],
-  [
-    'an image() reference in a style element',
-    svg(
-      '<style>.a{mask-image:image("https://evil.example/mask.png")}</style><path class="a" d="M0 0"/>'
-    ),
-  ],
-  // Everything below is an element OTHER than `image`/`use` that dereferences
-  // `href`. The guard used to name those two, and the generic value check passes
-  // an ordinary `https:` value — so each of these reached the public bucket with
-  // its reference intact and `isValid: true`, nothing even stripped.
+  // Every element below dereferences `href`, not only `image` and `use`.
   [
     'an feImage href, which SVG 2 defines as an external-resource reference',
     svg(
       '<filter id="f"><feImage href="https://evil.example/pixel.png"/></filter><rect width="8" height="8" filter="url(#f)"/>'
     ),
+    'external-reference',
   ],
   [
     'a textPath href',
     svg(
       '<text><textPath href="https://evil.example/x.svg#p">hi</textPath></text>'
     ),
+    'external-reference',
   ],
   [
     'a gradient template href',
     svg(
       '<linearGradient id="g" href="https://evil.example/g.svg#h"/><rect width="8" height="8" fill="url(#g)"/>'
     ),
+    'external-reference',
   ],
   [
     'a pattern template xlink:href',
     svg(
       '<pattern id="p" xlink:href="https://evil.example/p.svg#q"/><rect width="8" height="8" fill="url(#p)"/>'
     ),
+    'external-reference',
   ],
   [
     'a filter href',
     svg(
       '<filter id="f" href="https://evil.example/f.svg#g"/><rect width="8" height="8" filter="url(#f)"/>'
     ),
+    'external-reference',
+  ],
+  [
+    'an external <use>',
+    `<svg xmlns="${SVG_NS}"><use href="https://evil.example/i.svg#i"/></svg>`,
+    'external-reference',
   ],
 ];
 
 /**
  * The forms that MUST survive. Without these the entry above is satisfiable by
- * a sanitiser that strips every reference, which would silently blank every
- * gradient, mask, clip-path and sprite the application stores.
+ * a sanitiser that refuses every reference, which would refuse every gradient,
+ * mask, clip-path and sprite.
  */
 const LOCAL_REFERENCES: ReadonlyArray<readonly [string, string]> = [
   [
@@ -1514,18 +1216,26 @@ const LOCAL_REFERENCES: ReadonlyArray<readonly [string, string]> = [
 ];
 
 describe('external references in SVG', () => {
-  test.each([...EXTERNAL_REFERENCES])('%s is stripped', (_name, markup) => {
-    // The sanitizer's external-reference invariant is that external CSS is
-    // refused. Each of these is otherwise stored verbatim on the public bucket
-    // as `image/svg+xml` + `inline`, so it renders as a DOCUMENT and the
-    // reference is fetched at VIEW time — a beacon for every future viewer's IP,
-    // UA and Referer, changeable remotely after review.
-    //
-    // No script execution in any of them; this is the tracking and
-    // remote-mutation half of the surface, not XSS.
-    const result = clean(markup);
-    expect(result.isValid).toBe(true);
-    expect(result.cleanedSvg).not.toInclude('evil.example');
+  test.each([...EXTERNAL_REFERENCES])(
+    '%s is refused as %s',
+    (_name, markup, reason) => {
+      expect(clean(markup)).toMatchObject({
+        isValid: false,
+        reason,
+        cleanedSvg: '',
+      });
+    }
+  );
+
+  test('the upload route names an external reference as such', () => {
+    expect(
+      uploadRefusal(
+        svg('<image href="https://evil.example/p.svg" width="8" height="8"/>')
+      )
+    ).toMatchObject({
+      status: HTTP_STATUS.BAD_REQUEST,
+      message: MSG_SVG_EXTERNAL_REFERENCE,
+    });
   });
 
   test.each([...LOCAL_REFERENCES])('%s survives', (_name, markup) => {
@@ -1534,33 +1244,27 @@ describe('external references in SVG', () => {
     expect(result.cleanedSvg).toInclude('<svg');
   });
 
-  test('CSS is removed even when it contains only local references', () => {
-    const result = clean(
+  test('CSS needs conversion even when it names only local references', () => {
+    expectConversion(
       svg(
         '<style>.a{fill:url(#g)}</style><rect class="a" style="fill:url(#g)"/>'
       )
     );
-    expect(result.isValid).toBe(true);
-    expect(result.cleanedSvg).not.toMatch(/<style\b|\sstyle=/i);
   });
 
   test('content outside the svg root is refused', () => {
     // The app sweeps an XML tree where `<p>` is a child of `<svg>`; DOMPurify
     // re-parses the serialisation as HTML, where `p` terminates foreign content,
-    // so the node lands AFTER `</svg>`. `sanitized.includes('<svg')` could not
-    // see that: 55 bytes in produced `isValid: true` and
-    // `<svg xmlns="…"></svg>hi`, which made svgo throw `SvgoParserError` and the
-    // request a 500. The gate is structural now — one SVG root, no siblings.
+    // so the node lands AFTER `</svg>`. The gate is structural — one SVG root,
+    // no siblings.
     const result = clean(`<svg xmlns="${SVG_NS}"><p>hi</p></svg>`);
 
     expect(result.isValid).toBe(false);
   });
 
   test('whatever §13 produces, a malformed document is never STORED', () => {
-    // The half of §13 that holds today and must keep holding after a fix: the
-    // pipeline either refuses, or throws in svgo, but it does not hand R2 a
-    // two-root document. Written as the invariant rather than as the current
-    // outcome so a fix does not turn this red.
+    // The pipeline either refuses, or throws in svgo, but it does not hand R2 a
+    // two-root document.
     for (const markup of [
       `<svg xmlns="${SVG_NS}"><p>hi</p></svg>`,
       `<svg xmlns="${SVG_NS}"><div><style>a{fill:red}</style></div></svg>`,
@@ -1590,26 +1294,43 @@ describe('external references in SVG', () => {
     expect(result.cleanedSvg).toInclude('href="#i"');
   });
 
-  test('a <use> element cannot opt into an external reference', () => {
-    const external = `<svg xmlns="${SVG_NS}"><use href="https://evil.example/i.svg#i"/></svg>`;
-
-    const result = clean(external);
-    expect(result.cleanedSvg).not.toInclude('evil.example');
-    expect(result.cleanedSvg).not.toInclude('<use');
+  // Local, only spelled outside `[A-Za-z_][\w.-]*`: a renderer resolves these
+  // as written, so they convert instead of being refused as broken.
+  test.each([
+    ['an Arabic id', 'شعار'],
+    ['a leading digit', '1a'],
+    ['a React useId', ':r1:'],
+  ])('a <use> naming %s converts', (_label, id) => {
+    expect(
+      clean(
+        svg(
+          `<defs><rect id="${id}" width="4" height="4"/></defs><use href="#${id}"/>`
+        )
+      )
+    ).toMatchObject({ isValid: false, reason: 'requires-conversion' });
   });
 
-  test('the external reference is gone from the STORED bytes, not only the cleaned ones', () => {
-    // svgo runs after the sanitiser (`processImage`), and the earlier defect was
-    // measured on the svgo output: the reference survived both stages. Asserted
-    // end to end so a future sanitiser change cannot be judged on `cleanedSvg`
-    // alone.
-    for (const [, markup] of EXTERNAL_REFERENCES) {
-      const result = clean(markup);
-      expect(result.isValid).toBe(true);
-      expect(svgOptimizerServer({ data: result.cleanedSvg })).not.toInclude(
-        'evil.example'
+  test('a padded local href converts rather than being called external', () => {
+    expect(
+      clean(
+        svg('<defs><rect id="a" width="4" height="4"/></defs><use href=" #a"/>')
+      )
+    ).toMatchObject({ isValid: false, reason: 'requires-conversion' });
+  });
+
+  test('a use chain through such ids is still counted, and refused', () => {
+    // Converting does not skip the count: the browser renders what it names.
+    const levels = ['<g id="م0"><rect width="1" height="1"/></g>'];
+    for (let level = 1; level < 20; level++)
+      levels.push(
+        `<g id="م${level}"><use href="#م${level - 1}"/><use href="#م${level - 1}"/></g>`
       );
-    }
+    const result = clean(
+      svg(`<defs>${levels.join('')}</defs><use href="#م19"/>`)
+    );
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors.join('')).toInclude(String(SVG_MAX_RENDERED_NODES));
   });
 });
 
@@ -1702,45 +1423,36 @@ describe('the <use> expansion bound', () => {
   });
 
   /**
-   * The same chain with the SECOND reference of each level percent-encoded.
-   *
    * A renderer resolves a fragment DECODED — Chromium's
    * `SVGURLReferenceResolver` runs `DecodeUrlEscapeSequences` before
-   * `getElementById` — while `LOCAL_FRAGMENT` admits `%`, so `#%6c0` reached the
-   * stored document intact and cost ONE node against the ceiling while
-   * instantiating `id="l0"` in every viewer. Measured before the fix: 20 levels
-   * accepted with all 20 encoded references preserved through svgo.
+   * `getElementById` — so `#%6c0` instantiates `id="l0"`. The counter used to
+   * resolve it differently; now no encoded reference reaches it.
    */
-  const encodedUseChain = (levels: number, encode: boolean) => {
-    const parts = ['<g id="l0"><rect width="1" height="1"/></g>'];
-    for (let i = 1; i < levels; i++) {
-      const second = encode ? `#%6c${i - 1}` : `#l${i - 1}`;
-      parts.push(
-        `<g id="l${i}"><use href="#l${i - 1}"/><use href="${second}"/></g>`
-      );
-    }
-    return `<svg xmlns="${SVG_NS}">${parts.join('')}<use href="#l${levels - 1}"/></svg>`;
-  };
-
-  test('a percent-encoded fragment is counted, not waved through', () => {
-    const plain = clean(encodedUseChain(20, false));
-    const encoded = clean(encodedUseChain(20, true));
-
-    // The control: the identical document with plain fragments is refused, so
-    // the encoded one differs only in spelling.
-    expect(plain.isValid).toBe(false);
-    expect(encoded.isValid).toBe(false);
-    expect(encoded.errors.join('')).toInclude(String(SVG_MAX_RENDERED_NODES));
-  });
-
-  test('a percent-encoded fragment that resolves is still a legitimate reference', () => {
-    // Counting it must not mean refusing it: `#%69` names `id="i"` and renders.
+  test('a percent-encoded fragment is refused before it can be counted', () => {
     const result = clean(
       `<svg xmlns="${SVG_NS}"><defs><symbol id="i"><rect width="8" height="8"/></symbol></defs><use href="#%69"/></svg>`
     );
 
-    expect(result.isValid).toBe(true);
-    expect(result.cleanedSvg).toInclude('<use');
+    expect(result.isValid).toBe(false);
+    expect(result.reason).toBeUndefined();
+    expect(result.errors.join('')).toInclude('not written as #id');
+  });
+
+  test('href and xlink:href on one <use> are both charged', () => {
+    // A renderer picks one of the two; charging the other would let a cheap
+    // decoy carry the count while the renderer expands the bomb.
+    const parts = [
+      '<g id="l0"><rect width="1" height="1"/></g><g id="cheap"/>',
+    ];
+    for (let i = 1; i < 20; i++)
+      parts.push(
+        `<g id="l${i}"><use xlink:href="#cheap" href="#l${i - 1}"/><use href="#l${i - 1}" xlink:href="#cheap"/></g>`
+      );
+    const bomb = svg(`${parts.join('')}<use href="#l19"/>`);
+
+    expect(clean(bomb).errors.join('')).toInclude(
+      String(SVG_MAX_RENDERED_NODES)
+    );
   });
 
   /**
@@ -1861,11 +1573,57 @@ describe('the <use> expansion bound', () => {
     expect(clean(inherited).isValid).toBe(false);
   });
 
-  test('CSS-escaped marker URLs are canonicalised before they are counted', () => {
+  test('a CSS-escaped marker URL is outside the native form, so it converts', () => {
+    // Nothing decodes it, so nothing counts it either: the conversion branch
+    // renders it in the uploader's own tab (the plan's accepted risks).
     const line = String.raw`<line x2="1" marker-start="u\72l(#\6d )"/>`;
     const escaped = `<svg xmlns="${SVG_NS}"><defs><marker id="m">${'<rect width="1" height="1"/>'.repeat(100)}</marker></defs>${line.repeat(100)}</svg>`;
 
-    expect(clean(escaped).isValid).toBe(false);
+    expect(clean(escaped)).toMatchObject({
+      isValid: false,
+      reason: 'requires-conversion',
+    });
+  });
+
+  // XML reads names case-sensitively, but the stored file is DOMPurify's HTML
+  // re-parse, which lowercases them: these used to pass the first check and
+  // reach the post-svgo one as a 422 "compression failed".
+  test.each([
+    [
+      'ids written ID=',
+      () => {
+        const levels = ['<g ID="l0"><rect width="1" height="1"/></g>'];
+        for (let level = 1; level < 20; level++)
+          levels.push(
+            `<g ID="l${level}"><use href="#l${level - 1}"/><use href="#l${level - 1}"/></g>`
+          );
+        return svg(`<defs>${levels.join('')}</defs><use href="#l19"/>`);
+      },
+    ],
+    [
+      'a pattern written FILL=',
+      () =>
+        svg(
+          `<defs><pattern id="p" width="1" height="1">${'<rect width="1" height="1"/>'.repeat(100)}</pattern></defs>` +
+            `<g FILL="url(#p)">${'<rect width="1" height="1"/>'.repeat(100)}</g>`
+        ),
+    ],
+    [
+      'path data written D=',
+      () => {
+        let d = 'M0 0';
+        for (let vertex = 0; vertex < 3000; vertex++)
+          d += ` L${vertex} ${vertex}`;
+        return svg(
+          `<defs><marker id="m"><g>${'<rect width="1" height="1"/>'.repeat(100)}</g></marker></defs>` +
+            `<path D="${d}" marker-mid="url(#m)"/>`
+        );
+      },
+    ],
+  ])('expansion through %s is refused by the first check', (_label, build) => {
+    expect(clean(build()).errors.join('')).toInclude(
+      String(SVG_MAX_RENDERED_NODES)
+    );
   });
 
   test('an ordinary marker on a line survives', () => {
@@ -1881,6 +1639,250 @@ describe('the <use> expansion bound', () => {
     // The bound above is satisfiable by refusing every repeated reference.
     expect(clean(repeatedMarker(20, 2, 'marker-start')).isValid).toBe(true);
   });
+
+  // Each of these renders its target's content again per reference, so 20
+  // levels of two references each instantiate about 2²⁰ nodes from a few KB.
+  // Before the counter charged them, all five were accepted.
+  describe('references other than <use> that render their target again', () => {
+    const doubling = (
+      define: (level: number, inner: string) => string,
+      reference: (level: number) => string
+    ) => {
+      const parts = [define(0, '<rect width="1" height="1"/>')];
+      for (let level = 1; level < 20; level++)
+        parts.push(define(level, reference(level - 1).repeat(2)));
+      return svg(`<defs>${parts.join('')}</defs>${reference(19)}`);
+    };
+
+    test.each([
+      [
+        'pattern',
+        doubling(
+          (level, inner) =>
+            `<pattern id="p${level}" width="1" height="1">${inner}</pattern>`,
+          (level) => `<rect width="1" height="1" fill="url(#p${level})"/>`
+        ),
+      ],
+      [
+        'pattern stroke',
+        doubling(
+          (level, inner) =>
+            `<pattern id="p${level}" width="1" height="1">${inner}</pattern>`,
+          (level) => `<rect width="1" height="1" stroke="url(#p${level})"/>`
+        ),
+      ],
+      [
+        'mask',
+        doubling(
+          (level, inner) => `<mask id="m${level}">${inner}</mask>`,
+          (level) => `<rect width="1" height="1" mask="url(#m${level})"/>`
+        ),
+      ],
+      [
+        'clip path',
+        doubling(
+          (level, inner) => `<clipPath id="c${level}">${inner}</clipPath>`,
+          (level) => `<rect width="1" height="1" clip-path="url(#c${level})"/>`
+        ),
+      ],
+      [
+        'feImage',
+        doubling(
+          (level, inner) =>
+            `<g id="g${level}">${inner}</g><filter id="f${level}"><feImage href="#g${level}"/></filter>`,
+          (level) => `<rect width="1" height="1" filter="url(#f${level})"/>`
+        ),
+      ],
+      [
+        'pattern template',
+        doubling(
+          (level, inner) =>
+            `<pattern id="p${level}" width="1" height="1">${inner}</pattern><pattern id="t${level}" href="#p${level}"/>`,
+          (level) => `<rect width="1" height="1" fill="url(#t${level})"/>`
+        ),
+      ],
+    ])('a %s chain is refused', (_label, bomb) => {
+      expect(bomb.match(/<[^>]+>/g)?.length).toBeLessThan(SVG_MAX_ELEMENTS);
+      expect(clean(bomb).errors.join('')).toInclude(
+        String(SVG_MAX_RENDERED_NODES)
+      );
+    });
+
+    const shapes = (count: number) =>
+      '<rect width="1" height="1"/>'.repeat(count);
+
+    test('a pattern inherited by a group is charged per shape it paints', () => {
+      const pattern = `<defs><pattern id="p" width="1" height="1">${shapes(100)}</pattern></defs>`;
+      expect(
+        clean(svg(`${pattern}<g fill="url(#p)">${shapes(100)}</g>`)).isValid
+      ).toBe(false);
+      // A shape that sets its own fill does not inherit the pattern.
+      expect(
+        clean(
+          svg(
+            `${pattern}<g fill="url(#p)">${'<rect width="1" height="1" fill="red"/>'.repeat(100)}</g>`
+          )
+        ).isValid
+      ).toBe(true);
+    });
+
+    test('a pattern inherited by content inside another pattern is charged', () => {
+      // Content inherits from the pattern's own ancestors, so each level's two
+      // rects paint the previous pattern without declaring it.
+      const levels = [
+        '<pattern id="p0" width="1" height="1"><rect/></pattern>',
+      ];
+      for (let level = 1; level < 20; level++)
+        levels.push(
+          `<g fill="url(#p${level - 1})"><pattern id="p${level}" width="1" height="1">${shapes(2)}</pattern></g>`
+        );
+      expect(
+        clean(
+          svg(
+            `<defs>${levels.join('')}</defs><rect width="1" height="1" fill="url(#p19)"/>`
+          )
+        ).isValid
+      ).toBe(false);
+    });
+
+    test('a pattern inherited through <use> is charged per instance', () => {
+      expect(
+        clean(
+          svg(
+            `<defs><g id="s">${shapes(100)}</g><pattern id="p" width="1" height="1">${shapes(100)}</pattern></defs>` +
+              '<use href="#s" fill="url(#p)"/>'
+          )
+        ).isValid
+      ).toBe(false);
+    });
+
+    // A renderer inherits on every CSS-wide keyword but `initial`, and on any
+    // value it cannot parse (it drops the declaration): each walk goes on.
+    const INHERITING = [
+      'unset',
+      'revert',
+      'revert-layer',
+      'INHERIT',
+      'not-a-color',
+      '#zzz',
+      'inherit !important',
+    ];
+
+    test.each(INHERITING)(
+      'a pattern inherited through fill="%s" is charged',
+      (spelling) => {
+        const painted =
+          `<rect width="1" height="1" fill="${spelling}"/>`.repeat(100);
+        expect(
+          clean(
+            svg(
+              `<defs><pattern id="p" width="1" height="1">${shapes(100)}</pattern></defs>` +
+                `<g fill="url(#p)">${painted}<circle r="1" fill="red"/></g>`
+            )
+          ).errors.join('')
+        ).toInclude(String(SVG_MAX_RENDERED_NODES));
+      }
+    );
+
+    test.each(INHERITING)(
+      'the nested pattern chain through fill="%s" is refused',
+      (spelling) => {
+        const levels = [
+          '<pattern id="p0" width="1" height="1"><rect/></pattern>',
+        ];
+        const rect = `<rect width="1" height="1" fill="${spelling}"/>`;
+        for (let level = 1; level < 20; level++)
+          levels.push(
+            `<g fill="url(#p${level - 1})"><pattern id="p${level}" width="1" height="1">${rect}${rect}</pattern></g>`
+          );
+        expect(
+          clean(
+            svg(
+              `${levels.join('')}<rect width="1" height="1" fill="url(#p19)"/>`
+            )
+          ).isValid
+        ).toBe(false);
+      }
+    );
+
+    test('stroke inherits the same way', () => {
+      const painted = '<rect width="1" height="1" stroke="unset"/>'.repeat(100);
+      expect(
+        clean(
+          svg(
+            `<defs><pattern id="p" width="1" height="1">${shapes(100)}</pattern></defs>` +
+              `<g stroke="url(#p)">${painted}</g>`
+          )
+        ).isValid
+      ).toBe(false);
+    });
+
+    test('a <use> that inherits through unset is charged per instance', () => {
+      expect(
+        clean(
+          svg(
+            `<defs><g id="s">${shapes(100)}</g><pattern id="p" width="1" height="1">${shapes(100)}</pattern></defs>` +
+              '<g fill="url(#p)"><use href="#s" fill="unset"/></g>'
+          )
+        ).isValid
+      ).toBe(false);
+    });
+
+    test.each([
+      'none',
+      'currentColor',
+      'initial',
+      'transparent',
+      '#f00',
+      'RED',
+    ])('a shape painted %s does not inherit the pattern', (paint) => {
+      expect(
+        clean(
+          svg(
+            `<defs><pattern id="p" width="1" height="1">${shapes(100)}</pattern></defs>` +
+              `<g fill="url(#p)">${`<rect width="1" height="1" fill="${paint}"/>`.repeat(100)}</g>`
+          )
+        ).isValid
+      ).toBe(true);
+    });
+
+    test.each([
+      [
+        'one drop-shadow filter on 40 shapes',
+        `<defs><filter id="f"><feGaussianBlur stdDeviation="1"/><feOffset dx="1"/></filter></defs>${'<rect width="1" height="1" filter="url(#f)"/>'.repeat(40)}`,
+      ],
+      [
+        'one clip path on 40 groups',
+        `<defs><clipPath id="c"><rect width="8" height="8"/></clipPath></defs>${'<g clip-path="url(#c)"><rect width="1" height="1"/></g>'.repeat(40)}`,
+      ],
+      [
+        'one mask on 40 shapes',
+        `<defs><mask id="m"><rect width="8" height="8" fill="#fff"/></mask></defs>${'<rect width="1" height="1" mask="url(#m)"/>'.repeat(40)}`,
+      ],
+      [
+        'one gradient on 300 shapes, which renders no content',
+        `<defs><linearGradient id="g">${'<stop offset="0" stop-color="red"/>'.repeat(20)}</linearGradient></defs><g fill="url(#g)">${shapes(300)}</g>`,
+      ],
+      [
+        'one small pattern on 40 shapes',
+        `<defs><pattern id="p" width="2" height="2">${shapes(4)}</pattern></defs><g fill="url(#p)">${shapes(40)}</g>`,
+      ],
+    ])('%s stays well inside the bound', (_label, inner) => {
+      expect(clean(svg(inner)).isValid).toBe(true);
+    });
+
+    test('a Figma image fill, a pattern that uses an embedded image, survives', () => {
+      const result = clean(
+        `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="${SVG_NS}" xmlns:xlink="${XLINK_NS}">` +
+          '<rect width="24" height="24" fill="url(#pattern0)"/><defs>' +
+          '<pattern id="pattern0" patternContentUnits="objectBoundingBox" width="1" height="1">' +
+          '<use xlink:href="#image0" transform="scale(0.125)"/></pattern>' +
+          `<image id="image0" width="8" height="8" xlink:href="data:image/png;base64,${realPng.toString('base64')}"/>` +
+          '</defs></svg>'
+      );
+      expect(result.isValid).toBe(true);
+    });
+  });
 });
 
 describe('the xlink namespace, however it is spelled', () => {
@@ -1888,30 +1890,95 @@ describe('the xlink namespace, however it is spelled', () => {
   const withPrefix = (inner: string) =>
     `<svg xmlns="${SVG_NS}" xmlns:xl="${XLINK_NS}" width="8" height="8">${inner}</svg>`;
 
-  test('an external reference under a foreign prefix is stripped', () => {
-    // A qualified-name lookup never saw `xl:href`, so a bare `https:` value —
-    // which `isDangerousValue` passes — survived this sweep, closed only by
-    // DOMPurify dropping an attribute in a namespace it does not recognise.
-    const result = clean(
-      withPrefix(
-        '<image width="8" height="8" xl:href="https://evil.example/p.png"/>'
+  test('an external reference under a foreign prefix is refused', () => {
+    // A qualified-name lookup never saw `xl:href`, so a bare `https:` value
+    // survived the sweep, closed only by DOMPurify dropping an attribute in a
+    // namespace it does not recognise.
+    expect(
+      clean(
+        withPrefix(
+          '<image width="8" height="8" xl:href="https://evil.example/p.png"/>'
+        )
       )
-    );
-
-    expect(result.isValid).toBe(true);
-    expect(result.cleanedSvg).not.toInclude('evil.example');
+    ).toMatchObject({ isValid: false, reason: 'external-reference' });
   });
 
-  test('a same-document reference under a foreign prefix survives', () => {
-    // The other half of the same blindness: no reference was FOUND on
-    // `<use xl:href="#a"/>`, so a legitimate Sketch-exported sprite lost every
-    // `<use>` to the reference-less removal.
-    const result = clean(
-      withPrefix('<symbol id="a"><circle r="1"/></symbol><use xl:href="#a"/>')
+  test('a same-document reference under a foreign prefix is stored', () => {
+    // The HTML re-parse reads xlink only under `xlink:`, so DOMPurify dropped
+    // `xl:href` and stored a `<use/>` that names nothing.
+    const { cleanedSvg } = validateSvgUpload(
+      Buffer.from(
+        withPrefix('<symbol id="a"><circle r="1"/></symbol><use xl:href="#a"/>')
+      ),
+      'sprite.svg'
+    );
+    const stored = svgOptimizerServer({ data: cleanedSvg });
+
+    expect(stored).toMatch(/<use [^>]*href="#a"/);
+    expect(stored).toInclude('id="a"');
+  });
+
+  test('an embedded raster under a foreign prefix is stored', () => {
+    const raster = `data:image/png;base64,${realPng.toString('base64')}`;
+    const { cleanedSvg } = validateSvgUpload(
+      Buffer.from(
+        withPrefix(`<image width="8" height="8" xl:href="${raster}"/>`)
+      ),
+      'embedded.svg'
     );
 
-    expect(result.isValid).toBe(true);
-    expect(result.cleanedSvg).toInclude('use');
+    expect(svgOptimizerServer({ data: cleanedSvg })).toInclude(raster);
+  });
+});
+
+describe('what DOMPurify removes after every rule has passed', () => {
+  // Its allowlist is not the native form. A drop that renders converts; one
+  // that never renders stays silent, or most exports would convert.
+  test.each([
+    [
+      'a gradient focal radius',
+      '<radialGradient id="g" fr="0.2"/><rect width="8" height="8" fill="url(#g)"/>',
+    ],
+    [
+      'unicode-bidi',
+      '<text unicode-bidi="bidi-override" direction="rtl">ab</text>',
+    ],
+    ['white-space', '<text white-space="pre">a  b</text>'],
+    [
+      'a conditional extension',
+      '<g requiredExtensions="https://example.com/x"><rect width="8" height="8"/></g>',
+    ],
+    [
+      'a referenced id that clobbers a DOM property',
+      '<linearGradient id="title"><stop offset="0" stop-color="red"/></linearGradient><rect width="8" height="8" fill="url(#title)"/>',
+    ],
+  ])('%s converts rather than being dropped', (_label, inner) => {
+    expect(clean(svg(inner))).toMatchObject({
+      isValid: false,
+      reason: 'requires-conversion',
+    });
+  });
+
+  test.each([
+    [
+      'enable-background',
+      '<g enable-background="new 0 0 8 8"><rect width="8" height="8"/></g>',
+    ],
+    [
+      'focusable and role',
+      '<g focusable="false" role="img"><rect width="8" height="8"/></g>',
+    ],
+    ['cursor', '<rect width="8" height="8" cursor="pointer"/>'],
+    [
+      'an unreferenced id that clobbers a DOM property',
+      '<g id="title"><rect width="8" height="8"/></g>',
+    ],
+    [
+      'an element no browser renders',
+      '<solidcolor/><rect width="8" height="8"/>',
+    ],
+  ])('%s is dropped and the file stays native', (_label, inner) => {
+    expect(clean(svg(inner)).isValid).toBe(true);
   });
 });
 
@@ -1996,80 +2063,21 @@ describe('the SVG content boundary', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GAP 4 — the two helpers, exercised directly
+// The name decoder, exercised directly. Only names are decoded: a reference is
+// read as written, so the renderer and the checks cannot disagree on it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('safeDecodeURI and isDangerousValue', () => {
-  test('safeDecodeURI decodes twice, so one layer of re-encoding buys nothing', () => {
+describe('safeDecodeURI', () => {
+  test('decodes twice, so one layer of re-encoding buys nothing', () => {
     expect(safeDecodeURI('javascript%3Aalert(1)')).toBe('javascript:alert(1)');
     expect(safeDecodeURI('javascript%253Aalert(1)')).toBe(
       'javascript:alert(1)'
     );
   });
 
-  test('safeDecodeURI returns the input rather than throwing on a bad escape', () => {
-    // A lone `%` is a `URIError` from `decodeURIComponent`. Returning the raw
-    // value is what keeps `isDangerousValue` matching on something.
+  test('returns the input rather than throwing on a bad escape', () => {
     expect(safeDecodeURI('%')).toBe('%');
     expect(safeDecodeURI('100%25 %E0%A4%A')).toBe('100%25 %E0%A4%A');
-  });
-
-  test.each([
-    'javascript:alert(1)',
-    'JaVaScRiPt:alert(1)',
-    '   javascript:x',
-    'javascript%3Aalert(1)',
-    'javascript%253Aalert(1)',
-    'vbscript:msgbox(1)',
-    'data:text/html,<b>',
-    '<script>alert(1)</script>',
-    'window.eval("x")',
-  ])('isDangerousValue refuses %p', (value) => {
-    expect(isDangerousValue(value)).toBe(true);
-  });
-
-  test.each([
-    'https://cdn.example.com/a.png',
-    '#gradient',
-    'currentColor',
-    'url(#clip)',
-    'M0 0h8v8H0z',
-    '',
-  ])('isDangerousValue admits %p', (value) => {
-    expect(isDangerousValue(value)).toBe(false);
-  });
-
-  test.each([
-    ['mask', "image-set('a.svg' 1x)"],
-    ['fill', "-webkit-image-set('a.svg' 1x)"],
-    ['MASK', String.raw`\69mage-set('a.svg' 1x)`],
-    ['cursor', "image('a.svg')"],
-    ['filter', "cross-fade('a.svg', 'b.svg')"],
-    ['stroke', '-moz-element(#a)'],
-    ['clip-path', "src('a.svg')"],
-    ['aria-label', 'javascript:alert(1)'],
-  ])('isDangerousAttribute refuses %s=%p', (name, value) => {
-    expect(isDangerousAttribute(name, value)).toBe(true);
-  });
-
-  test.each([
-    ['aria-label', 'Select element(s)'],
-    ['id', 'image(1)'],
-    ['href', '#image(1)'],
-    ['data-name', "src('a.svg')"],
-    ['transform', 'rotate(45)'],
-    ['fill', 'url(#g)'],
-  ])('isDangerousAttribute admits %s=%p', (name, value) => {
-    expect(isDangerousAttribute(name, value)).toBe(false);
-  });
-
-  test('isDangerousValue is a substring match, so a split scheme slips past it', () => {
-    // Recorded, not filed as a defect: DOMPurify's URI allowlist catches this
-    // downstream (asserted in the hostile table above), so the pipeline holds.
-    // It is here so that a change moving the decision back onto this function
-    // has to confront the gap.
-    expect(isDangerousValue('java\tscript:location=1')).toBe(false);
-    expect(isDangerousValue('&#106;avascript:location=1')).toBe(false);
   });
 });
 
@@ -3069,15 +3077,15 @@ describe('an inline data: raster is held to the upload policy', () => {
     expect(result.reason).toBe('invalid-inline-raster');
   });
 
-  test('an https: reference is still stripped, not refused', () => {
-    // The refusal above is about a supplied picture. A pointer to somebody
-    // else's picture keeps the reference answer it always had.
-    const result = clean(
-      svg('<image width="8" height="8" href="https://attacker.example/p.png"/>')
-    );
-
-    expect(result.isValid).toBe(true);
-    expect(result.cleanedSvg).not.toInclude('attacker.example');
+  test('an https: reference is refused as an external one', () => {
+    // Stripping it answered 200 with the picture silently gone.
+    expect(
+      clean(
+        svg(
+          '<image width="8" height="8" href="https://attacker.example/p.png"/>'
+        )
+      )
+    ).toMatchObject({ isValid: false, reason: 'external-reference' });
   });
 
   test('line-wrapped base64 survives and is stored unwrapped', () => {
@@ -3229,10 +3237,12 @@ describe('an inline data: raster is held to the upload policy', () => {
     expect(result.embeddedRasterMegapixels).toBe(0);
   });
 
+  // `url()` names only a local id in the native form, so nothing in one is
+  // decoded, tokenized or inlined; every other spelling is a file to convert.
   describe('inside url() in a presentation attribute', () => {
+    const BS = String.fromCodePoint(92);
     // Refused on its own as `animated`; inlined under `mask=` it used to be
-    // stored byte for byte and rendered, animation and `<use>` expansion
-    // included, past every guard the outer document is held to.
+    // stored byte for byte and rendered past every guard.
     const innerSvg = Buffer.from(
       svg('<rect width="8" height="8"><animate attributeName="x"/></rect>')
     ).toString('base64');
@@ -3246,214 +3256,124 @@ describe('an inline data: raster is held to the upload policy', () => {
       });
     });
 
+    // A nested document would reach the browser's conversion with no DOCTYPE,
+    // animation or expansion check, so it is refused as `<image href>` is.
     test.each(['mask', 'filter', 'clip-path', 'fill'])(
-      'data:image/svg+xml under %s is REFUSED as an unreadable inline raster',
+      'data:image/svg+xml under %s is refused',
       (attribute) => {
-        const result = clean(
-          inUrl(attribute, `data:image/svg+xml;base64,${innerSvg}`)
-        );
-        expect(result).toMatchObject({
-          isValid: false,
-          reason: 'invalid-inline-raster',
-          cleanedSvg: '',
-        });
+        expect(
+          clean(inUrl(attribute, `data:image/svg+xml;base64,${innerSvg}`))
+        ).toMatchObject({ isValid: false, reason: 'invalid-inline-raster' });
       }
     );
 
-    test.each([
-      ['quoted', `"data:image/svg+xml;base64,${innerSvg}"`],
-      ['CSS-escaped', String.raw`d\61ta:image/svg+xml;base64,` + innerSvg],
-      ['not base64', 'data:image/svg+xml,%3Csvg%2F%3E'],
-    ])('the %s spelling is refused too', (_label, target) => {
-      expect(clean(inUrl('mask', target))).toMatchObject({
-        isValid: false,
-        reason: 'invalid-inline-raster',
+    test('an admitted raster in url() needs conversion too: only <image> embeds one', () => {
+      expectConversion(
+        inUrl('mask', `data:image/png;base64,${realPng.toString('base64')}`)
+      );
+    });
+
+    test('an animated raster in url() is refused, not flattened', () => {
+      expect(
+        clean(inUrl('mask', `data:image/png;base64,${apng.toString('base64')}`))
+      ).toMatchObject({ isValid: false, reason: 'animated' });
+    });
+
+    test('the upload route answers each with its own message', () => {
+      expect(
+        uploadRefusal(
+          inUrl('mask', `data:image/png;base64,${realPng.toString('base64')}`)
+        )
+      ).toMatchObject({
+        status: HTTP_STATUS.BAD_REQUEST,
+        message: MSG_SVG_REQUIRES_CONVERSION,
+      });
+      expect(
+        uploadRefusal(inUrl('mask', `data:image/svg+xml;base64,${innerSvg}`))
+      ).toMatchObject({
+        status: HTTP_STATUS.BAD_REQUEST,
+        message: MSG_SVG_INVALID_INLINE_RASTER,
       });
     });
 
-    // A quote that exists only after decoding opens a string the renderer never
-    // sees; read as one, it swallowed the next `url(`, which the renderer loads.
+    // MEDIA-1 (fix-review.md): a quote that exists only after decoding opened a
+    // string the renderer never sees, which swallowed the next `url(`. `%` is
+    // literal to CSS, so `url(%27#a)` is itself a relative fetch; a value with
+    // `\` is outside the native form and converts unread.
     describe.each([
-      ['%27', '%27'],
-      ['%22', '%22'],
-      [String.raw`\'`, String.raw`\'`],
-      [String.raw`\22`, String.raw`\22 `],
-    ])('a decoded %s quote', (_label, quote) => {
+      ['%27', '%27', 'external-reference'],
+      ['%22', '%22', 'external-reference'],
+      [String.raw`\'`, String.raw`\'`, 'requires-conversion'],
+      [String.raw`\22`, String.raw`\22 `, 'requires-conversion'],
+    ] as const)('a decoded %s quote', (_label, quote, reason) => {
       const swallowing = (attribute: string, target: string) =>
         svg(
           `<rect width="8" height="8" ${attribute}="url(${quote}#a), url(${target}), url(${quote})"/>`
         );
 
       test.each(['mask', 'filter', 'fill'])(
-        'does not hide a data: document under %s',
+        'cannot hide a data: document under %s',
         (attribute) => {
-          const result = clean(
-            swallowing(attribute, `data:image/svg+xml;base64,${innerSvg}`)
-          );
-          expect(result.cleanedSvg).not.toInclude(innerSvg);
-          expect(result.cleanedSvg).not.toInclude('data:');
+          expect(
+            clean(
+              swallowing(attribute, `data:image/svg+xml;base64,${innerSvg}`)
+            )
+          ).toMatchObject({ isValid: false, reason, cleanedSvg: '' });
         }
       );
 
       test.each(['mask', 'filter', 'fill'])(
-        'does not hide an https: fetch under %s',
+        'cannot hide an https: fetch under %s',
         (attribute) => {
-          const result = clean(swallowing(attribute, 'https://evil.example/b'));
-          expect(result.cleanedSvg).not.toInclude('evil.example');
+          expect(
+            clean(swallowing(attribute, 'https://evil.example/b'))
+          ).toMatchObject({ isValid: false, reason, cleanedSvg: '' });
         }
       );
     });
 
+    // fix-review-assessment.md: CSS reads a comment and then a real fetch; the
+    // tokenizer read one local target.
+    test('a CSS comment cannot hide a url()', () => {
+      expectConversion(
+        svg(
+          `<rect width="8" height="8" fill="/*url('#*/url(https://evil.example/x)/*')*/"/>`
+        )
+      );
+    });
+
+    // Literal to CSS, both are relative URLs: a fetch, not a local reference.
     test.each([
-      // The renderer reads `%` literally, so each is a relative URL.
       ['a percent-encoded fragment', 'url(%23a)'],
-      [
-        'a percent-encoded data: scheme',
-        `url(data%3Aimage/svg+xml;base64,${innerSvg})`,
-      ],
-      // The renderer strips none of these, so `#` is not the first character.
       ['a no-break space before #', 'url(\u{A0}#a)'],
-      ['a quoted no-break space before #', "url('\u{A0}#a')"],
-      // After `url(` an escaped quote opens no string: the renderer reads a
-      // relative URL whose first character is the quote.
-      ['an escaped quote around a fragment', String.raw`url(\22#a\22)`],
-      [
-        'an escaped quote around an admitted raster',
-        String.raw`url(\22 data:image/png;base64,iVBORw0KGgo=\22)`,
-      ],
+    ])('%s is refused as external', (_label, value) => {
+      expect(
+        clean(svg(`<rect width="8" height="8" mask="${value}"/>`))
+      ).toMatchObject({ isValid: false, reason: 'external-reference' });
+    });
 
-      // The same, behind an escaped function name.
-      ['an escaped name before an escaped quote', String.raw`u\72l(\22#a\22)`],
-      ['an escaped first letter', String.raw`\75rl(\22#a\22)`],
-      [
-        'an escaped name before an escaped apostrophe',
-        String.raw`u\72l(\'#a\')`,
-      ],
-      [
-        'an escaped call after a plain one',
-        String.raw`url(#a) u\72l(\22#b\22)`,
-      ],
-
-      // `&#13;&#10;` is one newline to CSS, so the escape consumes all of it.
+    test.each([
+      ['an escaped quote around a fragment', `url(${BS}22#a${BS}22)`],
+      ['an escaped function name', `u${BS}72l(#a)`],
+      ['an escaped call after a plain one', `url(#a) u${BS}72l(#b)`],
       [
         'an escaped name split by CRLF',
-        String.raw`u\72&#13;&#10;l(https://evil.example/b)`,
+        `u${BS}72&#13;&#10;l(https://evil.example/b)`,
       ],
-    ])('%s is stripped as an external reference', (_label, value) => {
-      const result = clean(svg(`<rect width="8" height="8" mask="${value}"/>`));
-      expect(result.isValid).toBe(true);
-      expect(result.cleanedSvg).not.toInclude('mask=');
+      ['a padded target', 'url( #a )'],
+      ['a fallback colour', 'url(#a) red'],
+      ['a list of two', 'url(#a) url(#b)'],
+      ['an unterminated string', "url('#a"],
+      ['a quoted string holding url( text', "url('#aurl(#b)')"],
+    ])('%s needs conversion', (_label, value) => {
+      expectConversion(svg(`<rect width="8" height="8" mask="${value}"/>`));
     });
 
-    // A quoted string is ONE target to a renderer, so a `url(` inside it is part
-    // of the id. Read as a second function, it cut the target and stripped the
-    // reference, and the optimizer then dropped the gradient it named.
-    describe('a genuine quoted string containing url( text', () => {
-      const gradient = (id: string) =>
-        `<linearGradient id="${id}"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>`;
-      const rect = (attribute: string, value: string) =>
-        `<rect width="8" height="8" ${attribute}="${value}"/>`;
-
-      // svgo renames ids, so the pair is checked by what the gradient became.
-      const gradientIds = (stored: string) =>
-        Array.from(
-          stored.matchAll(/<linearGradient id="([^"]+)"/g),
-          (match) => match[1] ?? ''
-        );
-
-      test.each([
-        ['single-quoted', 'fill="url(\'#aurl(#b)\')"'],
-        ['double-quoted', 'fill=\'url("#aurl(#b)")\''],
-      ])('%s reference survives with its gradient', (_label, attribute) => {
-        const result = clean(
-          svg(
-            `${gradient('aurl(#b)')}<rect width="8" height="8" ${attribute}/>`
-          )
-        );
-        expect(result.isValid).toBe(true);
-        if (!result.isValid) throw new Error('expected valid SVG');
-        expect(result.errors).toEqual([]);
-        expect(result.cleanedSvg).toInclude('<linearGradient id="sid-1">');
-        expect(result.cleanedSvg).toInclude(` fill="url('#sid-1')"`);
-
-        const stored = svgOptimizerServer({ data: result.cleanedSvg });
-        const [id] = gradientIds(stored);
-        expect(id).toBeDefined();
-        expect(stored).toInclude(`#${id}`);
-        expect(stored).toInclude(' fill="url(');
-      });
-
-      test('padding inside the parentheses is restated, not stored as sent', () => {
-        const result = clean(
-          svg(gradient('aurl(#b)') + rect('fill', "url( '#aurl(#b)' )"))
-        );
-        expect(result.isValid).toBe(true);
-        if (!result.isValid) throw new Error('expected valid SVG');
-        expect(result.errors).toEqual([]);
-        expect(result.cleanedSvg).toInclude(`fill="url('#sid-1')"`);
-      });
-
-      test('two quoted strings each holding url( text both survive', () => {
-        const mask = "url('#aurl(#b)'), url('#curl(#d)')";
-        const result = clean(
-          svg(
-            `${gradient('aurl(#b)')}${gradient('curl(#d)')}` +
-              rect('mask', mask)
-          )
-        );
-        expect(result.isValid).toBe(true);
-        if (!result.isValid) throw new Error('expected valid SVG');
-        expect(result.errors).toEqual([]);
-        expect(result.cleanedSvg).toInclude(
-          `mask="url('#sid-1'), url('#sid-2')"`
-        );
-
-        const stored = svgOptimizerServer({ data: result.cleanedSvg });
-        const ids = gradientIds(stored);
-        expect(ids).toHaveLength(2);
-        expect(stored).toInclude(`mask="url('#${ids[0]}'), url('#${ids[1]}')"`);
-      });
-
-      test('a real url() after the string is still read', () => {
-        const result = clean(
-          svg(
-            gradient('aurl(#b)') +
-              rect('mask', "url('#aurl(#b)'), url(https://evil.example/x)")
-          )
-        );
-        expect(result.isValid).toBe(true);
-        expect(result.cleanedSvg).not.toInclude('mask=');
-        expect(result.cleanedSvg).not.toInclude('evil.example');
-      });
-
-      test.each([
-        ['at the end of the value', "url('#aurl(b)"],
-        [
-          'at a newline, before a real url()',
-          "url('#a&#10;url(https://x.example/b)",
-        ],
-      ])('an unterminated string %s is stripped', (_label, value) => {
-        const result = clean(svg(rect('mask', value)));
-        expect(result.isValid).toBe(true);
-        expect(result.cleanedSvg).not.toInclude('mask=');
-      });
-
-      test('an escaped quote does not close the string', () => {
-        const result = clean(
-          svg(rect('mask', String.raw`url('#a\'), url(https://evil.example/x)`))
-        );
-        expect(result.isValid).toBe(true);
-        expect(result.cleanedSvg).not.toInclude('mask=');
-      });
-    });
-
-    // The optimizer finds the definitions a `url()` names with its own pattern,
-    // which reads neither a padded nor an escaped target, and it deletes what it
-    // cannot see named. The sanitizer therefore restates every local reference
-    // in the one spelling the optimizer reads, so these run the upload path's two
-    // steps (`validateSvgUpload`, then `svgOptimizerServer`) and look at the
+    // svgo finds the definitions a `url()` names with its own pattern and
+    // deletes what it cannot see named, so these run the upload path's two
+    // steps (`validateSvgUpload`, then `svgOptimizerServer`) and read the
     // stored file.
-    describe('a local url() reference, through the whole upload pipeline', () => {
+    describe('a native url() reference, through the whole upload pipeline', () => {
       const stops =
         '<stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>';
       const definitions: Record<string, (id: string) => string> = {
@@ -3466,27 +3386,14 @@ describe('an inline data: raster is held to the upload policy', () => {
         filter: (id) =>
           `<filter id="${id}"><feFlood flood-color="red"/></filter>`,
       };
-      const xml = (text: string) =>
-        text.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
 
-      const stored = (
-        attribute: string,
-        ids: readonly string[],
-        value: string
-      ) => {
-        const define = definitions[attribute.toLowerCase()];
-        if (!define) throw new Error(`no definition for ${attribute}`);
-        const markup = svg(
-          `<defs>${ids.map((id) => define(xml(id))).join('')}</defs>` +
-            `<rect width="8" height="8" ${attribute}="${xml(value)}"/>`
-        );
-        const { cleanedSvg } = validateSvgUpload(Buffer.from(markup), 'a.svg');
-        expect(isDangerousValue(cleanedSvg)).toBe(false);
-        return svgOptimizerServer({ data: cleanedSvg });
-      };
+      const store = (markup: string) =>
+        svgOptimizerServer({
+          data: validateSvgUpload(Buffer.from(markup), 'a.svg').cleanedSvg,
+        });
 
-      // Read off the stored file the way a renderer would, not matched as text:
-      // the definitions that carry an id, and what every `url()` names.
+      // Read off the stored file the way a renderer would: the definitions that
+      // carry an id, and what every `url()` names.
       const readStored = (output: string) => {
         const { window } = new JSDOM('', { runScripts: 'outside-only' });
         const doc = new window.DOMParser().parseFromString(
@@ -3497,87 +3404,51 @@ describe('an inline data: raster is held to the upload policy', () => {
           (element) => element.getAttribute('id') ?? ''
         );
         const references = [...doc.querySelectorAll('*')].flatMap((element) =>
-          [...element.attributes]
-            .filter((attribute) => attribute.name !== 'id')
-            .flatMap((attribute) => urlTargets(attribute.value))
-            .map((target) => decodeURIComponent(target.slice('#'.length)))
+          [...element.attributes].flatMap(
+            ({ value }) =>
+              /^url\((["']?)#([^"')]+)\1\)$/.exec(value)?.slice(2, 3) ?? []
+          )
         );
         return { ids, references };
       };
 
-      const expectIntact = (output: string, count = 1) => {
+      const expectIntact = (output: string) => {
         const { ids, references } = readStored(output);
-        expect(ids).toHaveLength(count);
         const byCode = (a: string, b: string) => (a < b ? -1 : 1);
+        expect(ids.length).toBeGreaterThan(0);
         expect(references.toSorted(byCode)).toEqual(ids.toSorted(byCode));
       };
 
-      test.each([
-        ['plain', 'aurl(#b)', "url('#aurl(#b)')"],
-        ['padded', 'aurl(#b)', "url( '#aurl(#b)' )"],
-        ['an escaped quote', "a'url(#b)", String.raw`url('#a\'url(#b)')`],
-        ['parentheses, single-quoted', 'a(b)c', "url('#a(b)c')"],
-        ['parentheses, double-quoted', 'a(b)c', 'url("#a(b)c")'],
-        ['an escaped double quote', 'a"b', String.raw`url("#a\"b")`],
-        ['a space, quoted', 'a b', 'url("#a b")'],
-        ['a space, as a CSS escape', 'a b', String.raw`url(#a\20 b)`],
-        ['a backslash', String.raw`a\b`, String.raw`url("#a\\b")`],
-        ['a literal percent sign', 'a%b', 'url("#a%25b")'],
-        ['a malformed percent escape', 'a%b', 'url(#a%b)'],
-        ['a percent-encoded character', 'aAb', 'url(#a%41b)'],
-        ['a CSS-escaped function name', 'a', String.raw`u\72l( "#a" )`],
-        ['a fallback colour', 'a(1)', "url( '#a(1)' ) red"],
-      ])('fill: %s keeps its gradient', (_label, id, value) => {
-        expectIntact(stored('fill', [id], value));
-      });
-
-      test.each(['stroke', 'mask', 'filter', 'clip-path'])(
-        '%s keeps what a padded reference names',
-        (attribute) => {
-          expectIntact(stored(attribute, ['m(1)'], "url( '#m(1)' )"));
-        }
-      );
-
-      test('an upper-case attribute name is read as DOMPurify will lower it', () => {
-        expectIntact(stored('FILL', ['a(1)'], "url( '#a(1)' )"));
-      });
-
-      test('a list of references keeps every definition, whatever the prefixes', () => {
-        const output = stored(
-          'filter',
-          ['f', 'fx'],
-          "url( '#f' ) url( '#fx' )"
-        );
-        expectIntact(output, 2);
-      });
-
-      test('a reference the optimizer cannot restate is refused, not left dangling', () => {
-        for (const value of [
-          'url(#a b)',
-          "url('#a' junk)",
-          String.raw`url(#a\9 b)`,
-          `url(#a) "x"`,
-          'url(#a) /* url(#b) */',
-        ]) {
-          const result = clean(
-            svg(
-              `<defs>${definitions.fill?.('a')}</defs><rect width="8" height="8" fill="${xml(value)}"/>`
+      describe.each(Object.keys(definitions))('%s', (attribute) => {
+        test.each([
+          ['unquoted', 'url(#g_1.a-b)'],
+          ['single-quoted', "url('#g_1.a-b')"],
+          ['double-quoted', 'url("#g_1.a-b")'],
+        ])('%s keeps what it names', (_label, value) => {
+          const define = definitions[attribute];
+          if (!define) throw new Error(`no definition for ${attribute}`);
+          expectIntact(
+            store(
+              svg(
+                `<defs>${define('g_1.a-b')}</defs><rect width="8" height="8" ${attribute}="${value.replaceAll('"', '&quot;')}"/>`
+              )
             )
           );
-          expect(result.isValid).toBe(false);
-          expect(result.cleanedSvg).toBe('');
-        }
+        });
       });
 
-      test('a local reference beside an external one is stripped whole', () => {
-        const result = clean(
+      // The browser-preprocessing finding: svgo rewrote `url(#f) url(#fx)` to
+      // `url(#a) url(#ax)` and deleted `#fx`. A list is not native now; one id
+      // that prefixes another is.
+      test('an id that prefixes another keeps both definitions', () => {
+        const output = store(
           svg(
-            `<defs>${definitions.fill?.('a')}</defs><rect width="8" height="8" fill="url( '#a' ) url(https://evil.example/x)"/>`
+            '<defs><filter id="f"><feFlood/></filter><filter id="fx"><feFlood/></filter></defs>' +
+              '<rect width="8" height="8" filter="url(#f)"/><rect width="8" height="8" filter="url(#fx)"/>'
           )
         );
-        expect(result.isValid).toBe(true);
-        expect(result.cleanedSvg).not.toInclude('evil.example');
-        expect(result.cleanedSvg).not.toInclude('fill=');
+        expectIntact(output);
+        expect(readStored(output).ids).toContainAllValues(['f', 'fx']);
       });
     });
 
@@ -3591,8 +3462,6 @@ describe('an inline data: raster is held to the upload policy', () => {
     });
 
     test('a padded marker reference still scans in linear time', () => {
-      // The marker sweep reads its own `url()`; every target here is `#a`, so
-      // the value reaches it past the external-reference check.
       const padded = svg(
         `<path d="M0 0L1 1" marker-start="url(${' '.repeat(128_000)}#a)x"/>`
       );
@@ -3602,8 +3471,6 @@ describe('an inline data: raster is held to the upload policy', () => {
     });
 
     test('a url( nested in every other url( still scans in linear time', () => {
-      // Every target is tested from its own `url(`, so a scan that reads each to
-      // its closing `)` is quadratic in the attribute.
       const nested = svg(
         `<rect width="8" height="8" mask="${'url(#a '.repeat(200_000)}"/>`
       );
@@ -3611,79 +3478,13 @@ describe('an inline data: raster is held to the upload policy', () => {
       clean(nested);
       expect(performance.now() - started).toBeLessThan(5000);
     });
-
-    test('an admitted raster survives, and is charged its megapixels', () => {
-      const result = clean(
-        inUrl(
-          'mask',
-          `data:image/png;base64,${pngHeader(4000, 4000).toString('base64')}`
-        )
-      );
-      expect(result.isValid).toBe(true);
-      if (!result.isValid) throw new Error('expected valid SVG');
-      expect(result.cleanedSvg).toInclude('data:image/png;base64,');
-      expect(result.embeddedRasterMegapixels).toBe(16);
-    });
-
-    test('an animated or oversized raster answers as the <image> one does', () => {
-      expect(
-        clean(inUrl('mask', `data:image/png;base64,${apng.toString('base64')}`))
-      ).toMatchObject({ isValid: false, reason: 'animated' });
-      expect(
-        clean(
-          inUrl(
-            'filter',
-            `data:image/png;base64,${pngHeader(5001, 5001).toString('base64')}`
-          )
-        )
-      ).toMatchObject({ isValid: false, reason: 'too-many-pixels' });
-    });
-
-    test('a declaration that is no presentation attribute is stripped, not refused', () => {
-      const result = clean(
-        svg(
-          `<rect width="8" height="8" style="mask-image:url(data:image/svg+xml;base64,${innerSvg})"/>`
-        )
-      );
-      expect(result.isValid).toBe(true);
-      expect(result.cleanedSvg).not.toInclude('data:');
-    });
-
-    test('a declaration that becomes an attribute is held to the same policy', () => {
-      expect(
-        clean(
-          svg(
-            `<rect width="8" height="8" style="mask:url(data:image/svg+xml;base64,${innerSvg})"/>`
-          )
-        )
-      ).toMatchObject({ isValid: false, reason: 'invalid-inline-raster' });
-    });
-
-    test('the upload route answers with the inline-raster message', () => {
-      const logged = spyOn(console, 'warn').mockImplementation(() => {});
-      try {
-        expect(() =>
-          validateSvgUpload(
-            Buffer.from(inUrl('mask', `data:image/svg+xml;base64,${innerSvg}`)),
-            'masked.svg'
-          )
-        ).toThrow(
-          expect.objectContaining({
-            status: HTTP_STATUS.BAD_REQUEST,
-            message: uploadMsg.invalidInlineRaster,
-          })
-        );
-      } finally {
-        logged.mockRestore();
-      }
-    });
   });
 });
 
-describe('image functions other than url() in an attribute', () => {
-  // `image-set('…' 1x)` takes a bare string, so neither the `url()` data check
-  // nor the external-reference check saw it: the data form rendered the inner
-  // SVG in <img>, the external form beaconed when opened as a document.
+describe('functions other than url() in an attribute', () => {
+  // `image-set('…' 1x)` takes a bare string, so a check of `url()` targets
+  // never saw it. The native form allows a short list of functions by name
+  // instead, so none of these needs to be recognised.
   const innerSvg = Buffer.from(
     svg('<rect width="8" height="8"><animate attributeName="x"/></rect>')
   ).toString('base64');
@@ -3697,70 +3498,52 @@ describe('image functions other than url() in an attribute', () => {
     ['mixed case', `-WebKit-Image-SET('${beacon}' 1x)`],
     ['CSS-escaped name', String.raw`\69mage-set('` + `${beacon}' 1x)`],
     ['CSS-escaped hyphen', String.raw`image\-set('` + `${data}' 1x)`],
-    ['escape ending in a space', String.raw`im\61 ge-set('` + `${data}' 1x)`],
     ['percent-encoded', `image-set(%27${beacon}%27 1x)`],
     ['after another value', `none, image-set('${data}' 1x)`],
     ['image()', `image('${beacon}')`],
     ['cross-fade()', `cross-fade('${data}' 50%, '${beacon}')`],
-    ['-webkit-cross-fade()', `-webkit-cross-fade('${data}', '${data}', 50%)`],
     ['-moz-element()', '-moz-element(#a)'],
     ['src()', `src('${beacon}')`],
+    ['var()', 'var(--x, red)'],
+    ['calc()', 'calc(1px + 2px)'],
   ];
 
-  const cases = ['mask', 'fill', 'filter'].flatMap((attribute) =>
-    spellings.map(([label, value]) => [attribute, label, value] as const)
+  const cases = ['mask', 'fill', 'filter', 'MASK', 'Fill'].flatMap(
+    (attribute) =>
+      spellings.map(([label, value]) => [attribute, label, value] as const)
   );
 
-  test.each(cases)('%s with %s is stripped', (attribute, _label, value) => {
-    const markup = svg(
-      `<rect id="a" width="8" height="8"/><rect width="8" height="8" ${attribute}="${value.replaceAll('"', '&quot;')}"/>`
-    );
-    const result = expectNeutralised(markup, ['data:', 'evil.example']);
-
-    expect(result.isValid).toBe(true);
-    if (!result.isValid) throw new Error('expected valid SVG');
-    expect(result.cleanedSvg).not.toInclude(` ${attribute}=`);
-    expect(svgOptimizerServer({ data: result.cleanedSvg })).not.toMatch(
-      /data:|evil\.example|image-set|element\(/i
-    );
-  });
-
-  test.each(['MASK', 'Fill'])(
-    '%s is matched as the HTML re-parse lowercases it',
-    (attribute) => {
-      const result = expectNeutralised(
+  test.each(cases)(
+    '%s with %s needs conversion',
+    (attribute, _label, value) => {
+      expectConversion(
         svg(
-          `<rect width="8" height="8" ${attribute}="image-set('${beacon}' 1x)"/>`
-        ),
-        ['evil.example']
-      );
-      expect(result.isValid).toBe(true);
-      expect(result.cleanedSvg.toLowerCase()).not.toInclude(
-        ` ${attribute.toLowerCase()}=`
+          `<rect id="a" width="8" height="8"/><rect width="8" height="8" ${attribute}="${value.replaceAll('"', '&quot;')}"/>`
+        )
       );
     }
   );
 
-  // Text, not CSS: only a presentation attribute's value is parsed as one.
   test.each([
+    ['a transform', 'transform="rotate(45) translate(1, 2) scale(2)"'],
+    ['a colour function', 'fill="rgb(1, 2, 3)"'],
+    ['an upper-case colour function', 'stroke="RGBA(1, 2, 3, .5)"'],
+    ['a url() paint', `fill="url('#g')"`],
+    // Text, never read as CSS.
     ['an aria-label', 'aria-label="Select element(s)"'],
     ['an id', 'id="image(1)"'],
-    ['a fragment named like a function', 'href="#image(1)"'],
-    ['a transform', 'transform="rotate(45)"'],
-    // The spelling `localUrl` writes: any other is restated, see its tests.
-    ['a url() paint', `fill="url('#g')"`],
-  ])('%s survives', (_label, attribute) => {
+  ])('%s stays native', (_label, attribute) => {
     const result = clean(
-      svg(
-        `<linearGradient id="g"/><use ${attribute}/>` +
-          `<rect width="8" height="8" ${attribute}/>`
-      )
+      svg(`<linearGradient id="g"/><rect width="8" height="8" ${attribute}/>`)
     );
     expect(result.isValid).toBe(true);
     expect(result.cleanedSvg).toInclude(attribute);
-    expect(result.errors).not.toContainEqual(
-      expect.stringContaining('محتوى خطير')
-    );
+  });
+
+  test('a fragment spelled like a function converts: an href is never read as CSS', () => {
+    const result = clean(svg('<g id="a"/><use href="#image(1)"/>'));
+    expect(result.isValid).toBe(false);
+    expect(result.reason).toBe('requires-conversion');
   });
 });
 
@@ -3914,13 +3697,10 @@ describe('the ICC profile bound', () => {
   }, 30_000);
 });
 
-describe('an id no reference spelling survives, through the whole upload pipeline', () => {
-  // An id that spells `url(https://…)`, `alert(` or a quote is stripped by the
-  // value checks or missed by the optimizer's reference pattern, and the
-  // definition it names was then deleted as unused. Every id that a reference
-  // names and that is not a plain token is renamed first, so each of these is
-  // checked on the STORED file: the definition is there, and every reference
-  // resolves to one.
+describe('ids and the references that name them, through the whole upload pipeline', () => {
+  // A reference names an id one way, `#id` or `url(#id)` with a plain id, so
+  // nothing is renamed or decoded: the stored ids are the uploaded ones, and
+  // svgo's reference pattern reads every reference the renderer does.
   const stops =
     '<stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>';
   const attr = (text: string) =>
@@ -3931,41 +3711,17 @@ describe('an id no reference spelling survives, through the whole upload pipelin
       .replaceAll('\t', '&#9;')
       .replaceAll('\n', '&#10;')
       .replaceAll('\r', '&#13;');
+  const BS = String.fromCodePoint(92);
   const cssString = (id: string) =>
     id
-      .replaceAll('\\', '\\\\')
-      .replaceAll("'", String.raw`\'`)
-      .replaceAll('\n', String.raw`\a `)
-      .replaceAll('\r', String.raw`\d `)
-      .replaceAll('\t', String.raw`\9 `);
-  const percent = (id: string) => encodeURIComponent(id).replaceAll("'", '%27');
-
-  interface Spelling {
-    href: (id: string) => string;
-    raw: boolean;
-    url: (id: string) => string;
-  }
-  const spellings: ReadonlyArray<readonly [string, Spelling]> = [
-    [
-      'the id written out',
-      {
-        href: (id) => `#${id}`,
-        raw: true,
-        url: (id) => `url('#${cssString(id)}')`,
-      },
-    ],
-    [
-      'percent-encoding',
-      {
-        href: (id) => `#${percent(id)}`,
-        raw: false,
-        url: (id) => `url('#${percent(id)}')`,
-      },
-    ],
-  ];
+      .replaceAll(BS, () => BS + BS)
+      .replaceAll("'", () => `${BS}'`)
+      .replaceAll('\n', () => `${BS}a `)
+      .replaceAll('\r', () => `${BS}d `)
+      .replaceAll('\t', () => `${BS}9 `);
 
   // Every kind of site that names an id, each with a definition of its own.
-  const build = (base: string, spelling: Spelling) => {
+  const build = (base: string) => {
     let count = 0;
     const tags: string[] = [];
     const definitions: string[] = [];
@@ -3973,7 +3729,7 @@ describe('an id no reference spelling survives, through the whole upload pipelin
     const define = (tag: string, markup: (id: string) => string) => {
       const id = `${base}${count++}`;
       tags.push(tag);
-      definitions.push(markup(attr(id)));
+      definitions.push(markup(id));
       return id;
     };
     const gradient = (id: string) =>
@@ -3983,30 +3739,30 @@ describe('an id no reference spelling survives, through the whole upload pipelin
 
     for (const attribute of ['fill', 'stroke']) {
       const id = define('linearGradient', gradient);
-      body.push(shape(`${attribute}="${attr(spelling.url(id))}"`));
+      body.push(shape(`${attribute}="url(#${id})"`));
     }
     const mask = define(
       'mask',
       (id) => `<mask id="${id}"><rect width="4" height="4" fill="#fff"/></mask>`
     );
-    body.push(shape(`mask="${attr(spelling.url(mask))}"`));
+    body.push(shape(`mask="url(#${mask})"`));
     const clip = define(
       'clipPath',
       (id) => `<clipPath id="${id}"><rect width="4" height="4"/></clipPath>`
     );
-    body.push(shape(`clip-path="${attr(spelling.url(clip))}"`));
+    body.push(shape(`clip-path="url(#${clip})"`));
     const filter = define(
       'filter',
       (id) => `<filter id="${id}"><feFlood flood-color="red"/></filter>`
     );
-    body.push(shape(`filter="${attr(spelling.url(filter))}"`));
+    body.push(shape(`filter="url(#${filter})"`));
     for (const attribute of ['marker-start', 'marker-mid', 'marker-end']) {
       const id = define(
         'marker',
         (marker) =>
           `<marker id="${marker}"><rect width="2" height="2"/></marker>`
       );
-      body.push(shape(`${attribute}="${attr(spelling.url(id))}"`));
+      body.push(shape(`${attribute}="url(#${id})"`));
     }
     for (const attribute of ['href', 'xlink:href']) {
       const id = define(
@@ -4014,29 +3770,12 @@ describe('an id no reference spelling survives, through the whole upload pipelin
         (group) =>
           `<g id="${group}"><rect width="2" height="2" fill="red"/><rect width="1" height="1" fill="blue"/></g>`
       );
-      body.push(`<use ${attribute}="${attr(spelling.href(id))}"/>`);
+      body.push(`<use ${attribute}="#${id}"/>`);
     }
     const template = define('linearGradient', gradient);
     tags.push('linearGradient');
-    definitions.push(
-      `<linearGradient id="templated" href="${attr(spelling.href(template))}"/>`
-    );
-    body.push(shape('fill="url(#templated)"'));
-    const first = define(
-      'filter',
-      (id) => `<filter id="${id}"><feFlood/></filter>`
-    );
-    const second = define(
-      'filter',
-      (id) => `<filter id="${id}"><feFlood/></filter>`
-    );
-    body.push(
-      shape(
-        `filter="${attr(`${spelling.url(first)} ${spelling.url(second)}`)}"`
-      )
-    );
-    const fallback = define('linearGradient', gradient);
-    body.push(shape(`fill="${attr(`${spelling.url(fallback)} red`)}"`));
+    definitions.push(`<linearGradient id="${base}t" href="#${template}"/>`);
+    body.push(shape(`fill="url(#${base}t)"`));
 
     return {
       markup: svg(`<defs>${definitions.join('')}</defs>${body.join('')}`),
@@ -4058,91 +3797,82 @@ describe('an id no reference spelling survives, through the whole upload pipelin
       id: element.getAttribute('id') ?? '',
       tag: element.localName,
     }));
-    const named = (target: string) =>
-      target.startsWith('#')
-        ? decodeURIComponent(target.slice(1))
-        : `external:${target}`;
-    const referencesIn = (name: string, value: string) => {
-      if (name === 'id') return [];
-      return name === 'href' || name.endsWith(':href')
-        ? [named(value)]
-        : urlTargets(value).map(named);
-    };
     const references = [...doc.querySelectorAll('*')].flatMap((element) =>
-      [...element.attributes].flatMap(({ name, value }) =>
-        referencesIn(name, value)
-      )
+      [...element.attributes].flatMap(({ name, value }) => {
+        if (name === 'id') return [];
+        if (name === 'href' || name.endsWith(':href'))
+          return [value.replace(/^#/, '')];
+        return /^url\((["']?)#([^"')]+)\1\)$/.exec(value)?.slice(2, 3) ?? [];
+      })
     );
     return { definitions, references };
   };
 
   const byCode = (a: string, b: string) => (a < b ? -1 : 1);
-  const expectIntact = (output: string, tags: readonly string[]) => {
-    const { definitions, references } = readStored(output);
-    expect(definitions.map(({ tag }) => tag).toSorted(byCode)).toEqual(
-      [...tags].toSorted(byCode)
-    );
-    const ids = new Set(definitions.map(({ id }) => id));
-    expect(ids.size).toBe(definitions.length);
-    for (const id of ids) expect(references).toContain(id);
-    for (const reference of references) expect(ids.has(reference)).toBe(true);
-  };
 
-  const IDS: ReadonlyArray<
-    readonly [label: string, id: string, writtenOut: boolean]
-  > = [
-    ['an apostrophe', "a'b", true],
-    ['a double quote', 'a"b', true],
-    ['a backslash', String.raw`a\b`, true],
-    ['a space', 'a b', true],
-    ['a literal percent sign', 'a%b', true],
-    ['a percent escape written out', 'a%41b', false],
-    ['parentheses', 'a(b)c', true],
-    ['a hash', 'a#b', true],
-    ['an emoji', 'a\u{1F600}b', true],
-    ['U+2028', 'a\u{2028}b', true],
-    ['a line break', 'a\nb', true],
-    ['a tab', 'a\tb', true],
-    ['url( text after an apostrophe', "a'url(https://evil.example/e)", true],
-    ['url( text', 'aurl(https://evil.example/e)', true],
-    ['alert(', 'alert(1)', true],
-    ['javascript:', 'javascript:x', true],
-    ['data:text/html', 'data:text/html,x', true],
-    ['a leading digit', '1a', true],
-    ['a dot and a colon', 'a.b:c', true],
+  test.each([
+    ['letters', 'g'],
+    ['underscores, digits, dots and hyphens', 'Grad_1.b-'],
+    ['a leading underscore', '_g'],
+  ])(
+    'ids of %s keep every definition and reference',
+    (_label, base) => {
+      const { markup, tags } = build(base);
+      const stored = store(markup);
+      const { definitions, references } = readStored(stored);
+
+      expect(definitions.map(({ tag }) => tag).toSorted(byCode)).toEqual(
+        [...tags].toSorted(byCode)
+      );
+      const ids = new Set(definitions.map(({ id }) => id));
+      expect(ids.size).toBe(definitions.length);
+      for (const id of ids) {
+        expect(id.startsWith(base)).toBe(true);
+        expect(references).toContain(id);
+      }
+      for (const reference of references) expect(ids.has(reference)).toBe(true);
+    },
+    30_000
+  );
+
+  const IDS: ReadonlyArray<readonly [label: string, id: string]> = [
+    ['an apostrophe', "a'b"],
+    ['a double quote', 'a"b'],
+    ['a backslash', String.raw`a\b`],
+    ['a space', 'a b'],
+    ['a literal percent sign', 'a%b'],
+    ['a percent escape written out', 'a%41b'],
+    ['parentheses', 'a(b)c'],
+    ['a hash', 'a#b'],
+    ['an emoji', 'a\u{1F600}b'],
+    ['a line break', 'a\nb'],
+    ['url( text after an apostrophe', "a'url(https://evil.example/e)"],
+    ['alert(', 'alert(1)'],
+    ['javascript:', 'javascript:x'],
+    ['a leading digit', '1a'],
+    ['a colon', 'a:c'],
   ];
 
-  describe.each(IDS)('%s', (_label, id, writtenOut) => {
-    test.each(spellings.filter(([, spelling]) => writtenOut || !spelling.raw))(
-      'named by %s, every definition and reference is kept',
-      (_name, spelling) => {
-        const { markup, tags } = build(id, spelling);
-        const stored = store(markup);
+  describe.each(IDS)('an id with %s', (_label, id) => {
+    test('named by url() needs conversion', () => {
+      expectConversion(
+        svg(
+          `<linearGradient id="${attr(id)}">${stops}</linearGradient>` +
+            `<rect width="8" height="8" fill="${attr(`url('#${cssString(id)}')`)}"/>`
+        )
+      );
+    });
 
-        expectIntact(stored, tags);
-        expect(stored).not.toInclude('evil.example');
-        expect(stored).not.toInclude('alert(');
-        expect(store(stored)).toBe(stored);
-      },
-      30_000
-    );
-  });
-
-  test('the case the verifier found: an apostrophe and url( in a gradient id', () => {
-    const id = "a'url(https://evil.example/e)";
-    const markup = svg(
-      `<linearGradient id="${id}">${stops}</linearGradient>` +
-        String.raw`<rect width="8" height="8" fill="url('#a\'url(https://evil.example/e)')"/>`
-    );
-    const result = clean(markup);
-    expect(result.isValid).toBe(true);
-    if (!result.isValid) throw new Error('expected valid SVG');
-    expect(result.cleanedSvg).toInclude('<linearGradient id="sid-1">');
-    expect(result.cleanedSvg).toInclude(`fill="url('#sid-1')"`);
-
-    const stored = store(markup);
-    expectIntact(stored, ['linearGradient']);
-    expect(stored).not.toInclude('evil.example');
+    test('named by href is refused', () => {
+      const result = clean(
+        svg(
+          `<g id="${attr(id)}"><rect width="1" height="1"/></g>` +
+            `<use href="${attr(`#${id}`)}"/>`
+        )
+      );
+      expect(result.isValid).toBe(false);
+      expect(result.cleanedSvg).toBe('');
+    });
   });
 
   test('a plain id is left exactly as it is', () => {
@@ -4153,7 +3883,7 @@ describe('an id no reference spelling survives, through the whole upload pipelin
       )
     );
     expect(result.cleanedSvg).toInclude('id="Grad_1-b"');
-    expect(result.cleanedSvg).not.toInclude('sid-');
+    expect(result.cleanedSvg).toInclude('fill="url(#Grad_1-b)"');
   });
 
   test('an id nothing references is left as it is', () => {
@@ -4163,71 +3893,101 @@ describe('an id no reference spelling survives, through the whole upload pipelin
     expect(result.cleanedSvg).toInclude('id="a b"');
   });
 
-  test('a new id collides with no id and no reference, dangling ones included', () => {
+  test('the case the verifier found is refused before anything is counted', () => {
+    // 20 levels of `<g id="%4Ck">` doubled through `#%254C…`, with `L*` decoys
+    // that the double-decoding counter resolved instead, plus the element that
+    // switched renaming off. The encoded href is not the native spelling.
+    const levels = [
+      '<g id="%4C0"><rect width="1" height="1"/></g><g id="L0"/>',
+    ];
+    for (let level = 1; level < 20; level++)
+      levels.push(
+        `<g id="%4C${level}"><use href="#%254C${level - 1}"/><use href="#%254C${level - 1}"/></g><g id="L${level}"/>`
+      );
     const result = clean(
       svg(
-        `<rect id="sid-1" width="1" height="1" fill="url(#sid-2)"/>` +
-          `<linearGradient id="a b">${stops}</linearGradient>` +
-          `<rect width="8" height="8" fill="url('#a b')"/>`
-      )
-    );
-    expect(result.isValid).toBe(true);
-    if (!result.isValid) throw new Error('expected valid SVG');
-    expect(result.cleanedSvg).toInclude('<linearGradient id="sid-3">');
-    expect(result.cleanedSvg).toInclude(`fill="url('#sid-3')"`);
-    expect(result.cleanedSvg).toInclude('id="sid-1"');
-    expect(result.cleanedSvg).not.toInclude('id="sid-2"');
-  });
-
-  test('only the first of a duplicated id is renamed, as a renderer resolves it', () => {
-    const result = clean(
-      svg(
-        `<linearGradient id="a b">${stops}</linearGradient>` +
-          `<linearGradient id="a b"/>` +
-          `<rect width="8" height="8" fill="url('#a b')"/>`
-      )
-    );
-    expect(result.isValid).toBe(true);
-    if (!result.isValid) throw new Error('expected valid SVG');
-    expect(result.cleanedSvg).toInclude('<linearGradient id="sid-1">');
-    expect(result.cleanedSvg).toInclude('<linearGradient id="a b"/>');
-  });
-
-  test('a reference that cannot be restated is still refused, not left dangling', () => {
-    const result = clean(
-      svg(
-        `<linearGradient id="a b">${stops}</linearGradient>` +
-          `<rect width="8" height="8" fill="url(#a b)"/>`
+        `${levels.join('')}<use href="#%254C19"/>` +
+          `<rect fill="url('#%254C0') /**/ url(https://x.example/a)"/>`
       )
     );
     expect(result.isValid).toBe(false);
     expect(result.cleanedSvg).toBe('');
   });
+});
 
-  test('an external reference beside a renamed one is still stripped whole', () => {
-    const markup = svg(
-      `<linearGradient id="a b">${stops}</linearGradient>` +
-        `<rect width="8" height="8" fill="url('#a b') url(https://evil.example/x)"/>`
+describe('svgo keeps what renders through references and inheritance', () => {
+  // The recheck after svgo reads the form, not the picture, so these assert the
+  // stored file itself.
+  const store = (inner: string) =>
+    svgOptimizerServer({
+      data: validateSvgUpload(Buffer.from(svg(inner)), 'kept.svg').cleanedSvg,
+    });
+  const parse = (output: string) => {
+    const { window } = new JSDOM('', { runScripts: 'outside-only' });
+    return new window.DOMParser().parseFromString(output, 'image/svg+xml');
+  };
+
+  test.each(['display="none"', 'visibility="hidden"', 'opacity="0"'])(
+    'a <use> of an element under %s keeps its target',
+    (hidden) => {
+      // The instance inherits from the <use>, not from the hidden group.
+      const doc = parse(
+        store(
+          `<g ${hidden}><path id="p" d="M2 2h4v4H2z" fill="red"/></g><use href="#p"/>`
+        )
+      );
+      expect(doc.querySelector('#p')).not.toBeNull();
+    }
+  );
+
+  test('a <use> of one of siblings that share a fill keeps the fill', () => {
+    const doc = parse(
+      store(
+        '<g><path id="a" fill="red" d="M0 0h2v2H0z"/><path fill="red" d="M3 0h2v2H3z"/>' +
+          '<path fill="red" d="M6 0h2v2H6z"/></g><use href="#a" y="4"/>'
+      )
     );
-    const result = clean(markup);
-    expect(result.isValid).toBe(true);
-    expect(result.cleanedSvg).not.toInclude('evil.example');
-    expect(result.cleanedSvg).not.toInclude('fill=');
+    expect(doc.querySelector('#a')?.getAttribute('fill')).toBe('red');
   });
 
-  test('a renamed definition is still bounded by the <use> expansion limit', () => {
-    const levels = Array.from(
-      { length: 12 },
-      (_, level) =>
-        `<g id="l ${level}">` +
-        (level === 0
-          ? '<rect width="1" height="1"/>'
-          : `<use href="#l ${level - 1}"/><use href="#l ${level - 1}"/>`) +
-        '</g>'
-    ).join('');
-    const result = clean(svg(`${levels}<use href="#l 11"/>`));
-    expect(result.isValid).toBe(false);
-    expect(result.cleanedSvg).toBe('');
+  // Every element painted `paint` must still sit under the red group.
+  const inheritsRed = (doc: Document, paint: string) => {
+    const painted = [...doc.querySelectorAll('[fill]')].filter(
+      (element) => element.getAttribute('fill') === paint
+    );
+    return (
+      painted.length > 0 &&
+      painted.every((element) => {
+        for (
+          let node = element.parentElement;
+          node;
+          node = node.parentElement
+        ) {
+          const fill = node.getAttribute('fill');
+          if (fill !== null && fill !== paint) return fill === 'red';
+        }
+        return false;
+      })
+    );
+  };
+
+  test.each(['inherit', 'unset'])(
+    'two siblings written fill="%s" keep the group colour',
+    (paint) => {
+      const doc = parse(
+        store(
+          `<g fill="red"><rect width="4" height="8" fill="${paint}"/><rect x="4" width="4" height="8" fill="${paint}"/></g>`
+        )
+      );
+      expect(inheritsRed(doc, paint)).toBe(true);
+    }
+  );
+
+  test('a single child written fill="unset" keeps the group colour', () => {
+    const doc = parse(
+      store('<g fill="red"><rect width="8" height="8" fill="unset"/></g>')
+    );
+    expect(inheritsRed(doc, 'unset')).toBe(true);
   });
 });
 

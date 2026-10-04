@@ -29,7 +29,9 @@ import {
   symmetricEncrypt,
 } from 'better-auth/crypto';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { otpMsg } from '@app/shared/messages/otp';
 import { validID } from '@app/shared/utils';
 import {
   isTwoFactorMethodEnabled,
@@ -43,7 +45,6 @@ import { generateUuidV7 } from '@/lib/id';
 
 import { parseAuthBody } from '../context';
 import { authError } from '../errors';
-import { otpMsg, twoFactorMsg } from '../messages';
 import { mintReauthGrant, requireReauthPassword } from '../reauth/grant';
 import { resolveRequestSession } from '../session/request';
 import { revokeTwoFactorState } from '../session/rotation';

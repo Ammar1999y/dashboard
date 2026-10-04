@@ -3,6 +3,8 @@ import { useEffect } from 'react';
 
 import { useSession } from '@/lib/auth/use-session';
 
+import { ErrorState } from '@/components/ui/error-state';
+
 import { AuthCard } from './auth-card';
 import { takeRedirectPath } from './redirect-path';
 import { SignInBackground } from './sign-in-background';
@@ -18,7 +20,7 @@ const WORDMARK = <Wordmark className='mx-auto mb-5 h-20 text-primary' />;
  */
 export default function SignIn() {
   const { replace } = useRouter();
-  const { isPending, data } = useSession();
+  const { isPending, data, error, refetch } = useSession();
   const signedIn = !isPending && !!data?.user;
 
   useEffect(() => {
@@ -32,7 +34,11 @@ export default function SignIn() {
     <>
       <SignInBackground />
       <AuthCard title='تسجيل الدخول' header={WORDMARK} className='fade-in'>
-        <SignInForm />
+        {error ? (
+          <ErrorState error={error} refetch={refetch} className='mt-6' />
+        ) : (
+          <SignInForm />
+        )}
       </AuthCard>
     </>
   );

@@ -54,8 +54,9 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { CONTACT_LABEL } from '@app/shared/messages/otp';
 
 import { generateUuidV7 } from '@/lib/id';
 import { processOtpSend } from '@/lib/otp/send';
@@ -107,7 +108,7 @@ beforeAll(async () => {
       channel: 'email',
       purpose: 'verify_contact',
       sendTo: EMAIL,
-      entityName: 'البريد الإلكتروني',
+      entityName: CONTACT_LABEL.email,
     });
   } catch (error) {
     fixture.threw = error;

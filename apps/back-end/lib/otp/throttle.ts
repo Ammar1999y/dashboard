@@ -6,10 +6,9 @@ import { eq } from 'drizzle-orm';
 
 import { verificationSessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
-
-import { otpMsg } from '@/lib/auth/messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { otpMsg } from '@app/shared/messages/otp';
 
 import { OTP_BLOCK_DURATION_HOURS } from './limits';
 

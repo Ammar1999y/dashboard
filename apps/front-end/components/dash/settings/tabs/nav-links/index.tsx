@@ -4,8 +4,9 @@ import type { FieldPath } from 'react-hook-form';
 
 import { memo } from 'react';
 
-import { generateUUIDv7 } from '@/utils';
 import { useController } from 'react-hook-form';
+
+import { generateEntityId } from '@/utils/generate-id';
 
 import { Switch } from '@/components/ui/switch';
 import SortableFieldArray from '@/components/form/field-array';
@@ -16,13 +17,12 @@ import { KeyInput } from '../key-input';
 import { SectionLinkCombobox } from './section-combobox';
 
 const createItem = () => ({
-  id: generateUUIDv7(),
+  id: generateEntityId(),
   key: '',
   title: '',
   link: '',
   showInHeader: false,
   showInFooter: false,
-  order: 0,
 });
 
 const NavLinksSection = memo(() => (

@@ -8,6 +8,20 @@
 import { SQL } from 'bun';
 import { expect, test } from 'bun:test';
 
+import { APIError } from 'better-auth/api';
+
+import { CustomError } from '@app/shared/error-class';
+import {
+  CUSTOM_AUTH_CODE,
+  EMAIL_NOT_VERIFIED_CODE,
+} from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import {
+  MSG_EMAIL_NOT_VERIFIED,
+  MSG_LOGIN_REQUIRED,
+} from '@app/shared/messages/auth';
+import { MSG_SERVICE_UNAVAILABLE } from '@app/shared/messages/common';
+
 import { serializeForLog } from '@/utils/log';
 
 /**
@@ -322,6 +336,49 @@ check(
 // ── control chars / log forging ───────────────────────────────────────
 const forged = serializeForLog({ msg: 'a\nFAKE: injected\r\nb' });
 check('newlines stripped', !forged.includes('\n') && !forged.includes('\r'));
+
+// ── product copy stays out of logs ────────────────────────────────────
+const copy = serializeForLog(
+  new CustomError(MSG_SERVICE_UNAVAILABLE, HTTP_STATUS.SERVICE_UNAVAILABLE)
+);
+check(
+  'CustomError: Arabic message omitted, status kept',
+  !has(copy, MSG_SERVICE_UNAVAILABLE) && has(copy, '503'),
+  copy
+);
+const answered = serializeForLog(
+  new APIError('FORBIDDEN', {
+    code: CUSTOM_AUTH_CODE,
+    message: MSG_LOGIN_REQUIRED,
+  })
+);
+check(
+  'answered APIError: message omitted, auth code kept',
+  !has(answered, MSG_LOGIN_REQUIRED) && has(answered, '"authCode":"__"'),
+  answered
+);
+const routed = serializeForLog(
+  new APIError('FORBIDDEN', {
+    code: EMAIL_NOT_VERIFIED_CODE,
+    message: MSG_EMAIL_NOT_VERIFIED,
+  })
+);
+check(
+  'routing-code APIError: message omitted',
+  !has(routed, MSG_EMAIL_NOT_VERIFIED) && has(routed, EMAIL_NOT_VERIFIED_CODE),
+  routed
+);
+const library = serializeForLog(
+  new APIError('BAD_REQUEST', {
+    code: 'SOME_LIBRARY_CODE',
+    message: 'Library text',
+  })
+);
+check(
+  'unanswered library APIError keeps its diagnostic message',
+  has(library, 'Library text'),
+  library
+);
 
 // ── KNOWN RESIDUAL: free text is not reachable by a key-based rule ────
 const freeText = serializeForLog(new Error('provider payload SENTINEL_TOKEN'));

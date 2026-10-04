@@ -1,15 +1,6 @@
 # Review of the audit fixes (working tree vs `HEAD` 3df2019)
 
-### [Medium] MEDIA-1 fix bypassed by a decoded quote inside the attribute value
-
-- **Where:** `packages/shared/src/images/config.ts:85-89` (`urlFunctionTargets`), `:202-204` (`urlTargets`) and `:98-103` (`hasExternalUrlReference`). Consumed at `svg-optimizer.ts:158-162` and `:635-644`.
-- **Problem:** the value is percent-decoded and CSS-unescaped as a whole before it is split into `url()` targets. A decoded `'` or `"` then opens a string the browser never sees, and that string swallows the next `url(...)`.
-- **Evidence:** `mask="url(%27#a), url(data:image/svg+xml;base64,<animated SVG>), url(%27)"` is read by the code as one `#`-fragment target. Edge's computed `maskImage` shows three layers, the middle one being the data SVG. `sanitizeSvgServer` → `svgOptimizerServer` accepted the `%27`, `%22` and `\'` spellings and kept the inner document byte for byte. The plain `url(data:…)` form is correctly refused. The same trick keeps `url(https://evil.example/b)` on `mask`, `filter` and `fill`. That part already existed at `HEAD`, but it is the same class and was not swept.
-- **Failure scenario:** the MEDIA-1 scenario is unchanged. A `<use>` blow-up or a refused animation is stored, and it is served publicly once published.
-- **Fix:**
-  - Check every `url(` occurrence on its own, without a consuming regex, or tokenize the raw value the way CSS does and decode each token separately.
-  - Each target must be a `#fragment` or a raster that passes `analyzeInlineRaster`.
-  - Add the `%27`, `%22` and `\'` cases for both `data:` and `https:` to `tests/unit/upload-validation.test.ts`.
+SVG findings and their original evidence have moved to [svg-processing-plan.md](svg-processing-plan.md#original-svg-findings-moved-from-reviews), which also records current status and planned disposition.
 
 ### [Medium] `?grant=` removed, so the stock Better Auth passkey client can no longer register a passkey
 
@@ -193,12 +184,6 @@
 - **Problem:** any invalid index anywhere refuses every `CONCURRENTLY` file. Examples: a `_ccnew` index left by an operator's failed `REINDEX CONCURRENTLY`, or an index another session is building at that moment. It fails closed, so this is a nuisance rather than a hole.
 - **Fix:** limit the check to index names the file creates.
 
-### [Low] MEDIA-1: rasters inside `url()` are stored uncanonicalised, which makes a comment false
-
-- **Where:** `packages/shared/src/images/svg-optimizer.ts:36-41` (the `ASCII_WHITESPACE` comment: "the stored URI has none"), `:635-644`.
-- **Problem:** only the `<image>` path writes `raster.canonical` back. `mask="url('data:image/png;base64,iVBORw0K GgoAAAAN …')"` was stored with its spaces still in.
-- **Fix:** write the canonical form back into the attribute, or narrow the comment to `<image>`.
-
 ### [Low] 2FA-1: the Google refusal audit row describes a session that never committed
 
 - **Where:** `lib/auth/two-factor/issue.ts:190-206` (`recordRefusal`: `oldData: { loginSuccess: true }`, `sessionAbandoned: true`).
@@ -240,7 +225,6 @@ The published document is the contract clients are built from, so every new refu
 - **2FA-4:** `tests/integration/two-factor-totp.test.ts:762-833` compares the count against a regenerated set, so it still passes if `spendBackupCode` is deleted. No test asserts N → N−1 after a single backup-code sign-in.
 - **2FA-2:** both refusal tests (`two-factor-management.test.ts:296, 383`) stop at the pending check. Deleting the secret overwrite in `clearCapabilityFor` fails no test.
 - **REC-2:** only the email variant is tested (`password-reauth-guard.test.ts:271-315`). The phone variant, the paid-SMS case the audit reproduced, has no test.
-- **MEDIA-1:** no test covers the decoded-quote forms (see the Medium entry).
 
 ### [Low] Trimmed comments lost the only statement of a cross-file constraint
 

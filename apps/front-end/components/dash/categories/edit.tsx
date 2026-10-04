@@ -11,14 +11,14 @@ import { useForm } from 'react-hook-form';
 
 import {
   toCategoryForm,
-  updateCategorySchema,
+  updateCategoryBodySchema,
 } from '@/utils/validation/categories';
 
 import { Form } from '@/components/form/form';
 
 import { EditRecord } from '../shared/edit-record';
 import { FormHeader } from '../shared/form-header';
-import { useEntityMutations, withoutId } from '../shared/use-entity-mutations';
+import { useEntityMutations } from '../shared/use-entity-mutations';
 import { categoryEntity } from './entity';
 import { CategoryFields } from './fields';
 
@@ -28,19 +28,14 @@ export default function EditCategory() {
 
 const CategoryEditForm = memo(({ record }: { record: CategoryClient }) => {
   const methods = useForm<UpdateCategoryInput, unknown, UpdateCategoryOutput>({
-    resolver: zodResolver(updateCategorySchema),
+    resolver: zodResolver(updateCategoryBodySchema),
     defaultValues: toCategoryForm(record),
   });
   const { update } = useEntityMutations<CategoryClient>(categoryEntity);
 
   const onSubmit = useCallback(
-    (data: UpdateCategoryOutput) => {
-      const payload = withoutId(data);
-      return update(record.id, payload, (updatedAt) => ({
-        ...payload,
-        updatedAt,
-      }));
-    },
+    (data: UpdateCategoryOutput) =>
+      update(record.id, data, (updatedAt) => ({ ...data, updatedAt })),
     [record.id, update]
   );
 

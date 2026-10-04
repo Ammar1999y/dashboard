@@ -6,9 +6,8 @@ import { useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-
-import { mutate } from '@/utils/mutation';
-import { devSignUpSchema } from '@/utils/validation/auth';
+import { devSignUpSchema } from '@app/shared/validation/dev';
+import { mutate } from '@/lib/api/mutation';
 
 import { Form } from '@/components/form/form';
 import FormInput from '@/components/form/form-input';
@@ -30,8 +29,12 @@ export default function DevSignUp() {
 
   const onSubmit = useCallback(
     async (data: DevSignUpOutput) => {
-      await mutate({ href: '/api/dev/sign-up', method: 'POST', data });
-      toast.success('تم إنشاء الحساب بنجاح');
+      const { message } = await mutate({
+        href: '/api/dev/sign-up',
+        method: 'POST',
+        data,
+      });
+      toast.success(message);
       void replace('/dash/sign-in');
     },
     [replace]

@@ -1,19 +1,25 @@
-import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
-import type { PermissionRows } from '@/lib/permissions/matrix';
+import type { PermissionRows } from '@app/shared/permissions/matrix';
 
 import { and, count, eq, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { rolePermissions, roles } from '@/db/schema';
 
+import { PERMISSIONS_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns';
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_CREATE_ERROR,
   MSG_CREATED,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/common';
+import {
+  diffPermissionMatrices,
+  toPermissionRows,
+} from '@app/shared/permissions/matrix';
+import { assertStandardRoleName } from '@app/shared/permissions/roles';
+import { validatePermissionScope } from '@app/shared/permissions/scope';
 import { createPermissionSchema } from '@app/shared/validation/permissions';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
@@ -23,25 +29,8 @@ import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { PERMISSION_AUDIT_VERSION } from '@/lib/permissions/audit';
-import {
-  diffPermissionMatrices,
-  toPermissionRows,
-} from '@/lib/permissions/matrix';
-import {
-  assertStandardRoleName,
-  standardScopeFilter,
-} from '@/lib/permissions/roles';
-import { validatePermissionScope } from '@/lib/permissions/scope';
+import { standardScopeFilter } from '@/lib/permissions/roles';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
-
-// See USERS_FILTER_COLUMNS for why the scan-only operator is permitted here.
-export const PERMISSIONS_FILTER_COLUMNS: FilterColumnSpecs = {
-  roleName: { type: 'text', allowScanOnly: true },
-  description: { type: 'text', allowScanOnly: true },
-  isActive: { type: 'boolean' },
-  createdAt: { type: 'date' },
-  updatedAt: { type: 'date' },
-};
 
 export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   const { userId, scope } = await requirePermission(ctx, {

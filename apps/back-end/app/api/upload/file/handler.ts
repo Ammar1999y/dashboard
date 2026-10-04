@@ -1,14 +1,14 @@
 import type { DashboardPage } from '@app/shared/permissions/constants';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
-import { DASHBOARD_PAGES } from '@app/shared/permissions/constants';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
+import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireAnyPermission, requireSession } from '@/lib/http/session';
 import { requestActor } from '@/lib/media/actor';
 import { toMediaFile } from '@/lib/media/files';
-import { mediaMsg, uploadMsg } from '@/lib/media/messages';
 import { resolveUploadPurpose } from '@/lib/media/policy';
 import {
   acceptUpload,
@@ -27,16 +27,17 @@ const UPLOAD_ACTIONS = ['create', 'edit'] as const;
 
 /**
  * From the QUERY STRING: the permission check must run before `readFormData()`
- * parses the body it guards. `Object.hasOwn`, because `in` accepts `__proto__`.
+ * parses the body it guards.
  *
  * ⚠️ Only after the session check, or an unauthenticated caller could tell real
  * page names (401) from unknown ones (400).
  */
 function requireUploadResource(query: URLSearchParams): DashboardPage {
   const requested = query.get('resource');
-  if (!requested || !Object.hasOwn(DASHBOARD_PAGES, requested))
+  const resource = DASHBOARD_PAGE_NAMES.find((page) => page === requested);
+  if (!resource)
     throw new CustomError(uploadMsg.invalidResource, HTTP_STATUS.BAD_REQUEST);
-  return requested as DashboardPage;
+  return resource;
 }
 
 export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {

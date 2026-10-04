@@ -23,11 +23,10 @@ export const ROLE_SCOPE = {
 /**
  * The dashboard pages, IN ORDER, and the single place that order is written.
  *
- * A tuple rather than the keys of the label map, because this list is also the
- * `page_name` PostgreSQL enum and its value order is part of the database
- * schema. `Object.keys` returns `string[]`, so deriving the enum from the map
- * needs an assertion in `db/schema.ts` that would compile for any list, empty
- * included.
+ * A tuple, because this list is also the `page_name` PostgreSQL enum and its
+ * value order is part of the database schema. Display labels live in
+ * `DASHBOARD_PAGE_LABELS` (`messages/permissions.ts`), typed as a total `Record`
+ * over this tuple.
  *
  * ⚠️ Adding an entry requires a generated migration — `bun run db:generate`,
  * gated by `bun run check:schema-drift`. Without it the first permission write
@@ -43,19 +42,9 @@ export const DASHBOARD_PAGE_NAMES = [
 export type DashboardPage = (typeof DASHBOARD_PAGE_NAMES)[number];
 
 /**
- * Typed as a total `Record`, so a page added above without a label here — or a
- * label here for a page not above — is a compile error rather than a lookup
- * that returns `undefined` at runtime.
- */
-export const DASHBOARD_PAGES: Record<DashboardPage, string> = {
-  home: 'الرئيسية',
-  users: 'المستخدمين',
-  permissions: 'الصلاحيات',
-  media: 'الملفات',
-};
-
-/**
- * Permissions available on each page.
+ * Permissions available on each page. Display labels live in
+ * `PERMISSION_ACTION_LABELS` (`messages/permissions.ts`), typed as a total
+ * `Record` over this tuple.
  * - view/edit/delete apply to every record.
  * - viewOwn/editOwn/deleteOwn apply only to records the user created.
  * - create permits a new record.
@@ -63,20 +52,20 @@ export const DASHBOARD_PAGES: Record<DashboardPage, string> = {
  * Broader actions supersede their own-record variants: view supersedes viewOwn,
  * as edit supersedes editOwn and delete supersedes deleteOwn.
  */
-export const PERMISSION_ACTIONS = {
-  view: 'عرض الكل',
-  viewOwn: 'عرض الخاص',
-  edit: 'تعديل الكل',
-  editOwn: 'تعديل الخاص',
-  delete: 'حذف الكل',
-  deleteOwn: 'حذف الخاص',
-  create: 'إنشاء',
+export const PERMISSION_ACTION_NAMES = [
+  'view',
+  'viewOwn',
+  'edit',
+  'editOwn',
+  'delete',
+  'deleteOwn',
+  'create',
   /**
    * Page-scoped to `users`, so `sanitizePermissions` resolves it to `false`
    * everywhere else. Its own action rather than part of `edit`: an admin who may
    * correct a name should not thereby be able to disarm someone's 2FA.
    */
-  resetTwoFactor: 'إعادة تعيين التحقق بخطوتين',
+  'resetTwoFactor',
   /**
    * Page-scoped to `media`. Moving a file between the private and the public
    * bucket changes who on the internet can read it, which `edit` (a rename, a
@@ -85,10 +74,10 @@ export const PERMISSION_ACTIONS = {
    * role whose creator does not hold it. Every path into the public bucket
    * takes it, including a link or an upload to a public purpose.
    */
-  publish: 'نشر',
-} as const;
+  'publish',
+] as const;
 
-export type PermissionAction = keyof typeof PERMISSION_ACTIONS;
+export type PermissionAction = (typeof PERMISSION_ACTION_NAMES)[number];
 export type PermissionObject = Record<
   DashboardPage,
   Record<PermissionAction, boolean>

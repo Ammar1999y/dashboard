@@ -3,7 +3,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { roles } from '@/db/schema';
 
-import { MSG_FETCH_ERROR, MSG_FETCHED } from '@app/shared/api-messages';
+import { MSG_FETCH_ERROR, MSG_FETCHED } from '@app/shared/messages/common';
 
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';

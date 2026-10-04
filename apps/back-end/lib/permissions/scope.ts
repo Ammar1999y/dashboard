@@ -1,74 +1,17 @@
-import type { ActorPermissions } from './checker';
-import type { PagePermissions, PermissionRows } from './matrix';
 import type { Executor } from '@/db';
-import type {
-  DashboardPage,
-  PermissionAction,
-} from '@app/shared/permissions/constants';
+import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
 import { eq } from 'drizzle-orm';
 
 import { rolePermissions } from '@/db/schema';
 
-import {
-  HTTP_STATUS,
-  MSG_CANNOT_GRANT_UNOWNED_PERMISSIONS,
-} from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
-import { SUPERSEDING_ACTION } from '@app/shared/permissions/constants';
+import { assertRowsWithinScope } from '@app/shared/permissions/scope';
 
 import { notFoundError } from '@/lib/http/response';
 
 import { holdsLocks } from './roles';
-
-/**
- * Does the actor hold `action`, directly or through supersession?
- *
- * `PERMISSION_ACTIONS` states the rule: holding `view` makes `viewOwn`
- * redundant, and likewise for edit/delete. An exact-match comparison would
- * refuse an actor with `edit` on all records when granting `editOwn`, a strict
- * subset of what they already hold.
- */
-function actorHoldsAction(
-  actorPagePerms: Partial<Record<PermissionAction, boolean>> | undefined,
-  action: string
-): boolean {
-  if (actorPagePerms?.[action as PermissionAction] === true) return true;
-  const superseding = SUPERSEDING_ACTION[action];
-  return !!superseding && actorPagePerms?.[superseding] === true;
-}
-
-export function validatePermissionScope(
-  actorPermissions: ActorPermissions,
-  targetPermissions: PagePermissions
-): void {
-  for (const target of targetPermissions) {
-    const actorPagePerms = actorPermissions[target.name];
-
-    for (const [action, granted] of Object.entries(target.permissions)) {
-      if (granted === true && !actorHoldsAction(actorPagePerms, action))
-        throw new CustomError(
-          MSG_CANNOT_GRANT_UNOWNED_PERMISSIONS,
-          HTTP_STATUS.FORBIDDEN
-        );
-    }
-  }
-}
-
-/** `validatePermissionScope` over stored `role_permissions` rows. */
-export function assertRowsWithinScope(
-  actorPermissions: ActorPermissions,
-  rows: PermissionRows
-): void {
-  validatePermissionScope(
-    actorPermissions,
-    rows.map((p) => ({
-      name: p.pageName as DashboardPage,
-      permissions: (p.permissions || {}) as Record<string, boolean>,
-    }))
-  );
-}
 
 /**
  * `reachability` — "may this caller act on this target at all", answered 404.

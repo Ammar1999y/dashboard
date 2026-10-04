@@ -1,18 +1,19 @@
 import type { Entity } from './entity';
-import type { EntityID } from '@/types';
+import type { EntityID } from '@app/shared/types';
 import type { ComponentType } from 'react';
 
 import { useRouter } from 'next/router';
 
-import { validID } from '@/utils';
-
-import { useQueryData } from '@/utils/query';
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { validID } from '@app/shared/utils';
+import { MSG_INVALID_LINK } from '@/constants/messages';
+import { useQueryData } from '@/lib/api/query';
 
 import { ErrorState } from '@/components/ui/error-state';
 import { LoadingState } from '@/components/ui/loading-state';
 
-const INVALID_LINK = new Error('رابط السجل غير صالح');
-const noop = () => {};
+const INVALID_LINK = new CustomError(MSG_INVALID_LINK, HTTP_STATUS.NOT_FOUND);
 
 interface EditRecordProps<TRow> {
   entity: Entity;
@@ -42,7 +43,7 @@ export function EditRecord<TRow extends { id: EntityID }>({
 
   // The query is empty until the router has parsed the URL: still loading.
   if (!isReady || (id && isPending)) return <LoadingState />;
-  if (!id) return <ErrorState error={INVALID_LINK} refetch={noop} />;
+  if (!id) return <ErrorState error={INVALID_LINK} />;
   if (!data?.id) return <ErrorState error={error} refetch={refetch} />;
 
   return <Form key={data.id} record={data} />;

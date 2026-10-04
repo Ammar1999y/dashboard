@@ -1,8 +1,10 @@
 import { withTransaction } from '@/db';
 
-import { HTTP_STATUS, MSG_UPDATE_ERROR } from '@app/shared/api-messages';
 import { OTP_AUTO_VERIFY } from '@app/shared/config';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_UPDATE_ERROR } from '@app/shared/messages/common';
+import { userMsg } from '@app/shared/messages/users';
 import { changeEmailSchema } from '@app/shared/validation/auth';
 import { EMAIL_OTP_AVAILABLE } from '@app/shared/validation/otp';
 
@@ -19,7 +21,6 @@ import {
   commitEmailChange,
   sendContactChangeCode,
 } from '@/lib/users/contact-change';
-import { userMsg } from '@/lib/users/messages';
 
 /**
  * Initiates an email change. The new address is NEVER written to `users.email`

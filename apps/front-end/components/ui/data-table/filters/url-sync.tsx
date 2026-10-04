@@ -6,7 +6,10 @@ import { useShallow } from 'zustand/shallow';
 import { DEFAULT_PER_PAGE } from '@app/shared/data-table/parsers';
 import { writeUrl } from '@/lib/history';
 
-import { URL_KEYS, useDataTableStore } from '@/utils/store/data-table-store';
+import {
+  URL_KEYS,
+  useDataTableStore,
+} from '@/components/ui/data-table/store/url-store';
 
 function isSortEqual(a: ColumnSort[], b: ColumnSort[]): boolean {
   if (a.length !== b.length) return false;

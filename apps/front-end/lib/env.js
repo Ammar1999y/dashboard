@@ -1,72 +1,61 @@
-/**
- * @param {string | undefined} urlInput - The input URL from env variable.
- *   Env vars are `string | undefined`, and the guard below handles both.
- * @param {string} variableName - Variable name for clearer error messages.
- * @param {boolean} [throwError=true] - Whether to throw an error if the URL is invalid.
- * @param {boolean} [secure=true] - Whether to use secure protocol (https).
- * @returns {string} - Cleaned URL like "https://example.com"
- */
-function cleanEnvUrlToDomain(
-  urlInput,
-  variableName,
-  throwError = true,
-  secure = true
-) {
-  if (!urlInput || typeof urlInput !== 'string') {
-    if (throwError)
-      throw new Error(
-        `⚠️ Environment variable '${variableName}' is empty or not a string.`
-      );
-    return '';
-  }
+// `next.config.js` loads this file too, so it stays plain JavaScript.
 
-  let inputWithProtocol = urlInput.trim();
-  if (!/^https?:\/\//i.test(inputWithProtocol))
-    inputWithProtocol = `https://${inputWithProtocol}`;
+const isApiMocking = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
+
+/**
+ * Where a mock build sends its API requests. The mocks answer them in the
+ * browser; a request they miss fails to resolve rather than reaching a server
+ * with real data.
+ */
+const MOCK_API_ORIGIN = 'https://api.mock.invalid';
+/** The ports `dev:mock` (Next's default) and `start:mock` serve on, in `package.json`. */
+const MOCK_PUBLIC_URL =
+  process.env.NODE_ENV === 'production'
+    ? 'http://localhost:3123'
+    : 'http://localhost:3000';
+
+/**
+ * @param {string | undefined} value
+ * @param {string} name
+ * @param {{ secure: boolean }} options `secure` forces https.
+ * @returns {string} The URL's origin.
+ */
+function toOrigin(value, name, { secure }) {
+  const trimmed = value?.trim();
+  if (!trimmed)
+    throw new Error(`Environment variable '${name}' is empty or missing.`);
+
+  const withProtocol = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `${secure ? 'https' : 'http'}://${trimmed}`;
+  let url;
   try {
-    const url = new URL(inputWithProtocol);
-    if (secure) url.protocol = 'https:';
-    return url.origin;
+    url = new URL(withProtocol);
   } catch {
-    if (throwError)
-      throw new Error(
-        `⚠️ Invalid URL in environment variable '${variableName}'. Received value: "${urlInput}"`
-      );
-    return '';
+    throw new Error(
+      `Invalid URL in environment variable '${name}': "${trimmed}".`
+    );
   }
+  if (url.pathname !== '/' || url.search || url.hash)
+    throw new Error(
+      `Environment variable '${name}' must be an origin, without a path: "${trimmed}".`
+    );
+  if (secure) url.protocol = 'https:';
+  return url.origin;
 }
 
-const PUBLIC_URL = cleanEnvUrlToDomain(
-  process.env.NEXT_PUBLIC_URL,
-  'NEXT_PUBLIC_URL',
-  true,
-  process.env.NODE_ENV === 'production' &&
-    !process.env.NEXT_PUBLIC_URL?.startsWith('http://localhost:')
-);
+const publicUrl =
+  process.env.NEXT_PUBLIC_URL || (isApiMocking ? MOCK_PUBLIC_URL : undefined);
+const PUBLIC_URL = toOrigin(publicUrl, 'NEXT_PUBLIC_URL', {
+  secure:
+    process.env.NODE_ENV === 'production' &&
+    !publicUrl?.startsWith('http://localhost:'),
+});
 
-export const API_URL = cleanEnvUrlToDomain(
-  process.env.NEXT_PUBLIC_API_URL || 'http://135.181.179.60:5123',
-  'NEXT_PUBLIC_API_URL',
-  true,
-  false
-);
+const API_URL = isApiMocking
+  ? MOCK_API_ORIGIN
+  : toOrigin(process.env.NEXT_PUBLIC_API_URL, 'NEXT_PUBLIC_API_URL', {
+      secure: false,
+    });
 
-// const PUBLIC_API_URL = cleanEnvUrlToDomain(
-//   process.env.NEXT_PUBLIC_API_URL,
-//   'NEXT_PUBLIC_API_URL',
-//   true,
-//   true
-// );
-
-// const PUBLIC_ASSETS_URL = cleanEnvUrlToDomain(
-//   process.env.NEXT_PUBLIC_ASSETS_URL,
-//   'NEXT_PUBLIC_ASSETS_URL',
-//   false,
-//   true
-// );
-
-export {
-  PUBLIC_URL,
-  // PUBLIC_API_URL,
-  // PUBLIC_ASSETS_URL,
-};
+export { API_URL, PUBLIC_URL };

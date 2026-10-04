@@ -1,12 +1,9 @@
 import { withTransaction } from '@/db';
 import { rolePermissions, roles, users } from '@/db/schema';
 
-import {
-  HTTP_STATUS,
-  MSG_CREATE_ERROR,
-  MSG_CREATED,
-} from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_CREATE_ERROR, MSG_CREATED } from '@app/shared/messages/common';
 import {
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,

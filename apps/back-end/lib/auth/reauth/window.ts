@@ -7,13 +7,13 @@ import { and, eq, gt } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { verifications } from '@/db/schema';
 
+import { CustomError } from '@app/shared/error-class';
+import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_INVALID_CREDENTIALS,
   MSG_REAUTH_REQUIRED,
-  REAUTH_REQUIRED_CODE,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/auth';
 import { validID } from '@app/shared/utils';
 
 import { authenticationStartedAt } from '../session/authentication-time';

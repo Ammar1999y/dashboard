@@ -1,6 +1,6 @@
-import type { EntityID } from '@/types';
+import type { EntityID } from '@app/shared/types';
 
-import { entityKeys } from '@/utils/query-cache';
+import { entityKeys } from '@/lib/api/query-cache';
 
 interface EntityConfig {
   /** The react-query scope every key of the entity sits under. */

@@ -1,7 +1,7 @@
 import type { ColumnStore } from '@/components/ui/data-table/store/column-store';
 import type { QueryClient } from '@tanstack/react-query';
 
-import { useDataTableStore } from '@/utils/store/data-table-store';
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 
 import { LAB_QUERY_KEY } from './fake-server';
 import { useLab } from './lab-store';

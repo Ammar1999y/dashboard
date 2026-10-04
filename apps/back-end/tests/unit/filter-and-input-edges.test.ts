@@ -5,12 +5,12 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { users } from '@/db/schema';
 import * as z from 'zod';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { REQUEST_BODIES } from '@app/shared/contract';
 import {
   isTrigramIndexable,
   parseSearchParams,
 } from '@app/shared/data-table/parsers';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import { toCalendarDate } from '@app/shared/time';
 import {
   normalizeArabicDigits,

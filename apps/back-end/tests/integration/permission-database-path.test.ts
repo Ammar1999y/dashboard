@@ -25,10 +25,8 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { roles, users } from '@/db/schema';
 
-import {
-  HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-} from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 import { REQUIRE_ROLE_FOR_LOGIN } from '@app/shared/permissions/constants';
 
 import { resetTables } from '../helpers/database';

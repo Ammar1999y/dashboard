@@ -2,7 +2,7 @@ import { memo } from 'react';
 
 import FormInput from './form-input';
 
-const TOOLTIP =
+export const SLUG_TOOLTIP =
   'يقبل الأحرف الإنجليزية الصغيرة والأرقام والشرطات (-).\nلا يمكن أن يكون أرقاماً فقط.';
 
 const TIP =
@@ -15,7 +15,7 @@ const SlugInput = memo(
       label='المفتاح (slug)'
       dir='ltr'
       disabled={isEdit}
-      tooltip={TOOLTIP}
+      tooltip={SLUG_TOOLTIP}
       tip={TIP}
       classNameField={className}
     />

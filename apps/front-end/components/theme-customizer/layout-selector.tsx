@@ -2,14 +2,9 @@ import { memo, useCallback } from 'react';
 
 import { cn } from '@/lib/utils';
 
-import {
-  ThemeLayout,
-  useSettingStore,
-  useThemeLayout,
-} from '@/utils/store/setting';
-
 import { Label } from '@/components/ui/label';
 
+import { ThemeLayout, useSettingStore, useThemeLayout } from './layout-store';
 import { OptionCard } from './option-card';
 import { useEditorStore } from './store';
 import { StretchToggle } from './stretch-toggle';

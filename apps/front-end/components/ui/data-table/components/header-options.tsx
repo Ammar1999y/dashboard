@@ -4,8 +4,7 @@ import { memo, useCallback, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
-import { useDataTableStore } from '@/utils/store/data-table-store';
-
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 import {
   DropdownMenu,
   DropdownMenuContent,

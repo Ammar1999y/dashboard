@@ -2,26 +2,48 @@ import type { SettingsClient } from '@/types/settings';
 import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
-
-import { returnNumberOrNull } from '..';
 import {
   getColorSchema,
-  getIDSchema,
   idSchema,
-  orderedListSchema,
-  orderSchema,
   sanitizeStrict,
   sanitizeStrictSingleLine,
-  slugPreprocess,
+  slugSchema,
   trimed,
-} from './rules';
+} from '@app/shared/validation/rules';
+import {
+  MSG_CONTACT_INFO_INVALID,
+  MSG_COPYRIGHT_TOO_LONG,
+  MSG_FONT_NAME_TOO_LONG,
+  MSG_FONT_SIZE_MULTIPLIER_INVALID,
+  MSG_FONT_SIZE_MULTIPLIER_MAX,
+  MSG_FONT_SIZE_MULTIPLIER_MIN,
+  MSG_FOOTER_DESCRIPTION_TOO_LONG,
+  MSG_KEY_REQUIRED,
+  MSG_LETTER_SPACING_INVALID,
+  MSG_LETTER_SPACING_MAX,
+  MSG_LETTER_SPACING_MIN,
+  MSG_LINE_HEIGHT_INVALID,
+  MSG_LINE_HEIGHT_MAX,
+  MSG_LINE_HEIGHT_MIN,
+  MSG_LINK_REQUIRED,
+  MSG_LINK_TOO_LONG,
+  MSG_NAV_LINKS_INVALID,
+  MSG_SITE_DESCRIPTION_TOO_LONG,
+  MSG_SITE_TITLE_TOO_LONG,
+  MSG_SOCIAL_ACCOUNTS_INVALID,
+  MSG_TITLE_REQUIRED,
+  MSG_TITLE_TOO_LONG,
+} from '@/constants/messages';
 
-// Constants
+import { numberOr } from '@/utils/number';
+
+import { optionalTextSchema, orderedListSchema } from './rules';
+
 const SITE_TITLE_MAX = 100;
 const DESCRIPTION_MAX = 500;
 const COPYRIGHT_MAX = 200;
+const FONT_NAME_MAX = 100;
 
-// Font constants
 const MIN_LETTER_SPACING = -10;
 const MAX_LETTER_SPACING = 50;
 const MIN_LINE_HEIGHT = 0.5;
@@ -29,101 +51,85 @@ const MAX_LINE_HEIGHT = 5;
 const MIN_FONT_SIZE_MULTIPLIER = 0.5;
 const MAX_FONT_SIZE_MULTIPLIER = 3;
 
-// Site title schema with sanitization and validation
+const ITEM_TITLE_MAX = 100;
+const ITEM_LINK_MAX = 500;
+
 const siteTitleSchema = z.preprocess(
   sanitizeStrictSingleLine,
-  z
-    .string()
-    .max(
-      SITE_TITLE_MAX,
-      `عنوان الموقع يجب أن لا يتجاوز ${SITE_TITLE_MAX} حرفاً`
-    )
+  z.string().max(SITE_TITLE_MAX, MSG_SITE_TITLE_TOO_LONG(SITE_TITLE_MAX))
 );
 
-// Site description schema (optional)
-const siteDescriptionSchema = z.preprocess(
+const siteDescriptionSchema = optionalTextSchema(
   sanitizeStrict,
-  z
-    .string()
-    .max(
-      DESCRIPTION_MAX,
-      `وصف الموقع يجب أن لا يتجاوز ${DESCRIPTION_MAX} حرفاً`
-    )
+  DESCRIPTION_MAX,
+  MSG_SITE_DESCRIPTION_TOO_LONG(DESCRIPTION_MAX)
 );
 
-// Footer description schema (optional)
-const footerDescriptionSchema = z.preprocess(
+const footerDescriptionSchema = optionalTextSchema(
   sanitizeStrict,
-  z
-    .string()
-    .max(
-      DESCRIPTION_MAX,
-      `وصف الفوتر يجب أن لا يتجاوز ${DESCRIPTION_MAX} حرفاً`
-    )
+  DESCRIPTION_MAX,
+  MSG_FOOTER_DESCRIPTION_TOO_LONG(DESCRIPTION_MAX)
 );
 
-// Copyright text schema (optional)
-const copyrightTextSchema = z.preprocess(
+const copyrightTextSchema = optionalTextSchema(
   sanitizeStrictSingleLine,
-  z
-    .string()
-    .max(COPYRIGHT_MAX, `نص الحقوق يجب أن لا يتجاوز ${COPYRIGHT_MAX} حرفاً`)
+  COPYRIGHT_MAX,
+  MSG_COPYRIGHT_TOO_LONG(COPYRIGHT_MAX)
 );
 
-// Primary color schema (no alpha)
-const primaryColorSchema = getColorSchema({ optional: true });
+const primaryColorSchema = getColorSchema({ optional: true, alpha: false });
 
-// Font schemas
-const googleFontSchema = z
-  .preprocess(trimed, z.string().max(100, 'اسم الخط طويل جداً').nullish())
-  .nullish();
+const googleFontSchema = optionalTextSchema(
+  trimed,
+  FONT_NAME_MAX,
+  MSG_FONT_NAME_TOO_LONG
+);
 
 /**
- * The number inputs are registered uncontrolled, so a cleared field arrives as
- * `''` — which `Number('')` reads as 0, not "absent". Every font setting has a
- * neutral value, so an empty field means that value rather than an error.
+ * A number input registered uncontrolled arrives as a string, and a cleared one
+ * as `''`. Every font setting has a neutral value, which is what an empty field
+ * means; anything else that is not a number fails.
  */
-const numberOr =
-  (fallback: number) => (v: string | undefined | number | null) =>
-    v === '' || v == null ? fallback : (returnNumberOrNull(v) ?? fallback);
+const fontNumberSchema = (
+  neutral: number,
+  { min, max }: { min: number; max: number },
+  messages: { invalid: string; min: string; max: string }
+) =>
+  z.preprocess(
+    (v: string | number | null | undefined) => numberOr(v, neutral),
+    z.number(messages.invalid).min(min, messages.min).max(max, messages.max)
+  );
 
-const letterSpacingSchema = z.preprocess(
-  numberOr(0),
-  z
-    .number()
-    .min(
-      MIN_LETTER_SPACING,
-      `تباعد الأحرف يجب أن يكون أكبر من ${MIN_LETTER_SPACING}`
-    )
-    .max(
-      MAX_LETTER_SPACING,
-      `تباعد الأحرف يجب أن يكون أقل من ${MAX_LETTER_SPACING}`
-    )
+const letterSpacingSchema = fontNumberSchema(
+  0,
+  { min: MIN_LETTER_SPACING, max: MAX_LETTER_SPACING },
+  {
+    invalid: MSG_LETTER_SPACING_INVALID,
+    min: MSG_LETTER_SPACING_MIN(MIN_LETTER_SPACING),
+    max: MSG_LETTER_SPACING_MAX(MAX_LETTER_SPACING),
+  }
 );
 
-const lineHeightSchema = z.preprocess(
-  numberOr(1),
-  z
-    .number()
-    .min(MIN_LINE_HEIGHT, `تباعد الأسطر يجب أن يكون أكبر من ${MIN_LINE_HEIGHT}`)
-    .max(MAX_LINE_HEIGHT, `تباعد الأسطر يجب أن يكون أقل من ${MAX_LINE_HEIGHT}`)
+const lineHeightSchema = fontNumberSchema(
+  1,
+  { min: MIN_LINE_HEIGHT, max: MAX_LINE_HEIGHT },
+  {
+    invalid: MSG_LINE_HEIGHT_INVALID,
+    min: MSG_LINE_HEIGHT_MIN(MIN_LINE_HEIGHT),
+    max: MSG_LINE_HEIGHT_MAX(MAX_LINE_HEIGHT),
+  }
 );
 
-const fontSizeMultiplierSchema = z.preprocess(
-  numberOr(1),
-  z
-    .number()
-    .min(
-      MIN_FONT_SIZE_MULTIPLIER,
-      `مضاعف حجم الخط يجب أن يكون أكبر من ${MIN_FONT_SIZE_MULTIPLIER}`
-    )
-    .max(
-      MAX_FONT_SIZE_MULTIPLIER,
-      `مضاعف حجم الخط يجب أن يكون أقل من ${MAX_FONT_SIZE_MULTIPLIER}`
-    )
+const fontSizeMultiplierSchema = fontNumberSchema(
+  1,
+  { min: MIN_FONT_SIZE_MULTIPLIER, max: MAX_FONT_SIZE_MULTIPLIER },
+  {
+    invalid: MSG_FONT_SIZE_MULTIPLIER_INVALID,
+    min: MSG_FONT_SIZE_MULTIPLIER_MIN(MIN_FONT_SIZE_MULTIPLIER),
+    max: MSG_FONT_SIZE_MULTIPLIER_MAX(MAX_FONT_SIZE_MULTIPLIER),
+  }
 );
 
-// Settings fonts schema (simple, without language support for now)
 // LANGUAGES-TODOS: When adding multi-language support, convert to array structure
 const settingsFontsSchema = z
   .object({
@@ -134,55 +140,33 @@ const settingsFontsSchema = z
   })
   .nullish();
 
-// Item constants
-const ITEM_TITLE_MAX = 100;
-const ITEM_LINK_MAX = 500;
-
-// Item title schema
 const itemTitleSchema = z.preprocess(
   sanitizeStrictSingleLine,
   z
-    .string('العنوان مطلوب')
-    .max(ITEM_TITLE_MAX, `العنوان يجب أن لا يتجاوز ${ITEM_TITLE_MAX} حرفاً`)
+    .string(MSG_TITLE_REQUIRED)
+    .min(1, MSG_TITLE_REQUIRED)
+    .max(ITEM_TITLE_MAX, MSG_TITLE_TOO_LONG(ITEM_TITLE_MAX))
 );
 
-// Item link schema
 const itemLinkSchema = z.preprocess(
   trimed,
   z
-    .string('الرابط مطلوب')
-    .max(ITEM_LINK_MAX, `الرابط يجب أن لا يتجاوز ${ITEM_LINK_MAX} حرفاً`)
+    .string(MSG_LINK_REQUIRED)
+    .min(1, MSG_LINK_REQUIRED)
+    .max(ITEM_LINK_MAX, MSG_LINK_TOO_LONG(ITEM_LINK_MAX))
 );
 
-const keySchema = z.preprocess(
-  slugPreprocess,
-  z
-    .string()
-    .max(150, 'الـ key طويل جداً')
-    .regex(/^[a-z0-9-]*$/, 'الـ key يحتوي على أحرف غير مسموحة')
-);
+const keySchema = slugSchema.pipe(z.string().min(1, MSG_KEY_REQUIRED));
 
-// Social account item schema
-const socialAccountItemSchema = z.object({
+/** A social account or a contact entry: both are keyed links with a status. */
+const keyedLinkItemSchema = z.object({
   id: idSchema,
   key: keySchema,
   title: itemTitleSchema,
   link: itemLinkSchema,
   isActive: z.boolean().default(true),
-  order: orderSchema,
 });
 
-// Contact info item schema
-const contactInfoItemSchema = z.object({
-  id: idSchema,
-  key: keySchema,
-  title: itemTitleSchema,
-  link: itemLinkSchema,
-  isActive: z.boolean().default(true),
-  order: orderSchema,
-});
-
-// Nav link item schema
 const navLinkItemSchema = z.object({
   id: idSchema,
   key: keySchema,
@@ -190,48 +174,24 @@ const navLinkItemSchema = z.object({
   link: itemLinkSchema,
   showInHeader: z.boolean().default(false),
   showInFooter: z.boolean().default(false),
-  order: orderSchema,
 });
 
-// Social accounts array schema
-const socialAccountsSchema = orderedListSchema(
-  socialAccountItemSchema,
-  'قم بإدخال حسابات التواصل بشكل صحيح'
-);
-
-// Contact info array schema
-const contactInfoSchema = orderedListSchema(
-  contactInfoItemSchema,
-  'قم بإدخال بيانات التواصل بشكل صحيح'
-);
-
-// Nav links array schema
-const navLinksSchema = orderedListSchema(
-  navLinkItemSchema,
-  'قم بإدخال الروابط بشكل صحيح'
-);
-
-// Settings schema (for upsert - uses POST)
+/** The site's one settings row, upserted whole: it has no id to address. */
 export const settingsSchema = z.object({
-  id: getIDSchema({ optional: true }).nullish(),
-
-  // Basic Info
   siteTitle: siteTitleSchema,
   siteDescription: siteDescriptionSchema,
   footerDescription: footerDescriptionSchema,
   copyrightText: copyrightTextSchema,
   primaryColor: primaryColorSchema,
-
-  // Fonts
   fonts: settingsFontsSchema,
-
-  // Social & Contact
-  socialAccounts: socialAccountsSchema,
-  contactInfo: contactInfoSchema,
-  navLinks: navLinksSchema,
+  socialAccounts: orderedListSchema(
+    keyedLinkItemSchema,
+    MSG_SOCIAL_ACCOUNTS_INVALID
+  ),
+  contactInfo: orderedListSchema(keyedLinkItemSchema, MSG_CONTACT_INFO_INVALID),
+  navLinks: orderedListSchema(navLinkItemSchema, MSG_NAV_LINKS_INVALID),
 });
 
-// Type inference
 export type SettingsInput = z.input<typeof settingsSchema>;
 export type SettingsOutput = z.output<typeof settingsSchema>;
 
@@ -252,14 +212,13 @@ const DEFAULT_FONTS = {
 export const toSettingsForm = (
   record: SettingsClient | null
 ): DefaultValues<SettingsInput> => ({
-  id: record?.id,
-  siteTitle: record?.siteTitle || '',
-  siteDescription: record?.siteDescription || '',
-  footerDescription: record?.footerDescription || '',
-  copyrightText: record?.copyrightText || '',
-  primaryColor: record?.primaryColor || '',
-  fonts: record?.fonts || DEFAULT_FONTS,
-  socialAccounts: record?.socialAccounts || [],
-  contactInfo: record?.contactInfo || [],
-  navLinks: record?.navLinks || [],
+  siteTitle: record?.siteTitle ?? '',
+  siteDescription: record?.siteDescription ?? '',
+  footerDescription: record?.footerDescription ?? '',
+  copyrightText: record?.copyrightText ?? '',
+  primaryColor: record?.primaryColor ?? '',
+  fonts: record?.fonts ?? DEFAULT_FONTS,
+  socialAccounts: record?.socialAccounts ?? [],
+  contactInfo: record?.contactInfo ?? [],
+  navLinks: record?.navLinks ?? [],
 });

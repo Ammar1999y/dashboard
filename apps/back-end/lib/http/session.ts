@@ -4,12 +4,10 @@ import type {
   PermissionAction,
 } from '@app/shared/permissions/constants';
 
-import {
-  HTTP_STATUS,
-  MSG_REAUTH_REQUIRED,
-  REAUTH_REQUIRED_CODE,
-} from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_REAUTH_REQUIRED } from '@app/shared/messages/auth';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 
 import { hasAdminReauth } from '@/lib/auth/reauth/window';

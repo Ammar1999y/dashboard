@@ -68,7 +68,7 @@ import {
   users,
 } from '@/db/schema';
 
-import { MSG_EMAIL_EXISTS } from '@app/shared/api-messages';
+import { MSG_EMAIL_EXISTS } from '@app/shared/messages/users';
 import {
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,

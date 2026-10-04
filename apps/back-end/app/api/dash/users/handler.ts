@@ -1,20 +1,24 @@
-import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
-
 import { and, count, eq, isNull } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { roles, users } from '@/db/schema';
 
+import { PHONE_ENABLED } from '@app/shared/config';
+import { USERS_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns';
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_CREATE_ERROR,
   MSG_CREATED,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
-} from '@app/shared/api-messages';
-import { PHONE_ENABLED } from '@app/shared/config';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/common';
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
+import { toPermissionRows } from '@app/shared/permissions/matrix';
+import {
+  resolveActionScope,
+  validatePermissionScope,
+} from '@app/shared/permissions/scope';
 import { validID } from '@app/shared/utils';
 import { createUserSchema } from '@app/shared/validation/auth';
 
@@ -29,34 +33,15 @@ import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { auditCustomRolePermissions } from '@/lib/permissions/audit';
-import {
-  insufficientPermissions,
-  resolveActionScope,
-} from '@/lib/permissions/checker';
-import { toPermissionRows } from '@/lib/permissions/matrix';
+import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
   createCustomRole,
   nonSystemRoleFilter,
   publicRoleFields,
   validateAssignableRole,
 } from '@/lib/permissions/roles';
-import {
-  validatePermissionScope,
-  validateRolePermissionScope,
-} from '@/lib/permissions/scope';
+import { validateRolePermissionScope } from '@/lib/permissions/scope';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
-
-// Server-owned filter contract: keys are the allowlist, and the type decides
-// which operators and value shapes are accepted. `allowScanOnly` enables the
-// "does not contain" operator, a guaranteed sequential scan that a
-// dashboard-sized table affords; turn it off here first if the table grows.
-export const USERS_FILTER_COLUMNS: FilterColumnSpecs = {
-  name: { type: 'text', allowScanOnly: true },
-  email: { type: 'text', allowScanOnly: true },
-  isActive: { type: 'boolean' },
-  createdAt: { type: 'date' },
-  updatedAt: { type: 'date' },
-};
 
 export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
   const { userId, scope } = await requirePermission(ctx, {

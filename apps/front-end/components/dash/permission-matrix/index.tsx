@@ -7,9 +7,9 @@ import { useFormContext } from 'react-hook-form';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/shallow';
 import {
-  DASHBOARD_PAGES,
-  PERMISSION_ACTIONS,
-} from '@app/shared/permissions/constants';
+  DASHBOARD_PAGE_LABELS,
+  PERMISSION_ACTION_LABELS,
+} from '@app/shared/messages/permissions';
 import { cn } from '@/lib/utils';
 
 import { AnimatedCheckbox } from '@/components/ui/animated-checkbox';
@@ -81,7 +81,7 @@ export const PermissionMatrix = memo(() => {
               <ColumnHead
                 key={action}
                 col={col}
-                label={PERMISSION_ACTIONS[action]}
+                label={PERMISSION_ACTION_LABELS[action]}
               />
             ))}
           </TableRow>
@@ -92,7 +92,7 @@ export const PermissionMatrix = memo(() => {
             <PageRow
               key={page.name}
               row={row}
-              label={DASHBOARD_PAGES[page.name]}
+              label={DASHBOARD_PAGE_LABELS[page.name]}
             />
           ))}
         </TableBody>

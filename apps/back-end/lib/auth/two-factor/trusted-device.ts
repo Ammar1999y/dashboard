@@ -18,18 +18,15 @@ import { createHMAC } from '@better-auth/utils/hmac';
 import { createAuthEndpoint, sessionMiddleware } from 'better-auth/api';
 import { expireCookie } from 'better-auth/cookies';
 
-import {
-  HTTP_STATUS,
-  MSG_INVALID_INPUT,
-  MSG_NOT_FOUND,
-} from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { MSG_INVALID_INPUT, MSG_NOT_FOUND } from '@app/shared/messages/common';
 import { validID } from '@app/shared/utils';
 
 import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta, bodyRecord } from '../context';
 import { authError, sessionRequired } from '../errors';
-import { twoFactorMsg } from '../messages';
 import { envelopeResponse } from '../plugin-openapi';
 import {
   expiresIn,

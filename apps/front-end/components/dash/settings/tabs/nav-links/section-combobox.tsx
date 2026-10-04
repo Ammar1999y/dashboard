@@ -12,8 +12,8 @@ import {
 } from 'react';
 
 import { useController } from 'react-hook-form';
-
-import { useQueryData } from '@/utils/query';
+import { MSG_LOADING, MSG_NO_RESULTS } from '@/constants/messages';
+import { useQueryData } from '@/lib/api/query';
 
 import {
   Combobox,
@@ -22,10 +22,13 @@ import {
   ComboboxInput,
   ComboboxItem,
 } from '@/components/ui/autocomplete/combobox';
+import { ErrorState } from '@/components/ui/error-state';
 import { Icon } from '@/components/ui/icon';
 import FormField from '@/components/form/form-field';
 
 import { sectionEntity } from '../../../sections/entity';
+
+const LINK_ICON = <Icon icon='solar:link-linear' className='size-4' />;
 
 interface SectionLinkComboboxProps {
   index: number;
@@ -40,22 +43,11 @@ const SectionLinkCombobox = memo(
     });
 
     const [inputValue, setInputValue] = useState('');
-    const inputRef = useRef<HTMLInputElement>(null);
     const isSelectingRef = useRef(false);
 
     useEffect(() => {
       setInputValue(field.value || '');
     }, [field.value]);
-
-    const ref = useCallback(
-      (el: HTMLInputElement) => {
-        field.ref(el);
-        if (inputRef.current !== el) {
-          inputRef.current = el;
-        }
-      },
-      [field]
-    );
 
     const handleInputChange = useCallback(
       (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -73,7 +65,6 @@ const SectionLinkCombobox = memo(
 
     const handleValueChange = useCallback(
       (value: string) => {
-        // When selecting from dropdown, prepend # to the slug
         isSelectingRef.current = true;
         const newValue = value ? `#${value}` : '';
         setInputValue(newValue);
@@ -82,7 +73,6 @@ const SectionLinkCombobox = memo(
       [field]
     );
 
-    // Extract slug from current value (remove # if present)
     const currentSlug = useMemo(() => {
       if (field.value?.startsWith('#')) {
         return field.value.slice(1);
@@ -108,10 +98,10 @@ const SectionLinkCombobox = memo(
             placeholder='قم بربط معا الاقسام، او روابط خارجيه'
             name={field.name}
             value={inputValue}
-            icon={<Icon icon='solar:link-linear' className='size-4' />}
+            icon={LINK_ICON}
             disabled={field.disabled}
             onBlur={field.onBlur}
-            ref={ref}
+            ref={field.ref}
             onChange={handleInputChange}
           />
           <SectionComboboxContent searchValue={inputValue} />
@@ -131,16 +121,18 @@ interface SectionComboboxContentProps {
 
 const SectionComboboxContent = memo(
   ({ searchValue }: SectionComboboxContentProps) => {
-    const { data: sections, isLoading } = useQueryData<SectionClient[]>({
+    const {
+      data: sections,
+      error,
+      refetch,
+    } = useQueryData<SectionClient[]>({
       queryKey: sectionEntity.keys.list,
       href: sectionEntity.href,
     });
 
-    // Filter sections based on search value
     const filteredSections = useMemo(() => {
       if (!sections) return [];
 
-      // Remove # prefix if present for searching
       const search = searchValue.startsWith('#')
         ? searchValue.slice(1).toLowerCase()
         : searchValue.toLowerCase();
@@ -153,17 +145,14 @@ const SectionComboboxContent = memo(
           section.slug?.toLowerCase().includes(search)
       );
     }, [sections, searchValue]);
-    if (!isLoading && !filteredSections?.length) return null;
+    // Nothing to suggest leaves the field a plain input for an external link.
+    if (sections && filteredSections.length === 0) return null;
     return (
       <ComboboxContent data-lenis-prevent>
-        {isLoading ? (
-          <div className='flex h-20 items-center justify-center text-sm font-semibold'>
-            جاري التحميل...
-          </div>
-        ) : (
+        {sections && (
           <>
             <ComboboxEmpty className='flex h-20 items-center justify-center text-sm font-semibold'>
-              لا توجد أقسام مطابقة
+              {MSG_NO_RESULTS}
             </ComboboxEmpty>
             {filteredSections.map((section) => (
               <ComboboxItem value={section.slug || ''} key={section.id}>
@@ -173,6 +162,18 @@ const SectionComboboxContent = memo(
               </ComboboxItem>
             ))}
           </>
+        )}
+        {!sections && error && (
+          <ErrorState
+            error={error}
+            refetch={refetch}
+            className='m-1 py-4 text-sm'
+          />
+        )}
+        {!sections && !error && (
+          <div className='flex h-20 items-center justify-center text-sm font-semibold'>
+            {MSG_LOADING}
+          </div>
         )}
       </ComboboxContent>
     );

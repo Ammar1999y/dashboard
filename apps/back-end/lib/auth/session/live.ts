@@ -6,8 +6,9 @@ import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { sessions, users } from '@/db/schema';
 
-import { HTTP_STATUS, MSG_LOGIN_REQUIRED } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
 import { validID } from '@app/shared/utils';
 
 import { lockEligibleAuthUser } from '../user-eligibility';

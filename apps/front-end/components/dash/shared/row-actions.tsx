@@ -1,5 +1,5 @@
 import type { Entity } from './entity';
-import type { EntityID } from '@/types';
+import type { EntityID } from '@app/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -7,9 +7,10 @@ import { memo, useCallback, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-
-import { mutate, toastError } from '@/utils/mutation';
-import { cacheRemoved } from '@/utils/query-cache';
+import { hasErrorCode } from '@/lib/api/fetch';
+import { COMMITTED_CODE, mutate } from '@/lib/api/mutation';
+import { cacheRemoved } from '@/lib/api/query-cache';
+import { toastError } from '@/lib/toast-error';
 
 import { Button } from '@/components/ui/button';
 import { actionsColumn } from '@/components/ui/data-table';
@@ -75,19 +76,23 @@ const DeleteAction = memo(
 
     const handleConfirm = useCallback(async () => {
       setLoading(true);
+      // `afterDelete` may read the row, so it runs before the row leaves.
+      const write = () => {
+        afterDelete?.(queryClient, id);
+        cacheRemoved(queryClient, entity.keys, id);
+      };
       try {
         const result = await mutate({
           href: entity.itemHref(id),
           method: 'DELETE',
-          // Only once the server has deleted it.
-          onSuccess: () => {
-            cacheRemoved(queryClient, entity.keys, id);
-            afterDelete?.(queryClient, id);
-          },
+          onSuccess: write,
+          onUnreadAnswer: write,
         });
-        toast.success(result.message || `تم حذف ${entity.noun} بنجاح`);
+        toast.success(result.message);
         setOpen(false);
       } catch (error) {
+        // Deleted, though the view was not updated: confirming again is no retry.
+        if (hasErrorCode(error, COMMITTED_CODE)) setOpen(false);
         toastError(error);
       } finally {
         setLoading(false);

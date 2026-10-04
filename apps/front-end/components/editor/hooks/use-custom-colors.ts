@@ -1,8 +1,7 @@
 import { useEffect } from 'react';
 
 import { create } from 'zustand';
-
-import { getColorSchema } from '@/utils/validation/rules';
+import { getColorSchema } from '@app/shared/validation/rules';
 
 const STORAGE_KEY = 'plate-editor-custom-colors';
 const MAX_CUSTOM_COLORS = 10;

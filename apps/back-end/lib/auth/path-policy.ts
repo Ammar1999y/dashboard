@@ -9,12 +9,12 @@ import { db, withTransaction } from '@/db';
 import { sessions } from '@/db/schema';
 import { formCsrfMiddleware } from 'better-auth/api';
 
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import {
-  HTTP_STATUS,
-  MSG_INVALID_CREDENTIALS,
   MSG_INVALID_INPUT,
   MSG_PAGE_NOT_FOUND,
-} from '@app/shared/api-messages';
+} from '@app/shared/messages/common';
 import { validID } from '@app/shared/utils';
 import { loginSchema } from '@app/shared/validation/auth';
 import { NAME_MAX, PASSWORD_MAX } from '@app/shared/validation/constants';

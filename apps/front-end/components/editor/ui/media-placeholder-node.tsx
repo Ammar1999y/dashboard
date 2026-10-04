@@ -12,6 +12,7 @@ import {
 } from '@platejs/media/react';
 import { PlateElement, useEditorPlugin, withHOC } from 'platejs/react';
 import { useFilePicker } from 'use-file-picker';
+import { toAcceptList } from '@/lib/files/accept';
 import { cn } from '@/lib/utils';
 
 import { formatBytes } from '@/utils/format-bytes';
@@ -21,7 +22,6 @@ import { useUploadFile } from '@/components/editor/hooks/use-upload-file';
 import {
   MEDIA_TYPE_BY_NODE,
   mediaConfig,
-  toAcceptList,
 } from '@/components/editor/media-config';
 
 export const PlaceholderElement = withHOC(
@@ -47,6 +47,8 @@ export const PlaceholderElement = withHOC(
     const { openFilePicker } = useFilePicker({
       accept,
       multiple: true,
+      // Only the `File`s are used: reading them all into memory first is waste.
+      readFilesContent: false,
       onFilesSelected: (data: { plainFiles?: File[] }) => {
         if (!data.plainFiles || data.plainFiles.length === 0) return;
 
@@ -64,10 +66,18 @@ export const PlaceholderElement = withHOC(
       },
     });
 
+    const handlePick = React.useCallback(() => {
+      if (!loading) openFilePicker();
+    }, [loading, openFilePicker]);
+
     const replaceCurrentPlaceholder = React.useCallback(
       (file: File) => {
-        void uploadFile(file, mediaType);
         api.placeholder.addUploadingFile(element.id as string, file);
+        void uploadFile(file, mediaType).then((uploaded) => {
+          // Failed or aborted: the placeholder stays, ready to pick again.
+          if (!uploaded)
+            api.placeholder.removeUploadingFile(element.id as string);
+        });
       },
       [api.placeholder, element.id, mediaType, uploadFile]
     );
@@ -85,7 +95,7 @@ export const PlaceholderElement = withHOC(
           initialHeight: imageRef.current?.height,
           initialWidth: imageRef.current?.width,
           isUpload: true,
-          name: mediaType === 'file' ? uploadedFile.name : '',
+          name: mediaType === 'file' ? uploadedFile.displayName : '',
           placeholderId: element.id as string,
           type: element.mediaType ?? '',
           url: uploadedFile.url,
@@ -124,7 +134,7 @@ export const PlaceholderElement = withHOC(
               'flex cursor-pointer select-none items-center rounded-sm bg-muted p-3 pe-9 hover:bg-primary/10'
             )}
             contentEditable={false}
-            onClick={() => !loading && openFilePicker()}
+            onClick={handlePick}
           >
             <div className='relative me-3 flex text-muted-foreground/80 [&_svg]:size-6'>
               <Icon icon={config.icon} />

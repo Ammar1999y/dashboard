@@ -5,8 +5,7 @@ import type { PlateEditor } from 'platejs/react';
 import * as React from 'react';
 
 import { useEditorRef } from 'platejs/react';
-
-import { toastError } from '@/utils/mutation';
+import { toastError } from '@/lib/toast-error';
 
 import {
   DropdownMenu,

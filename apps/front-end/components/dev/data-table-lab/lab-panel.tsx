@@ -5,7 +5,7 @@ import type { LabEvent } from './types';
 import { memo, useCallback, useMemo, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadBlob } from '@/lib/download';
+import { downloadBlob } from '@/lib/files/download';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';

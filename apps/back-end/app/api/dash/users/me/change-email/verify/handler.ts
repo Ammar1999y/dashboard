@@ -1,4 +1,5 @@
-import { MSG_UPDATE_ERROR } from '@app/shared/api-messages';
+import { MSG_UPDATE_ERROR } from '@app/shared/messages/common';
+import { userMsg } from '@app/shared/messages/users';
 import { changeEmailVerifySchema } from '@app/shared/validation/auth';
 
 import { getAuditMeta } from '@/lib/audit';
@@ -15,7 +16,6 @@ import {
   userIdentifier,
 } from '@/lib/rate-limit';
 import { commitEmailChange } from '@/lib/users/contact-change';
-import { userMsg } from '@/lib/users/messages';
 
 /**
  * Step 2 of the email change: the code sent to the NEW address is verified

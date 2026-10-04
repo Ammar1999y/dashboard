@@ -21,7 +21,8 @@ import {
 } from 'better-auth/api';
 import { twoFactor } from 'better-auth/plugins/two-factor';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
 import { validID } from '@app/shared/utils';
 import {
   isTwoFactorMethodEnabled,
@@ -35,7 +36,6 @@ import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta, bodyRecord } from '../context';
 import { authError } from '../errors';
-import { twoFactorMsg } from '../messages';
 import { RP_ID } from '../passkey-assertion';
 import { expireDontRememberMarker } from '../session/cookie';
 import { submittedRememberMe } from '../session/remember-me';

@@ -5,7 +5,7 @@ import type { ThemeMode } from '@/components/theme-customizer/types';
 import dynamic from 'next/dynamic';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
-import { downloadBlob } from '@/lib/download';
+import { downloadBlob, openBlob } from '@/lib/files/download';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
@@ -243,13 +243,11 @@ const downloadExport = () =>
     'editor-lab.html'
   );
 
-const openExport = () => {
-  const url = URL.createObjectURL(
-    new Blob([useLab.getState().exportHtml], { type: 'text/html' })
+const openExport = () =>
+  openBlob(
+    new Blob([useLab.getState().exportHtml], { type: 'text/html' }),
+    'noopener'
   );
-  window.open(url, '_blank', 'noopener');
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-};
 
 const ExportPane = memo(() => {
   const html = useLab((s) => s.exportHtml);

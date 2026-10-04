@@ -8,10 +8,10 @@ import type { OtpChannel } from '@app/shared/validation/enums';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
+import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 import { sendOtpSchema } from '@app/shared/validation/otp';
 
-import { otpMsg } from '@/lib/auth/messages';
 import { enqueueAfterResponse } from '@/lib/http/after-response';
 import { readJsonBody } from '@/lib/http/input';
 import { enforceOtpSurfaceSendQuota } from '@/lib/rate-limit';
@@ -19,7 +19,6 @@ import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
 import { logSanitized } from '@/utils/log';
 
-import { CONTACT_LABEL } from './content';
 import { processOtpSend } from './send';
 import { OTP_BASE_RESEND_DELAY_S } from './throttle';
 

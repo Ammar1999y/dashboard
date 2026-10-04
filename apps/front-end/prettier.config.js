@@ -18,6 +18,7 @@ module.exports = {
     // adding the group reformats none of the existing files — this side simply
     // does not put a blank line before `^@/lib/`.
     '^@app/(.*)$',
+    '^@/constants(/.*)?$',
     '^@/lib/(.*)$',
     '',
     '^@/utils/(.*)$',

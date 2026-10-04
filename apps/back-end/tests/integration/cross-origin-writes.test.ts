@@ -15,9 +15,10 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { twoFactorMethods, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_UNTRUSTED_ORIGIN } from '@app/shared/messages/common';
 
-import { CUSTOM_AUTH_CODE, MSG_UNTRUSTED_ORIGIN } from '@/lib/auth/errors';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';

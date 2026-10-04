@@ -10,6 +10,7 @@ import { Turnstile as _Turnstile } from '@marsidev/react-turnstile';
 import { useTheme } from 'next-themes';
 import { useFormContext } from 'react-hook-form';
 import { toast } from 'sonner';
+import { MSG_BROWSER_UNSUPPORTED } from '@/constants/messages';
 
 import { useFormErrors } from '@/components/form/store';
 
@@ -18,10 +19,8 @@ Turnstile.displayName = 'Turnstile';
 
 const SCRIPT_OPTIONS = { id: 'turnstile-script' };
 
-// A mock build runs on localhost, where the real key is refused.
 const SITE_KEY =
-  process.env.NODE_ENV === 'development' ||
-  process.env.NEXT_PUBLIC_API_MOCKING === 'enabled'
+  process.env.NODE_ENV === 'development'
     ? '1x00000000000000000000AA'
     : (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '');
 
@@ -30,10 +29,7 @@ const LOAD_RETRY_MS = 8000;
 const RELOAD_DELAY_MS = 500;
 
 const onUnsupported = () =>
-  toast.error(
-    'المتصفح غير مدعوم، قم بتغير المتصفح او استخدام اخر نسخة للمتابعة.',
-    { duration: 20_000 }
-  );
+  toast.error(MSG_BROWSER_UNSUPPORTED, { duration: 20_000 });
 
 interface TurnstileWidgetProps {
   /** Set by the form after a failed sign-in; the widget clears it once reset. */
@@ -113,4 +109,22 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
 
 TurnstileWidget.displayName = 'TurnstileWidget';
 
-export default TurnstileWidget;
+// The mocks never check the token, and a mock run must work offline.
+const MOCK_CAPTCHA_TOKEN = 'mock-captcha';
+
+// A plain function, not `memo(...)` with a `displayName`: those are side
+// effects that keep it in the real bundle after the flag folds to false.
+function MockCaptcha({ reset, setReset }: TurnstileWidgetProps) {
+  const { setValue } = useFormContext<LoginInput>();
+
+  useEffect(() => {
+    setValue('captcha', MOCK_CAPTCHA_TOKEN);
+    if (reset) setReset(false);
+  }, [reset, setValue, setReset]);
+
+  return null;
+}
+
+export default process.env.NEXT_PUBLIC_API_MOCKING === 'enabled'
+  ? MockCaptcha
+  : TurnstileWidget;

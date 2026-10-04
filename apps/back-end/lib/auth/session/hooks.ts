@@ -7,17 +7,20 @@ import { users } from '@/db/schema';
 import { APIError } from 'better-auth/api';
 
 import {
-  EMAIL_NOT_VERIFIED_CODE,
-  HTTP_STATUS,
-  MSG_EMAIL_NOT_VERIFIED,
-  MSG_INVALID_CREDENTIALS,
-  MSG_PHONE_NOT_VERIFIED,
-  PHONE_NOT_VERIFIED_CODE,
-} from '@app/shared/api-messages';
-import {
   REQUIRE_EMAIL_VERIFICATION,
   REQUIRE_PHONE_VERIFICATION,
 } from '@app/shared/config';
+import {
+  EMAIL_NOT_VERIFIED_CODE,
+  PHONE_NOT_VERIFIED_CODE,
+} from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import {
+  MSG_EMAIL_NOT_VERIFIED,
+  MSG_INVALID_CREDENTIALS,
+  MSG_PHONE_NOT_VERIFIED,
+} from '@app/shared/messages/auth';
+import { sanitizePermissions } from '@app/shared/permissions/matrix';
 import { validID } from '@app/shared/utils';
 import {
   EMAIL_OTP_AVAILABLE,
@@ -25,7 +28,6 @@ import {
 } from '@app/shared/validation/otp';
 
 import { auditLog, boundedAuditMeta, boundedUserAgent } from '@/lib/audit';
-import { sanitizePermissions } from '@/lib/permissions/matrix';
 
 import { logSanitized } from '@/utils/log';
 

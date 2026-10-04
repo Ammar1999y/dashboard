@@ -1,7 +1,7 @@
 import type { FieldArrayItemProps } from '.';
 import type { ReactNode } from 'react';
 
-import { ACCEPT_IMAGES } from '@/lib/constants';
+import { ACCEPT_IMAGES } from '@/lib/files/accept';
 
 import { FileUpload } from '@/components/shared/file-upload';
 

@@ -10,17 +10,17 @@ import type { BetterAuthPlugin } from 'better-auth';
 
 import { withTransaction } from '@/db';
 import { VERIFICATION_IDENTIFIER_MAX } from '@/db/limits';
-import { createAuthEndpoint } from 'better-auth/api';
+import { createAuthEndpoint, isAPIError } from 'better-auth/api';
 import * as z from 'zod';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
 import { twoFactorPasskeyVerifySchema } from '@app/shared/validation/two-factor';
 
-import { logSanitized } from '@/utils/log';
+import { errorClassOf, logSanitized } from '@/utils/log';
 
 import { parseAuthBody } from '../context';
 import { authError } from '../errors';
-import { twoFactorMsg } from '../messages';
 import {
   advancePasskeyCounter,
   passkeyOptions,
@@ -154,7 +154,9 @@ export const twoFactorPasskey = () =>
               await chargeFailure();
               logSanitized('error', {
                 msg: 'twoFactor.passkey.verifyFailed',
-                error,
+                errorClass: errorClassOf(error),
+                // An `APIError` is a denial whose message is the client's answer.
+                ...(!isAPIError(error) && { error }),
               });
               throw authError(
                 HTTP_STATUS.UNAUTHORIZED,

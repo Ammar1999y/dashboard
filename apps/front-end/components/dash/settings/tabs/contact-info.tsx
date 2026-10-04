@@ -3,26 +3,15 @@ import type { SettingsInput } from '@/utils/validation/settings';
 
 import { memo } from 'react';
 
-import { generateUUIDv7 } from '@/utils';
-
 import SortableFieldArray from '@/components/form/field-array';
 import ImageItemCard from '@/components/form/field-array/image-item-card';
 
-import { KeyedLinkFields } from './keyed-link-fields';
-
-const createItem = () => ({
-  id: generateUUIDv7(),
-  key: '',
-  title: '',
-  link: '',
-  isActive: true,
-  order: 0,
-});
+import { createKeyedLinkItem, KeyedLinkFields } from './keyed-link-fields';
 
 const ContactInfoSection = memo(() => (
   <SortableFieldArray<SettingsInput, 'contactInfo'>
     name='contactInfo'
-    createItem={createItem}
+    createItem={createKeyedLinkItem}
     Item={ContactInfoItem}
     addLabel='إضافة بيانات تواصل'
     emptyText='لا توجد بيانات تواصل بعد'

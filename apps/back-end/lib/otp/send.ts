@@ -7,8 +7,9 @@ import { and, eq, sql } from 'drizzle-orm';
 import { withTransaction } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { otpMsg } from '@app/shared/messages/otp';
 import {
   OTP_CODE_LENGTH,
   OTP_EXPIRY_MINUTES,
@@ -20,7 +21,7 @@ import { enforceOtpGlobalSendBudget } from '@/lib/rate-limit';
 
 import { logSanitized } from '@/utils/log';
 
-import { deliverOtp, MSG_OTP_SEND_FAILED } from './delivery';
+import { deliverOtp } from './delivery';
 import { hashOtpCode } from './hash';
 import { OTP_BLOCK_DURATION_HOURS, OTP_MAX_ATTEMPTS } from './limits';
 import {
@@ -173,7 +174,7 @@ export async function processOtpSend({
         (session.nextAllowedAt.getTime() - now.getTime()) / 1000
       );
       throw new CustomError(
-        `يرجى الانتظار ${waitSeconds} ثانية قبل إعادة الإرسال`,
+        otpMsg.resendWait(waitSeconds),
         HTTP_STATUS.TOO_MANY_REQUESTS
       );
     }
@@ -190,7 +191,7 @@ export async function processOtpSend({
       await blockSession(tx, session.id, blockedUntil);
 
       deferredError = blockedError(
-        `تجاوزت الحد الأقصى من المحاولات. تم حظر ${entityName} لمدة ${OTP_BLOCK_DURATION_HOURS} ساعة`,
+        otpMsg.sendBlocked(entityName, OTP_BLOCK_DURATION_HOURS),
         blockedUntil
       );
       return null;
@@ -242,7 +243,7 @@ export async function processOtpSend({
       });
 
     if (!updatedSession)
-      throw new CustomError(MSG_OTP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+      throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
 
     await tx
       .insert(verificationCodes)
@@ -277,7 +278,7 @@ export async function processOtpSend({
   // After the commit, so provider latency holds no locks. The refund matches
   // this code only, never a newer send.
   if (!result)
-    throw new CustomError(MSG_OTP_SEND_FAILED, HTTP_STATUS.INTERNAL_ERROR);
+    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
   const deliver = async () => {
     try {
       await deliverOtp(channel, sendTo, otpCode, purpose);

@@ -6,7 +6,7 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { sessions, users, verifications } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { PUBLIC_ORIGIN } from '@/lib/env';
 

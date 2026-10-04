@@ -18,7 +18,9 @@ import { users } from '@/db/schema';
 import { createAuthEndpoint } from 'better-auth/api';
 import * as z from 'zod';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 import {
   isTwoFactorOtpChannelEnabled,
@@ -27,7 +29,6 @@ import {
   twoFactorOtpVerifySchema,
 } from '@app/shared/validation/two-factor';
 
-import { CONTACT_LABEL } from '@/lib/otp/content';
 import { processOtpSend } from '@/lib/otp/send';
 import { OTP_BASE_RESEND_DELAY_S } from '@/lib/otp/throttle';
 import { otpGuessWasEvaluated, processOtpVerify } from '@/lib/otp/verify';
@@ -39,7 +40,6 @@ import { contactOf } from '@/lib/users/contact';
 
 import { authAuditMeta, bodyRecord, parseAuthBody } from '../context';
 import { asAuthError, authError } from '../errors';
-import { otpMsg, twoFactorMsg } from '../messages';
 import { envelopeResponse } from '../plugin-openapi';
 import { requireReauthPassword } from '../reauth/grant';
 import { resolveRequestSession } from '../session/request';

@@ -1,168 +1,360 @@
-import type { MockUser } from '../store';
-import type { EntityID } from '@/types';
+import type { MockUser, MockUserRole } from '../store';
+import type { AccessScope } from '@app/shared/permissions/constants';
+import type { ActorPermissions } from '@app/shared/permissions/scope';
+import type { EntityID } from '@app/shared/types';
+import type * as z from 'zod';
 
-import { generateUUIDv7 } from '@/utils';
 import { http } from 'msw';
+import { PHONE_ENABLED } from '@app/shared/config';
+import { REQUEST_BODIES } from '@app/shared/contract';
+import { USERS_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns';
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_DELETED, MSG_UPDATED } from '@app/shared/messages/common';
+import {
+  MSG_CANNOT_DELETE_SELF,
+  MSG_CUSTOM_ROLE_NEEDS_PERMISSIONS,
+  MSG_EMAIL_EXISTS,
+  MSG_PHONE_EXISTS,
+} from '@app/shared/messages/users';
 import {
   CUSTOM_ROLE_VALUE,
   ROLE_SCOPE,
 } from '@app/shared/permissions/constants';
+import {
+  permissionsEqual,
+  toPermissionRows,
+} from '@app/shared/permissions/matrix';
+import {
+  holdsActionOn,
+  resolveActionScope,
+  validatePermissionScope,
+} from '@app/shared/permissions/scope';
+
+import { generateEntityId } from '@/utils/generate-id';
 
 import { queryTable } from '../lib/data-table';
 import { now } from '../lib/db';
-import { api, fail, MSG, notFound, ok, okPage, readBody } from '../lib/http';
-import { roles, session, toUserClient, userRole, users } from '../store';
+import {
+  api,
+  created,
+  notFoundError,
+  ok,
+  okPage,
+  parseOrThrow,
+  readJson,
+  readJsonBody,
+  requireId,
+} from '../lib/http';
+import {
+  assertRoleWithinScope,
+  assignableRole,
+  insufficientPermissions,
+  requirePermission,
+} from '../lib/permissions';
+import { CUSTOM_ROLE_NAME } from '../seed';
+import { roleOf, roleRef, session, toUserClient, users } from '../store';
 
-const CANNOT_DELETE_SELF = 'لا يمكنك حذف حسابك الخاص';
-const CUSTOM_ROLE_NEEDS_PERMISSIONS = 'يجب تحديد صلاحيات للدور المخصص';
+const [adminUpdateBody, selfUpdateBody] =
+  REQUEST_BODIES['PUT /api/dash/users/:id'];
 
-const isSelf = (id: EntityID) => session.get()?.user.id === id;
+/**
+ * The server's `assertTargetUserVisible`: a user with no role, another
+ * system-role account, or one outside an `'own'` scope answers 404.
+ */
+function assertVisible(
+  user: MockUser,
+  actorUserId: EntityID,
+  scope: AccessScope | null
+): MockUserRole {
+  if (!user.role) throw notFoundError();
+  const isSelf = user.id === actorUserId;
+  if (!isSelf && user.role.scope === ROLE_SCOPE.SYSTEM) throw notFoundError();
+  if (!isSelf && scope === 'own' && user.createdBy !== actorUserId)
+    throw notFoundError();
+  return user.role;
+}
 
-/** The server never lists or opens a system-role account but the viewer's own. */
-const isReachable = (user: MockUser) =>
-  user.role?.scope !== ROLE_SCOPE.SYSTEM || isSelf(user.id);
+/** The target's role matrix, or 404 as the server's join on `roles` answers. */
+function targetRoleMatrix(user: MockUser) {
+  const role = roleOf(user);
+  if (!role) throw notFoundError();
+  return role.permissions;
+}
 
-const emailTaken = (email: string, exceptId?: EntityID) =>
-  users
-    .all()
-    .some(
-      (u) => u.id !== exceptId && u.email.toLowerCase() === email.toLowerCase()
+/** `ux_users_email` and `ux_users_phone_number`, which ignores no number. */
+function assertUnique(
+  email: string,
+  phoneNumber: string | null,
+  exceptId?: EntityID
+) {
+  const others = users.all().filter((u) => u.id !== exceptId);
+  if (others.some((u) => u.email.toLowerCase() === email.toLowerCase()))
+    throw new CustomError(MSG_EMAIL_EXISTS, HTTP_STATUS.CONFLICT);
+  if (phoneNumber && others.some((u) => u.phoneNumber === phoneNumber))
+    throw new CustomError(MSG_PHONE_EXISTS, HTTP_STATUS.CONFLICT);
+}
+
+/** The role the server's `createCustomRole` mints for one user. */
+const mintCustomRole = (createdBy: EntityID): MockUserRole => ({
+  id: generateEntityId(),
+  roleName: CUSTOM_ROLE_NAME,
+  scope: ROLE_SCOPE.CUSTOM,
+  createdBy,
+});
+
+/** The list row the server selects; the rest comes with the detail. */
+const toListRow = (user: MockUser) => {
+  const { id, name, email, isActive, roleId, role, createdAt, updatedAt } =
+    toUserClient(user);
+  return { id, name, email, isActive, roleId, role, createdAt, updatedAt };
+};
+
+const detail = (user: MockUser) => ({
+  ...toUserClient(user),
+  permissions: roleOf(user)?.permissions ?? [],
+});
+
+/**
+ * The server's `editUserAsAdmin`, its checks in its order, without the
+ * re-authentication, the password checks and the session rotation.
+ */
+function editUserAsAdmin({
+  actorUserId,
+  actorPermissions,
+  editScope,
+  targetId,
+  input,
+}: {
+  actorUserId: EntityID;
+  actorPermissions: ActorPermissions;
+  editScope: AccessScope;
+  targetId: EntityID;
+  input: z.output<typeof adminUpdateBody>;
+}) {
+  const target = users.find(targetId);
+  if (!target) throw notFoundError();
+  const currentRole = assertVisible(target, actorUserId, editScope);
+  const currentMatrix = targetRoleMatrix(target);
+
+  const isCustomRole = input.roleId === CUSTOM_ROLE_VALUE;
+  const isCurrentlyCustom = currentRole.scope === ROLE_SCOPE.CUSTOM;
+  // Only on a change: a deactivated role keeps its members, and an edit that
+  // restates it must still reach them.
+  const assigned =
+    !isCustomRole && input.roleId !== target.roleId
+      ? assignableRole(input.roleId)
+      : undefined;
+
+  assertRoleWithinScope(actorPermissions, currentMatrix, 'reachability');
+
+  if (isCustomRole && input.permissions?.length)
+    validatePermissionScope(actorPermissions, input.permissions);
+  else if (assigned)
+    assertRoleWithinScope(actorPermissions, assigned.permissions, 'grant');
+
+  const suppliedMatrix = input.permissions?.length ? input.permissions : null;
+  const customPermsChanged =
+    isCustomRole &&
+    isCurrentlyCustom &&
+    !!suppliedMatrix &&
+    !permissionsEqual(
+      toPermissionRows(currentMatrix),
+      toPermissionRows(suppliedMatrix)
     );
 
-function detail(user: MockUser) {
-  const isCustom = user.role?.scope === ROLE_SCOPE.CUSTOM;
-  return {
-    ...toUserClient(user),
-    roleId: isCustom ? CUSTOM_ROLE_VALUE : user.roleId,
-    permissions: isCustom
-      ? (user.permissions ?? [])
-      : (roles.find(user.roleId ?? '')?.permissions ?? []),
-  };
+  if (isCustomRole) {
+    if (!isCurrentlyCustom) {
+      if (
+        !resolveActionScope(actorPermissions, 'permissions', 'create').allowed
+      )
+        throw insufficientPermissions();
+    } else if (
+      customPermsChanged &&
+      !holdsActionOn(
+        actorPermissions,
+        'permissions',
+        'edit',
+        currentRole.createdBy,
+        actorUserId
+      )
+    ) {
+      throw insufficientPermissions();
+    }
+    // No matrix means "keep the current one".
+    if (!suppliedMatrix && !isCurrentlyCustom)
+      throw new CustomError(
+        MSG_CUSTOM_ROLE_NEEDS_PERMISSIONS,
+        HTTP_STATUS.UNPROCESSABLE
+      );
+  }
+
+  const role = isCustomRole
+    ? isCurrentlyCustom
+      ? currentRole
+      : mintCustomRole(actorUserId)
+    : assigned
+      ? roleRef(assigned)
+      : currentRole;
+
+  const emailChanged = target.email !== input.email;
+  // Omitted keeps the number; only an explicit null/'' clears it.
+  const newPhoneNumber = input.phoneNumber ?? null;
+  const phoneChanged =
+    PHONE_ENABLED &&
+    input.phoneNumber !== undefined &&
+    (target.phoneNumber ?? null) !== newPhoneNumber;
+
+  assertUnique(input.email, phoneChanged ? newPhoneNumber : null, target.id);
+
+  const updatedAt = now();
+  users.update(target.id, {
+    name: input.name,
+    email: input.email,
+    isActive: input.isActive,
+    roleId: input.roleId,
+    role,
+    permissions: isCustomRole
+      ? (suppliedMatrix ?? target.permissions)
+      : undefined,
+    ...(emailChanged && { emailVerified: false }),
+    ...(phoneChanged && {
+      phoneNumber: newPhoneNumber,
+      phoneNumberVerified: false,
+    }),
+    ...(input.password && { password: input.password }),
+    updatedAt,
+  });
+  return { updatedAt };
 }
 
 export const usersHandlers = [
-  http.get(api('/api/dash/users'), ({ request }) =>
-    okPage(
+  http.get(api('/api/dash/users'), ({ request }) => {
+    const { userId, scope } = requirePermission('users', 'view');
+    return okPage(
       queryTable(
         users
           .all()
-          .filter((u) => u.role?.scope !== ROLE_SCOPE.SYSTEM)
-          .map(toUserClient),
+          .filter(
+            (u) =>
+              !!u.role &&
+              u.role.scope !== ROLE_SCOPE.SYSTEM &&
+              (scope === 'all' || u.createdBy === userId)
+          )
+          .map(toListRow),
         new URL(request.url),
         {
-          searchFields: ['name', 'email'],
+          filterableColumns: USERS_FILTER_COLUMNS,
+          searchableColumns: ['name', 'email'],
           defaultSort: { id: 'createdAt', desc: true },
-          columns: { role: (row) => row.role?.roleName },
         }
       )
-    )
-  ),
+    );
+  }),
 
   http.get<{ id: string }>(api('/api/dash/users/:id'), ({ params }) => {
-    const user = users.find(params.id);
-    if (!user || !isReachable(user)) return notFound();
+    const { userId, scope: viewScope } = requirePermission('users', 'view', {
+      throwError: false,
+    });
+    const targetId = requireId(params.id);
+    // Your own account needs no grant to be read.
+    if (userId !== targetId && !viewScope) throw insufficientPermissions();
+    const user = users.find(targetId);
+    if (!user) throw notFoundError();
+    assertVisible(user, userId, viewScope);
     return ok(detail(user));
   }),
 
   http.post(api('/api/dash/users'), async ({ request }) => {
-    const body = await readBody<MockUser>(request);
-    if (!body.name || !body.email || !body.password) {
-      return fail(422, MSG.invalidInput);
-    }
-    if (emailTaken(body.email)) return fail(409, MSG.emailExists);
+    const { userId, permissions } = requirePermission('users', 'create');
+    const input = await readJsonBody(
+      request,
+      REQUEST_BODIES['POST /api/dash/users']
+    );
+    const isCustomRole = input.roleId === CUSTOM_ROLE_VALUE;
 
-    const role = userRole(body.roleId ?? null);
-    if (role === undefined) return fail(422, MSG.invalidInput);
-    if (body.roleId === CUSTOM_ROLE_VALUE && !body.permissions?.length) {
-      return fail(422, CUSTOM_ROLE_NEEDS_PERMISSIONS);
-    }
+    if (
+      isCustomRole &&
+      !resolveActionScope(permissions, 'permissions', 'create').allowed
+    )
+      throw insufficientPermissions();
+    if (isCustomRole && input.permissions?.length)
+      validatePermissionScope(permissions, input.permissions);
+
+    const assigned = isCustomRole ? undefined : assignableRole(input.roleId);
+    if (assigned)
+      assertRoleWithinScope(permissions, assigned.permissions, 'grant');
+
+    const phoneNumber = (PHONE_ENABLED && input.phoneNumber) || null;
+    assertUnique(input.email, phoneNumber);
 
     const createdAt = now();
     const user = users.insert({
-      id: generateUUIDv7(),
-      name: body.name,
-      email: body.email,
-      password: body.password,
-      phoneNumber: body.phoneNumber ?? null,
+      id: generateEntityId(),
+      name: input.name,
+      email: input.email,
+      password: input.password,
+      phoneNumber,
       emailVerified: false,
       phoneNumberVerified: false,
-      isActive: body.isActive ?? true,
-      roleId: body.roleId ?? null,
-      role,
-      permissions:
-        body.roleId === CUSTOM_ROLE_VALUE ? body.permissions : undefined,
+      isActive: input.isActive,
+      roleId: input.roleId,
+      role: assigned ? roleRef(assigned) : mintCustomRole(userId),
+      permissions: isCustomRole ? input.permissions : undefined,
+      createdBy: userId,
       createdAt,
       updatedAt: createdAt,
     });
 
-    return ok({ id: user.id }, MSG.created);
+    return created(user.id);
   }),
 
   http.put<{ id: string }>(
     api('/api/dash/users/:id'),
     async ({ params, request }) => {
-      const user = users.find(params.id);
-      if (!user || !isReachable(user)) return notFound();
-
-      const body = await readBody<MockUser>(request);
-      const updatedAt = now();
-
-      if (isSelf(user.id)) {
-        if (!body.name) return fail(422, MSG.invalidInput);
-        users.update(user.id, { name: body.name, updatedAt });
-        const current = session.get();
-        if (current) {
-          session.set({
-            ...current,
-            user: { ...current.user, name: body.name },
-          });
-        }
-        return ok({ updatedAt }, MSG.updated);
-      }
-
-      if (body.email && emailTaken(body.email, user.id)) {
-        return fail(409, MSG.emailExists);
-      }
-
-      const roleId = body.roleId === undefined ? user.roleId : body.roleId;
-      const role = userRole(roleId, user.role);
-      if (role === undefined) return fail(422, MSG.invalidInput);
-
-      const permissions =
-        roleId === CUSTOM_ROLE_VALUE
-          ? (body.permissions ?? user.permissions)
-          : undefined;
-      if (roleId === CUSTOM_ROLE_VALUE && !permissions?.length) {
-        return fail(422, CUSTOM_ROLE_NEEDS_PERMISSIONS);
-      }
-
-      const email = body.email ?? user.email;
-      const phoneNumber =
-        body.phoneNumber === undefined ? user.phoneNumber : body.phoneNumber;
-
-      users.update(user.id, {
-        name: body.name ?? user.name,
-        email,
-        phoneNumber,
-        isActive: body.isActive ?? user.isActive,
-        roleId,
-        role,
+      const {
+        userId,
+        scope: editScope,
         permissions,
-        ...(body.password && { password: body.password }),
-        ...(email !== user.email && { emailVerified: false }),
-        ...(phoneNumber !== user.phoneNumber && { phoneNumberVerified: false }),
-        updatedAt,
-      });
+      } = requirePermission('users', 'edit', { throwError: false });
+      // Ahead of the id, as on the server: a malformed body's 400 precedes a
+      // bad id's 422.
+      const body = await readJson(request);
+      const targetId = requireId(params.id);
 
-      return ok({ updatedAt }, MSG.updated);
+      // Editing your own row is the self-edit branch: its contract is the name.
+      if (userId === targetId) {
+        const { name } = parseOrThrow(selfUpdateBody, body);
+        const updatedAt = now();
+        users.update(userId, { name, updatedAt });
+        const current = session.get();
+        if (current)
+          session.set({ ...current, user: { ...current.user, name } });
+        return ok({ updatedAt }, MSG_UPDATED);
+      }
+
+      if (!editScope) throw insufficientPermissions();
+      const result = editUserAsAdmin({
+        actorUserId: userId,
+        actorPermissions: permissions,
+        editScope,
+        targetId,
+        input: parseOrThrow(adminUpdateBody, body),
+      });
+      return ok(result, MSG_UPDATED);
     }
   ),
 
   http.delete<{ id: string }>(api('/api/dash/users/:id'), ({ params }) => {
-    if (isSelf(params.id)) return fail(400, CANNOT_DELETE_SELF);
-    const user = users.find(params.id);
-    if (!user || !isReachable(user)) return notFound();
+    const { userId, permissions, scope } = requirePermission('users', 'delete');
+    const targetId = requireId(params.id);
+    if (userId === targetId)
+      throw new CustomError(MSG_CANNOT_DELETE_SELF, HTTP_STATUS.BAD_REQUEST);
+    const user = users.find(targetId);
+    if (!user) throw notFoundError();
+    assertVisible(user, userId, scope);
+    assertRoleWithinScope(permissions, targetRoleMatrix(user), 'reachability');
     users.remove(user.id);
-    return ok(null, MSG.deleted);
+    return ok(null, MSG_DELETED);
   }),
 ];

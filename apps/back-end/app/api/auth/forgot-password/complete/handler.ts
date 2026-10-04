@@ -5,8 +5,10 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { otpMsg } from '@app/shared/messages/otp';
 import {
   OTP_ENABLED,
   recoveryCompleteSchema,
@@ -14,7 +16,6 @@ import {
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import { credentialAccountOf } from '@/lib/auth/credential-account';
-import { otpMsg, twoFactorMsg } from '@/lib/auth/messages';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword } from '@/lib/auth/password/hash';
 import {

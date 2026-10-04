@@ -1,34 +1,17 @@
+import type { ColorInstance } from 'color';
+
 import Color from 'color';
 
 type ColorFormat = 'hex' | 'rgb' | 'hsl';
 
-interface HslColor {
-  h: number;
-  s: number;
-  l: number;
-  alpha?: number;
-}
-
-// Existing functions reimplemented with color library
+/** Throws on a value the `color` parser cannot read. */
 export function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  try {
-    const color = Color(hex);
-    return {
-      r: color.red(),
-      g: color.green(),
-      b: color.blue(),
-    };
-  } catch {
-    return { r: 0, g: 0, b: 0 };
-  }
+  const color = Color(hex);
+  return { r: color.red(), g: color.green(), b: color.blue() };
 }
 
 export function rgbToHex(r: number, g: number, b: number): string {
-  try {
-    return Color.rgb(r, g, b).hex();
-  } catch {
-    return '#000000';
-  }
+  return Color.rgb(r, g, b).hex();
 }
 
 export function rgbToHsl(
@@ -36,16 +19,12 @@ export function rgbToHsl(
   g: number,
   b: number
 ): { h: number; s: number; l: number } {
-  try {
-    const color = Color.rgb(r, g, b).hsl();
-    return {
-      h: Math.round(color.hue()),
-      s: Math.round(color.saturationl()),
-      l: Math.round(color.lightness()),
-    };
-  } catch {
-    return { h: 0, s: 0, l: 0 };
-  }
+  const color = Color.rgb(r, g, b).hsl();
+  return {
+    h: Math.round(color.hue()),
+    s: Math.round(color.saturationl()),
+    l: Math.round(color.lightness()),
+  };
 }
 
 export function hslToRgb(
@@ -53,55 +32,36 @@ export function hslToRgb(
   s: number,
   l: number
 ): { r: number; g: number; b: number } {
-  try {
-    const color = Color.hsl(h, s, l);
-    return {
-      r: Math.round(color.red()),
-      g: Math.round(color.green()),
-      b: Math.round(color.blue()),
-    };
-  } catch {
-    return { r: 0, g: 0, b: 0 };
-  }
+  const color = Color.hsl(h, s, l);
+  return {
+    r: Math.round(color.red()),
+    g: Math.round(color.green()),
+    b: Math.round(color.blue()),
+  };
 }
 
-// New alpha functions
+/** Throws on a value the `color` parser cannot read. */
 export function hexToRgba(hex: string): {
   r: number;
   g: number;
   b: number;
   a: number;
 } {
-  try {
-    const color = Color(hex);
-    return {
-      r: color.red(),
-      g: color.green(),
-      b: color.blue(),
-      a: color.alpha(),
-    };
-  } catch {
-    return { r: 0, g: 0, b: 0, a: 1 };
-  }
+  const color = Color(hex);
+  return {
+    r: color.red(),
+    g: color.green(),
+    b: color.blue(),
+    a: color.alpha(),
+  };
 }
 
-export function rgbaToHex(r: number, g: number, b: number, a: number): string {
-  try {
-    // Color library handles alpha in hex if needed, but standard .hex() might not include it if alpha is 1
-    // To force alpha or handle it specifically as the original code did:
-    const color = Color.rgb(r, g, b).alpha(a);
-    // The original code returned 8-digit hex. Color library returns 8 digit if alpha < 1
-    // If we strictly want 8 digit hex always or similar behavior:
-    const hex = color.hex();
-    if (a === 1) return hex;
+/** `hex()` drops the alpha channel; `hexa()` always writes it. */
+const toHex = (color: ColorInstance) =>
+  color.alpha() < 1 ? color.hexa() : color.hex();
 
-    // Manually constructing if needed, or just trusting the library.
-    // The library returns #RRGGBB or #RRGGBBAA.
-    // Let's stick to library behavior which is standard.
-    return hex;
-  } catch {
-    return '#000000';
-  }
+export function rgbaToHex(r: number, g: number, b: number, a: number): string {
+  return toHex(Color.rgb(r, g, b).alpha(a));
 }
 
 export function rgbaToHsla(
@@ -110,17 +70,13 @@ export function rgbaToHsla(
   b: number,
   a: number
 ): { h: number; s: number; l: number; a: number } {
-  try {
-    const color = Color.rgb(r, g, b).alpha(a).hsl();
-    return {
-      h: Math.round(color.hue()),
-      s: Math.round(color.saturationl()),
-      l: Math.round(color.lightness()),
-      a: color.alpha(),
-    };
-  } catch {
-    return { h: 0, s: 0, l: 0, a: 1 };
-  }
+  const color = Color.rgb(r, g, b).alpha(a).hsl();
+  return {
+    h: Math.round(color.hue()),
+    s: Math.round(color.saturationl()),
+    l: Math.round(color.lightness()),
+    a: color.alpha(),
+  };
 }
 
 export function hslaToRgba(
@@ -129,111 +85,59 @@ export function hslaToRgba(
   l: number,
   a: number
 ): { r: number; g: number; b: number; a: number } {
-  try {
-    const color = Color.hsl(h, s, l).alpha(a);
-    return {
-      r: Math.round(color.red()),
-      g: Math.round(color.green()),
-      b: Math.round(color.blue()),
-      a: color.alpha(),
-    };
-  } catch {
-    return { r: 0, g: 0, b: 0, a: 1 };
-  }
+  const color = Color.hsl(h, s, l).alpha(a);
+  return {
+    r: Math.round(color.red()),
+    g: Math.round(color.green()),
+    b: Math.round(color.blue()),
+    a: color.alpha(),
+  };
 }
 
-const formatNumber = (num?: number) => {
+const formatNumber = (num: number) => {
   if (!num) return '0';
   return Number.isSafeInteger(num) ? num : num.toFixed(4);
 };
 
-const formatHsl = (hsl: HslColor, includeAlpha: boolean = true) => {
-  const h = formatNumber(hsl.h);
-  const s = formatNumber(hsl.s * 100);
-  const l = formatNumber(hsl.l * 100);
-
-  return `hsl(${h} ${s}% ${l}%${
-    includeAlpha && hsl.alpha !== undefined && hsl.alpha !== 1
-      ? ` / ${hsl.alpha}`
-      : ''
-  })`;
-};
-
 /**
- * Checks if the color value already contains a color function or is in a complete format
+ * Any CSS color the `color` parser reads, or the bare `H S% L%` channels the
+ * theme stores, which it reads only inside `hsl()`.
  */
-const isCompleteColorFormat = (colorValue: string): boolean => {
-  const trimmed = colorValue.trim();
+function parseColor(value: string): ColorInstance | null {
+  for (const candidate of [value, `hsl(${value})`]) {
+    try {
+      return Color(candidate);
+    } catch {
+      // Not this form; the next one may read it.
+    }
+  }
+  return null;
+}
 
-  // Check if it's a hex color or contains a color function (hsl, rgb, oklch, etc.)
-  if (trimmed.startsWith('#') || trimmed.includes('(')) return true;
-
-  // Check if it's a CSS color keyword
-  const cssColorKeywords = [
-    'transparent',
-    'currentcolor',
-    'inherit',
-    'initial',
-    'unset',
-  ];
-  return cssColorKeywords.includes(trimmed.toLowerCase());
-};
-
+/** `null` when `colorValue` is not a color. */
 export const colorFormatter = (
   colorValue: string,
   format: ColorFormat = 'hsl',
   tailwindVersion: '3' | '4' = '3',
   valuesOnly: boolean = false
-): string => {
-  try {
-    // Parse the color using the color library
-    const parsedColor = Color(
-      isCompleteColorFormat(colorValue) ? colorValue : `hsl(${colorValue})`
-    );
+): string | null => {
+  const color = parseColor(colorValue);
+  if (!color) return null;
 
-    switch (format) {
-      case 'hsl': {
-        const hslObj = parsedColor.hsl().object();
-        const alpha = parsedColor.alpha();
-
-        const hsl: HslColor = {
-          h: hslObj.h || 0,
-          s: hslObj.s / 100,
-          l: hslObj.l / 100,
-          alpha: alpha === 1 ? undefined : alpha,
-        };
-
-        const h = formatNumber(hsl.h);
-        const s = formatNumber(hsl.s * 100);
-        const l = formatNumber(hsl.l * 100);
-
-        // Check if alpha exists and is not 1 (fully opaque)
-        const hasAlpha = hsl.alpha !== undefined && hsl.alpha !== 1;
-        const alphaValue = hasAlpha ? ` / ${hsl.alpha}` : '';
-        const values = `${h} ${s}% ${l}%${alphaValue}`;
-
-        if (valuesOnly) {
-          return values;
-        }
-
-        if (tailwindVersion === '4') {
-          // formatHsl expects s and l to be 0-1 based on how we constructed hsl object above
-          return formatHsl(hsl);
-        }
-        return values;
-      }
-      case 'rgb': {
-        return parsedColor.rgb().string(); // e.g., "rgb(64, 128, 192)"
-      }
-      case 'hex': {
-        return parsedColor.hex(); // e.g., "#4080c0"
-      }
-      default: {
-        return colorValue;
-      }
+  switch (format) {
+    case 'hsl': {
+      const { h, s, l } = color.hsl().object();
+      const alpha = color.alpha();
+      const values = `${formatNumber(h || 0)} ${formatNumber(s)}% ${formatNumber(l)}%${
+        alpha === 1 ? '' : ` / ${alpha}`
+      }`;
+      return tailwindVersion === '4' && !valuesOnly ? `hsl(${values})` : values;
     }
-  } catch (error) {
-    console.error(`Failed to convert color: ${colorValue}`, error);
-    return colorValue;
+    case 'rgb': {
+      return color.rgb().string();
+    }
+    case 'hex': {
+      return toHex(color);
+    }
   }
 };

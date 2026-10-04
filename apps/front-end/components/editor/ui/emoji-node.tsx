@@ -7,8 +7,7 @@ import * as React from 'react';
 import { EmojiInlineIndexSearch, insertEmoji } from '@platejs/emoji';
 import { EmojiPlugin } from '@platejs/emoji/react';
 import { PlateElement, usePluginOption } from 'platejs/react';
-
-import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
+import { MSG_NO_RESULTS } from '@/constants/messages';
 
 import { useDebounce } from '@/hooks/use-debounce';
 
@@ -52,7 +51,7 @@ export function EmojiInputElement(props: PlateElementProps) {
 
         <InlineComboboxContent>
           {!isPending && (
-            <InlineComboboxEmpty>{NO_RESULTS_MESSAGE}</InlineComboboxEmpty>
+            <InlineComboboxEmpty>{MSG_NO_RESULTS}</InlineComboboxEmpty>
           )}
 
           <InlineComboboxGroup>

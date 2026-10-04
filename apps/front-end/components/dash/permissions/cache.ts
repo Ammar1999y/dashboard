@@ -1,14 +1,17 @@
-import type { RoleOption } from './entity';
-import type { EntityID } from '@/types';
+import type {
+  PagePermission,
+  PermissionClient,
+  RoleSummary,
+} from '@/types/permission';
 import type { UserClient } from '@/types/user';
+import type { EntityID } from '@app/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
-
-import { cacheUpdatedEach } from '@/utils/query-cache';
+import { cacheUpdatedEach } from '@/lib/api/query-cache';
 
 import { userEntity } from '../users/entity';
-import { ROLE_OPTIONS_KEY } from './entity';
+import { permissionEntity, ROLE_OPTIONS_KEY } from './entity';
 
 /**
  * Keeps the role picker's list in step with a saved permission: an active one
@@ -17,11 +20,11 @@ import { ROLE_OPTIONS_KEY } from './entity';
  */
 export function cacheRoleOption(
   queryClient: QueryClient,
-  role: RoleOption & { isActive: boolean }
+  role: RoleSummary & { isActive: boolean }
 ) {
-  const option: RoleOption = { id: role.id, roleName: role.roleName };
+  const option: RoleSummary = { id: role.id, roleName: role.roleName };
 
-  queryClient.setQueryData<RoleOption[]>(ROLE_OPTIONS_KEY, (roles) => {
+  queryClient.setQueryData<RoleSummary[]>(ROLE_OPTIONS_KEY, (roles) => {
     if (!roles) return roles;
     if (!role.isActive) return roles.filter((r) => r.id !== role.id);
     if (roles.some((r) => r.id === role.id)) {
@@ -32,7 +35,7 @@ export function cacheRoleOption(
 }
 
 export function removeRoleOption(queryClient: QueryClient, id: EntityID) {
-  queryClient.setQueryData<RoleOption[]>(ROLE_OPTIONS_KEY, (roles) =>
+  queryClient.setQueryData<RoleSummary[]>(ROLE_OPTIONS_KEY, (roles) =>
     roles?.filter((r) => r.id !== id)
   );
 }
@@ -51,19 +54,62 @@ export function resolveUserRole(
   if (!roleId) return null;
   if (current && roleId === current.roleId) return current.role;
   if (roleId === CUSTOM_ROLE_VALUE) return undefined;
-  const roles = queryClient.getQueryData<RoleOption[]>(ROLE_OPTIONS_KEY);
+  const roles = queryClient.getQueryData<RoleSummary[]>(ROLE_OPTIONS_KEY);
   return roles?.find((r) => r.id === roleId);
 }
 
-/** Users embed their role's name, so a rename is written into their rows. */
-export function cacheRoleRenamed(
+/**
+ * Users embed their role's name, and a user's detail its role's matrix, so a
+ * rename or a new matrix is written into their rows.
+ */
+export function cacheRoleChanged(
   queryClient: QueryClient,
   id: EntityID,
-  roleName: string
+  {
+    roleName,
+    permissions,
+  }: { roleName: string; permissions?: PagePermission[] }
 ) {
-  cacheUpdatedEach<UserClient>(queryClient, userEntity.keys, (user) =>
-    user.role?.id === id && user.role.roleName !== roleName
-      ? { ...user, role: { ...user.role, roleName } }
-      : user
+  cacheUpdatedEach<UserClient>(queryClient, userEntity.keys, (user) => {
+    if (user.role?.id !== id) return user;
+    const renamed = user.role.roleName !== roleName;
+    const regranted = !!permissions && !!user.permissions;
+    if (!renamed && !regranted) return user;
+    return {
+      ...user,
+      role: { ...user.role, roleName },
+      ...(regranted && { permissions }),
+    };
+  });
+}
+
+/** A standard role's matrix, when this client holds the role's detail. */
+export function cachedRoleMatrix(
+  queryClient: QueryClient,
+  roleId: UserClient['roleId']
+): PagePermission[] | undefined {
+  if (!roleId || roleId === CUSTOM_ROLE_VALUE) return undefined;
+  return queryClient.getQueryData<PermissionClient>(
+    permissionEntity.keys.detail(roleId)
+  )?.permissions;
+}
+
+/**
+ * A user joined (`delta` 1) or left (-1) a role: its row's count follows. A
+ * custom role is no row of the list, and a detail carries no count.
+ */
+export function cacheRoleUsersCount(
+  queryClient: QueryClient,
+  roleId: UserClient['roleId'] | undefined,
+  delta: number
+) {
+  if (!roleId || roleId === CUSTOM_ROLE_VALUE) return;
+  cacheUpdatedEach<PermissionClient>(
+    queryClient,
+    permissionEntity.keys,
+    (role) =>
+      role.id === roleId && role.usersCount !== undefined
+        ? { ...role, usersCount: Math.max(0, role.usersCount + delta) }
+        : role
   );
 }

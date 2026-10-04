@@ -4,7 +4,7 @@ import { fileTransitionEnum } from '@/db/schema';
 
 import {
   DASHBOARD_PAGE_NAMES,
-  PERMISSION_ACTIONS,
+  PERMISSION_ACTION_NAMES,
 } from '@app/shared/permissions/constants';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
 import {
@@ -79,7 +79,7 @@ const ERROR_ENVELOPE_SCHEMA: JsonSchema = {
 };
 
 const PERMISSION_ACTION_PROPERTIES = Object.fromEntries(
-  Object.keys(PERMISSION_ACTIONS).map((action) => [action, { type: 'boolean' }])
+  PERMISSION_ACTION_NAMES.map((action) => [action, { type: 'boolean' }])
 );
 const PARTIAL_ACTIONS_SCHEMA: JsonSchema = {
   type: 'object',
@@ -88,7 +88,7 @@ const PARTIAL_ACTIONS_SCHEMA: JsonSchema = {
 };
 const COMPLETE_ACTIONS_SCHEMA: JsonSchema = {
   ...PARTIAL_ACTIONS_SCHEMA,
-  required: Object.keys(PERMISSION_ACTIONS),
+  required: [...PERMISSION_ACTION_NAMES],
 };
 export const PAGE_PERMISSION_SCHEMA: JsonSchema = {
   type: 'object',

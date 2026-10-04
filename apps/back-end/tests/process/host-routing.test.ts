@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
 
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
 
 const state = { origin: '' };
 const guardedPath = '/api/health/storage?deep=1';

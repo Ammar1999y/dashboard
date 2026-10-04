@@ -14,8 +14,10 @@ import { and, eq } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { files } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { sanitizeFilename } from '@app/shared/filename';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
 import {
   MAX_DOCUMENT_SIZE_MB,
   MAX_IMAGE_PIXELS,
@@ -38,7 +40,6 @@ import { errorTypeOf, logSanitized } from '@/utils/log';
 
 import { auditAs } from './actor';
 import { fileTypeFor } from './allowlist';
-import { sanitizeFilename } from './filename';
 import { FILE_COLUMNS, matchesRow } from './files';
 import { objectHeaders } from './headers';
 import { measureEncodeCost } from './image/optimize';
@@ -48,7 +49,6 @@ import {
   validateSvgUpload,
 } from './image/process';
 import { objectKey } from './keys';
-import { mediaMsg, uploadMsg } from './messages';
 import { requirePublishGrant } from './policy';
 
 /**

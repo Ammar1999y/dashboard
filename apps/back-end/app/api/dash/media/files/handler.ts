@@ -1,5 +1,6 @@
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import {
   deleteFilesSchema,
   moveFilesSchema,
@@ -13,7 +14,6 @@ import { grantedActor, requestActor } from '@/lib/media/actor';
 import { moveFiles, toMediaFile } from '@/lib/media/files';
 import { requireFolder } from '@/lib/media/folders';
 import { deleteFiles } from '@/lib/media/lifecycle';
-import { mediaMsg } from '@/lib/media/messages';
 import { DEFAULT_UPLOAD_PURPOSE } from '@/lib/media/policy';
 import {
   acceptUpload,

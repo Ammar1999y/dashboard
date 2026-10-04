@@ -28,7 +28,8 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { otpSubjectFor, otpTextFor } from '@app/shared/messages/otp';
 import {
   ENABLED_TWO_FACTOR_METHODS,
   TWO_FACTOR_ENABLED,
@@ -36,7 +37,6 @@ import {
 } from '@app/shared/validation/two-factor';
 
 import { PUBLIC_ORIGIN } from '@/lib/env';
-import { otpSubjectFor, otpTextFor } from '@/lib/otp/content';
 import { hashOtpCode } from '@/lib/otp/hash';
 import { clearOutbox, readOutbox } from '@/lib/otp/outbox';
 

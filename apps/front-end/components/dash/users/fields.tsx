@@ -1,9 +1,8 @@
 import { memo } from 'react';
 
 import { useWatch } from 'react-hook-form';
+import { PHONE_ENABLED, PHONE_REQUIRED } from '@app/shared/config';
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
-
-import { PHONE_ENABLED, PHONE_REQUIRED } from '@/utils/config';
 
 import FormInput from '@/components/form/form-input';
 import FormPassword from '@/components/form/form-password';

@@ -1,3 +1,9 @@
+import {
+  DATE_OPERATOR_LABELS,
+  FILTER_OPERATOR_LABELS,
+  SORT_ORDER_LABELS,
+} from '../messages/data-table';
+
 export type DataTableConfig = typeof dataTableConfig;
 
 const operators = [
@@ -43,60 +49,65 @@ interface Option<T extends string> {
 
 const options = <T extends string>(entries: Option<T>[]) => entries;
 
+const operatorOptions = (
+  values: readonly FilterOperator[],
+  labels: Record<FilterOperator, string> = FILTER_OPERATOR_LABELS
+) =>
+  options<FilterOperator>(
+    values.map((value) => ({ label: labels[value], value }))
+  );
+
+const DATE_LABELS = { ...FILTER_OPERATOR_LABELS, ...DATE_OPERATOR_LABELS };
+
 const dataTableConfig = {
-  textOperators: options<FilterOperator>([
-    { label: 'يحتوي على', value: 'iLike' },
-    { label: 'لا يحتوي على', value: 'notILike' },
-    { label: 'يبدأ بـ', value: 'startsWith' },
-    { label: 'ينتهي بـ', value: 'endsWith' },
-    { label: 'يساوي', value: 'eq' },
-    { label: 'لا يساوي', value: 'ne' },
-    { label: 'فارغ', value: 'isEmpty' },
-    { label: 'غير فارغ', value: 'isNotEmpty' },
+  textOperators: operatorOptions([
+    'iLike',
+    'notILike',
+    'startsWith',
+    'endsWith',
+    'eq',
+    'ne',
+    'isEmpty',
+    'isNotEmpty',
   ]),
-  numericOperators: options<FilterOperator>([
-    { label: 'يساوي', value: 'eq' },
-    { label: 'لا يساوي', value: 'ne' },
-    { label: 'أقل من', value: 'lt' },
-    { label: 'أقل من أو يساوي', value: 'lte' },
-    { label: 'أكبر من', value: 'gt' },
-    { label: 'أكبر من أو يساوي', value: 'gte' },
-    { label: 'بين', value: 'isBetween' },
-    { label: 'فارغ', value: 'isEmpty' },
-    { label: 'غير فارغ', value: 'isNotEmpty' },
+  numericOperators: operatorOptions([
+    'eq',
+    'ne',
+    'lt',
+    'lte',
+    'gt',
+    'gte',
+    'isBetween',
+    'isEmpty',
+    'isNotEmpty',
   ]),
-  dateOperators: options<FilterOperator>([
-    { label: 'يساوي', value: 'eq' },
-    { label: 'لا يساوي', value: 'ne' },
-    { label: 'قبل', value: 'lt' },
-    { label: 'بعد', value: 'gt' },
-    { label: 'يساوي أو قبل', value: 'lte' },
-    { label: 'يساوي أو بعد', value: 'gte' },
-    { label: 'بين', value: 'isBetween' },
-    { label: 'فارغ', value: 'isEmpty' },
-    { label: 'غير فارغ', value: 'isNotEmpty' },
+  dateOperators: operatorOptions(
+    [
+      'eq',
+      'ne',
+      'lt',
+      'gt',
+      'lte',
+      'gte',
+      'isBetween',
+      'isEmpty',
+      'isNotEmpty',
+    ],
+    DATE_LABELS
+  ),
+  selectOperators: operatorOptions(['eq', 'ne', 'isEmpty', 'isNotEmpty']),
+  multiSelectOperators: operatorOptions([
+    'inArray',
+    'notInArray',
+    'isEmpty',
+    'isNotEmpty',
   ]),
-  selectOperators: options<FilterOperator>([
-    { label: 'يساوي', value: 'eq' },
-    { label: 'لا يساوي', value: 'ne' },
-    { label: 'فارغ', value: 'isEmpty' },
-    { label: 'غير فارغ', value: 'isNotEmpty' },
-  ]),
-  multiSelectOperators: options<FilterOperator>([
-    { label: 'يحتوي على أي من', value: 'inArray' },
-    { label: 'لا يحتوي على أي من', value: 'notInArray' },
-    { label: 'فارغ', value: 'isEmpty' },
-    { label: 'غير فارغ', value: 'isNotEmpty' },
-  ]),
-  booleanOperators: options<FilterOperator>([
-    { label: 'يساوي', value: 'eq' },
-    { label: 'لا يساوي', value: 'ne' },
-  ]),
+  booleanOperators: operatorOptions(['eq', 'ne']),
   // Published as `FilterOperator` although the values are `SortOrder`s; narrowing
   // it would break a consumer that relies on the published type.
   sortOrders: [
-    { label: 'تصاعدي', value: 'asc' as FilterOperator },
-    { label: 'تنازلي', value: 'desc' as FilterOperator },
+    { label: SORT_ORDER_LABELS.asc, value: 'asc' as FilterOperator },
+    { label: SORT_ORDER_LABELS.desc, value: 'desc' as FilterOperator },
   ],
   filterVariants,
   operators,

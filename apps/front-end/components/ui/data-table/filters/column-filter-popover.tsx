@@ -8,8 +8,8 @@ import type { Column } from '@tanstack/react-table';
 import { useCallback, useId, useState } from 'react';
 
 import { generateId } from '@/utils/generate-id';
-import { useDataTableStore } from '@/utils/store/data-table-store';
 
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 import { Icon } from '@/components/ui/icon';
 
 import { Button } from '../../button';

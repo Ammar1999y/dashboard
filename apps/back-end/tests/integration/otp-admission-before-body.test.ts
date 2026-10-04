@@ -21,7 +21,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';

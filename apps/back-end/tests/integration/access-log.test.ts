@@ -10,7 +10,7 @@ import { describe, expect, spyOn, test } from 'bun:test';
 
 import { app } from '@/app';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { MAX_JSON_BODY_BYTES } from '@/lib/http/request';
 

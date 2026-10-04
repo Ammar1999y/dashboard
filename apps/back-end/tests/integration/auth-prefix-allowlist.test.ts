@@ -18,7 +18,8 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { app } from '@/app';
 import { ROUTES } from '@/routes';
 
-import { HTTP_STATUS, MSG_PAGE_NOT_FOUND } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
 
 import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
 import { PRE_AUTH_LIMIT } from '@/lib/http/pre-auth';

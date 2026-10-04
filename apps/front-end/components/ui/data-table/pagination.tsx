@@ -1,10 +1,9 @@
 import { memo, useCallback, useMemo } from 'react';
 
-import { cn, getPageNumbers } from '@/lib/utils';
-
-import { useDataTableStore } from '@/utils/store/data-table-store';
+import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 import { Icon } from '@/components/ui/icon';
 import {
   Select,
@@ -13,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+
+import { getPageNumbers } from './utils/page-numbers';
 
 const PAGE_SIZE_OPTIONS = [5, 10, 25, 50];
 

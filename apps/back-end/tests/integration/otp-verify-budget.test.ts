@@ -49,8 +49,9 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { otpMsg } from '@app/shared/messages/otp';
 import { OTP_EXPIRY_MINUTES } from '@app/shared/validation/constants';
 import { OTP_PURPOSES, PHONE_OTP_CHANNELS } from '@app/shared/validation/enums';
 
@@ -603,7 +604,7 @@ describe('only an attempt that COMPARES a code is charged', () => {
       code: WRONG_CODE,
     });
     expect(expired.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(expired.message).toContain('انتهت صلاحية');
+    expect(expired.message).toBe(otpMsg.codeExpired);
 
     // Nothing to compare against, so nothing charged — neither counter moved.
     // Charging here is what turned an expired code into a targeted six-hour

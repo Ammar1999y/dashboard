@@ -5,7 +5,7 @@ import type {
 import type { AuditMeta } from '@/lib/audit';
 import type { EntityID } from '@app/shared/types';
 
-import { MSG_INVALID_CREDENTIALS } from '@app/shared/api-messages';
+import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 
 import { asAuthError } from '../errors';
 import { LoginRejected, verifyLoginAttempt } from '../login-guard';

@@ -5,17 +5,17 @@ import { isDeadlock, isInvalidTextEncoding } from '@/db/errors';
 import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import { isAPIError } from 'better-auth/api';
 
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_INTERNAL_ERROR,
   MSG_INVALID_INPUT,
   MSG_NOT_FOUND,
   MSG_PAGE_NOT_FOUND,
   MSG_SERVICE_UNAVAILABLE,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/common';
 
-import { errorClassOf, logSanitized } from '@/utils/log';
+import { errorClassOf, logSanitized, thrownAt } from '@/utils/log';
 
 import { responsePayload } from './contract';
 import { serializeSetCookie } from './cookies';
@@ -108,8 +108,8 @@ export function handleApiError(
       logSanitized('error', {
         msg: 'server error response',
         status: error.status,
-        message: error.message,
         errorClass: errorClassOf(error),
+        thrownAt: thrownAt(error),
         cause: error.cause,
       });
     const errorHeaders = error.responseHeaders;
@@ -146,9 +146,17 @@ export function handleApiError(
   }
 
   // A 5xx `APIError` is logged where it is raised: Better Auth's through
-  // `auth`'s logger, ours beside each `authError`.
-  if (!(isAPIError(error) && error.statusCode >= HTTP_STATUS.INTERNAL_ERROR))
-    logSanitized('error', error);
+  // `auth`'s logger, ours beside each `authError`. Its message is the answer
+  // already composed for the client, so a 4xx one is logged by status and code.
+  if (isAPIError(error)) {
+    if (error.statusCode < HTTP_STATUS.INTERNAL_ERROR)
+      logSanitized('error', {
+        msg: 'unmapped auth error response',
+        status: error.statusCode,
+        errorClass: errorClassOf(error),
+        authCode: error.body?.code,
+      });
+  } else logSanitized('error', error);
   return apiError({
     message: fallbackMessage ?? MSG_INTERNAL_ERROR,
     status: HTTP_STATUS.INTERNAL_ERROR,

@@ -1,13 +1,11 @@
-import type { PermissionRows } from './matrix';
 import type { HandlerCookie } from '@/lib/http/contract';
 import type {
-  AccessScope,
-  AllScopedAction,
   DashboardPage,
   PermissionAction,
-  PermissionObject,
   SessionMetadata,
 } from '@app/shared/permissions/constants';
+import type { PermissionRows } from '@app/shared/permissions/matrix';
+import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
@@ -16,16 +14,15 @@ import { db } from '@/db';
 import { rolePermissions, roles, sessions, users } from '@/db/schema';
 import { parseCookies } from 'better-auth/cookies';
 
-import {
-  HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-  MSG_LOGIN_REQUIRED,
-} from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
+import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 import {
-  OWN_ACTION_MAP,
-  SUPERSEDING_ACTION,
-} from '@app/shared/permissions/constants';
+  permissionsEqual,
+  sanitizePermissions,
+} from '@app/shared/permissions/matrix';
+import { resolveActionScope } from '@app/shared/permissions/scope';
 import { validID } from '@app/shared/utils';
 
 import { auth } from '@/lib/auth';
@@ -36,16 +33,10 @@ import {
 
 import { logSanitized } from '@/utils/log';
 
-import { permissionsEqual, sanitizePermissions } from './matrix';
 import { resyncUserSessions } from './session-refresh';
 
 type AuthSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
 
-export type ActorPermissions = Partial<PermissionObject>;
-
-const SCOPED_ACTIONS = new Set<PermissionAction>(
-  Object.keys(OWN_ACTION_MAP) as PermissionAction[]
-);
 const READ_ACTIONS = new Set<PermissionAction>(['view', 'viewOwn']);
 
 function loginRequired(): CustomError {
@@ -104,64 +95,6 @@ function sessionIdOf(session: AuthSession): EntityID {
   const sessionId = validID(session.session.id);
   if (!sessionId) throw loginRequired();
   return sessionId;
-}
-
-/**
- * Resolve allowed/scope for a given action against a permissions matrix.
- *
- * - An all-scoped action (`view`/`edit`/`delete`): the unrestricted grant first,
- *   then the `Own` variant with `scope: 'own'`.
- * - An own-scoped action (`viewOwn`/`editOwn`/`deleteOwn`): the superseding
- *   unrestricted grant first, then the own grant itself.
- * - Anything else: exact match only.
- *
- * Exported so it can be tested directly: a bug here is an authorization bypass,
- * and reached only through `checkUserPermission` every case in its matrix costs
- * a session and a database round trip. See
- * `tests/unit/permission-scope.test.ts`.
- */
-export function resolveActionScope(
-  permissions:
-    | Record<string, Record<string, boolean>>
-    | Partial<Record<DashboardPage, Record<PermissionAction, boolean>>>,
-  resource: DashboardPage,
-  action: PermissionAction
-): { allowed: boolean; scope: AccessScope | null } {
-  const pagePerms = permissions?.[resource];
-
-  // An own-scoped action asked for DIRECTLY, handled first because the generic
-  // path below answers both of its cases wrongly: holding `edit` must satisfy
-  // `editOwn`, and holding only `editOwn` must answer `scope: 'own'`, never
-  // `'all'`.
-  const superseding = SUPERSEDING_ACTION[action];
-  if (superseding) {
-    if (pagePerms?.[superseding] === true)
-      return { allowed: true, scope: 'all' };
-    if (pagePerms?.[action] === true) return { allowed: true, scope: 'own' };
-    return { allowed: false, scope: null };
-  }
-
-  if (pagePerms?.[action] === true) return { allowed: true, scope: 'all' };
-  if (SCOPED_ACTIONS.has(action)) {
-    const ownAction = OWN_ACTION_MAP[action as AllScopedAction];
-    if (pagePerms?.[ownAction] === true) return { allowed: true, scope: 'own' };
-  }
-  return { allowed: false, scope: null };
-}
-
-/**
- * `action` on a record `createdBy` owns: the all-scoped grant, or the
- * own-scoped one when the actor created it.
- */
-export function holdsActionOn(
-  permissions: ActorPermissions,
-  resource: DashboardPage,
-  action: AllScopedAction,
-  createdBy: EntityID | null,
-  actorUserId: EntityID
-): boolean {
-  const { allowed, scope } = resolveActionScope(permissions, resource, action);
-  return allowed && (scope === 'all' || createdBy === actorUserId);
 }
 
 interface Grants {

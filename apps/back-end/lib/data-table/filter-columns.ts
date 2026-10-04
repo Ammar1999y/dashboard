@@ -1,8 +1,9 @@
-import type { FilterColumnSpec, FilterColumnSpecs } from './column-specs';
-import type { SearchAnchor } from '@app/shared/data-table/parsers';
+import type {
+  FilterColumnSpec,
+  FilterColumnSpecs,
+} from '@app/shared/data-table/column-specs';
 import type {
   ExtendedColumnFilter,
-  FilterOperator,
   JoinOperator,
 } from '@app/shared/types/data-table';
 import type { SQL, Table } from 'drizzle-orm';
@@ -28,57 +29,17 @@ import {
   sql,
 } from 'drizzle-orm';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import {
-  isTrigramIndexable,
-  MIN_SEARCH_LENGTH,
-  searchTermLength,
-} from '@app/shared/data-table/parsers';
-import { CustomError } from '@app/shared/error-class';
-import {
-  toCalendarDate,
-  zonedDayStart,
-  zonedNextDayStart,
-} from '@app/shared/time';
-
-import {
-  isArrayValueOperator,
-  isNoValueOperator,
-  isScanOnlyOperator,
-  isSearchOperator,
-  operatorAllowedForType,
-} from './column-specs';
-
-export const MSG_INVALID_FILTER = 'أحد عوامل التصفية غير صالح، أعد ضبط التصفية';
-const MSG_SHORT_SEARCH = `نص البحث في التصفية يجب أن يتضمن ${MIN_SEARCH_LENGTH} أحرف أو أرقام على الأقل`;
-
-/** Which edge of the `ILIKE` pattern this operator anchors — see `isTrigramIndexable`. */
-function searchAnchorOf(operator: FilterOperator): SearchAnchor {
-  if (operator === 'startsWith') return 'prefix';
-  if (operator === 'endsWith') return 'suffix';
-  return 'contains';
-}
-
-/**
- * Reject instead of silently dropping. A dropped filter broadens an `and`
- * result set and narrows an `or` one, so the caller is shown data they did not
- * ask for while receiving a 200.
- */
-export function invalidFilter(message = MSG_INVALID_FILTER): never {
-  throw new CustomError(message, HTTP_STATUS.UNPROCESSABLE);
-}
-
-/**
- * Whether the column can actually hold an empty string, which decides whether
- * `isEmpty` may compare against `''` at all.
- *
- * `select` / `multiSelect` name a value set, not a storage type, and a closed
- * set is a PostgreSQL enum in practice: `enum_column = ''` is a cast error.
- * That leaves `text` as the only string-like type.
- */
-function isStringLike(spec: FilterColumnSpec): boolean {
-  return spec.type === 'text';
-}
+  assertFilterAllowed,
+  dayBounds,
+  dayRangeBounds,
+  invalidFilter,
+  isStringLike,
+  numberRangeBounds,
+  parseBoolean,
+  requireFilterSpec,
+  safeNumber,
+} from '@app/shared/data-table/filter-rules';
 
 /**
  * ⚠️ TEXT COLUMNS ONLY — see `isStringLike`. A bare boolean expression rather
@@ -97,114 +58,8 @@ function isNotEmpty(column: Column) {
   return sql<boolean>`(${column} is not null and ${column} <> '')`;
 }
 
-/** Every supplied member of a closed-set filter is one of the set's values. */
-function membersAllowed(
-  spec: FilterColumnSpec,
-  value: unknown,
-  valueIsArray: boolean
-): boolean {
-  if (spec.values === undefined) return true;
-  const members = valueIsArray ? (value as unknown[]).filter(Boolean) : [value];
-  return members.every(
-    (member) => typeof member === 'string' && spec.values?.includes(member)
-  );
-}
-
-/**
- * Canonical decimal only — the grammar `positiveInt` enforces on the
- * pagination bounds. Bare `Number()` accepts spellings a query string has no
- * business carrying: `Number('')` is 0, `'0x10'` is 16, `'1e2'` is 100.
- *
- * Fractions are allowed where `positiveInt` forbids them: this bounds a numeric
- * COLUMN, which may be `numeric`, not a page index.
- */
-// eslint-disable-next-line security/detect-unsafe-regex -- anchored, no nested quantifier and no overlapping alternation; the optional fraction cannot backtrack into the integer part
-const CANONICAL_DECIMAL = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
-
-function safeNumber(value: unknown): number | null {
-  if (typeof value !== 'string' || !CANONICAL_DECIMAL.test(value)) return null;
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
-}
-
-function parseBoolean(value: unknown): boolean | null {
-  if (typeof value === 'boolean') return value;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return null;
-}
-
 export function escapeLike(value: string): string {
   return value.replaceAll(/[%_\\]/g, String.raw`\$&`);
-}
-
-/** Half-open UTC bounds for one calendar day in the business timezone. */
-function dayBounds(raw: unknown): { start: Date; next: Date } {
-  const calendarDate = toCalendarDate(raw);
-  if (!calendarDate) invalidFilter();
-  const start = zonedDayStart(calendarDate);
-  const next = zonedNextDayStart(calendarDate);
-  if (!start || !next) invalidFilter();
-  return { start, next };
-}
-
-/**
- * Validate one filter against its column descriptor. Runs before any SQL is
- * built so an impossible combination becomes a 422, never a PostgreSQL cast
- * error surfacing as a 500.
- */
-function assertFilterAllowed(
-  filter: ExtendedColumnFilter<Table>,
-  spec: FilterColumnSpec
-): 'apply' | 'skip' {
-  if (!operatorAllowedForType(spec.type, filter.operator)) invalidFilter();
-
-  // Before the no-value early return: the scan-only policy is a property of
-  // the OPERATOR and must hold whether or not it takes a value.
-  if (isScanOnlyOperator(filter.operator) && !spec.allowScanOnly)
-    invalidFilter();
-
-  if (isNoValueOperator(filter.operator)) return 'apply';
-
-  const valueIsArray = Array.isArray(filter.value);
-  if (isArrayValueOperator(filter.operator) !== valueIsArray) invalidFilter();
-
-  // A fixed [lower, upper] pair: a third slot is a malformed range, not one to
-  // truncate.
-  if (
-    filter.operator === 'isBetween' &&
-    (filter.value as string[]).length !== 2
-  )
-    invalidFilter();
-
-  // No value chosen yet — not an invalid filter, an unexpressed one. The
-  // parse layer already drops empty scalars for the same reason; treating the
-  // array case differently would 422 the whole list on a half-filled chip.
-  // Checked on content, not length: positional slots mean a cleared range
-  // arrives as ['', ''] rather than [].
-  //
-  // Not the dropped-predicate case elsewhere in this file: there a real
-  // condition vanished; an empty set was never a condition.
-  if (valueIsArray && !(filter.value as string[]).some(Boolean)) return 'skip';
-
-  // A member outside a closed set is a client error, not a PostgreSQL one.
-  if (!membersAllowed(spec, filter.value, valueIsArray)) invalidFilter();
-
-  if (isSearchOperator(filter.operator)) {
-    if (typeof filter.value !== 'string') invalidFilter();
-    const min = spec.minSearchLength ?? MIN_SEARCH_LENGTH;
-    if (searchTermLength(filter.value) < min) invalidFilter(MSG_SHORT_SEARCH);
-    // The floor is a proxy; this is the property. Not applied to the scan-only
-    // operator, whose predicate can never use the index however the term is
-    // spelled — requiring trigrams there would refuse a filter for no gain.
-    if (
-      !isScanOnlyOperator(filter.operator) &&
-      !isTrigramIndexable(filter.value, searchAnchorOf(filter.operator))
-    )
-      invalidFilter(MSG_SHORT_SEARCH);
-  }
-
-  return 'apply';
 }
 
 // Every negated form below adds `or(..., isNull(column))`: under SQL
@@ -314,46 +169,20 @@ function buildCondition(
       return compareNumber(column, value, gte);
     }
 
-    // The bounds are ORDERED, not taken positionally: the smaller value is the
-    // start of the range whichever slot it arrived in, so a transposed pair is
-    // the range the user meant rather than an unsatisfiable one. One bound alone
-    // bounds its own side and leaves the other open, which is why each
-    // `undefined` below is not an error.
+    // Ordered bounds with an open side for an empty slot; see the helpers.
     case 'isBetween': {
-      const [rawStart, rawEnd] = value as string[];
-
       if (spec.type === 'date') {
-        const first = rawStart ? dayBounds(rawStart) : null;
-        const second = rawEnd ? dayBounds(rawEnd) : null;
-        if (!first && !second) invalidFilter();
-        // Compared on `start`, so an inverted pair swaps whole calendar days
-        // rather than mixing one day's start with another's end.
-        const ordered =
-          first && second && second.start < first.start
-            ? [second, first]
-            : [first, second];
+        const { start, next } = dayRangeBounds(value as string[]);
         return and(
-          ordered[0] ? gte(column, ordered[0].start) : undefined,
-          ordered[1] ? lt(column, ordered[1].next) : undefined
+          start ? gte(column, start) : undefined,
+          next ? lt(column, next) : undefined
         );
       }
 
-      // Absent and uncoercible must not collapse into one `null`: only absence
-      // means an open side. An uncoercible bound is a 422, as it is for every
-      // sibling operator; read as absent it would widen the range silently.
-      const first = rawStart?.trim()
-        ? (safeNumber(rawStart) ?? invalidFilter())
-        : null;
-      const second = rawEnd?.trim()
-        ? (safeNumber(rawEnd) ?? invalidFilter())
-        : null;
-      if (first === null && second === null) invalidFilter();
-      if (first !== null && second !== null)
-        return and(
-          gte(column, Math.min(first, second)),
-          lte(column, Math.max(first, second))
-        );
-      return first === null ? lte(column, second) : gte(column, first);
+      const { lower, upper } = numberRangeBounds(value as string[]);
+      if (lower !== null && upper !== null)
+        return and(gte(column, lower), lte(column, upper));
+      return lower === null ? lte(column, upper) : gte(column, lower);
     }
 
     // `''` is rejected outright on boolean/timestamp/numeric columns ("invalid
@@ -397,12 +226,7 @@ export function filterColumns<T extends Table>({
 
   const conditions: SQL[] = [];
   for (const filter of filters) {
-    // `Object.hasOwn`, not `specs[id]` or `in`: the id is attacker-controlled,
-    // and inherited members (`constructor`, `toString`, `__proto__`) would slip
-    // past the unknown-column check and fail further down as a 500.
-    // eslint-disable-next-line unicorn/no-unsafe-property-key -- guarded by Object.hasOwn
-    const spec = Object.hasOwn(specs, filter.id) ? specs[filter.id] : undefined;
-    if (!spec) invalidFilter();
+    const spec = requireFilterSpec(specs, filter.id);
 
     const column = getColumn(table, filter.id);
     // A descriptor without a matching column is a server-side mismatch, not

@@ -7,7 +7,8 @@ import { app } from '@/app';
 import { db, withTransaction } from '@/db';
 import { rolePermissions, roles, users } from '@/db/schema';
 
-import { HTTP_STATUS, REAUTH_REQUIRED_CODE } from '@app/shared/api-messages';
+import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 
 import { auditLog } from '@/lib/audit';

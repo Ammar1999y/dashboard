@@ -1,3 +1,4 @@
+import type { StoredRow } from '@/types/api';
 import type { SettingsClient } from '@/types/settings';
 import type {
   SettingsInput,
@@ -10,11 +11,14 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
+import { BUSINESS_TIMEZONE } from '@app/shared/config';
+import { safeDate } from '@app/shared/time';
+import { mutate } from '@/lib/api/mutation';
+import { useQueryData } from '@/lib/api/query';
 
-import { mutate } from '@/utils/mutation';
-import { useQueryData } from '@/utils/query';
 import { settingsSchema, toSettingsForm } from '@/utils/validation/settings';
 
+import { DEFAULT_DATE_LOCALE } from '@/components/ui/date/constants';
 import { ErrorState } from '@/components/ui/error-state';
 import { LoadingState } from '@/components/ui/loading-state';
 import { Form } from '@/components/form/form';
@@ -26,19 +30,18 @@ import { SETTINGS_TABS } from './tabs';
 const SETTINGS_KEY = ['settings'];
 const SETTINGS_HREF = '/api/dash/settings';
 
-const updatedAtFormat = new Intl.DateTimeFormat('ar-SA', {
+const updatedAtFormat = new Intl.DateTimeFormat(DEFAULT_DATE_LOCALE, {
   year: 'numeric',
   month: 'long',
   day: 'numeric',
   hour: '2-digit',
   minute: '2-digit',
+  timeZone: BUSINESS_TIMEZONE,
 });
 
-const formatUpdatedAt = (value: string | null | undefined) => {
-  const date = value ? new Date(value) : null;
-  return date && !Number.isNaN(date.getTime())
-    ? updatedAtFormat.format(date)
-    : null;
+const formatUpdatedAt = (value: string | undefined) => {
+  const date = safeDate(value);
+  return date ? updatedAtFormat.format(date) : null;
 };
 
 export default function SiteSettings() {
@@ -64,7 +67,6 @@ const SettingsForm = memo(({ record }: { record: SettingsClient | null }) => {
     resolver: zodResolver(settingsSchema),
     defaultValues: toSettingsForm(record),
   });
-  const { setValue } = methods;
 
   const lastUpdated = useMemo(
     () => formatUpdatedAt(record?.updatedAt),
@@ -73,10 +75,7 @@ const SettingsForm = memo(({ record }: { record: SettingsClient | null }) => {
 
   const onSubmit = useCallback(
     async (data: SettingsOutput) => {
-      const result = await mutate<
-        Pick<SettingsClient, 'id' | 'createdAt' | 'updatedAt'>,
-        SettingsOutput
-      >({
+      const result = await mutate<StoredRow, SettingsOutput>({
         href: SETTINGS_HREF,
         method: 'POST',
         data,
@@ -85,15 +84,27 @@ const SettingsForm = memo(({ record }: { record: SettingsClient | null }) => {
             ...data,
             ...saved,
           });
-          // The form outlives the save, so the next one must upsert the row
-          // this one created instead of creating another.
-          setValue('id', saved.id);
+        },
+        // Only a first save leaves the row's id unknown, so only it refetches.
+        onUnreadAnswer: async () => {
+          const stored = queryClient.getQueryData<SettingsClient | null>(
+            SETTINGS_KEY
+          );
+          if (!stored) {
+            await queryClient.invalidateQueries({ queryKey: SETTINGS_KEY });
+            return;
+          }
+          queryClient.setQueryData<SettingsClient>(SETTINGS_KEY, {
+            ...stored,
+            ...data,
+            updatedAt: new Date().toISOString(),
+          });
         },
       });
 
-      toast.success(result.message || 'تم حفظ الإعدادات بنجاح');
+      toast.success(result.message);
     },
-    [queryClient, setValue]
+    [queryClient]
   );
 
   return (

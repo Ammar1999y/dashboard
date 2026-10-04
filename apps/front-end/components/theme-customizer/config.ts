@@ -1,10 +1,18 @@
 import type { ThemeStyleProps, ThemeStyles } from './types';
 
+import {
+  FONT_SCALE_MAX,
+  FONT_SCALE_MIN,
+} from '@app/shared/validation/constants';
 import { PRIMARY_THEME_VALUES } from '@/constants/theme';
 
 export const DEFAULT_FONT_SCALE = 1;
 
-export const FONT_SCALE_RANGE = { min: 0.875, max: 1.125, step: 0.025 };
+export const FONT_SCALE_RANGE = {
+  min: FONT_SCALE_MIN,
+  max: FONT_SCALE_MAX,
+  step: 0.025,
+};
 export const RADIUS_RANGE = { min: 0, max: 2, step: 0.025 };
 export const SPACING_RANGE = { min: 0.15, max: 0.35, step: 0.01 };
 

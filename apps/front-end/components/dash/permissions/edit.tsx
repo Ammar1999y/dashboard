@@ -10,11 +10,9 @@ import { memo, useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
+import { adminUpdatePermissionBodySchema } from '@app/shared/validation/permissions';
 
-import {
-  toPermissionForm,
-  updatePermissionSchema,
-} from '@/utils/validation/permissions';
+import { toPermissionForm } from '@/utils/validation/permissions';
 
 import { Form } from '@/components/form/form';
 
@@ -22,7 +20,7 @@ import { samePermissions } from '../permission-matrix/matrix';
 import { EditRecord } from '../shared/edit-record';
 import { FormHeader } from '../shared/form-header';
 import { useEntityMutations } from '../shared/use-entity-mutations';
-import { cacheRoleOption, cacheRoleRenamed } from './cache';
+import { cacheRoleChanged, cacheRoleOption } from './cache';
 import { permissionEntity } from './entity';
 import { PermissionFields } from './fields';
 
@@ -39,7 +37,7 @@ const PermissionEditForm = memo(({ record }: { record: PermissionClient }) => {
     unknown,
     UpdatePermissionOutput
   >({
-    resolver: zodResolver(updatePermissionSchema),
+    resolver: zodResolver(adminUpdatePermissionBodySchema),
     defaultValues: toPermissionForm(record),
   });
   const { update } = useEntityMutations<PermissionClient>(permissionEntity);
@@ -64,9 +62,7 @@ const PermissionEditForm = memo(({ record }: { record: PermissionClient }) => {
         (updatedAt) => ({ ...payload, updatedAt }),
         () => {
           cacheRoleOption(queryClient, { ...payload, id: record.id });
-          if (record.roleName !== data.roleName) {
-            cacheRoleRenamed(queryClient, record.id, data.roleName);
-          }
+          cacheRoleChanged(queryClient, record.id, payload);
         }
       );
     },

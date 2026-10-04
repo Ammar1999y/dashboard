@@ -9,6 +9,7 @@ import { createAuthEndpoint } from 'better-auth/api';
 import * as z from 'zod';
 
 import { CustomError } from '@app/shared/error-class';
+import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import {
   REAUTH_METHODS,
   reauthPasskeySchema,
@@ -41,8 +42,6 @@ import { enforceReauthAttemptLimit, requireReauthSession } from './session';
 import { mintAdminReauth } from './window';
 
 const CEREMONY_MAX_AGE_S = 300;
-
-const MSG_REAUTH_FAILED = 'Reauthentication failed.';
 
 const ceremonySchema = z.object({
   challenge: z.string(),
@@ -120,7 +119,7 @@ export const reauthentication = () =>
               });
               return ctx.json({ success: true, data: options });
             } catch (error) {
-              throw asAuthError(error, MSG_REAUTH_FAILED);
+              throw asAuthError(error, MSG_INVALID_CREDENTIALS);
             }
           }
         ),
@@ -201,7 +200,7 @@ export const reauthentication = () =>
             } catch (error) {
               // Unlike the options endpoint: any other failure is a denial.
               if (error instanceof CustomError)
-                throw toAuthApiError(error, MSG_REAUTH_FAILED);
+                throw toAuthApiError(error, MSG_INVALID_CREDENTIALS);
               if (isDeadlock(error)) throw databaseContended(error);
               throw authenticationDenied();
             }

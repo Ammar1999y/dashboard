@@ -27,7 +27,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 
-import { useDataTableStore } from '@/utils/store/data-table-store';
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 
 import { ACTIONS_COLUMN } from './column-presets';
 import { DataTableBody } from './components/body';

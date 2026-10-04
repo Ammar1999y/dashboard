@@ -69,6 +69,16 @@ export const KNOWN_MIME_TYPES: readonly string[] = MEDIA_TYPES.map(
   ([mime]) => mime
 );
 
+/**
+ * - `container`: the right container (ZIP, compound file) but not a well-formed
+ *   package of the declared type, or unreadable within the caps.
+ * - `mismatch`: a well-formed package of a DIFFERENT type than declared.
+ * - `embedded`: embedded objects or ActiveX controls.
+ * - `encrypted`: password-protected, so its contents cannot be checked.
+ */
+export type MediaRefusalReason =
+  'signature' | 'container' | 'mismatch' | 'macros' | 'embedded' | 'encrypted';
+
 /** Type/subtype only, lowercased: `Application/PDF; charset=x` → `application/pdf`. */
 export function normalizeMimeType(declared: string): string {
   const [essence] = declared.split(';', 1);

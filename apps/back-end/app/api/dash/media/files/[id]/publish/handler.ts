@@ -1,11 +1,11 @@
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 
 import { requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { requestActor } from '@/lib/media/actor';
 import { toMediaFile } from '@/lib/media/files';
-import { mediaMsg } from '@/lib/media/messages';
 import { transitionFile } from '@/lib/media/visibility';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 

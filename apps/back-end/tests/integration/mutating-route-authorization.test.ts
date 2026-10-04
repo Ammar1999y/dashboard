@@ -22,11 +22,9 @@ import type { SignedInSession } from '../helpers/session';
 import { app } from '@/app';
 import { ROUTES } from '@/routes';
 
-import {
-  HTTP_STATUS,
-  MSG_INSUFFICIENT_PERMISSIONS,
-  MSG_LOGIN_REQUIRED,
-} from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
+import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 
 import { generateUuidV7 } from '@/lib/id';
 

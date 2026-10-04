@@ -1,47 +1,34 @@
 import type { MediaType } from '@/components/editor/media-config';
-import type { UploadedFile } from '@/types/upload';
+import type { MediaFile } from '@/lib/files/upload';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import * as z from 'zod';
-import { MIB } from '@app/shared/validation/constants';
-
-import { CustomError } from '@/utils/error-class';
-import { UNEXPECTED_ERROR_MESSAGE } from '@/utils/error-messages';
-import {
-  fileTooLargeMessage,
-  UPLOAD_FAILED_MESSAGE,
-} from '@/utils/file-messages';
-import { prepareFile } from '@/utils/images/client';
-import { mutate, toastError } from '@/utils/mutation';
+import { toast } from 'sonner';
+import { MSG_UPLOAD_FAILED } from '@app/shared/messages/media';
+import { MSG_SVG_CONVERTED } from '@/constants/messages';
+import { uploadFile as upload } from '@/lib/files/upload';
+import { toastError } from '@/lib/toast-error';
 
 import { mediaConfig } from '@/components/editor/media-config';
-
-const UPLOAD_PATH = '/api/upload';
 
 const PROGRESS_STEP = 10;
 const PROGRESS_CEILING = 90;
 const PROGRESS_TICK_MS = 200;
 const PROGRESS_RESET_MS = 1000;
 
-const uploadedFileSchema: z.ZodType<UploadedFile> = z.object({
-  url: z.string().min(1),
-  name: z.string(),
-  size: z.number(),
-  type: z.string(),
-});
-
 interface UseUploadFileOptions {
-  onUploadComplete?: (file: UploadedFile) => void;
+  onUploadComplete?: (file: MediaFile) => void;
 }
 
 /**
  * One upload at a time: a new call, or unmounting, aborts the one in flight.
  * `uploadFile` never rejects — a failure is toasted here and resolves to
  * `undefined`, as does an aborted upload.
+ *
+ * The progress is an estimate: `fetch` reports no upload progress.
  */
 export function useUploadFile({ onUploadComplete }: UseUploadFileOptions = {}) {
-  const [uploadedFile, setUploadedFile] = useState<UploadedFile>();
+  const [uploadedFile, setUploadedFile] = useState<MediaFile>();
   const [uploadingFile, setUploadingFile] = useState<File>();
   const [progress, setProgress] = useState(0);
   const controllerRef = useRef<AbortController | null>(null);
@@ -50,13 +37,16 @@ export function useUploadFile({ onUploadComplete }: UseUploadFileOptions = {}) {
   useEffect(
     () => () => {
       controllerRef.current?.abort();
+      // The aborted call settles after this; with no controller to match, its
+      // `finally` writes no state and schedules no reset.
+      controllerRef.current = null;
       clearTimeout(resetTimerRef.current);
     },
     []
   );
 
   const uploadFile = useCallback(
-    async (file: File, type: MediaType): Promise<UploadedFile | undefined> => {
+    async (file: File, type: MediaType): Promise<MediaFile | undefined> => {
       controllerRef.current?.abort();
       clearTimeout(resetTimerRef.current);
       const controller = new AbortController();
@@ -66,20 +56,11 @@ export function useUploadFile({ onUploadComplete }: UseUploadFileOptions = {}) {
       setUploadingFile(file);
       setProgress(0);
 
+      const config = mediaConfig[type];
+
       let progressTimer: ReturnType<typeof setInterval> | undefined;
-      let uploaded: UploadedFile;
+      let uploaded: MediaFile;
       try {
-        const { maxSizeMB } = mediaConfig[type];
-        if (file.size > maxSizeMB * MIB)
-          throw new CustomError(fileTooLargeMessage(file.name, maxSizeMB), 413);
-
-        const prepared = type === 'image' ? await prepareFile(file) : file;
-        if (signal.aborted) return;
-
-        const body = new FormData();
-        body.append('file', prepared);
-        body.append('type', type);
-
         progressTimer = setInterval(
           () =>
             setProgress((prev) =>
@@ -87,20 +68,18 @@ export function useUploadFile({ onUploadComplete }: UseUploadFileOptions = {}) {
             ),
           PROGRESS_TICK_MS
         );
-        const { data } = await mutate({
-          href: UPLOAD_PATH,
-          method: 'POST',
-          data: body,
+        // TODO: the resource of the record the editor belongs to, once the
+        // content pages have a back-end; `media` is the library's.
+        uploaded = await upload(file, {
+          resource: 'media',
+          // Paste and drop reach here without the toolbar's gate.
+          kinds: config.enabled ? config.kinds : [],
           signal,
+          onConverted: (name) => toast.info(MSG_SVG_CONVERTED(name)),
         });
-
-        const parsed = uploadedFileSchema.safeParse(data);
-        if (!parsed.success)
-          throw new CustomError(UNEXPECTED_ERROR_MESSAGE, 500);
-        uploaded = parsed.data;
       } catch (error) {
         if (signal.aborted) return;
-        toastError(error, UPLOAD_FAILED_MESSAGE);
+        toastError(error, MSG_UPLOAD_FAILED);
         return;
       } finally {
         clearInterval(progressTimer);

@@ -13,9 +13,8 @@ import * as React from 'react';
 import { EmojiSettings } from '@platejs/emoji';
 import { useEmojiDropdownMenuState } from '@platejs/emoji/react';
 import * as Popover from '@radix-ui/react-popover';
+import { MSG_NO_RESULTS } from '@/constants/messages';
 import { cn } from '@/lib/utils';
-
-import { NO_RESULTS_MESSAGE } from '@/utils/ui-messages';
 
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
@@ -95,7 +94,7 @@ const i18n: UseEmojiPickerType['i18n'] = {
   pick: 'اختر رمزاً تعبيرياً...',
   search: 'ابحث في الرموز التعبيرية',
   searchNoResultsSubtitle: 'لم يُعثر على هذا الرمز',
-  searchNoResultsTitle: NO_RESULTS_MESSAGE,
+  searchNoResultsTitle: MSG_NO_RESULTS,
   searchResult: 'نتائج البحث',
   skins: {
     '1': 'افتراضي',

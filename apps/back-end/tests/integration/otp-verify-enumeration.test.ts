@@ -35,7 +35,7 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
 

@@ -9,9 +9,10 @@ import { withTransaction } from '@/db';
 import { users, verificationCodes, verificationSessions } from '@/db/schema';
 import { TransactionDeadlineError } from '@/db/transaction';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { OTP_AUTO_VERIFY } from '@app/shared/config';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 
 import { auditLog } from '@/lib/audit';
@@ -143,10 +144,7 @@ export async function processOtpVerify({
       .for('update');
 
     if (!session)
-      throw new CustomError(
-        'لم يتم إرسال رمز التحقق. يرجى طلب رمز جديد',
-        HTTP_STATUS.NOT_FOUND
-      );
+      throw new CustomError(otpMsg.codeNotSent, HTTP_STATUS.NOT_FOUND);
 
     // A send-cap block can be set while the verify counters are under their
     // caps; without this, a leftover live code would still verify.
@@ -334,21 +332,13 @@ export async function processOtpVerify({
   if (outcome.kind === 'matched') return;
 
   if (outcome.kind === 'no-code')
-    throw new CustomError(
-      'انتهت صلاحية رمز التحقق. يرجى طلب رمز جديد',
-      HTTP_STATUS.BAD_REQUEST
-    );
+    throw new CustomError(otpMsg.codeExpired, HTTP_STATUS.BAD_REQUEST);
   if (outcome.kind === 'blocked') {
-    // The message says a new code lifts the block: see
-    // `VERIFY_BLOCK_CLEARED_BY_RESEND`.
-    const blocked = blockedError(
-      'تم حظر التحقق مؤقتاً بعد تجاوز عدد المحاولات. يرجى طلب رمز جديد',
-      outcome.blockedUntil
-    );
+    const blocked = blockedError(otpMsg.verifyBlocked, outcome.blockedUntil);
     throw outcome.evaluated ? markEvaluatedGuess(blocked) : blocked;
   }
   throw markEvaluatedGuess(
-    new CustomError('رمز التحقق غير صحيح', HTTP_STATUS.BAD_REQUEST)
+    new CustomError(otpMsg.codeIncorrect, HTTP_STATUS.BAD_REQUEST)
   );
 }
 

@@ -4,8 +4,8 @@ const { API_URL, PUBLIC_URL } = require('./lib/env');
 // TODO: clear the unuse
 const isDev = process.env.NODE_ENV !== 'production';
 // A mock build (see mocks/) routes every request through a service worker. Its
-// pass-through fetches fall under `connect-src`, the Turnstile script included,
-// and an upgraded https API URL would no longer match the http one it allows.
+// pass-through fetches fall under `connect-src`, the Turnstile script included.
+// Inert while `headers` below is disabled: no CSP is sent at all.
 const isApiMocking = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
 const CSP = `
   base-uri 'self';

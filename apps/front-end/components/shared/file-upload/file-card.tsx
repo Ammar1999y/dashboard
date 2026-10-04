@@ -10,7 +10,7 @@ import { Icon } from '@/components/ui/icon';
 import { SortableListHandle } from '@/components/ui/sortable-list';
 
 import { FileCardAction } from './file-card-action';
-import { getFileIcon, getPreviewUrl, isImageFile } from './file-utils';
+import { describeFile, getFileIcon, getPreviewUrl } from './file-utils';
 
 interface FileCardProps {
   file: FileWithPreview;
@@ -31,8 +31,9 @@ export const FileCard = memo(
     isDragOverlay = false,
     showDragHandle = false,
   }: FileCardProps) => {
-    const { name, size } = file.file;
-    const isImage = isImageFile(file);
+    const facts = describeFile(file.file);
+    const { name, size } = facts;
+    const isImage = facts.kind === 'image';
     const previewUrl = getPreviewUrl(file);
 
     const handleRemove = useCallback(
@@ -55,7 +56,7 @@ export const FileCard = memo(
               className='h-full w-full object-cover transition-transform duration-300 group-hover:scale-105'
             />
           ) : (
-            <Icon icon={getFileIcon(file)} className='size-8 opacity-60' />
+            <Icon icon={getFileIcon(facts)} className='size-8 opacity-60' />
           )}
 
           <div

@@ -3,12 +3,14 @@ import { memo, useCallback } from 'react';
 import { APP_NAME } from '@/constants';
 import { cn } from '@/lib/utils';
 
-import { ThemeLayout, useSettingStore } from '@/utils/store/setting';
-
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { NavMini, NavVertical } from '@/components/dash/nav';
+import {
+  ThemeLayout,
+  useSettingStore,
+} from '@/components/theme-customizer/layout-store';
 
 import Logo from './logo';
 import { dashboardNav } from './nav-data';

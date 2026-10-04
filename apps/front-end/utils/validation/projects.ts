@@ -2,73 +2,62 @@ import type { ProjectClient } from '@/types/projects';
 import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
-
 import {
-  getIDSchema,
-  idSchema,
   sanitizeStrict,
   sanitizeStrictSingleLine,
-} from './rules';
+  trimed,
+} from '@app/shared/validation/rules';
+import {
+  MSG_LINK_TOO_LONG,
+  MSG_PROJECT_DESCRIPTION_TOO_LONG,
+  MSG_PROJECT_TITLE_TOO_LONG,
+  MSG_PROJECT_TITLE_TOO_SHORT,
+} from '@/constants/messages';
 
-// Constants
+import { optionalIdSchema, optionalTextSchema } from './rules';
+
 const PROJECT_TITLE_MIN = 2;
 const PROJECT_TITLE_MAX = 150;
 const PROJECT_DESCRIPTION_MAX = 1000;
 const PROJECT_LINK_MAX = 500;
 
-// Project title schema with sanitization and validation
 const projectTitleSchema = z.preprocess(
   sanitizeStrictSingleLine,
   z
     .string()
-    .min(
-      PROJECT_TITLE_MIN,
-      `عنوان المشروع يجب أن يكون ${PROJECT_TITLE_MIN} أحرف على الأقل`
-    )
-    .max(
-      PROJECT_TITLE_MAX,
-      `عنوان المشروع يجب أن لا يتجاوز ${PROJECT_TITLE_MAX} حرفاً`
-    )
+    .min(PROJECT_TITLE_MIN, MSG_PROJECT_TITLE_TOO_SHORT(PROJECT_TITLE_MIN))
+    .max(PROJECT_TITLE_MAX, MSG_PROJECT_TITLE_TOO_LONG(PROJECT_TITLE_MAX))
 );
 
-// Project description schema (optional)
-const projectDescriptionSchema = z.preprocess(
+const projectDescriptionSchema = optionalTextSchema(
   sanitizeStrict,
-  z
-    .string()
-    .max(
-      PROJECT_DESCRIPTION_MAX,
-      `وصف المشروع يجب أن لا يتجاوز ${PROJECT_DESCRIPTION_MAX} حرفاً`
-    )
+  PROJECT_DESCRIPTION_MAX,
+  MSG_PROJECT_DESCRIPTION_TOO_LONG(PROJECT_DESCRIPTION_MAX)
 );
 
-// Project link schema (optional, simple string validation)
-const projectLinkSchema = z.preprocess(
-  (v: string) => (typeof v === 'string' ? v.trim() : ''),
-  z
-    .string()
-    .max(PROJECT_LINK_MAX, `الرابط يجب أن لا يتجاوز ${PROJECT_LINK_MAX} حرفاً`)
+const projectLinkSchema = optionalTextSchema(
+  trimed,
+  PROJECT_LINK_MAX,
+  MSG_LINK_TOO_LONG(PROJECT_LINK_MAX)
 );
 
-// Create project schema
 export const createProjectSchema = z.object({
   title: projectTitleSchema,
   description: projectDescriptionSchema,
   link: projectLinkSchema,
-  categoryId: getIDSchema({ optional: true }).nullish(),
+  categoryId: optionalIdSchema.optional(),
   isActive: z.boolean().default(true),
 });
 
-// Update project schema (extends create schema with id)
-export const updateProjectSchema = createProjectSchema.extend({
-  id: idSchema,
-});
+/** See the note on updateCategoryBodySchema in ./categories. */
+export const updateProjectBodySchema = createProjectSchema
+  .extend({ isActive: z.boolean() })
+  .strict();
 
-// Type inference
 export type CreateProjectInput = z.input<typeof createProjectSchema>;
-export type UpdateProjectInput = z.input<typeof updateProjectSchema>;
+export type UpdateProjectInput = z.input<typeof updateProjectBodySchema>;
 export type CreateProjectOutput = z.output<typeof createProjectSchema>;
-export type UpdateProjectOutput = z.output<typeof updateProjectSchema>;
+export type UpdateProjectOutput = z.output<typeof updateProjectBodySchema>;
 
 /** See the note on DEFAULT_CATEGORY in ./categories. */
 export const DEFAULT_PROJECT: DefaultValues<CreateProjectInput> = {
@@ -81,10 +70,9 @@ export const DEFAULT_PROJECT: DefaultValues<CreateProjectInput> = {
 
 /** See the note on toCategoryForm in ./categories. */
 export const toProjectForm = (record: ProjectClient): UpdateProjectInput => ({
-  id: record.id,
-  title: record.title ?? '',
+  title: record.title,
   description: record.description ?? '',
   link: record.link ?? '',
   categoryId: record.categoryId ?? null,
-  isActive: record.isActive ?? true,
+  isActive: record.isActive,
 });

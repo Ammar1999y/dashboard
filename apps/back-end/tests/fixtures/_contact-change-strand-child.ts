@@ -15,7 +15,7 @@ const { seedUser, signIn, baseHeaders, uniquePhone } =
   await import('../helpers/session');
 const { app } = await import('@/app');
 const { PUBLIC_ORIGIN } = await import('@/lib/env');
-const { twoFactorMsg } = await import('@/lib/auth/messages');
+const { twoFactorMsg } = await import('@app/shared/messages/auth');
 
 const owner = await seedUser({
   phoneNumber: uniquePhone(),

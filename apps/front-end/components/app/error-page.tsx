@@ -1,13 +1,20 @@
+import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
+import {
+  MSG_PAGE_FAILED_DETAIL,
+  MSG_PAGE_NOT_FOUND_DETAIL,
+  MSG_UNEXPECTED_ERROR,
+} from '@/constants/messages';
+
 import { Link } from '@/components/ui/link';
 
 const NOT_FOUND = {
-  title: 'الصفحة غير موجودة',
-  description: 'الرابط غير صحيح، أو أن الصفحة نُقلت أو حُذفت.',
+  title: MSG_PAGE_NOT_FOUND,
+  description: MSG_PAGE_NOT_FOUND_DETAIL,
 };
 
 const FAILED = {
-  title: 'حدث خطأ غير متوقع',
-  description: 'تعذر عرض هذه الصفحة. أعد المحاولة بعد قليل.',
+  title: MSG_UNEXPECTED_ERROR,
+  description: MSG_PAGE_FAILED_DETAIL,
 };
 
 /** The body of `404`, `500` and `_error`; `statusCode` is absent for a client-side error. */

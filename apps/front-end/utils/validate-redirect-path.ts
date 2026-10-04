@@ -1,86 +1,104 @@
-/**
- * Validates redirect path to prevent Open Redirect attacks.
- * Allows complex query params like: /dash/languages?sort=%5B%7B"id"...
- *
- * @security Defense layers:
- * 1. Basic validation (type, length, format)
- * 2. Control & invisible character blocking (including Unicode)
- * 3. Multi-decode to catch %2F%2F, %252F%252F attacks
- * 4. URL API validation with pathname normalization check
- */
-export function validateRedirectPath(path: string, fallback = '/dash'): string {
-  // 1. Basic validation
-  if (!path || typeof path !== 'string') return fallback;
+const ORIGIN = 'http://localhost';
+const MAX_LENGTH = 2048;
+const MAX_DECODE_PASSES = 5;
+const PROTOCOL_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
+const ENCODED_RUN = /(?:%[0-9A-Fa-f][0-9A-Fa-f])+/g;
 
-  // 2. Block control chars & dangerous Unicode BEFORE any processing
-  // Includes: control chars, zero-width, soft hyphen, bidirectional, BOM,
-  // fullwidth @, Unicode slashes that may normalize
-  // prettier-ignore
-  // eslint-disable-next-line security/detect-non-literal-regexp
-  const dangerousCharsPattern = new RegExp([
-    '[\u{0}-\u{1F}\u{7F}]',       // Control characters
-    '[\u{AD}]',                     // Soft hyphen (invisible)
-    '[\u{200B}-\u{200F}]',              // Zero-width chars
-    '[\u{2028}-\u{202F}]',              // Line/paragraph separators, bidirectional
-    '[\u{FEFF}]',                     // BOM
-    '[\u{FF20}]',                     // Fullwidth @ (＠)
-    '[\u{2215}\u{2044}\u{FF0F}\u{29F8}]',   // Unicode slashes (∕, ⁄, ／, ⧸)
-  ].join('|'));
-  if (dangerousCharsPattern.test(path)) return fallback;
+// prettier-ignore
+// eslint-disable-next-line security/detect-non-literal-regexp
+const DANGEROUS_CHARACTERS = new RegExp([
+  '[\u{0}-\u{1F}\u{7F}]',       // Control characters
+  '[\u{AD}]',                     // Soft hyphen (invisible)
+  '[\u{200B}-\u{200F}]',              // Zero-width chars
+  '[\u{2028}-\u{202F}]',              // Line/paragraph separators, bidirectional
+  '[\u{FEFF}]',                     // BOM
+  '[\u{FF20}]',                     // Fullwidth @ (＠)
+  '[\u{2215}\u{2044}\u{FF0F}\u{29F8}]',   // Unicode slashes (∕, ⁄, ／, ⧸)
+].join('|'));
+
+/** Decoded until stable, or `null` when it will not decode or never settles. */
+function decodeStrict(value: string): string | null {
+  let decoded = value;
+  for (let pass = 0; pass < MAX_DECODE_PASSES; pass++) {
+    let next: string;
+    try {
+      next = decodeURIComponent(decoded);
+    } catch {
+      return null;
+    }
+    if (next === decoded) return decoded;
+    decoded = next;
+  }
+  return null;
+}
+
+/** Each run of escapes decoded where it can be; a literal `%` stays as written. */
+function decodeLenient(value: string): string {
+  let decoded = value;
+  for (let pass = 0; pass < MAX_DECODE_PASSES; pass++) {
+    const next = decoded.replaceAll(ENCODED_RUN, (run) => {
+      try {
+        return decodeURIComponent(run);
+      } catch {
+        return run;
+      }
+    });
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
+/** A same-origin path to return to after sign-in, or `fallback`. */
+export function validateRedirectPath(path: string, fallback = '/dash'): string {
+  if (!path || typeof path !== 'string') return fallback;
+  if (DANGEROUS_CHARACTERS.test(path)) return fallback;
 
   const trimmed = path.trim();
-  if (!trimmed || trimmed.length > 2048) return fallback;
-
-  // 3. Must be relative path (starts with / but not //)
+  if (!trimmed || trimmed.length > MAX_LENGTH) return fallback;
   if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return fallback;
-
-  // 4. Block backslashes (browsers may interpret \ as /)
+  // Browsers read `\` as `/`.
   if (trimmed.includes('\\')) return fallback;
 
-  // 5. Decode to catch encoded attacks (%2F%2F = //, %252F = %2F)
-  let decoded = trimmed;
-  try {
-    let prev = '';
-    for (let i = 0; decoded !== prev && i < 5; i++) {
-      prev = decoded;
-      decoded = decodeURIComponent(decoded);
-    }
-  } catch {
-    decoded = trimmed;
-  }
+  const pathEnd = trimmed.search(/[?#]/);
+  const rawPath = pathEnd === -1 ? trimmed : trimmed.slice(0, pathEnd);
+  const rawRest = pathEnd === -1 ? '' : trimmed.slice(pathEnd);
 
-  // 6. Validate decoded version
-  const protocolPattern = /^[a-z][a-z0-9+.-]*:/i;
+  // Strict: a segment that will not decode could be hiding `//` from the
+  // checks. An `@` matters here only — an email in a table filter is a
+  // legitimate query.
+  const decodedPath = decodeStrict(rawPath);
   if (
-    decoded.startsWith('//') ||
-    decoded.includes('\\') ||
-    decoded.includes('@') ||
-    protocolPattern.test(decoded) ||
-    dangerousCharsPattern.test(decoded)
+    decodedPath === null ||
+    decodedPath.startsWith('//') ||
+    decodedPath.includes('@') ||
+    decodedPath.includes('\\') ||
+    DANGEROUS_CHARACTERS.test(decodedPath)
   ) {
     return fallback;
   }
 
-  // 7. URL API validation - CRITICAL: check normalized pathname
+  // Free text, where a literal `%` (`50%25 off`) is legitimate.
+  const decodedRest = decodeLenient(rawRest);
+  if (decodedRest.includes('\\') || DANGEROUS_CHARACTERS.test(decodedRest)) {
+    return fallback;
+  }
+
+  const hashStart = trimmed.indexOf('#');
+  const decodedHash =
+    hashStart === -1 ? '' : decodeLenient(trimmed.slice(hashStart + 1));
+  if (PROTOCOL_PATTERN.test(decodedHash) || decodedHash.startsWith('//')) {
+    return fallback;
+  }
+
+  let url: URL;
   try {
-    const url = new URL(trimmed, 'http://localhost');
-
-    // Origin check
-    if (url.origin !== 'http://localhost') return fallback;
-
-    // CRITICAL: Path traversal can normalize to //evil.com
-    // e.g., /..//evil.com -> pathname becomes //evil.com (protocol-relative!)
-    // Only block // at START of pathname (middle // like /test//file is safe)
-    if (url.pathname.startsWith('//')) return fallback;
-
-    // Check hash for dangerous protocols
-    if (url.hash && protocolPattern.test(url.hash.slice(1))) return fallback;
-
-    // Check hash for // at start (could be used with JS that reads hash)
-    if (url.hash.startsWith('#//')) return fallback;
+    url = new URL(trimmed, ORIGIN);
   } catch {
     return fallback;
   }
+  // Dot segments can normalise to a protocol-relative `//evil.com`.
+  if (url.origin !== ORIGIN || url.pathname.startsWith('//')) return fallback;
 
   return trimmed;
 }

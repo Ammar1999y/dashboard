@@ -23,7 +23,7 @@ import type { Handler } from '@/lib/http/contract';
 
 import { pingDatabase } from '@/db';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { apiRaw } from '@/lib/http/response';
 import { maintenanceTokenMatches } from '@/lib/maintenance/token';

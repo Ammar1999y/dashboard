@@ -11,7 +11,7 @@ import { useForm } from 'react-hook-form';
 
 import {
   toSectionForm,
-  updateSectionSchema,
+  updateSectionBodySchema,
 } from '@/utils/validation/sections';
 
 import { Form } from '@/components/form/form';
@@ -19,7 +19,7 @@ import { FormTabs } from '@/components/form/tabs/form-tabs';
 
 import { EditRecord } from '../shared/edit-record';
 import { FormHeader } from '../shared/form-header';
-import { useEntityMutations, withoutId } from '../shared/use-entity-mutations';
+import { useEntityMutations } from '../shared/use-entity-mutations';
 import { sectionEntity } from './entity';
 import { EDIT_SECTION_TABS } from './tabs';
 
@@ -29,19 +29,14 @@ export default function EditSection() {
 
 const SectionEditForm = memo(({ record }: { record: SectionClient }) => {
   const methods = useForm<UpdateSectionInput, unknown, UpdateSectionOutput>({
-    resolver: zodResolver(updateSectionSchema),
+    resolver: zodResolver(updateSectionBodySchema),
     defaultValues: toSectionForm(record),
   });
   const { update } = useEntityMutations<SectionClient>(sectionEntity);
 
   const onSubmit = useCallback(
-    (data: UpdateSectionOutput) => {
-      const payload = withoutId(data);
-      return update(record.id, payload, (updatedAt) => ({
-        ...payload,
-        updatedAt,
-      }));
-    },
+    (data: UpdateSectionOutput) =>
+      update(record.id, data, (updatedAt) => ({ ...data, updatedAt })),
     [record.id, update]
   );
 

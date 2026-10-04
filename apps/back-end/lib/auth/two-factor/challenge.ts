@@ -21,7 +21,9 @@ import { users } from '@/db/schema';
 import { APIError } from 'better-auth/api';
 import { expireCookie } from 'better-auth/cookies';
 
-import { HTTP_STATUS, MSG_INVALID_INPUT } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
 import { validID } from '@app/shared/utils';
 import { contactKindOf } from '@app/shared/validation/enums';
 
@@ -31,7 +33,6 @@ import { contactOf } from '@/lib/users/contact';
 import { logSanitized } from '@/utils/log';
 
 import { authError } from '../errors';
-import { twoFactorMsg } from '../messages';
 import {
   deliverSessionCookie,
   expireDontRememberMarker,

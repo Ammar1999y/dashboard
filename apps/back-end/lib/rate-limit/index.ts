@@ -1,13 +1,13 @@
 import type { EntityID } from '@app/shared/types';
 import type { OtpChannel } from '@app/shared/validation/enums';
 
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_MISSING_CLIENT_IP,
   MSG_SERVICE_UNAVAILABLE,
   MSG_TOO_MANY_REQUESTS,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/common';
 import { contactKindOf } from '@app/shared/validation/enums';
 
 import { getClientIp } from '@/lib/http/client-ip';

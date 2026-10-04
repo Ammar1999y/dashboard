@@ -7,8 +7,7 @@ import * as React from 'react';
 import { MarkdownPlugin } from '@platejs/markdown';
 import { useEditorRef } from 'platejs/react';
 import { useFilePicker } from 'use-file-picker';
-
-import { toastError } from '@/utils/mutation';
+import { toastError } from '@/lib/toast-error';
 
 import {
   DropdownMenu,
@@ -39,6 +38,8 @@ function useImportPicker(accept: string[], parse: keyof typeof PARSERS) {
   return useFilePicker({
     accept,
     multiple: false,
+    // Read below, once: the picker would otherwise read it first.
+    readFilesContent: false,
     onFilesSelected: ({ plainFiles }: PickedFiles) => {
       const file = plainFiles?.[0];
       if (!file) return;

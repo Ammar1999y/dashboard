@@ -1,6 +1,6 @@
 import type { AuditMeta } from '@/lib/audit';
-import type { ActorPermissions } from '@/lib/permissions/checker';
 import type { AccessScope } from '@app/shared/permissions/constants';
+import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
 import { eq, sql } from 'drizzle-orm';

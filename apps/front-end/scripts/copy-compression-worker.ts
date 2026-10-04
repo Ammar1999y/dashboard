@@ -8,7 +8,7 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
-import { COMPRESSION_LIB_URL } from '../utils/images/config';
+import { COMPRESSION_LIB_URL } from '../lib/files/config';
 
 const require = createRequire(import.meta.url);
 const target = join(import.meta.dirname, '..', 'public', COMPRESSION_LIB_URL);

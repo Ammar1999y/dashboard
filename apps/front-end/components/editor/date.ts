@@ -6,8 +6,7 @@ import {
   format,
   isSameDay,
 } from 'date-fns';
-
-import { safeDate } from '@/utils/time';
+import { safeDate } from '@app/shared/time';
 
 export const EMPTY_DATE_LABEL = 'اختر تاريخ';
 

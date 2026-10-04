@@ -17,8 +17,9 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { CONTACT_LABEL } from '@app/shared/messages/otp';
 
 import { PROVIDER_TIMEOUT_MS } from '@/lib/otp/delivery';
 import { processOtpSend } from '@/lib/otp/send';
@@ -55,7 +56,7 @@ beforeAll(async () => {
       channel: 'email',
       purpose: 'verify_contact',
       sendTo: user.email,
-      entityName: 'البريد الإلكتروني',
+      entityName: CONTACT_LABEL.email,
     });
   } catch (error) {
     fixture.threw = error;

@@ -2,7 +2,7 @@ import type { LabRow } from './fake-server';
 import type { Mismatch } from './types';
 import type { Column, Table } from '@tanstack/react-table';
 
-import { useDataTableStore } from '@/utils/store/data-table-store';
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 
 import { displayValue, LAB_ACTIONS_COLUMN } from './columns';
 

@@ -24,7 +24,7 @@ import type { SignedInSession } from '../helpers/session';
 
 import { app } from '@/app';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { auth } from '@/lib/auth';
 

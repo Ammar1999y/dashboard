@@ -1,57 +1,35 @@
-import type { Config } from 'svgo';
-
 import { JSDOM } from 'jsdom';
 import { optimize } from 'svgo';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import { sanitizeSvg } from '@app/shared/images/svg-optimizer';
+import { optimizeSvg } from '@app/shared/images/svgo-config';
+import { uploadMsg } from '@app/shared/messages/media';
 
-import { uploadMsg } from '../messages';
+import { logSanitized } from '@/utils/log';
 
-const svgoConfig: Config = {
-  multipass: true,
-  plugins: [
-    {
-      name: 'preset-default',
-      params: {
-        overrides: {
-          // Not minified: its rename rewrites the first `#id` in each referencing
-          // attribute twice, so `url(#f) url(#fx)` becomes `url(#a) url(#ax)` and
-          // the second definition is deleted as unused.
-          cleanupIds: {
-            minify: false,
-            preserve: [],
-          },
-        },
-      },
-    },
-    'removeScripts',
-    // No `removeRasterImages`: it only knows `xlink:href` and a few raster
-    // types. `analyzeInlineRaster` in `sanitizeSvg` alone decides which rasters
-    // may be inlined.
-    'removeTitle',
-  ],
-};
-
+/**
+ * What is stored is svgo's output, so the native form is checked again on it:
+ * an optimizer rewrite outside that form is our defect, never stored.
+ */
 export function svgOptimizerServer({ data }: { data: string }) {
-  let optimized;
-  try {
-    optimized = optimize(data, svgoConfig);
-  } catch {
-    throw new CustomError(
-      uploadMsg.svgOptimizeFailed,
-      HTTP_STATUS.UNPROCESSABLE
-    );
+  const failed = () =>
+    new CustomError(uploadMsg.svgOptimizeFailed, HTTP_STATUS.UNPROCESSABLE);
+
+  const optimized = optimizeSvg(data, optimize);
+  if (optimized === null) throw failed();
+
+  const recheck = sanitizeSvgServer(optimized);
+  if (!recheck.isValid) {
+    logSanitized('error', {
+      msg: 'image.svg optimizer output refused',
+      reason: recheck.reason,
+      errors: recheck.errors,
+    });
+    throw failed();
   }
-
-  if (!optimized.data)
-    throw new CustomError(
-      uploadMsg.svgOptimizeFailed,
-      HTTP_STATUS.UNPROCESSABLE
-    );
-
-  return optimized.data;
+  return optimized;
 }
 
 export function sanitizeSvgServer(svgContent: string) {

@@ -15,8 +15,8 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { MAX_FAILED_ATTEMPTS } from '@/lib/auth/login-guard';
 import { generateUuidV7 } from '@/lib/id';

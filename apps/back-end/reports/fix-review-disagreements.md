@@ -298,6 +298,8 @@ The adversarial verifier re-ran every reviewer probe from every round, including
 
 You also chose to convert `style=` to presentation attributes, so Inkscape, Illustrator and Figma colours now survive upload. In Edge, those samples went from up to 1600 px different to 0.
 
+> **Correction (2026-10-04):** `fix-review.md` never asked for this conversion, and no owner request for it is on record. The converter and the id renaming above were removed under [svg-processing-plan.md](svg-processing-plan.md): the dashboard now converts a styled SVG to an image, odd ids are no longer renamed, and the 2M style-entry limit went with the converter.
+
 **What verified the final code**
 
 - Lint (back-end and shared), both typechecks and `check:deps` are clean. The hand-added `jose` entry passes `bun install --frozen-lockfile`.

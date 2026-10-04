@@ -136,3 +136,12 @@ svg {
 img {
   color: transparent;
 }
+
+/* `inert` fallback: below Chrome 102 the attribute is ignored, so a pending
+   button or form would still take taps. Focus and the accessibility tree stay
+   unguarded there. `!important` because native inert overrides
+   `pointer-events-auto` too. */
+[inert],
+[inert] * {
+  pointer-events: none !important;
+}

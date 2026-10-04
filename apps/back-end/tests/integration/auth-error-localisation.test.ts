@@ -23,8 +23,9 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
 
+import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
+
 import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
-import { CUSTOM_AUTH_CODE } from '@/lib/auth/errors';
 
 import { baseHeaders } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';

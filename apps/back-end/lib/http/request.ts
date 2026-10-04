@@ -1,7 +1,8 @@
 import type { BodyPolicy, HandlerInput, HandlerRequestMeta } from './contract';
 
-import { HTTP_STATUS, MSG_BODY_TOO_LARGE } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_BODY_TOO_LARGE } from '@app/shared/messages/common';
 import { normalizeMimeType } from '@app/shared/validation/media-types';
 
 import { getClientIp } from './client-ip';

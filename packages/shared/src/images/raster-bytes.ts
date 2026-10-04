@@ -25,7 +25,7 @@ export function hasRasterSignature(
 }
 
 /** Which admitted raster these bytes actually are, from the signature alone. */
-function rasterTypeOf(bytes: Uint8Array): RasterMimeType | null {
+export function rasterTypeOf(bytes: Uint8Array): RasterMimeType | null {
   for (const mimeType of Object.keys(RASTER_MAGIC_BYTES))
     if (hasRasterSignature(mimeType) && matchesMagicBytes(bytes, mimeType))
       return mimeType;

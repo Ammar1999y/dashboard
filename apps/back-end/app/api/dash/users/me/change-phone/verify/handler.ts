@@ -1,5 +1,6 @@
-import { MSG_UPDATE_ERROR } from '@app/shared/api-messages';
 import { PHONE_ENABLED } from '@app/shared/config';
+import { MSG_UPDATE_ERROR } from '@app/shared/messages/common';
+import { userMsg } from '@app/shared/messages/users';
 import { changePhoneVerifySchema } from '@app/shared/validation/auth';
 
 import { getAuditMeta } from '@/lib/audit';
@@ -15,7 +16,6 @@ import {
   userIdentifier,
 } from '@/lib/rate-limit';
 import { commitPhoneChange } from '@/lib/users/contact-change';
-import { userMsg } from '@/lib/users/messages';
 
 /**
  * Step 2 of the phone change: the code sent to the NEW number is verified and

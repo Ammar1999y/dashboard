@@ -10,11 +10,11 @@ import { db } from '@/db';
 import { getConstraintName } from '@/db/errors';
 import { auditLogs, files } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 
 import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
 import { generateUuidV7 } from '@/lib/id';
-import { mediaMsg } from '@/lib/media/messages';
 
 import { resetTables } from '../helpers/database';
 

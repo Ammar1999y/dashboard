@@ -5,23 +5,21 @@ import type {
   PermissionObject,
 } from '@app/shared/permissions/constants';
 
-import {
-  HTTP_STATUS,
-  MSG_CANNOT_GRANT_UNOWNED_PERMISSIONS,
-  MSG_NOT_FOUND,
-} from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_NOT_FOUND } from '@app/shared/messages/common';
+import { MSG_CANNOT_GRANT_UNOWNED_PERMISSIONS } from '@app/shared/messages/permissions';
 import {
   DASHBOARD_PAGE_NAMES,
   OWN_ACTION_MAP,
-  PERMISSION_ACTIONS,
+  PERMISSION_ACTION_NAMES,
 } from '@app/shared/permissions/constants';
-
-import { resolveActionScope } from '@/lib/permissions/checker';
 import {
-  collapseToNotFound,
+  resolveActionScope,
   validatePermissionScope,
-} from '@/lib/permissions/scope';
+} from '@app/shared/permissions/scope';
+
+import { collapseToNotFound } from '@/lib/permissions/scope';
 
 /**
  * `resolveActionScope` — the two cases its own comment records as previously
@@ -33,7 +31,7 @@ import {
  * unit test at all — every case would have cost a session and a database round
  * trip. It is exported now.
  *
- * **This is not the full matrix.** The `DASHBOARD_PAGES × PERMISSION_ACTIONS`
+ * **This is not the full matrix.** The `DASHBOARD_PAGE_NAMES × PERMISSION_ACTION_NAMES`
  * walk belongs to its own shard. What is here is the part that cannot wait: the
  * two answers the function's comment says it used to get wrong, and the
  * caller-supplied-key cases, because it indexes a plain object with a key that
@@ -83,9 +81,7 @@ describe('the two answers this function used to get wrong', () => {
 describe('denial is the default', () => {
   test('an empty matrix denies every action on every page', () => {
     for (const page of DASHBOARD_PAGE_NAMES)
-      for (const action of Object.keys(
-        PERMISSION_ACTIONS
-      ) as PermissionAction[])
+      for (const action of PERMISSION_ACTION_NAMES)
         expect(resolveActionScope({}, page, action)).toEqual({
           allowed: false,
           scope: null,

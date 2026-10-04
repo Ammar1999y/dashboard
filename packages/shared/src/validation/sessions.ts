@@ -1,8 +1,14 @@
 import * as z from 'zod';
 
+import {
+  idRequired,
+  MSG_SESSION_IDS_REQUIRED,
+  MSG_SESSION_IDS_TOO_MANY,
+  MSG_SESSIONS_DELETE_SHAPE,
+} from '../messages/validation';
 import { UUID_V7_FRAGMENT } from '../utils';
 import { IDS_ARRAY_MAX } from './constants';
-import { idRequired, idSchema } from './rules';
+import { idSchema } from './rules';
 
 export const SESSIONS_PAGE_SIZE = 50;
 export const SESSIONS_MAX_PAGE_SIZE = 100;
@@ -18,8 +24,8 @@ export const deleteSessionsSchema = z.union(
       .object({
         sessionIds: z
           .array(idSchema, { message: idRequired })
-          .min(1, 'يجب تحديد جلسة واحدة على الأقل')
-          .max(IDS_ARRAY_MAX, `الحد الأقصى ${IDS_ARRAY_MAX} جلسة في الطلب`),
+          .min(1, MSG_SESSION_IDS_REQUIRED)
+          .max(IDS_ARRAY_MAX, MSG_SESSION_IDS_TOO_MANY),
       })
       .strict(),
     // Emergency path: end every other session in one transaction, without
@@ -30,8 +36,5 @@ export const deleteSessionsSchema = z.union(
   // and failed a constraint inside it (`{sessionIds: []}`, 51 ids), and this
   // message when none got that far (a bad id, `revokeAll: false`, `{}`). All
   // three messages are live client copy.
-  {
-    error:
-      'حدد جلسة واحدة على الأقل عبر sessionIds، أو أرسل revokeAll: true لإنهاء الجلسات الأخرى',
-  }
+  { error: MSG_SESSIONS_DELETE_SHAPE }
 );

@@ -4,8 +4,9 @@ import type { PgTransactionConfig } from 'drizzle-orm/pg-core';
 
 import { drizzle } from 'drizzle-orm/bun-sql';
 
-import { HTTP_STATUS, MSG_SERVICE_UNAVAILABLE } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_SERVICE_UNAVAILABLE } from '@app/shared/messages/common';
 
 import { logLine } from '@/utils/log';
 

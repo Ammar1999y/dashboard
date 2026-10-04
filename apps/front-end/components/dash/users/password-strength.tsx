@@ -2,64 +2,65 @@ import { memo, useMemo } from 'react';
 
 import { AnimatePresence, motion } from 'framer-motion';
 import { useWatch } from 'react-hook-form';
+import {
+  checkPasswordRules,
+  PASSWORD_RULES,
+} from '@app/shared/validation/rules';
+import {
+  MSG_PASSWORD_MUST_CONTAIN,
+  MSG_PASSWORD_REQUIREMENTS,
+} from '@/constants/messages';
 import { fieldMessage } from '@/lib/motion';
 import { cn } from '@/lib/utils';
 
 import { Icon } from '@/components/ui/icon';
 
-const PASSWORD_REQUIREMENTS = [
-  { regex: /.{8,}/, text: 'يجب أن تكون 8 أحرف على الأقل' },
-  { regex: /[0-9]/, text: 'يجب أن تحتوي على رقم واحد على الأقل' },
-  { regex: /[a-z]/, text: 'يجب أن تحتوي على حرف صغير واحد على الأقل' },
-  { regex: /[A-Z]/, text: 'يجب أن تحتوي على حرف كبير واحد على الأقل' },
-  { regex: /[^a-zA-Z0-9]/, text: 'يجب أن تحتوي على رمز خاص واحد على الأقل' },
-] as const;
-
-type StrengthScore = 0 | 1 | 2 | 3 | 4 | 5;
-
-const STRENGTH_CONFIG = {
-  colors: {
-    0: 'bg-border',
-    1: 'bg-red-500',
-    2: 'bg-orange-500',
-    3: 'bg-amber-500',
-    4: 'bg-amber-700',
-    5: 'bg-emerald-500',
-  } satisfies Record<StrengthScore, string>,
-  texts: {
-    0: 'أدخل كلمة مرور',
-    1: 'كلمة مرور ضعيفة',
-    2: 'كلمة مرور متوسطة',
-    3: 'كلمة مرور قوية!',
-    4: 'كلمة مرور قوية جدا!!',
-  } satisfies Record<Exclude<StrengthScore, 5>, string>,
-} as const;
-
-type Requirement = {
-  met: boolean;
-  text: string;
+/** One entry per score, from no rule met to all of them. */
+type ByScore = readonly string[] & {
+  length: [unknown, ...typeof PASSWORD_RULES]['length'];
 };
+
+const STRENGTH_COLORS = [
+  'bg-border',
+  'bg-red-500',
+  'bg-red-500',
+  'bg-orange-500',
+  'bg-amber-500',
+  'bg-amber-700',
+  'bg-emerald-500',
+] as const satisfies ByScore;
+
+const STRENGTH_TEXTS = [
+  'أدخل كلمة مرور',
+  'كلمة مرور ضعيفة',
+  'كلمة مرور ضعيفة',
+  'كلمة مرور متوسطة',
+  'كلمة مرور قوية!',
+  'كلمة مرور قوية جداً!!',
+  'كلمة مرور قوية جداً!!',
+] as const satisfies ByScore;
 
 const PasswordStrength = memo(() => {
   const password = useWatch<{ password?: string }>({ name: 'password' });
 
-  const calculateStrength = useMemo((): {
-    score: StrengthScore;
-    requirements: Requirement[];
-  } => {
-    const requirements = PASSWORD_REQUIREMENTS.map((req) => ({
-      met: req.regex.test(password || ''),
-      text: req.text,
+  const calculateStrength = useMemo(() => {
+    const results = checkPasswordRules(password || '');
+    const requirements = PASSWORD_RULES.map((rule) => ({
+      rule,
+      met: results[rule],
+      text: MSG_PASSWORD_REQUIREMENTS[rule],
     }));
 
     return {
-      score: requirements.filter((req) => req.met).length as StrengthScore,
+      score: requirements.filter((req) => req.met).length,
       requirements,
     };
   }, [password]);
 
   const meterStyle = useMemo(
-    () => ({ width: `${(calculateStrength.score / 5) * 100}%` }),
+    () => ({
+      width: `${(calculateStrength.score / PASSWORD_RULES.length) * 100}%`,
+    }),
     [calculateStrength.score]
   );
 
@@ -79,12 +80,12 @@ const PasswordStrength = memo(() => {
             role='progressbar'
             aria-valuenow={calculateStrength.score}
             aria-valuemin={0}
-            aria-valuemax={PASSWORD_REQUIREMENTS.length}
+            aria-valuemax={PASSWORD_RULES.length}
           >
             <div
               className={cn(
                 'h-full transition-all duration-500',
-                STRENGTH_CONFIG.colors[calculateStrength.score]
+                STRENGTH_COLORS[calculateStrength.score]
               )}
               style={meterStyle}
             />
@@ -94,22 +95,13 @@ const PasswordStrength = memo(() => {
             id='password-strength'
             className='mb-2 flex justify-between text-sm'
           >
-            <span className='font-medium'>يجب أن تحتوي على:</span>
-            <span>
-              {
-                STRENGTH_CONFIG.texts[
-                  Math.min(
-                    calculateStrength.score,
-                    4
-                  ) as keyof typeof STRENGTH_CONFIG.texts
-                ]
-              }
-            </span>
+            <span className='font-medium'>{MSG_PASSWORD_MUST_CONTAIN}</span>
+            <span>{STRENGTH_TEXTS[calculateStrength.score]}</span>
           </p>
 
           <ul className='space-y-1.5' aria-label='Password requirements'>
-            {calculateStrength.requirements.map((req, index) => (
-              <li key={index} className='flex items-center gap-2'>
+            {calculateStrength.requirements.map((req) => (
+              <li key={req.rule} className='flex items-center gap-2'>
                 {req.met ? (
                   <Icon
                     icon='solar:check-read-linear'

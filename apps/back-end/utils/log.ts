@@ -3,6 +3,9 @@
 // context incident response needs, so they are serialized field by field with
 // hard bounds and recursive redaction instead.
 
+import { CustomError } from '@app/shared/error-class';
+import { CUSTOM_AUTH_CODE, ROUTING_CODES } from '@app/shared/error-codes';
+
 const LOG_MAX_DEPTH = 4;
 const LOG_MAX_ITEMS = 20;
 const LOG_MAX_KEYS = 30;
@@ -259,6 +262,33 @@ function serializeQueryError(
   return out;
 }
 
+/**
+ * An answered `APIError`'s auth code: its message is then the Arabic product
+ * copy for that code, not a diagnostic. `null` for any other error.
+ */
+function answeredAuthCode(error: Error): string | null {
+  // By name: an APIError may cross a module-instance boundary.
+  if (error.name !== 'APIError') return null;
+  const body: unknown = Reflect.get(error, 'body');
+  const code: unknown =
+    typeof body === 'object' && body !== null
+      ? Reflect.get(body, 'code')
+      : null;
+  return code === CUSTOM_AUTH_CODE || ROUTING_CODES.has(code)
+    ? String(code)
+    : null;
+}
+
+/** The first stack frame: where it was thrown, without quoting its message. */
+export function thrownAt(error: Error): string | undefined {
+  const frame = error.stack
+    ?.split('\n')
+    .find((line) => line.trimStart().startsWith('at '));
+  return frame === undefined
+    ? undefined
+    : clampLogString(frame.trimStart().slice(3));
+}
+
 function serializeErrorLike(
   error: Error,
   depth: number,
@@ -267,13 +297,18 @@ function serializeErrorLike(
 ): Record<string, unknown> {
   if (isParameterBearingQueryError(error)) return serializeQueryError(error);
 
-  // `message` is kept, and a key-based rule cannot see inside it: anything that
-  // builds a message from a secret must be contained where it is thrown (see
-  // `serializeQueryError`, `sendOtp`). This is not a no-secrets guarantee.
   const out: Record<string, unknown> = {
     name: clampLogString(error.name || 'Error'),
-    message: clampLogString(error.message || ''),
   };
+  // Product copy stays out of logs; status, code and throw site identify it.
+  const authCode = answeredAuthCode(error);
+  if (authCode !== null) out.authCode = authCode;
+  else if (error instanceof CustomError) out.thrownAt = thrownAt(error);
+  else
+    // `message` is kept, and a key-based rule cannot see inside it: anything
+    // that builds a message from a secret must be contained where it is thrown
+    // (see `serializeQueryError`, `sendOtp`). This is not a no-secrets guarantee.
+    out.message = clampLogString(error.message || '');
   for (const key of ERROR_DETAIL_KEYS) {
     const value: unknown = Reflect.get(error, key);
     if (typeof value === 'number') {

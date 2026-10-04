@@ -1,24 +1,38 @@
-import type { PermissionRows } from '@/lib/permissions/matrix';
+import type { PermissionRows } from '@app/shared/permissions/matrix';
 
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { rolePermissions, roles, sessions, users } from '@/db/schema';
 
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_DELETE_ERROR,
   MSG_DELETED,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
   MSG_UPDATE_ERROR,
   MSG_UPDATED,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/common';
+import { permissionMsg } from '@app/shared/messages/permissions';
 import {
   REQUIRE_ROLE_FOR_LOGIN,
   ROLE_SCOPE,
 } from '@app/shared/permissions/constants';
+import {
+  diffPermissionMatrices,
+  permissionsEqual,
+  sanitizePermissions,
+  toPagePermissions,
+  toPermissionRows,
+} from '@app/shared/permissions/matrix';
+import { assertStandardRoleName } from '@app/shared/permissions/roles';
+import {
+  assertRowsWithinScope,
+  holdsActionOn,
+  validatePermissionScope,
+} from '@app/shared/permissions/scope';
 import { adminUpdatePermissionBodySchema } from '@app/shared/validation/permissions';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
@@ -32,29 +46,15 @@ import {
   PERMISSION_AUDIT_METADATA_FIELDS,
   PERMISSION_AUDIT_VERSION,
 } from '@/lib/permissions/audit';
-import {
-  holdsActionOn,
-  insufficientPermissions,
-} from '@/lib/permissions/checker';
-import {
-  diffPermissionMatrices,
-  permissionsEqual,
-  sanitizePermissions,
-  toPagePermissions,
-  toPermissionRows,
-} from '@/lib/permissions/matrix';
-import { permissionMsg } from '@/lib/permissions/messages';
+import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
   assertOwnedStandardRole,
-  assertStandardRoleName,
   lockOwnedStandardRole,
   standardRoleFilter,
   writeRoleMatrix,
 } from '@/lib/permissions/roles';
 import {
-  assertRowsWithinScope,
   collapseToNotFound,
-  validatePermissionScope,
   validateRolePermissionScope,
 } from '@/lib/permissions/scope';
 import { refreshRoleSessions } from '@/lib/permissions/session-refresh';

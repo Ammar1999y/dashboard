@@ -1,7 +1,7 @@
 import type { Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
-import type { ActorPermissions } from '@/lib/permissions/checker';
-import type { PermissionRows } from '@/lib/permissions/matrix';
+import type { PermissionRows } from '@app/shared/permissions/matrix';
+import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 import type { adminUpdateUserBodySchema } from '@app/shared/validation/auth';
 import type { z } from 'zod';
@@ -11,10 +11,20 @@ import { eq, sql } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { accounts, rolePermissions, roles, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { PHONE_ENABLED } from '@app/shared/config';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { userMsg } from '@app/shared/messages/users';
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
+import {
+  permissionsEqual,
+  toPermissionRows,
+} from '@app/shared/permissions/matrix';
+import {
+  holdsActionOn,
+  resolveActionScope,
+  validatePermissionScope,
+} from '@app/shared/permissions/scope';
 
 import { auditLog } from '@/lib/audit';
 import { credentialAccountOf } from '@/lib/auth/credential-account';
@@ -30,26 +40,17 @@ import { removeMethodIntent } from '@/lib/auth/two-factor/methods';
 import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
 import { notFoundError } from '@/lib/http/response';
 import { auditCustomRolePermissions } from '@/lib/permissions/audit';
-import {
-  holdsActionOn,
-  insufficientPermissions,
-  resolveActionScope,
-} from '@/lib/permissions/checker';
-import { permissionsEqual, toPermissionRows } from '@/lib/permissions/matrix';
+import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
   createCustomRole,
   destroyCustomRole,
   validateAssignableRole,
 } from '@/lib/permissions/roles';
-import {
-  validatePermissionScope,
-  validateRolePermissionScope,
-} from '@/lib/permissions/scope';
+import { validateRolePermissionScope } from '@/lib/permissions/scope';
 import { refreshUserSessions } from '@/lib/permissions/session-refresh';
 
 import { assertContactChangeKeepsFactor } from './contact-change';
 import { liveUser } from './filters';
-import { userMsg } from './messages';
 import {
   assertTargetUserReachable,
   assertTargetUserVisible,

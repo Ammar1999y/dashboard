@@ -1,4 +1,5 @@
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import { createFolderSchema } from '@app/shared/validation/media';
 
 import { readJsonBody } from '@/lib/http/input';
@@ -6,7 +7,6 @@ import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { requestActor } from '@/lib/media/actor';
 import { createFolder } from '@/lib/media/folders';
-import { mediaMsg } from '@/lib/media/messages';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 export const POST = withApiErrors(mediaMsg.updateError, async (ctx) => {

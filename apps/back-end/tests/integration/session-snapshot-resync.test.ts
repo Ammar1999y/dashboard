@@ -16,7 +16,7 @@ import { app } from '@/app';
 import { db, withTransaction } from '@/db';
 import { rolePermissions, sessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { auth } from '@/lib/auth';
 import { refreshRoleSessions } from '@/lib/permissions/session-refresh';

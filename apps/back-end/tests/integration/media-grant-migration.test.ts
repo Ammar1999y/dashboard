@@ -21,7 +21,7 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { sessions } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, mergeCookies, signedInUser } from '../helpers/session';

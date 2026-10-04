@@ -5,9 +5,8 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
-import { useTableUrlState } from '@/utils/store/data-table-store';
-
 import { DataTableView } from '@/components/ui/data-table';
+import { useTableUrlState } from '@/components/ui/data-table/store/url-store';
 
 import { labColumns } from './columns';
 import { fetchLabPage, LAB_QUERY_KEY } from './fake-server';

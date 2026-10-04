@@ -10,7 +10,7 @@ const { seedUser, signIn, baseHeaders, uniquePhone } =
   await import('../helpers/session');
 const { app } = await import('@/app');
 const { PUBLIC_ORIGIN } = await import('@/lib/env');
-const { REAUTH_REQUIRED_CODE } = await import('@app/shared/api-messages');
+const { REAUTH_REQUIRED_CODE } = await import('@app/shared/error-codes');
 const { startGoogle } = await import('../helpers/google');
 const { TWO_FACTOR_ENABLED } =
   await import('@app/shared/validation/two-factor');

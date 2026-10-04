@@ -1,5 +1,6 @@
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import { updateFolderSchema } from '@app/shared/validation/media';
 
 import { readJsonBody, requireId } from '@/lib/http/input';
@@ -8,7 +9,6 @@ import { requirePermission } from '@/lib/http/session';
 import { grantedActor } from '@/lib/media/actor';
 import { deleteFolder, updateFolder } from '@/lib/media/folders';
 import { deleteFolderTree } from '@/lib/media/lifecycle';
-import { mediaMsg } from '@/lib/media/messages';
 import { viewablePages } from '@/lib/media/usages';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 

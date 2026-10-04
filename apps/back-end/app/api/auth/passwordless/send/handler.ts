@@ -1,7 +1,7 @@
 import { PASSWORDLESS_ENABLED } from '@app/shared/config';
+import { otpMsg } from '@app/shared/messages/otp';
 import { OTP_ENABLED } from '@app/shared/validation/otp';
 
-import { otpMsg } from '@/lib/auth/messages';
 import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import {
   apiSuccess,

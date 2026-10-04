@@ -9,8 +9,9 @@ import { and, eq, isNotNull, lt, ne, sql } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { files } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 
 import { generateUuidV7 } from '@/lib/id';
 import {
@@ -29,7 +30,6 @@ import {
   matchesRow,
 } from './files';
 import { objectHeaders } from './headers';
-import { mediaMsg } from './messages';
 import { removeObject, removeOrphanedObject } from './orphaned-objects';
 import { hasPublicUsage } from './usages';
 

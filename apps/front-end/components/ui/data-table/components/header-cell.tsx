@@ -9,8 +9,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { flexRender } from '@tanstack/react-table';
 import { cn } from '@/lib/utils';
 
-import { useDataTableStore } from '@/utils/store/data-table-store';
-
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 import { Icon } from '@/components/ui/icon';
 
 import { Button } from '../../button';

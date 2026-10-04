@@ -151,6 +151,17 @@ export function stripControlAndTrim(value: string): string {
   return value.replaceAll(CONTROL_CHARACTERS, '').trim();
 }
 
+/** The quick-search term the server applies; `''` for one it ignores. */
+export function effectiveSearchTerm(raw: string): string {
+  const term = stripControlAndTrim(raw);
+  const length = searchTermLength(term);
+  return length >= MIN_SEARCH_LENGTH &&
+    length <= MAX_SEARCH_LENGTH &&
+    isTrigramIndexable(term)
+    ? term
+    : '';
+}
+
 function safeString(v: unknown, maxLen: number): string | null {
   if (typeof v === 'string') {
     const trimmed = stripControlAndTrim(v);

@@ -7,7 +7,7 @@ import '@/styles/app-style.css';
 import '@/styles/icons.css';
 import '@/styles/table.css';
 import '@/styles/editor-content.css';
-import '@/utils/validation/locale';
+import '@/lib/zod-locale';
 import '@/lib/icons-bundle.generated';
 
 import type { Page } from '@/types/page';

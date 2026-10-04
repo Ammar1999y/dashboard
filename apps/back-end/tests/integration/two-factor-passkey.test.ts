@@ -26,10 +26,11 @@ import {
 } from '@/db/schema';
 import { symmetricEncrypt } from 'better-auth/crypto';
 
-import { HTTP_STATUS, MSG_INVALID_INPUT } from '@app/shared/api-messages';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
 import { NAME_MAX } from '@app/shared/validation/constants';
 
-import { twoFactorMsg } from '@/lib/auth/messages';
 import { advancePasskeyCounter } from '@/lib/auth/passkey-assertion';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { generateUuidV7 } from '@/lib/id';

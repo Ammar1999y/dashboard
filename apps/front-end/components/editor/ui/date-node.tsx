@@ -6,9 +6,8 @@ import type { PlateElementProps } from 'platejs/react';
 import { useCallback } from 'react';
 
 import { PlateElement, useReadOnly } from 'platejs/react';
+import { safeDate } from '@app/shared/time';
 import { cn } from '@/lib/utils';
-
-import { safeDate } from '@/utils/time';
 
 import { Calendar } from '@/components/ui/calendar';
 import {

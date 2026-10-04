@@ -8,8 +8,9 @@ import { db, withTransaction } from '@/db';
 import { getConstraintName, isUniqueViolation } from '@/db/errors';
 import { files, folders } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import {
   FOLDER_MAX_CHILDREN,
   FOLDER_MAX_DEPTH,
@@ -18,7 +19,6 @@ import {
 import { escapeLike } from '@/lib/data-table/filter-columns';
 
 import { auditAs, withinScope } from './actor';
-import { mediaMsg } from './messages';
 
 interface FolderSummary {
   id: string;

@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import { ROUTES } from '@/routes';
 
-import { MSG_PAGE_NOT_FOUND } from '@app/shared/api-messages';
+import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
 
 import { toPublishedManifest } from '@/lib/http/route-manifest';
 

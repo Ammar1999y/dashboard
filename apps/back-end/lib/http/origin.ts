@@ -1,9 +1,9 @@
 import type { HandlerRequestMeta } from './contract';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_UNTRUSTED_ORIGIN } from '@app/shared/messages/common';
 
-import { MSG_UNTRUSTED_ORIGIN } from '@/lib/auth/errors';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 const SAFE_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);

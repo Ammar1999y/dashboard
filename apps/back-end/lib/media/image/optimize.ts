@@ -4,9 +4,10 @@
  */
 import { inflateSync } from 'node:zlib';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import { iccProfileChunk } from '@app/shared/images/raster-bytes';
+import { uploadMsg } from '@app/shared/messages/media';
 import {
   MAX_IMAGE_EDGE,
   MAX_IMAGE_PIXELS,
@@ -18,7 +19,6 @@ import { serverFault } from '@/lib/http/response';
 
 import { logLine } from '@/utils/log';
 
-import { uploadMsg } from '../messages';
 import { boundedImage } from './bounded';
 
 const UNDECODABLE_CODES = new Set([

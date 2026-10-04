@@ -3,16 +3,19 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_DELETE_ERROR,
   MSG_DELETED,
   MSG_FETCH_ERROR,
   MSG_FETCHED,
   MSG_UPDATE_ERROR,
   MSG_UPDATED,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/common';
+import { userMsg } from '@app/shared/messages/users';
+import { toPagePermissions } from '@app/shared/permissions/matrix';
+import { holdsActionOn } from '@app/shared/permissions/scope';
 import {
   adminUpdateUserBodySchema,
   selfUpdateUserBodySchema,
@@ -24,17 +27,12 @@ import { handleUserConstraintViolation } from '@/lib/http/constraint-errors';
 import { parseOrThrow, requireId, requireJsonBody } from '@/lib/http/input';
 import { apiSuccess, notFoundError, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
-import {
-  holdsActionOn,
-  insufficientPermissions,
-} from '@/lib/permissions/checker';
-import { toPagePermissions } from '@/lib/permissions/matrix';
+import { insufficientPermissions } from '@/lib/permissions/checker';
 import { publicRoleFields } from '@/lib/permissions/roles';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 import { softDeleteUser } from '@/lib/users/delete';
 import { editUserAsAdmin, renameSelf } from '@/lib/users/edit';
 import { liveUser } from '@/lib/users/filters';
-import { userMsg } from '@/lib/users/messages';
 import { readSessionsPage } from '@/lib/users/session-page';
 import {
   actorCoversTargetRole,

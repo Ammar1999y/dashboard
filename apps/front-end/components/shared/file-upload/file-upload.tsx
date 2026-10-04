@@ -1,22 +1,21 @@
 'use client';
 
 import type { FileWithPreview } from './file-types';
+import type { AcceptMap } from '@/lib/files/accept';
 import type { FileRejection } from 'react-dropzone';
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
-import { MAX_IMAGE_SIZE, MIB } from '@app/shared/validation/constants';
-import { ACCEPT_IMAGES_WITH_SVG } from '@/lib/constants';
+import { MSG_PROCESSING_FAILED, MSG_SVG_CONVERTED } from '@/constants/messages';
+import { ACCEPT_IMAGES_WITH_SVG } from '@/lib/files/accept';
+import { prepareFile } from '@/lib/files/prepare';
+import { toastError } from '@/lib/toast-error';
 import { cn } from '@/lib/utils';
 
-import { CustomError } from '@/utils/error-class';
-import { joinFormats, PROCESSING_FAILED_MESSAGE } from '@/utils/file-messages';
 import { formatBytes } from '@/utils/format-bytes';
 import { generateId } from '@/utils/generate-id';
-import { prepareFile } from '@/utils/images/client';
-import { CompressionError } from '@/utils/images/client-image-compression';
 
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
@@ -29,11 +28,13 @@ import { imageZoomDialog } from '@/components/dialogs/image-zoom/store';
 
 import { FileCard } from './file-card';
 import {
+  describeFile,
   downloadFile,
   getAcceptedFormats,
   getDropzoneText,
-  getFileExtension,
   getHelperText,
+  getSizeLimits,
+  isImageFile,
   notifyTooManyFiles,
   toastRejections,
 } from './file-utils';
@@ -41,8 +42,7 @@ import { usePreviewUrls } from './use-preview-urls';
 
 interface FileUploadProps {
   maxFiles?: number;
-  maxSizeMB?: number;
-  accept?: Record<string, string[]>;
+  accept?: AcceptMap;
   initialFiles?: FileWithPreview[];
   onFilesChange?: (files: FileWithPreview[]) => void;
   className?: string;
@@ -57,7 +57,6 @@ interface FileUploadProps {
 export const FileUpload = memo(
   ({
     maxFiles = 10,
-    maxSizeMB = MAX_IMAGE_SIZE,
     accept = ACCEPT_IMAGES_WITH_SVG,
     initialFiles = [],
     onFilesChange,
@@ -68,14 +67,25 @@ export const FileUpload = memo(
     inputId,
   }: FileUploadProps) => {
     const [files, setFiles] = useState(initialFiles);
-    const formats = useMemo(() => getAcceptedFormats(accept), [accept]);
     const limits = useMemo(
-      () => ({ maxSizeMB, maxFiles, formats }),
-      [maxSizeMB, maxFiles, formats]
+      () => ({
+        maxFiles,
+        formats: getAcceptedFormats(accept),
+        sizes: getSizeLimits(accept),
+      }),
+      [accept, maxFiles]
     );
     const createPreview = usePreviewUrls(files);
     // Files still being compressed: they hold slots before they reach `files`.
     const pendingCount = useRef(0);
+    // Aborted on unmount: nothing may create a preview or toast after it.
+    const controller = useRef(new AbortController());
+
+    useEffect(() => {
+      const current = new AbortController();
+      controller.current = current;
+      return () => current.abort();
+    }, []);
 
     useEffect(() => {
       onFilesChange?.(files);
@@ -121,45 +131,38 @@ export const FileUpload = memo(
         const batch = acceptedFiles.slice(0, slots);
         if (batch.length === 0) return;
 
+        const { signal } = controller.current;
         pendingCount.current += batch.length;
         const prepared: File[] = [];
         try {
           for (const file of batch) {
             try {
-              prepared.push(await prepareFile(file));
-            } catch (error) {
-              const message =
-                error instanceof CustomError
-                  ? error.message
-                  : PROCESSING_FAILED_MESSAGE;
-              const alternatives =
-                error instanceof CompressionError
-                  ? formats.filter((f) => f !== getFileExtension(file.name))
-                  : [];
-              toast.error(
-                alternatives.length > 0
-                  ? `${file.name}: ${message}. جرّب تحويلها إلى إحدى الصيغ: ${joinFormats(alternatives)}`
-                  : `${file.name}: ${message}`
+              prepared.push(
+                await prepareFile(file, {
+                  signal,
+                  onConverted: (name) => toast.info(MSG_SVG_CONVERTED(name)),
+                })
               );
-              console.error('Processing failed', error);
+            } catch (error) {
+              if (signal.aborted) return;
+              toastError(error, MSG_PROCESSING_FAILED);
             }
           }
         } finally {
           pendingCount.current -= batch.length;
         }
+        if (signal.aborted) return;
 
         // Previews are created only now, in the same tick as the append, so
         // none exists for a file that never reaches the list.
         const added = prepared.map((file) => ({
           id: generateId(),
           file,
-          preview: file.type.startsWith('image/')
-            ? createPreview(file)
-            : undefined,
+          preview: isImageFile(file) ? createPreview(file) : undefined,
         }));
         if (added.length > 0) setFiles((prev) => [...prev, ...added]);
       },
-      [files.length, maxFiles, formats, createPreview]
+      [files.length, maxFiles, createPreview]
     );
 
     const isSingleMode = maxFiles === 1;
@@ -170,11 +173,13 @@ export const FileUpload = memo(
       accept,
       maxFiles,
       multiple: !isSingleMode,
-      maxSize: maxSizeMB * MIB,
       disabled: isSingleMode && files.length > 0,
     });
 
-    const totalSize = files.reduce((sum, { file }) => sum + file.size, 0);
+    const totalSize = files.reduce(
+      (sum, { file }) => sum + describeFile(file).size,
+      0
+    );
 
     return (
       <div className={cn('w-full space-y-4', className)}>

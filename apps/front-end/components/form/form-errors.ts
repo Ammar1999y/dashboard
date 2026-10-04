@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
 
 const TOASTED_MESSAGES_MAX = 3;
 
@@ -7,7 +8,7 @@ export function showFormErrors(messages: Record<string, string>) {
     .filter((message) => message.trim() !== '')
     .slice(0, TOASTED_MESSAGES_MAX);
 
-  toast.error(shown.length > 0 ? shown.join('\n') : 'تحقق من صحة جميع الخانات');
+  toast.error(shown.length > 0 ? shown.join('\n') : MSG_INVALID_INPUT);
 }
 
 export function flattenErrors(

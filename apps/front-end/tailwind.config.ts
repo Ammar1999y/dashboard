@@ -1,9 +1,9 @@
 import type { Config } from 'tailwindcss';
 
-import { breakpointsTokens } from '@/constants/breakpoints';
-import { PRIMARY_CSS_VARIABLES } from '@/constants/theme';
 import animate from 'tailwindcss-animate';
 import plugin from 'tailwindcss/plugin';
+import { breakpointsTokens } from '@/constants/breakpoints';
+import { PRIMARY_CSS_VARIABLES } from '@/constants/theme';
 
 // Generate spacing values using CSS calc with --spacing variable
 // This mimics Tailwind v4's dynamic spacing behavior

@@ -6,16 +6,15 @@ import {
   isUniqueViolation,
 } from '@/db/errors';
 
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
+import { permissionMsg } from '@app/shared/messages/permissions';
 import {
-  HTTP_STATUS,
   MSG_EMAIL_EXISTS,
   MSG_PHONE_EXISTS,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
-
-import { mediaMsg } from '@/lib/media/messages';
-import { permissionMsg } from '@/lib/permissions/messages';
-import { userMsg } from '@/lib/users/messages';
+  userMsg,
+} from '@app/shared/messages/users';
 
 import { logSanitized } from '@/utils/log';
 

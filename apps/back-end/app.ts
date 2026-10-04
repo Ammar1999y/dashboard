@@ -21,14 +21,14 @@ import { errorClassOf, logLine } from '@/utils/log';
 // they run when the application is assembled, whatever else imports them.
 import '@/lib/otp/config';
 
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_INTERNAL_ERROR,
   MSG_METHOD_NOT_ALLOWED,
   MSG_PAGE_NOT_FOUND,
-} from '@app/shared/api-messages';
+} from '@app/shared/messages/common';
 
-import { CUSTOM_AUTH_CODE, localisedAuthMessage } from '@/lib/auth/errors';
+import { localisedAuthBody } from '@/lib/auth/errors';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { elysiaRouteConfig, toElysiaHandler } from '@/lib/http/adapters/elysia';
 import { runAfterResponse } from '@/lib/http/after-response';
@@ -74,15 +74,16 @@ async function localiseAuthError(response: Response): Promise<Response> {
     typeof body === 'object' && body !== null && 'code' in body
       ? body.code
       : undefined;
-  const message = localisedAuthMessage(code);
-  if (message === undefined) return response;
+  const localised = localisedAuthBody(code);
+  if (localised === undefined) return response;
 
   const headers = new Headers(response.headers);
   headers.set('content-type', 'application/json;charset=utf-8');
-  return Response.json(
-    { message, code: CUSTOM_AUTH_CODE },
-    { status: response.status, statusText: response.statusText, headers }
-  );
+  return Response.json(localised, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 /**

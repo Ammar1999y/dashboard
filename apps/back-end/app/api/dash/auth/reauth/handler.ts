@@ -1,10 +1,10 @@
+import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
-  HTTP_STATUS,
   MSG_INVALID_CREDENTIALS,
   MSG_REAUTH_GRANTED,
-  MSG_UPDATE_ERROR,
-} from '@app/shared/api-messages';
-import { CustomError } from '@app/shared/error-class';
+} from '@app/shared/messages/auth';
+import { MSG_UPDATE_ERROR } from '@app/shared/messages/common';
 import { adminReauthSchema } from '@app/shared/validation/auth';
 
 import { getAuditMeta } from '@/lib/audit';

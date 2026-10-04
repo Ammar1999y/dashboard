@@ -1,11 +1,13 @@
 import type { NavSection } from '@/components/dash/nav';
 
+import { DASHBOARD_PAGE_LABELS } from '@app/shared/messages/permissions';
+
 export const dashboardNav: readonly NavSection[] = [
   {
     name: 'الأساسي',
     items: [
       {
-        title: 'الرئيسية',
+        title: DASHBOARD_PAGE_LABELS.home,
         path: '/dash',
         icon: 'solar:home-2-bold-duotone',
       },
@@ -84,7 +86,7 @@ export const dashboardNav: readonly NavSection[] = [
     name: 'الإدارة',
     items: [
       {
-        title: 'المستخدمين',
+        title: DASHBOARD_PAGE_LABELS.users,
         path: '/dash/users',
         icon: 'solar:user-bold-duotone',
         children: [
@@ -101,7 +103,7 @@ export const dashboardNav: readonly NavSection[] = [
         ],
       },
       {
-        title: 'الصلاحيات',
+        title: DASHBOARD_PAGE_LABELS.permissions,
         path: '/dash/permissions',
         icon: 'solar:key-square-2-bold-duotone',
         children: [

@@ -6,13 +6,8 @@
 
 import * as z from 'zod';
 
+import { preferencesValidationMsg } from '../messages/validation';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, PRESET_NAME_MAX } from './constants';
-
-export const preferencesValidationMsg = {
-  presetTooLong: `اسم السمة يجب أن لا يتجاوز ${PRESET_NAME_MAX} حرفاً`,
-  presetInvalid: 'اسم السمة يحتوي على أحرف غير مسموحة',
-  fontScaleOutOfRange: `حجم الخط يجب أن يكون بين ${FONT_SCALE_MIN} و ${FONT_SCALE_MAX}`,
-};
 
 export const COLOR_MODES = ['light', 'dark', 'system'] as const;
 export const THEME_LAYOUTS = ['vertical', 'horizontal', 'mini'] as const;

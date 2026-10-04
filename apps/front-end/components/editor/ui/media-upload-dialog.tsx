@@ -1,6 +1,6 @@
 import type { MediaType } from '@/components/editor/media-config';
 import type { DialogStore } from '@/lib/dialogs';
-import type { UploadedFile } from '@/types/upload';
+import type { MediaFile } from '@/lib/files/upload';
 import type { FileRejection } from 'react-dropzone';
 
 import { memo, useCallback, useId, useMemo, useState } from 'react';
@@ -9,7 +9,7 @@ import { insertImage, insertMediaEmbed } from '@platejs/media';
 import { useEditorRef } from 'platejs/react';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
-import { MIB } from '@app/shared/validation/constants';
+import { MSG_FILE_UPLOADED } from '@app/shared/messages/media';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
@@ -28,6 +28,7 @@ import { mediaConfig } from '@/components/editor/media-config';
 import {
   getAcceptedFormats,
   getHelperText,
+  getSizeLimits,
   toastRejections,
 } from '@/components/shared/file-upload/file-utils';
 
@@ -54,12 +55,12 @@ const MediaUploadForm = memo(({ dialog, type }: MediaUploadFormProps) => {
   );
 
   const onUploadComplete = useCallback(
-    (file: UploadedFile) => {
+    (file: MediaFile) => {
       // Closed while uploading: the user cancelled the insert.
       if (dialog.getPayload() === null) return;
       insertMedia(file.url);
       dialog.close();
-      toast.success('تم رفع الملف بنجاح');
+      toast.success(MSG_FILE_UPLOADED);
     },
     [dialog, insertMedia]
   );
@@ -78,9 +79,9 @@ const MediaUploadForm = memo(({ dialog, type }: MediaUploadFormProps) => {
 
   const limits = useMemo(
     () => ({
-      maxSizeMB: config.maxSizeMB,
       maxFiles: 1,
       formats: getAcceptedFormats(config.accept),
+      sizes: getSizeLimits(config.accept),
     }),
     [config]
   );
@@ -95,7 +96,6 @@ const MediaUploadForm = memo(({ dialog, type }: MediaUploadFormProps) => {
     onDropRejected,
     accept: config.accept,
     maxFiles: limits.maxFiles,
-    maxSize: config.maxSizeMB * MIB,
     multiple: false,
   });
 

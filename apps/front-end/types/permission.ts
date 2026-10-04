@@ -1,25 +1,26 @@
-import type { EntityID } from '.';
-import type {
-  DashboardPage,
-  PermissionAction,
-  ROLE_SCOPE,
-} from '@app/shared/permissions/constants';
+import type { EntityID } from '@app/shared/types';
+import type { pagePermissionSchema } from '@app/shared/validation/permissions';
+import type * as z from 'zod';
 
-export type RoleScope = (typeof ROLE_SCOPE)[keyof typeof ROLE_SCOPE];
+export type PagePermission = z.output<typeof pagePermissionSchema>;
 
-export interface PagePermission {
-  name: DashboardPage;
-  permissions: Partial<Record<PermissionAction, boolean>>;
+/** A role as a user record and the role picker carry it. */
+export interface RoleSummary {
+  id: EntityID;
+  roleName: string;
 }
 
+/**
+ * A role as `/api/dash/permissions` sends it. The list carries the counts and
+ * timestamps; the detail carries the matrix.
+ */
 export interface PermissionClient {
   id: EntityID;
   roleName: string;
-  description?: string | null;
+  description: string | null;
   isActive: boolean;
-  scope: RoleScope;
   usersCount?: number;
-  createdAt?: string; // timestamp with time zone in Postgres
-  updatedAt?: string; // timestamp with time zone in Postgres
-  permissions: PagePermission[];
+  createdAt?: string;
+  updatedAt?: string;
+  permissions?: PagePermission[];
 }

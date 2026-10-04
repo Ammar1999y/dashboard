@@ -1,9 +1,5 @@
-import type { EntityID } from '.';
+import type { StoredRow } from './api';
+import type { CreateCategoryOutput } from '@/utils/validation/categories';
 
-export interface CategoryClient {
-  id: EntityID;
-  title: string;
-  isActive?: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-}
+/** Served by the mocks only until the back-end has it. */
+export type CategoryClient = CreateCategoryOutput & StoredRow;

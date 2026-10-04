@@ -1,15 +1,15 @@
 import type { Executor, Tx } from '@/db';
-import type { ActorPermissions } from '@/lib/permissions/checker';
 import type { RolePolicyTarget } from '@/lib/permissions/roles';
 import type { AccessScope } from '@app/shared/permissions/constants';
+import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
 import { eq } from 'drizzle-orm';
 
 import { roles, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { notFoundError } from '@/lib/http/response';
 import { isProtectedSystemRole } from '@/lib/permissions/roles';

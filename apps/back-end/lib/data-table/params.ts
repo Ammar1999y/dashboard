@@ -1,4 +1,4 @@
-import type { FilterColumnSpecs } from './column-specs';
+import type { FilterColumnSpecs } from '@app/shared/data-table/column-specs';
 import type { PaginationMeta } from '@app/shared/types/api';
 import type { ExtendedColumnSort } from '@app/shared/types/data-table';
 import type { SQL, Table } from 'drizzle-orm';
@@ -6,25 +6,16 @@ import type { SQL, Table } from 'drizzle-orm';
 import { and, asc, desc, ilike, or } from 'drizzle-orm';
 
 import {
-  DATA_TABLE_PARAM_KEYS,
-  isTrigramIndexable,
+  assertDataTableParamKeys,
+  invalidFilter,
+} from '@app/shared/data-table/filter-rules';
+import {
+  effectiveSearchTerm,
   MAX_PER_PAGE,
-  MAX_SEARCH_LENGTH,
-  MIN_SEARCH_LENGTH,
   parseSearchParams,
-  searchTermLength,
-  stripControlAndTrim,
 } from '@app/shared/data-table/parsers';
 
-import {
-  escapeLike,
-  filterColumns,
-  getColumn,
-  invalidFilter,
-} from './filter-columns';
-
-/** `search` is read here rather than by the parser, so it is added here too. */
-const ACCEPTED_PARAM_KEYS = new Set([...DATA_TABLE_PARAM_KEYS, 'search']);
+import { escapeLike, filterColumns, getColumn } from './filter-columns';
 
 interface DataTableQueryParams<T extends Table> {
   url: string;
@@ -64,13 +55,7 @@ export function parseDataTableParams<T extends Table>(
 ): DataTableQueryResult {
   const { searchParams } = new URL(url);
 
-  // Unknown as well as repeated: an ignored `serach=` would answer an
-  // unfiltered 200 that the caller reads as a search result.
-  const seen = new Set<string>();
-  for (const key of searchParams.keys()) {
-    if (seen.has(key) || !ACCEPTED_PARAM_KEYS.has(key)) invalidFilter();
-    seen.add(key);
-  }
+  assertDataTableParamKeys(searchParams);
 
   const params: Record<string, string | undefined> =
     Object.fromEntries(searchParams);
@@ -109,14 +94,7 @@ export function parseDataTableParams<T extends Table>(
   // character URL is a compatibility case, not an attack. A term that clears
   // the floor but yields no trigram — `!!!`, `😀😀😀` — is dropped by the same
   // rule, for the scan it would otherwise force.
-  const rawSearch = stripControlAndTrim(searchParams.get('search') ?? '');
-  const rawSearchLength = searchTermLength(rawSearch);
-  const search =
-    rawSearchLength >= MIN_SEARCH_LENGTH &&
-    rawSearchLength <= MAX_SEARCH_LENGTH &&
-    isTrigramIndexable(rawSearch)
-      ? rawSearch
-      : '';
+  const search = effectiveSearchTerm(searchParams.get('search') ?? '');
 
   let searchWhere: SQL | undefined;
   if (search && searchableColumns?.length) {

@@ -16,7 +16,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import { sanitizeFilename } from '@/lib/media/filename';
+import { sanitizeFilename } from '@app/shared/filename';
+
 import { getContentDisposition } from '@/lib/media/headers';
 
 /** Everything after `filename*=UTF-8''`. */

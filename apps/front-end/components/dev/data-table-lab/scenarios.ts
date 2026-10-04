@@ -5,7 +5,7 @@ import type { ColumnStore } from '@/components/ui/data-table/store/column-store'
 import type { QueryClient } from '@tanstack/react-query';
 import type { Table } from '@tanstack/react-table';
 
-import { useDataTableStore } from '@/utils/store/data-table-store';
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 
 import { LAB_ACTIONS_COLUMN, labColumns } from './columns';
 import { LAB_QUERY_KEY, labServer } from './fake-server';

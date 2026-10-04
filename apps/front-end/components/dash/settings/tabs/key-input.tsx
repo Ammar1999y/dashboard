@@ -4,8 +4,7 @@ import type { FieldPath } from 'react-hook-form';
 import { memo } from 'react';
 
 import FormInput from '@/components/form/form-input';
-
-const TOOLTIP = 'يقبل الأحرف الإنجليزية الصغيرة والأرقام والشرطات (-).';
+import { SLUG_TOOLTIP } from '@/components/form/slug';
 
 interface KeyInputProps {
   name: FieldPath<SettingsInput>;
@@ -17,7 +16,7 @@ const KeyInput = memo(({ name, className }: KeyInputProps) => (
     name={name}
     label='المفتاح'
     dir='ltr'
-    tooltip={TOOLTIP}
+    tooltip={SLUG_TOOLTIP}
     classNameField={className}
   />
 ));

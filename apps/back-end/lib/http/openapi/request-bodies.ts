@@ -6,7 +6,7 @@ import { PHONE_ENABLED, PHONE_REQUIRED } from '@app/shared/config';
 import { REQUEST_BODIES } from '@app/shared/contract';
 import {
   CUSTOM_ROLE_VALUE,
-  PERMISSION_ACTIONS,
+  PERMISSION_ACTION_NAMES,
 } from '@app/shared/permissions/constants';
 import {
   MAX_DOCUMENT_SIZE_MB,
@@ -131,9 +131,9 @@ function addPagePermissionRules(schema: JsonSchema): JsonSchema {
         properties: {
           permissions: {
             properties: Object.fromEntries(
-              Object.keys(PERMISSION_ACTIONS)
-                .filter((action) => action !== 'view')
-                .map((action) => [action, { const: false }])
+              PERMISSION_ACTION_NAMES.filter((action) => action !== 'view').map(
+                (action) => [action, { const: false }]
+              )
             ),
           },
         },

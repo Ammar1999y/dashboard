@@ -17,12 +17,12 @@ import {
 import { verifyGoogleIdToken } from 'better-auth/social-providers';
 import * as z from 'zod';
 
+import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
 import {
-  MSG_INTERNAL_ERROR,
   MSG_INVALID_CREDENTIALS,
   MSG_REAUTH_REQUIRED,
-  REAUTH_REQUIRED_CODE,
-} from '@app/shared/api-messages';
+} from '@app/shared/messages/auth';
+import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
 
 import { auth } from '@/lib/auth';
 import * as passkeyAssertion from '@/lib/auth/passkey-assertion';

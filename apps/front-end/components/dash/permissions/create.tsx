@@ -9,19 +9,16 @@ import { useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
-import { ROLE_SCOPE } from '@app/shared/permissions/constants';
+import { createPermissionSchema } from '@app/shared/validation/permissions';
 
-import {
-  createPermissionSchema,
-  DEFAULT_PERMISSION,
-} from '@/utils/validation/permissions';
+import { DEFAULT_PERMISSION } from '@/utils/validation/permissions';
 
 import { Form } from '@/components/form/form';
 
 import { FormHeader } from '../shared/form-header';
 import { useEntityMutations } from '../shared/use-entity-mutations';
 import { cacheRoleOption } from './cache';
-import { permissionEntity } from './entity';
+import { permissionEntity, ROLE_OPTIONS_KEY } from './entity';
 import { PermissionFields } from './fields';
 
 export default function CreatePermission() {
@@ -43,10 +40,11 @@ export default function CreatePermission() {
         (created) => ({
           ...data,
           ...created,
-          scope: ROLE_SCOPE.STANDARD,
+          description: data.description ?? null,
           usersCount: 0,
         }),
-        (row) => cacheRoleOption(queryClient, row)
+        (row) => cacheRoleOption(queryClient, row),
+        () => void queryClient.invalidateQueries({ queryKey: ROLE_OPTIONS_KEY })
       ),
     [create, queryClient]
   );

@@ -1,13 +1,12 @@
-import type { PermissionRows } from './matrix';
 import type { Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
+import type { PermissionRows } from '@app/shared/permissions/matrix';
 import type { EntityID } from '@app/shared/types';
 
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
+import { diffPermissionMatrices } from '@app/shared/permissions/matrix';
 
 import { auditLog } from '@/lib/audit';
-
-import { diffPermissionMatrices } from './matrix';
 
 /**
  * Version marker on every role/permission audit payload.

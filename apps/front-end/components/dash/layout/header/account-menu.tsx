@@ -1,10 +1,9 @@
 import Link from 'next/link';
 import { memo } from 'react';
 
-import { authClient } from '@/lib/auth/client';
+import { authClient, toAuthError } from '@/lib/auth/client';
 import { useSession } from '@/lib/auth/use-session';
-
-import { toastError } from '@/utils/mutation';
+import { toastError } from '@/lib/toast-error';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -21,7 +20,7 @@ const signOut = () => {
   void authClient
     .signOut()
     .then(({ error }) => {
-      if (error) toastError(error);
+      if (error) toastError(toAuthError(error));
     })
     .catch(toastError);
 };

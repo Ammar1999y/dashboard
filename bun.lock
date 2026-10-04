@@ -217,6 +217,7 @@
         "@ianvs/prettier-plugin-sort-imports": "^4",
         "eslint": "^10",
         "prettier": "^3",
+        "svgo": "^4",
         "typescript": "^6",
       },
     },

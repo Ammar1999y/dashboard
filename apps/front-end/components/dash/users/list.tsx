@@ -1,3 +1,5 @@
+import { DASHBOARD_PAGE_LABELS } from '@app/shared/messages/permissions';
+
 import { DataTable } from '@/components/ui/data-table';
 
 import { columns } from './columns';
@@ -8,7 +10,7 @@ const cta = { href: userEntity.newRoute, label: 'إضافة مستخدم جدي�
 export default function UsersList() {
   return (
     <DataTable
-      title='المستخدمين'
+      title={DASHBOARD_PAGE_LABELS.users}
       cta={cta}
       columns={columns}
       queryKey={userEntity.keys.list}

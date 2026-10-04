@@ -75,9 +75,9 @@ What lives there and why:
 - `auth-fields.ts` — the Better Auth `additionalFields`, so the server's
   `betterAuth()` and the client's `inferAdditionalFields()` share one
   declaration.
-- `types/`, `permissions/constants`, `config`, `api-messages`, `error-class`,
-  `data-table/*`, `images/*`, `utils`, `time` — the isomorphic modules that used
-  to be copied between the two apps.
+- `types/`, `permissions/constants`, `config`, `messages/*`, `http-status`,
+  `error-codes`, `error-class`, `data-table/*`, `images/*`, `utils`, `time` — the
+  isomorphic modules that used to be copied between the two apps.
 
 ## Dependencies
 

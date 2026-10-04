@@ -1,22 +1,18 @@
 import { encode } from 'blurhash';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   hasRasterSignature,
   isAnimatedRaster,
   matchesMagicBytes,
 } from '@app/shared/images/raster-bytes';
-import {
-  MAX_IMAGE_EDGE,
-  MAX_IMAGE_PIXELS,
-} from '@app/shared/validation/constants';
+import { svgRefusalMessage } from '@app/shared/images/svg-refusal';
+import { uploadMsg } from '@app/shared/messages/media';
 
 import { errorTypeOf, logSanitized } from '@/utils/log';
 
 import { FILE_TYPE_TABLE } from '../allowlist';
-import { sanitizeFilename } from '../filename';
-import { uploadMsg } from '../messages';
 import { optimizeImage } from './optimize';
 import { imageToRgba } from './rgba';
 import { sanitizeSvgServer, svgOptimizerServer } from './svg';
@@ -136,15 +132,7 @@ export function validateSvgUpload(
     errors: result.errors,
   });
   throw new CustomError(
-    result.reason === 'animated'
-      ? uploadMsg.animatedNotAllowed(sanitizeFilename(fileName))
-      : result.reason === 'too-many-pixels'
-        ? uploadMsg.tooManyPixels(Math.floor(MAX_IMAGE_PIXELS / 1_000_000))
-        : result.reason === 'edge-too-long'
-          ? uploadMsg.edgeTooLong(MAX_IMAGE_EDGE)
-          : result.reason === 'invalid-inline-raster'
-            ? uploadMsg.invalidInlineRaster
-            : uploadMsg.invalidSvg,
+    svgRefusalMessage(result.reason, fileName),
     result.reason === 'too-many-pixels' || result.reason === 'edge-too-long'
       ? HTTP_STATUS.UNPROCESSABLE
       : HTTP_STATUS.BAD_REQUEST

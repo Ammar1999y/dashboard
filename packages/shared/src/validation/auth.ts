@@ -2,8 +2,17 @@ import type { EntityID } from '../types';
 
 import * as z from 'zod';
 
-import { MSG_CUSTOM_ROLE_NEEDS_PERMISSIONS } from '../api-messages';
 import { PHONE_ENABLED, PHONE_REQUIRED } from '../config';
+import { MSG_CUSTOM_ROLE_NEEDS_PERMISSIONS } from '../messages/users';
+import {
+  idRequired,
+  MSG_CAPTCHA_REQUIRED,
+  MSG_NAME_REQUIRED,
+  MSG_NAME_TOO_LONG,
+  MSG_PERMISSIONS_ONLY_FOR_CUSTOM_ROLE,
+  MSG_PHONE_DISABLED,
+  MSG_PHONE_REQUIRED,
+} from '../messages/validation';
 import { CUSTOM_ROLE_VALUE } from '../permissions/constants';
 import { NAME_MAX } from './constants';
 import { PHONE_OTP_CHANNELS } from './enums';
@@ -11,7 +20,6 @@ import { otpCodeSchema } from './otp';
 import { permissionsArraySchema } from './permissions';
 import {
   emailSchema,
-  idRequired,
   idSchema,
   optionalPhoneSchema,
   passwordSchema,
@@ -30,8 +38,8 @@ export const loginSchema = z.object({
   password: passwordSchema,
   captcha: z
     .string()
-    .min(1, 'الرجاء التحقق من أنك لست روبوت')
-    .max(1000, 'الرجاء التحقق من أنك لست روبوت'),
+    .min(1, MSG_CAPTCHA_REQUIRED)
+    .max(1000, MSG_CAPTCHA_REQUIRED),
   // Validated and published rather than read straight off the body: the value
   // decides a session lifetime, and it survives a two-factor challenge in the
   // companion record. `HONOUR_REMEMBER_ME` decides whether it is obeyed.
@@ -51,8 +59,8 @@ const userRoleSchema = z.object({
     sanitizeStrictSingleLine,
     z
       .string()
-      .min(2, 'الاسم مطلوب')
-      .max(NAME_MAX, `الاسم يجب أن لا يتجاوز ${NAME_MAX} حرفاً`)
+      .min(2, MSG_NAME_REQUIRED)
+      .max(NAME_MAX, MSG_NAME_TOO_LONG)
       .meta({
         maxLength: undefined,
         description: `${STRICT_SINGLE_LINE_DESCRIPTION} ${strictTextMaximum(NAME_MAX)}`,
@@ -95,7 +103,7 @@ function validatePhoneByMode(
   if (!PHONE_ENABLED && data.phoneNumber) {
     ctx.addIssue({
       code: 'custom',
-      message: 'رقم الهاتف غير مُفعّل في النظام',
+      message: MSG_PHONE_DISABLED,
       path: ['phoneNumber'],
     });
   }
@@ -105,7 +113,7 @@ function validatePhoneByMode(
   if (PHONE_REQUIRED && !data.phoneNumber && !(allowAbsent && absent)) {
     ctx.addIssue({
       code: 'custom',
-      message: 'رقم الهاتف مطلوب',
+      message: MSG_PHONE_REQUIRED,
       path: ['phoneNumber'],
     });
   }
@@ -141,7 +149,7 @@ function validateCustomRolePermissions(
   if (data.roleId !== CUSTOM_ROLE_VALUE && data.permissions?.length) {
     ctx.addIssue({
       code: 'custom',
-      message: 'الصلاحيات مسموح بها فقط عند اختيار دور مخصص',
+      message: MSG_PERMISSIONS_ONLY_FOR_CUSTOM_ROLE,
       path: ['permissions'],
     });
   }

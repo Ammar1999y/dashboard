@@ -1,4 +1,4 @@
-import type { FilterColumnSpecs } from '@/lib/data-table/column-specs';
+import type { FilterColumnSpecs } from '@app/shared/data-table/column-specs';
 import type { MediaScope } from '@app/shared/validation/media';
 
 import { and, count, eq, isNotNull } from 'drizzle-orm';
@@ -6,8 +6,9 @@ import { and, count, eq, isNotNull } from 'drizzle-orm';
 import { db } from '@/db';
 import { files } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 import { BUCKET_TYPES, FILE_KINDS } from '@app/shared/validation/enums';
 import { MEDIA_SCOPES } from '@app/shared/validation/media';
 import { KNOWN_MIME_TYPES } from '@app/shared/validation/media-types';
@@ -24,7 +25,6 @@ import {
   searchFolders,
 } from '@/lib/media/folders';
 import { UNFILED_RETENTION_DAYS, unfiledNow } from '@/lib/media/lifecycle';
-import { mediaMsg } from '@/lib/media/messages';
 import { ENABLED_VISIBILITIES } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 

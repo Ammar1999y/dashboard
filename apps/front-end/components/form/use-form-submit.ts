@@ -7,7 +7,7 @@ import type {
 
 import { useEffect, useMemo } from 'react';
 
-import { toastError } from '@/utils/mutation';
+import { toastError } from '@/lib/toast-error';
 
 import { flattenErrors, showFormErrors } from './form-errors';
 import { clearFormErrors, setFormErrors } from './store';

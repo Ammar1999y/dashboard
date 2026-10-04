@@ -16,10 +16,9 @@ import { users, verificationSessions } from '@/db/schema';
 import { APIError } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
 
-import {
-  HTTP_STATUS,
-  TWO_FACTOR_UNAVAILABLE_CODE,
-} from '@app/shared/api-messages';
+import { TWO_FACTOR_UNAVAILABLE_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
 import {
   ENABLED_TWO_FACTOR_METHODS,
   TWO_FACTOR_ENABLED,
@@ -29,7 +28,6 @@ import { auditLog, boundedAuditMeta } from '@/lib/audit';
 
 import { logSanitized } from '@/utils/log';
 
-import { twoFactorMsg } from '../messages';
 import { expireDontRememberMarker } from '../session/cookie';
 import {
   expiresIn,

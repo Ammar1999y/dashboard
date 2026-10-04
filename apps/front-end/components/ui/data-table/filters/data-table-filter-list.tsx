@@ -13,7 +13,6 @@ import { dataTableConfig } from '@app/shared/data-table/config';
 import { cn } from '@/lib/utils';
 
 import { generateId } from '@/utils/generate-id';
-import { useDataTableStore } from '@/utils/store/data-table-store';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,6 +24,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
 import { Icon } from '@/components/ui/icon';
 import {
   Popover,

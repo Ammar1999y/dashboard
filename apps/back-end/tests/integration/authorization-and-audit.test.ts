@@ -39,12 +39,9 @@ import { sql } from 'drizzle-orm';
 import { app } from '@/app';
 import { db } from '@/db';
 
-import {
-  HTTP_STATUS,
-  MSG_CREATED,
-  MSG_NOT_FOUND,
-  REAUTH_REQUIRED_CODE,
-} from '@app/shared/api-messages';
+import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_CREATED, MSG_NOT_FOUND } from '@app/shared/messages/common';
 
 import { SQLITE_MAINTENANCE_TOKEN } from '@/lib/env.server';
 import { generateUuidV7 } from '@/lib/id';

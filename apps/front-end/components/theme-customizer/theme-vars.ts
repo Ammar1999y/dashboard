@@ -10,6 +10,7 @@ const COMMON_STYLE_KEYS: ReadonlySet<string> = new Set(COMMON_STYLES);
 function toColorChannels(key: string, value: string) {
   if (value.startsWith('var(')) return value;
   const channels = colorFormatter(value, 'hsl', '4', true);
+  if (channels === null) return null;
   // theme-tokens.css appends its own alpha: `hsl(var(--shadow-color) / 0.1)`.
   return key === 'shadow-color' ? channels.split(' / ', 1)[0] : channels;
 }
@@ -22,14 +23,16 @@ export function computeThemeVars(
   const common = Object.entries(styles.light);
   const modeSpecific = Object.entries(styles[mode]);
 
-  // `styles` comes back from localStorage unchecked, hence the string guards.
+  // `styles` comes back from localStorage unchecked, hence the guards: a value
+  // that is not a color leaves theme-tokens.css's own in place.
   for (const [key, value] of common) {
     if (typeof value === 'string' && COMMON_STYLE_KEYS.has(key))
       vars[`--${key}`] = value;
   }
   for (const [key, value] of modeSpecific) {
     if (typeof value !== 'string' || COMMON_STYLE_KEYS.has(key)) continue;
-    vars[`--${key}`] = toColorChannels(key, value);
+    const channels = toColorChannels(key, value);
+    if (channels !== null) vars[`--${key}`] = channels;
   }
   return vars;
 }

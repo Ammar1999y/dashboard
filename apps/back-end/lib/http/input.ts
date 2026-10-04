@@ -2,10 +2,12 @@ import type { HandlerInput } from './contract';
 import type { EntityID } from '@app/shared/types';
 import type { z } from 'zod';
 
-import { HTTP_STATUS, MSG_INVALID_INPUT } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
+import { idRequired } from '@app/shared/messages/validation';
 import { validID } from '@app/shared/utils';
-import { idRequired, zodIssueMessage } from '@app/shared/validation/rules';
+import { zodIssueMessage } from '@app/shared/validation/rules';
 
 /** Narrows a parsed JSON body to a plain object; 400 for anything else. */
 export function requireJsonBody(body: unknown): Record<string, unknown> {

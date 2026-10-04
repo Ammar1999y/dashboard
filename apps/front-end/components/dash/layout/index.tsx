@@ -6,9 +6,12 @@ import { useEffect } from 'react';
 import { useSession } from '@/lib/auth/use-session';
 import { cn } from '@/lib/utils';
 
-import { ThemeLayout, useThemeLayout } from '@/utils/store/setting';
-
 import { down, useMediaQuery } from '@/hooks/use-media-query';
+import { ErrorState } from '@/components/ui/error-state';
+import {
+  ThemeLayout,
+  useThemeLayout,
+} from '@/components/theme-customizer/layout-store';
 
 import { saveRedirectPath } from '../auth/redirect-path';
 import { Header } from './header';
@@ -25,16 +28,19 @@ export default function DashboardLayout({
   const isMobile = useMediaQuery(MOBILE_QUERY);
   const themeLayout = useThemeLayout();
   const { replace, asPath } = useRouter();
-  const { data: session, isPending } = useSession();
+  const { data: session, isPending, error, refetch } = useSession();
   const userId = session?.user.id;
 
   useEffect(() => {
-    if (isPending || userId) return;
+    if (isPending || userId || error) return;
     saveRedirectPath(asPath);
     void replace('/dash/sign-in');
-  }, [isPending, userId, asPath, replace]);
+  }, [isPending, userId, error, asPath, replace]);
 
-  if (isPending || !userId) return null;
+  if (isPending) return null;
+  if (error)
+    return <ErrorState error={error} refetch={refetch} className='m-6' />;
+  if (!userId) return null;
 
   const horizontal = !isMobile && themeLayout === ThemeLayout.Horizontal;
   const sidebar = !isMobile && !horizontal;

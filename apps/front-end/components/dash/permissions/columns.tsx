@@ -1,7 +1,7 @@
 import type { PermissionClient } from '@/types/permission';
 import type { ColumnDef } from '@tanstack/react-table';
 
-import { humanReadableNumber } from '@/utils';
+import { humanReadableNumber } from '@app/shared/utils';
 
 import {
   dateColumn,

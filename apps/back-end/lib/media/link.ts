@@ -10,12 +10,12 @@ import { and, inArray, isNotNull } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { files } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { mediaMsg } from '@app/shared/messages/media';
 
 import { distinctIds, FILE_COLUMNS } from './files';
 import { claimFiles } from './lifecycle';
-import { mediaMsg } from './messages';
 import { requirePublishGrant } from './policy';
 import { usageVisibilities } from './usages';
 import { transitionFile } from './visibility';

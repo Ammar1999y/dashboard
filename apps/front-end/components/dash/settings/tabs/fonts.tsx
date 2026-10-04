@@ -2,8 +2,9 @@ import type { SettingsInput } from '@/utils/validation/settings';
 
 import { memo } from 'react';
 
-import { returnNumberOrNull } from '@/utils';
 import { useController, useWatch } from 'react-hook-form';
+
+import { numberOr } from '@/utils/number';
 
 import FormField from '@/components/form/form-field';
 import FormInput from '@/components/form/form-input';
@@ -94,9 +95,9 @@ const LivePreview = memo(({ dir }: { dir: 'rtl' | 'ltr' }) => {
   return (
     <FontPreview
       fontName={fonts?.googleFont ?? null}
-      letterSpacing={returnNumberOrNull(fonts?.letterSpacing) ?? 0}
-      lineHeight={returnNumberOrNull(fonts?.lineHeight) ?? 1}
-      fontSizeMultiplier={returnNumberOrNull(fonts?.fontSizeMultiplier) ?? 1}
+      letterSpacing={numberOr(fonts?.letterSpacing, 0)}
+      lineHeight={numberOr(fonts?.lineHeight, 1)}
+      fontSizeMultiplier={numberOr(fonts?.fontSizeMultiplier, 1)}
       dir={dir}
     />
   );

@@ -1,7 +1,7 @@
-import type { PagePermissions } from './matrix';
 import type { Executor, Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
 import type { AccessScope } from '@app/shared/permissions/constants';
+import type { PagePermissions } from '@app/shared/permissions/matrix';
 import type { EntityID } from '@app/shared/types';
 
 import { and, eq, ne, notInArray, sql } from 'drizzle-orm';
@@ -9,19 +9,20 @@ import { and, eq, ne, notInArray, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { rolePermissions, roles } from '@/db/schema';
 
-import { HTTP_STATUS, MSG_CREATE_ERROR } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_CREATE_ERROR } from '@app/shared/messages/common';
 import {
   CUSTOM_ROLE_VALUE,
   ROLE_SCOPE,
 } from '@app/shared/permissions/constants';
+import { CUSTOM_ROLE_NAME_PREFIX } from '@app/shared/permissions/roles';
 
 import { auditLog } from '@/lib/audit';
 import { notFoundError } from '@/lib/http/response';
 import { generateUuidV7 } from '@/lib/id';
 
 import { PERMISSION_AUDIT_VERSION } from './audit';
-import { permissionMsg } from './messages';
 
 export type RolePolicyTarget =
   { roleName?: string | null; scope?: string | null } | null | undefined;
@@ -52,18 +53,6 @@ export function standardScopeFilter() {
 
 export function standardRoleFilter(roleId: EntityID) {
   return and(eq(roles.id, roleId), standardScopeFilter());
-}
-
-/** `chk_custom_prefix_scope` ties this prefix to the custom scope. */
-export const CUSTOM_ROLE_NAME_PREFIX = `${CUSTOM_ROLE_VALUE}-`;
-
-/** The custom prefix names the roles `createCustomRole` mints. */
-export function assertStandardRoleName(roleName: string): void {
-  if (roleName.toLowerCase().startsWith(CUSTOM_ROLE_NAME_PREFIX))
-    throw new CustomError(
-      permissionMsg.customPrefixForbidden(CUSTOM_ROLE_NAME_PREFIX),
-      HTTP_STATUS.BAD_REQUEST
-    );
 }
 
 /**

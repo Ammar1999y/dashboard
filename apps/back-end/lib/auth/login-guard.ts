@@ -7,12 +7,12 @@ import { and, eq, sql } from 'drizzle-orm';
 import { withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/api-messages';
 import { CustomError } from '@app/shared/error-class';
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { userMsg } from '@app/shared/messages/users';
 
 import { auditLog } from '@/lib/audit';
 import { liveUser } from '@/lib/users/filters';
-import { userMsg } from '@/lib/users/messages';
 
 import { logLine } from '@/utils/log';
 
