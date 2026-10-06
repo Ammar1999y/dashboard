@@ -25,6 +25,7 @@ import {
   BETTER_AUTH_LOCAL_THROTTLE_PATHS,
   BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
   BETTER_AUTH_PATH_STATUSES,
+  BETTER_AUTH_SPENT_INPUT_REMEDIES,
   BETTER_AUTH_STATUS_DESCRIPTIONS,
   BETTER_AUTH_SUMMARIES,
   TWO_FACTOR_CHALLENGE_PATHS,
@@ -41,7 +42,7 @@ import {
 import { bodyTooLargeResponse, PRE_AUTH_RESPONSES } from './envelope';
 import { isJsonSchema, normalizeOpenApi31, toJsonSchema } from './json-schema';
 import { requestBody } from './request-bodies';
-import { operationSlug } from './route-operations';
+import { operationSlug, REAUTH_REQUIRED_REMEDY } from './route-operations';
 
 const BETTER_AUTH_OPENAPI = await auth.api.generateOpenAPISchema();
 const BETTER_AUTH_CONTEXT = await auth.$context;
@@ -128,6 +129,9 @@ const BETTER_AUTH_STATUS_DETAILS: Record<
   },
 };
 
+/** The 401 every path in `BETTER_AUTH_PASSWORD_LOCKOUT_PATHS` can also answer. */
+const REAUTH_REQUIRED_DETAIL = `With code \`REAUTH_REQUIRED\` no \`password\` was sent and the re-authentication window is closed: send \`password\`, or ${REAUTH_REQUIRED_REMEDY}`;
+
 function isDescribedStatus(
   status: string
 ): status is keyof typeof BETTER_AUTH_STATUS_DESCRIPTIONS {
@@ -141,14 +145,6 @@ const BETTER_AUTH_ERROR_SCHEMA: JsonSchema = {
   required: ['message'],
 };
 
-/**
- * Widens one response to admit a second JSON body alongside the one it
- * declares; `fallback` stands in for a response that is not there.
- *
- * `anyOf`, never `oneOf`: an alternative may overlap the declared body — the
- * envelope satisfies Better Call's error shape — and exactly-one would then
- * fail on the body the limiter actually sends.
- */
 function withDescription(response: unknown, detail: string): JsonSchema {
   if (!isJsonSchema(response)) return { description: detail };
   return {
@@ -157,6 +153,14 @@ function withDescription(response: unknown, detail: string): JsonSchema {
   };
 }
 
+/**
+ * Widens one response to admit a second JSON body alongside the one it
+ * declares; `fallback` stands in for a response that is not there.
+ *
+ * `anyOf`, never `oneOf`: an alternative may overlap the declared body — the
+ * envelope satisfies Better Call's error shape — and exactly-one would then
+ * fail on the body the limiter actually sends.
+ */
 function withAlternativeJsonBody(
   response: unknown,
   extra: JsonSchema,
@@ -305,8 +309,9 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
         .join(' '),
       BETTER_AUTH_ERROR_SCHEMA
     );
-  const database =
-    'No database connection came free in time, or a transaction was aborted to break a deadlock; retry after `Retry-After`.';
+  const database = `No database connection came free in time, or a transaction was aborted to break a deadlock; ${
+    BETTER_AUTH_SPENT_INPUT_REMEDIES[path] ?? 'retry after `Retry-After`.'
+  }`;
   // Endpoints that map a failure themselves (`asAuthError`) answer in Better
   // Auth's shape; every other path's database 503 reaches the envelope.
   responses['503'] =
@@ -341,6 +346,7 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
         description: [
           BETTER_AUTH_STATUS_DESCRIPTIONS[status],
           BETTER_AUTH_STATUS_DETAILS[path]?.[status],
+          status === '401' && passwordLockout && REAUTH_REQUIRED_DETAIL,
         ]
           .filter(Boolean)
           .join(' '),
@@ -375,7 +381,7 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
 
   if (path === '/oauth/google/callback')
     responses['302'] = {
-      description: `Return to the validated same-origin callbackURL, without codes or tokens. Fetch /api/auth/oauth/result with cookies to consume the result. A callback whose sign-in state is gone (expired, already used, or started in another browser) cannot know that callbackURL and goes to ${OAUTH_STATE_LOST_PAGE} instead, whatever mode the flow started in; start a new sign-in from there. A database or server fault answers 500 or 503 instead, with or without a callbackURL.`,
+      description: `Return to the validated same-origin callbackURL, without codes or tokens. Fetch /api/auth/oauth/result with cookies to consume the result. A callback whose sign-in state is gone (expired, already used, started in another browser, or never issued here) cannot know that callbackURL and goes to ${OAUTH_STATE_LOST_PAGE} instead, whatever mode the flow started in; start a new sign-in from there. A database or server fault answers 500 or 503 instead, with or without a callbackURL.`,
       headers: { Location: { schema: { type: 'string', format: 'uri' } } },
     };
 

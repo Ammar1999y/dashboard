@@ -74,6 +74,46 @@ function requireVerifierChallenge(
 }
 
 /**
+ * `context` whose `internalAdapter` records the first fault any call raises.
+ * The plugin swallows some: `beginAttempt` answers a failed counter consume
+ * with 401 and drops a failed re-arm, so the fault would read as a refusal.
+ */
+function recordingFaults(context: AuthContext['context']) {
+  const seen: { fault?: { error: unknown } } = {};
+  const record = (error: unknown) => {
+    seen.fault ??= { error };
+    return error;
+  };
+  const adapter = new Proxy(context.internalAdapter, {
+    get: (target, property, receiver) => {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        try {
+          const result: unknown = Reflect.apply(value, target, args);
+          return result instanceof Promise
+            ? result.catch((error: unknown) => {
+                throw record(error);
+              })
+            : result;
+        } catch (error) {
+          throw record(error);
+        }
+      };
+    },
+  });
+  return {
+    context: new Proxy(context, {
+      get: (target, property) =>
+        property === 'internalAdapter'
+          ? adapter
+          : Reflect.get(target, property),
+    }),
+    fault: () => seen.fault,
+  };
+}
+
+/**
  * The caller resolves the challenge so work that must stay outside the
  * transaction (the TOTP step reservation) can run first. `verify` must pass its
  * bound `context` to the endpoint it delegates to.
@@ -87,14 +127,22 @@ async function runPluginVerifier<T>(
     ctx,
     challenge,
     async (tx) => {
-      const bound = await transactionBoundContext(ctx.context);
+      const watched = recordingFaults(
+        await transactionBoundContext(ctx.context)
+      );
+      let outcome: { response: T } | { error: unknown };
       try {
-        return { response: await verify(bound, tx) };
+        outcome = { response: await verify(watched.context, tx) };
       } catch (error) {
-        // Invalid-code attempts must commit their counters before returning the error.
-        if (isAPIError(error)) return { error };
-        throw error;
+        outcome = { error };
       }
+      // Ahead of the answer: a fault the plugin swallowed, or one a later
+      // statement reports only as the aborted transaction, is answered as itself.
+      const fault = watched.fault();
+      if (fault) throw fault.error;
+      // Invalid-code attempts must commit their counters before returning the error.
+      if ('error' in outcome && !isAPIError(outcome.error)) throw outcome.error;
+      return outcome;
     }
   );
   if (!result) throw challengeMissingError();
@@ -327,24 +375,25 @@ const twoFactorAuth = () => {
             const requestSession = await resolveRequestSession(ctx);
             if (!requestSession) return;
             const credentialId = registeredPasskeyId(ctx.context.returned);
-            const outcome = credentialId
+            const result = credentialId
               ? await recordPasskeyEnrolment(ctx, requestSession, credentialId)
-              : 'failed';
-            if (outcome === 'recorded') return;
+              : null;
+            if (result?.outcome === 'recorded') return;
             logSanitized('error', {
               msg: 'twoFactor.enrolPasskey.intentUnrecorded',
               userId: requestSession.userId,
-              effect: credentialId
-                ? outcome === 'no-passkey'
+              effect: result
+                ? result.outcome === 'no-passkey'
                   ? 'the credential was deleted before it could be enrolled'
                   : 'the credential exists but is not offered as a factor'
                 : 'the registration response did not name the credential it wrote',
+              ...(result?.outcome === 'failed' && { cause: result.cause }),
             });
             // Replaces the registration's 200, which claimed a factor was added.
             // The credential is deliberately NOT removed on `'failed'`: a
             // compensating write after a failed write is the least likely to
             // succeed, and the authenticator already holds the credential.
-            const credentialGone = outcome === 'no-passkey';
+            const credentialGone = result?.outcome === 'no-passkey';
             throw authError(
               credentialGone
                 ? HTTP_STATUS.CONFLICT

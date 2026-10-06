@@ -4,11 +4,11 @@ import path from 'node:path';
 import type { RouteManifestEntry } from '@/lib/http/route-manifest';
 import type { PaginationMeta } from '@app/shared/types/api';
 
-import { MEDIA_FILTER_COLUMNS } from '@/app/api/dash/media/handler';
 import { ROUTES } from '@/routes';
 
 import { operatorsForSpec } from '@app/shared/data-table/column-specs';
 import {
+  MEDIA_FILTER_COLUMNS,
   PERMISSIONS_FILTER_COLUMNS,
   USERS_FILTER_COLUMNS,
 } from '@app/shared/data-table/filterable-columns';
@@ -36,13 +36,18 @@ import {
   betterAuthServes,
 } from '@/lib/auth/allowed-paths';
 import { BETTER_AUTH_OVERRIDDEN_RESPONSES } from '@/lib/http/openapi/better-auth';
-import { BETTER_AUTH_TRUSTED_RESPONSES } from '@/lib/http/openapi/better-auth-tables';
+import {
+  BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
+  BETTER_AUTH_SPENT_INPUT_REMEDIES,
+  BETTER_AUTH_TRUSTED_RESPONSES,
+} from '@/lib/http/openapi/better-auth-tables';
 import { openApiDocument } from '@/lib/http/openapi/document';
 import {
   memoiseOpenApiDocument,
   resolveOpenApiDocument,
 } from '@/lib/http/openapi/route';
 import { operationKey } from '@/lib/http/openapi/route-operations';
+import { SPENT_INPUT_REMEDIES } from '@/lib/http/openapi/route-tables';
 import { isSafeMethod } from '@/lib/http/origin';
 import {
   toManifest,
@@ -284,6 +289,8 @@ describe('the OpenAPI document', () => {
       handlerRateLimit: false,
       body: 'json',
       response: 'envelope',
+      reauth: false,
+      checksPassword: false,
     };
 
     expect(() => openApiDocument([...toManifest(ROUTES), collision])).toThrow(
@@ -617,6 +624,84 @@ describe('request and response contract fidelity', () => {
       'post'
     ).responses as Record<string, Record<string, unknown>>;
     expect(password['503']?.description).not.toContain('OTP channel');
+  });
+
+  test('a 503 after a single-use input was spent names the remedy, not a retry', () => {
+    const full = openApiDocument(toManifest(ROUTES));
+    const unavailable = (pathName: string) =>
+      String(
+        (
+          operationOf(full, pathName, 'post').responses as Record<
+            string,
+            Record<string, unknown>
+          >
+        )['503']?.description
+      );
+
+    const betterAuthUnavailable = (pathName: string) =>
+      String(
+        (
+          operationOf(
+            full,
+            `/api/auth${pathName}`,
+            betterAuthServes(pathName, 'POST') ? 'post' : 'get'
+          ).responses as Record<string, Record<string, unknown>>
+        )['503']?.description
+      );
+    const RETRY = 'deadlock; retry after `Retry-After`';
+
+    // What a retry actually meets, traced per path; the OAuth paths are not
+    // served with OAuth disabled, as in this tier.
+    const remedies: Record<string, string> = {
+      '/passwordless/verify': 'request a new code',
+      '/two-factor/otp/verify': 'start a new sign-in',
+      '/two-factor/verify-totp': 'next code',
+      '/two-factor/passkey/verify': 'start a new sign-in',
+      '/passkey/delete-passkey': 'a new one at `/two-factor/passkey/grant`',
+      '/oauth/google/callback': 'start a new sign-in',
+    };
+    expect(
+      Object.keys(BETTER_AUTH_SPENT_INPUT_REMEDIES).toSorted(compareCodeUnits)
+    ).toEqual(Object.keys(remedies).toSorted(compareCodeUnits));
+    const served = Object.entries(remedies).filter(
+      ([pathName]) =>
+        betterAuthServes(pathName, 'POST') || betterAuthServes(pathName, 'GET')
+    );
+    expect(served.length).toBeGreaterThanOrEqual(5);
+    for (const [pathName, remedy] of served) {
+      const description = betterAuthUnavailable(pathName);
+      expect(description, pathName).toContain(remedy);
+      expect(description, pathName).not.toContain(RETRY);
+    }
+    // Their 503 rolls the spend back, so the retry it invites succeeds.
+    for (const pathName of [
+      '/two-factor/verify-backup-code',
+      '/oauth/result',
+      '/sign-in/email',
+    ]) {
+      if (
+        !betterAuthServes(pathName, 'POST') &&
+        !betterAuthServes(pathName, 'GET')
+      )
+        continue;
+      expect(betterAuthUnavailable(pathName), pathName).toContain(RETRY);
+    }
+
+    expect(unavailable('/api/auth/forgot-password/reset')).toContain(
+      'request a new code'
+    );
+    expect(unavailable('/api/auth/forgot-password/complete')).toContain(
+      'start account recovery again'
+    );
+    expect(
+      Object.keys(SPENT_INPUT_REMEDIES).toSorted(compareCodeUnits)
+    ).toEqual([
+      'POST /api/auth/forgot-password/complete',
+      'POST /api/auth/forgot-password/reset',
+    ]);
+    expect(
+      unavailable('/api/auth/forgot-password/second-factor/send')
+    ).not.toContain('spent');
   });
 
   test('handler-enriched ids stay in the path and out of update bodies', () => {
@@ -2266,6 +2351,22 @@ describe('refusals a client branches on are published', () => {
     expect(description('/api/dash/users', 'get', '401')).not.toInclude(
       'REAUTH_REQUIRED'
     );
+  });
+
+  test.each([...BETTER_AUTH_PASSWORD_LOCKOUT_PATHS])(
+    'Better Auth %s names REAUTH_REQUIRED and both ways to answer it',
+    (pathName) => {
+      const text = description(`/api/auth${pathName}`, 'post', '401');
+      expect(text).toInclude('REAUTH_REQUIRED');
+      expect(text).toInclude('`password`');
+      expect(text).toInclude('POST /api/dash/auth/reauth');
+    }
+  );
+
+  test('a Better Auth path that checks no password keeps the plain 401', () => {
+    expect(
+      description('/api/auth/two-factor/totp/confirm', 'post', '401')
+    ).not.toInclude('REAUTH_REQUIRED');
   });
 
   test.each([

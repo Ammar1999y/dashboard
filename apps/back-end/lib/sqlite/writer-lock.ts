@@ -10,6 +10,13 @@ export interface WriterLock {
   release: () => void;
 }
 
+function claimFailure(directory: string, error: unknown): Error {
+  return new Error(
+    `Could not claim the SQLite directory ${directory}: ${error instanceof Error ? error.message : String(error)}`,
+    { cause: error }
+  );
+}
+
 /**
  * Elects THIS process as the owner of a SQLite directory's scheduled sweeps,
  * or returns `null` when another process or thread already owns it. Losing is
@@ -24,10 +31,14 @@ export interface WriterLock {
  * run (`lib/maintenance/election.ts`).
  */
 export function tryAcquireWriterLock(directory: string): WriterLock | null {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- deployment-configured path, not user input
-  mkdirSync(directory, { recursive: true });
-
-  const db: SqliteConnection = openConnection(path.join(directory, LOCK_FILE));
+  let db: SqliteConnection;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- deployment-configured path, not user input
+    mkdirSync(directory, { recursive: true });
+    db = openConnection(path.join(directory, LOCK_FILE));
+  } catch (error) {
+    throw claimFailure(directory, error);
+  }
   try {
     // Rollback-journal EXCLUSIVE uses an OS-released file lock.
     db.pragma('journal_mode = DELETE');
@@ -37,10 +48,7 @@ export function tryAcquireWriterLock(directory: string): WriterLock | null {
     db.close();
     // Only contention means "owned elsewhere"; any other failure is a broken directory.
     if (isSqliteBusy(error)) return null;
-    throw new Error(
-      `Could not claim the SQLite directory ${directory}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error }
-    );
+    throw claimFailure(directory, error);
   }
 
   const state = { released: false };

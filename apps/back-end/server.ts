@@ -105,7 +105,12 @@ const stopServer = (budgetMs: number) =>
 
 // Before listening: a broken SQLITE_DIR must fail the boot, not a bound port.
 const claimWriterLock = () => tryAcquireWriterLock(SQLITE_DIR);
-const writerLock = claimWriterLock();
+let writerLock: ReturnType<typeof claimWriterLock>;
+try {
+  writerLock = claimWriterLock();
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
 
 app.listen({ port, idleTimeout: IDLE_TIMEOUT_SECONDS }, (server) => {
   logLine('log', {

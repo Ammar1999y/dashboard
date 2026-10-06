@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
+import { withTransaction } from '@/db';
 import { roles, users } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -66,43 +66,16 @@ export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
     HTTP_STATUS.NOT_FOUND
   );
 
-  // ADDITIVE, never authoritative, like `editUserAsAdmin`'s preflight: the
-  // locked transaction re-reads the target and re-runs both gates, so this can
-  // only refuse EARLIER.
-  const [prefilter] = await db
-    .select({
-      id: users.id,
-      roleId: users.roleId,
-      createdBy: users.createdBy,
-      roleName: roles.roleName,
-      roleScope: roles.scope,
-    })
-    .from(users)
-    .leftJoin(roles, eq(users.roleId, roles.id))
-    .where(liveUser(eq(users.id, targetId)))
-    .limit(1);
-
-  if (!prefilter) throw notFoundError();
-
-  assertTargetUserVisible({
-    isSelf: prefilter.id === actorUserId,
-    roleId: prefilter.roleId,
-    createdBy: prefilter.createdBy,
-    role: { roleName: prefilter.roleName, scope: prefilter.roleScope },
-    actorUserId,
-    scope,
-  });
-
   const auditMeta = getAuditMeta(ctx);
 
   await withTransaction(async (tx) => {
-    // Locked first, keeping the canonical order (users -> everything else),
-    // and joined so the authorization below reads the role the row holds NOW.
     await assertTargetUserVisibleUnlocked(tx, {
       targetId,
       actorUserId,
       scope,
     });
+    // Locked first, keeping the canonical order (users -> everything else),
+    // and joined so the authorization below reads the role the row holds NOW.
     await lockTargetAndActor(tx, targetId, actorUserId, 'update');
     const [target] = await tx
       .select({

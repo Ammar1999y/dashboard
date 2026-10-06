@@ -17,7 +17,7 @@ import {
 
 import { auditLog } from '@/lib/audit';
 import { verifyTurnstileRequest } from '@/lib/captcha';
-import { ensureMinDelay, floorDeadline } from '@/lib/http/timing-floor';
+import { timingFloor } from '@/lib/http/timing-floor';
 import { markContactVerified } from '@/lib/otp/contact';
 import {
   collapseProofThrottle,
@@ -65,8 +65,7 @@ export const passwordless = () =>
         },
         async (ctx) => {
           const headers = requestHeaders(ctx);
-          // Set at the lookup: what precedes it is the same for every address.
-          let lookupStarted: number | undefined;
+          const floor = timingFloor();
 
           // ⚠️ Every limiter call stays inside: outside it, a `CustomError` is
           // not an APIError and Better Call answers an empty 500.
@@ -94,7 +93,8 @@ export const passwordless = () =>
               surface: 'passwordless',
             });
 
-            lookupStarted = Date.now();
+            // At the lookup: what precedes it is the same for every address.
+            const deadline = floor.start();
             const [userData] = await db
               .select({ id: users.id, email: users.email })
               .from(users)
@@ -115,7 +115,7 @@ export const passwordless = () =>
               identifier,
               code,
               auditMeta,
-              deadline: floorDeadline(lookupStarted),
+              deadline,
               onVerified: async (tx, matched) => {
                 await markContactVerified(tx, {
                   userId: userData.id,
@@ -215,8 +215,7 @@ export const passwordless = () =>
               otpMsg.invalidOrExpired
             );
           } finally {
-            if (lookupStarted !== undefined)
-              await ensureMinDelay(Date.now() - lookupStarted);
+            await floor.settle();
           }
         }
       ),

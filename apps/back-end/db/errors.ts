@@ -75,13 +75,28 @@ export function isInvalidTextEncoding(e: unknown): boolean {
  * PostgreSQL `deadlock_detected`: the transaction was aborted to break a lock
  * cycle, and a retry normally succeeds.
  */
-export function isDeadlock(e: unknown): boolean {
+function isDeadlock(e: unknown): boolean {
   return hasSqlState(e, '40P01');
 }
 
 /** PostgreSQL `query_canceled`: a statement exceeded `statement_timeout`. */
 export function isStatementTimeout(e: unknown): boolean {
   return hasSqlState(e, '57014');
+}
+
+/** No pooled connection came free within the bound `withTransaction` set. */
+export class ConnectionTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(
+      `postgres connection not acquired in time (${timeoutMs} ms): pool exhausted, or the database unreachable`
+    );
+    this.name = 'ConnectionTimeoutError';
+  }
+}
+
+/** A fault a retry after `DATABASE_RETRY_AFTER_S` normally clears, answered 503. */
+export function isDatabaseContention(e: unknown): boolean {
+  return isDeadlock(e) || e instanceof ConnectionTimeoutError;
 }
 
 export function getConstraintName(e: unknown): string {

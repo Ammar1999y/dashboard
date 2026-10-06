@@ -1,4 +1,3 @@
-import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
 import {
@@ -15,13 +14,8 @@ import { moveFiles, toMediaFile } from '@/lib/media/files';
 import { requireFolder } from '@/lib/media/folders';
 import { deleteFiles } from '@/lib/media/lifecycle';
 import { DEFAULT_UPLOAD_PURPOSE } from '@/lib/media/policy';
-import {
-  acceptUpload,
-  UPLOAD_ADMISSION_LIMIT,
-  UPLOAD_ADMISSION_SCOPE,
-} from '@/lib/media/upload';
+import { acceptUpload } from '@/lib/media/upload';
 import { viewablePages } from '@/lib/media/usages';
-import { isVisibilityEnabled } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 /**
@@ -39,19 +33,6 @@ export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
   // Query, not form field: it is checked before the body is parsed.
   const folderId = requireId(ctx.query.get('folder'));
   await requireFolder(folderId);
-
-  if (!isVisibilityEnabled(LIBRARY_UPLOAD_VISIBILITY))
-    throw new CustomError(
-      mediaMsg.visibilityDisabled,
-      HTTP_STATUS.UNPROCESSABLE
-    );
-
-  await enforceRateLimit({
-    scope: UPLOAD_ADMISSION_SCOPE,
-    identifier: userIdentifier(caller.userId),
-    limit: UPLOAD_ADMISSION_LIMIT,
-    failClosed: true,
-  });
 
   const row = await acceptUpload(ctx, requestActor(ctx, caller), {
     field: 'file',

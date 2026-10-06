@@ -195,14 +195,14 @@ export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
   const auditMeta = getAuditMeta(ctx);
 
   const revoked = await withTransaction(async (tx) => {
-    // The self case too: a password change in another tab holds the row and
-    // then waits for the sessions this deletes.
     if (!isSelf)
       await assertTargetUserVisibleUnlocked(tx, {
         targetId,
         actorUserId: currentUserId,
         scope: editScope,
       });
+    // The self case too: a password change in another tab holds the row and
+    // then waits for the sessions this deletes.
     await lockTargetAndActor(tx, targetId, currentUserId, 'share');
     if (!isSelf)
       await assertTargetReachable(tx, {

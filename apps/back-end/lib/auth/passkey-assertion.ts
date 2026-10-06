@@ -3,6 +3,7 @@ import type { EntityID } from '@app/shared/types';
 import type {
   AuthenticationResponseJSON,
   AuthenticatorTransportFuture,
+  VerifiedAuthenticationResponse,
 } from '@simplewebauthn/server';
 
 import { and, eq, lt } from 'drizzle-orm';
@@ -16,6 +17,8 @@ import {
 import * as z from 'zod';
 
 import { PUBLIC_ORIGIN } from '@/lib/env';
+
+import { logSanitized } from '@/utils/log';
 
 import { authenticationDenied } from './errors';
 
@@ -111,18 +114,27 @@ export async function verifyUserPasskey(
       and(eq(passkeys.userId, userId), eq(passkeys.credentialID, response.id))
     );
   if (!credential) throw authenticationDenied();
-  const result = await verifyAuthenticationResponse({
-    response,
-    expectedChallenge: challenge,
-    expectedOrigin: PUBLIC_ORIGIN,
-    expectedRPID: RP_ID,
-    credential: {
-      id: credential.credentialID,
-      publicKey: new Uint8Array(Buffer.from(credential.publicKey, 'base64')),
-      counter: credential.counter,
-    },
-    requireUserVerification: true,
-  });
+  // Only the verifier's own throws are a denial; the read above propagates, so
+  // a database fault is answered as one by the caller's boundary.
+  let result: VerifiedAuthenticationResponse;
+  try {
+    result = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: challenge,
+      expectedOrigin: PUBLIC_ORIGIN,
+      expectedRPID: RP_ID,
+      credential: {
+        id: credential.credentialID,
+        publicKey: new Uint8Array(Buffer.from(credential.publicKey, 'base64')),
+        counter: credential.counter,
+      },
+      requireUserVerification: true,
+    });
+  } catch (error) {
+    // Why it was rejected; a wrong origin or RP ID is a deployment fault.
+    logSanitized('warn', { msg: 'passkey.assertion.rejected', error });
+    throw authenticationDenied();
+  }
   if (!result.verified) throw authenticationDenied();
   return { credential, newCounter: result.authenticationInfo.newCounter };
 }

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import type { ScheduleHandle } from '@/lib/maintenance/schedule';
 import type { WriterLock } from '@/lib/sqlite/writer-lock';
 
@@ -83,16 +83,26 @@ describe('scheduleWhenOwner', () => {
     expect(calls).toMatchObject({ starts: 0, releases: 0, drains: 0 });
   });
 
-  test('a claim that throws on a retry is retried, not escaped', async () => {
+  test('a claim that throws on a retry is logged with its reason and retried, not escaped', async () => {
     const { calls, claim, start } = fakes([false, new Error('busy'), true]);
-    const ownership = scheduleWhenOwner(claim(), claim, {
-      start,
-      retryMs: RETRY_MS,
-    });
+    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const ownership = scheduleWhenOwner(claim(), claim, {
+        start,
+        retryMs: RETRY_MS,
+      });
 
-    await until(() => calls.starts > 0);
+      await until(() => calls.starts > 0);
 
-    expect(calls.starts).toBe(1);
-    await ownership.stopAndDrain(100);
+      expect(calls.starts).toBe(1);
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(logged.mock.calls[0]?.[0]))).toMatchObject({
+        msg: 'writer lock claim failed',
+        reason: 'busy',
+      });
+      await ownership.stopAndDrain(100);
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

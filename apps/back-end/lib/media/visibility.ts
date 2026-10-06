@@ -13,6 +13,7 @@ import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
 
+import { serverFault } from '@/lib/http/response';
 import { generateUuidV7 } from '@/lib/id';
 import {
   copyFileInR2,
@@ -251,17 +252,23 @@ export async function transitionFile(params: {
     )
       throw new Error('copied object does not match its source');
   } catch (error) {
-    logSanitized('error', {
+    const failure = {
       msg: 'media.transition copy failed',
       errorClass: errorTypeOf(error),
+      id,
+    };
+    const reverted = await removeStaleCopy(
+      id,
+      row.r2Key,
+      to,
+      transitionToken
+    ).catch((revertError: unknown) => {
+      throw serverFault(mediaMsg.storeFailed, { ...failure, revertError });
     });
-    const reverted = await removeStaleCopy(id, row.r2Key, to, transitionToken);
-    if (!reverted.removed)
-      logSanitized('error', {
-        msg: 'media.transition revert left to the sweep',
-        id,
-      });
-    throw new CustomError(mediaMsg.storeFailed, HTTP_STATUS.INTERNAL_ERROR);
+    throw serverFault(mediaMsg.storeFailed, {
+      ...failure,
+      revert: reverted.removed ? 'done' : 'left to the sweep',
+    });
   }
 
   const flipped = await withTransaction(async (tx) => {

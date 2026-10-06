@@ -20,7 +20,7 @@ export interface RequestSession {
 export async function resolveRequestSession(
   ctx: AuthContext
 ): Promise<RequestSession | null> {
-  const resolved = await getSessionFromCtx(ctx).catch(() => null);
+  const resolved = await getSessionFromCtx(ctx);
   const userId = validID(resolved?.user.id);
   const sessionId = resolved?.session.id;
   const userEmail = resolved?.user.email;

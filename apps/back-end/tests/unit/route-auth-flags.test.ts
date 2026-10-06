@@ -1,116 +1,203 @@
 /**
- * `reauth` and `checksPassword` on a route decide what its 401 and 429 publish,
- * so each is held to the handler it declares. A handler reaches either gate
- * directly or through the functions below, and a new caller of the
- * primitives fails the last test until it is listed here.
+ * `reauth` and `checksPassword` decide what a route's 401 and 429 publish, so
+ * each is held to what its handler can reach. `tests/helpers/route-gates.ts`
+ * says what the analyzer follows; a call site it cannot read fails here rather
+ * than reading as "no gate".
  */
-import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { beforeAll, describe, expect, test } from 'bun:test';
 import path from 'node:path';
+import type { Gate } from '@/tests/helpers/route-gates';
 
 import { ROUTES } from '@/routes';
+import {
+  createRouteGateAnalyzer,
+  globFiles,
+  REPO_ROOT,
+} from '@/tests/helpers/route-gates';
 
 import { PASSWORD_PROOF_PATHS } from '@/lib/auth/path-policy';
 import { BETTER_AUTH_PASSWORD_LOCKOUT_PATHS } from '@/lib/http/openapi/better-auth-tables';
 
 import { compareCodeUnits } from '@/utils/text';
 
-const REPO_ROOT = path.join(import.meta.dir, '..', '..');
+const handlerFiles = globFiles('app/api/**/handler.ts');
+const authFiles = globFiles('lib/auth/**/*.ts');
+const FIXTURE = 'tests/fixtures/_route-gates-handler.ts';
 
-const REAUTH_GATE =
-  /reauth: true|requireReauthWindow\(|authorizeContactChange\(|editUserAsAdmin\(/;
-const PASSWORD_GATE =
-  /verifyLoginAttempt\(|verifySessionPassword\(|authorizeContactChange\(/;
+const sorted = (values: Iterable<string>) =>
+  [...values].toSorted(compareCodeUnits);
 
-/** The only modules outside `app/` that call the primitives; see the header. */
-const PRIMITIVE_CALLERS = [
-  'lib/auth/path-policy.ts',
-  'lib/auth/reauth/password.ts',
-  'lib/users/contact-change.ts',
-  'lib/users/edit.ts',
-];
-
-const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
-
-/** Each exported method's own source: the text up to the next export. */
-function methodSources(source: string): Map<string, string> {
-  const sources = new Map<string, string>();
-  const starts = source
-    .matchAll(/^export const (GET|POST|PUT|PATCH|DELETE)\b/gm)
-    .toArray();
-  for (const [index, match] of starts.entries())
-    sources.set(
-      match[1] ?? '',
-      source.slice(match.index, starts[index + 1]?.index)
-    );
-  return sources;
+interface MethodGates {
+  label: string;
+  reauth: boolean;
+  checksPassword: boolean;
+  gates: ReadonlySet<Gate>;
 }
 
-const handlerFiles = Iterator.from(
-  new Bun.Glob('app/api/**/handler.ts').scanSync(REPO_ROOT)
-).toArray();
+/**
+ * Filled once: the checker resolves lazily, so whichever case ran first used
+ * to pay for every file its handler reaches, and timed out under load.
+ */
+const byFile = new Map<string, MethodGates[]>();
+const endpoints: { path: string; gates: ReadonlySet<Gate> }[] = [];
+const fixture = new Map<string, ReadonlySet<Gate> | Error>();
+
+beforeAll(async () => {
+  const analyzer = createRouteGateAnalyzer([
+    ...handlerFiles,
+    ...authFiles,
+    FIXTURE,
+  ]);
+  for (const file of handlerFiles) {
+    // eslint-disable-next-line no-unsanitized/method -- a handler the glob above found in this repository
+    const module: Record<string, unknown> = await import(
+      path.join(REPO_ROOT, file)
+    );
+    const methods = analyzer
+      .initializers(file)
+      .entries()
+      .flatMap(([name, initializer]) => {
+        const route = ROUTES.find((entry) => entry.handler === module[name]);
+        return route
+          ? [
+              {
+                label: `${route.method} ${route.path}`,
+                reauth: route.reauth,
+                checksPassword: route.checksPassword,
+                gates: analyzer.reach(initializer),
+              },
+            ]
+          : [];
+      })
+      .toArray();
+    byFile.set(file, methods);
+  }
+  for (const file of authFiles)
+    for (const endpoint of analyzer.authEndpoints(file))
+      endpoints.push({
+        path: endpoint.path,
+        gates: analyzer.reach(endpoint.handler),
+      });
+  for (const [name, initializer] of analyzer.initializers(FIXTURE)) {
+    try {
+      fixture.set(name, analyzer.reach(initializer));
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      fixture.set(name, error);
+    }
+  }
+  // Several times this hook's cost measured with the integration tier running
+  // alongside; the figures are in `reports/remaining-issues-fix-review-resolution.md` (#7).
+}, 120_000);
 
 describe('every route declares the gates its handler reaches', () => {
-  test.each(handlerFiles)('%s', async (file) => {
-    const location = path.join(REPO_ROOT, file);
-    // eslint-disable-next-line no-unsanitized/method -- a handler the glob above found in this repository
-    const module: Record<string, unknown> = await import(location);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the same file
-    const sources = methodSources(readFileSync(location, 'utf8'));
-    for (const method of METHODS) {
-      const handler = module[method];
-      if (typeof handler !== 'function') continue;
-      const route = ROUTES.find((entry) => entry.handler === handler);
-      if (!route) continue;
-      const source = sources.get(method) ?? '';
-      const label = `${route.method} ${route.path}`;
-      expect(route.reauth ?? false, label).toBe(REAUTH_GATE.test(source));
-      expect(route.checksPassword ?? false, label).toBe(
-        PASSWORD_GATE.test(source)
+  test.each(handlerFiles)('%s', (file) => {
+    const methods = byFile.get(file) ?? [];
+    for (const method of methods) {
+      expect(method.reauth, method.label).toBe(method.gates.has('window'));
+      expect(method.checksPassword, method.label).toBe(
+        method.gates.has('password')
       );
     }
   });
 
-  test('the Better Auth lockout list is every endpoint that checks the password', () => {
-    // A proof the hook takes (`PASSWORD_PROOF_PATHS`), or one the endpoint
-    // asks for itself.
-    const checked = new Set(PASSWORD_PROOF_PATHS);
-    const files = new Bun.Glob('lib/auth/**/*.ts').scanSync(REPO_ROOT);
-    for (const file of files) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- a file the glob above found in this repository
-      const source = readFileSync(path.join(REPO_ROOT, file), 'utf8');
-      const endpoints = source
-        .matchAll(/createAuthEndpoint\(\s*'([^']+)'/g)
-        .toArray();
-      for (const [index, match] of endpoints.entries()) {
-        const body = source.slice(match.index, endpoints[index + 1]?.index);
-        if (/requireReauthPassword\(|verifyReauthPassword\(/.test(body))
-          checked.add(match[1] ?? '');
-      }
-    }
+  test('no route was left out', () => {
+    const checked = new Set(
+      byFile
+        .values()
+        .flatMap((methods) => methods.map((method) => method.label))
+    );
+    // The document route's handler is built in `routes.ts`, not `app/api`.
     expect(
-      [...BETTER_AUTH_PASSWORD_LOCKOUT_PATHS].toSorted(compareCodeUnits)
-    ).toEqual([...checked].toSorted(compareCodeUnits));
+      ROUTES.map((route) => `${route.method} ${route.path}`).filter(
+        (label) => !checked.has(label)
+      )
+    ).toEqual(['GET /openapi.json']);
   });
 
-  test('no other module calls the primitives', () => {
-    const callers = Iterator.from(
-      new Bun.Glob('lib/**/*.ts').scanSync(REPO_ROOT)
-    )
-      .map((file) => file.replaceAll(path.sep, '/'))
-      .filter((file) => {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- a file the glob above found in this repository
-        const source = readFileSync(path.join(REPO_ROOT, file), 'utf8');
-        return (
-          /(?<!function )(?:requireReauthWindow|verifyLoginAttempt)\(/.test(
-            source
-          ) &&
-          !file.endsWith('lib/auth/reauth/window.ts') &&
-          !file.endsWith('lib/auth/login-guard.ts')
-        );
-      })
-      .toArray()
-      .toSorted(compareCodeUnits);
-    expect(callers).toEqual(PRIMITIVE_CALLERS);
+  test('the Better Auth lockout list is every endpoint that checks the password, and every one that can ask for it', () => {
+    expect(endpoints.length).toBeGreaterThan(0);
+
+    // A proof the hook takes (`PASSWORD_PROOF_PATHS`), or one the endpoint
+    // asks for itself.
+    const checksPassword = [
+      ...PASSWORD_PROOF_PATHS,
+      ...endpoints.filter((e) => e.gates.has('password')).map((e) => e.path),
+    ];
+    const asksForIt = [
+      ...PASSWORD_PROOF_PATHS,
+      ...endpoints
+        .filter((e) => e.gates.has('reauthRequired') || e.gates.has('window'))
+        .map((e) => e.path),
+    ];
+    const published = sorted(BETTER_AUTH_PASSWORD_LOCKOUT_PATHS);
+    expect(published).toEqual(sorted(new Set(checksPassword)));
+    expect(published).toEqual(sorted(new Set(asksForIt)));
+  });
+});
+
+describe('the analyzer, on one fixture function per shape', () => {
+  const gatesOf = (name: string) => {
+    const result = fixture.get(name);
+    if (!(result instanceof Set)) throw new Error(`${name}: ${String(result)}`);
+    return sorted(result);
+  };
+
+  test.each<[string, Gate[]]>([
+    ['reauthTrue', ['window']],
+    ['reauthFalse', []],
+    ['reauthAbsent', []],
+    ['viaObjectProperty', ['window']],
+    ['viaClassField', ['password']],
+    ['viaClassMethod', ['window']],
+    ['viaShorthandProperty', ['window']],
+    ['viaDestructuredProperty', ['window']],
+    ['viaGetter', ['window']],
+    ['viaLiteralKey', ['window']],
+    ['viaLateAssignment', ['window']],
+    ['viaConstructor', ['window']],
+    ['permissionByShorthand', ['window']],
+  ])('%s', (name, gates) => {
+    expect(gatesOf(name)).toEqual(gates);
+  });
+
+  test.each([
+    [
+      'optionsByReference',
+      'requirePermission options are not an inline object literal',
+    ],
+    ['optionsBySpread', 'requirePermission options contain a spread'],
+    [
+      'reauthByExpression',
+      'requirePermission `reauth` is not a literal true or false',
+    ],
+    [
+      'reauthShorthand',
+      'requirePermission `reauth` is not a property assignment',
+    ],
+    ['spreadArguments', 'requirePermission is called with a spread argument'],
+    [
+      'checkByReference',
+      'requirePermission is referenced without being called',
+    ],
+    [
+      'permissionThroughProperty',
+      'requirePermission is referenced without being called',
+    ],
+    [
+      'optionsBehindLiteralKey',
+      'requirePermission options are not an inline object literal',
+    ],
+    ['viaComputedKey', 'calls through a computed key'],
+    [
+      'viaUnassigned',
+      `calls ${FIXTURE}#unassigned, which the analyzer cannot follow`,
+    ],
+  ])('%s fails, naming the site', (name, why) => {
+    const result = fixture.get(name);
+    expect(result).toBeInstanceOf(Error);
+    const message = result instanceof Error ? result.message : '';
+    expect(message).toStartWith(`${FIXTURE}:`);
+    expect(message).toInclude(`: ${why}`);
   });
 });

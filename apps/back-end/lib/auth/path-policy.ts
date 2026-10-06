@@ -9,6 +9,7 @@ import { db, withTransaction } from '@/db';
 import { sessions } from '@/db/schema';
 import { formCsrfMiddleware } from 'better-auth/api';
 
+import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import {
@@ -326,8 +327,13 @@ async function requireLiveSession(
 ): Promise<void> {
   try {
     await assertLiveSession(sessionId, userId);
-  } catch {
-    throw sessionRequired();
+  } catch (error) {
+    if (
+      error instanceof CustomError &&
+      error.status === HTTP_STATUS.UNAUTHORIZED
+    )
+      throw sessionRequired();
+    throw error;
   }
 }
 

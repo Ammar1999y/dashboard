@@ -1,14 +1,12 @@
 import type { BetterAuthPlugin } from 'better-auth';
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 
-import { withTransaction } from '@/db';
-import { isDeadlock } from '@/db/errors';
+import { db, withTransaction } from '@/db';
 import { passkeys, verifications } from '@/db/schema';
 import { createAuthEndpoint } from 'better-auth/api';
 import * as z from 'zod';
 
-import { CustomError } from '@app/shared/error-class';
 import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import {
   REAUTH_METHODS,
@@ -21,12 +19,7 @@ import { auditLog } from '@/lib/audit';
 import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta } from '../context';
-import {
-  asAuthError,
-  authenticationDenied,
-  databaseContended,
-  toAuthApiError,
-} from '../errors';
+import { asAuthError, authenticationDenied } from '../errors';
 import {
   advancePasskeyCounter,
   passkeyOptions,
@@ -141,10 +134,16 @@ export const reauthentication = () =>
               const { userId, sessionId, userEmail } =
                 await requireReauthSession(ctx);
               await enforceReauthAttemptLimit(userId);
-              const stored =
-                await ctx.context.internalAdapter.consumeVerificationValue(
-                  reauthPasskeyKey(sessionId)
-                );
+              const [stored] = await db
+                .select({ id: verifications.id, value: verifications.value })
+                .from(verifications)
+                .where(
+                  and(
+                    eq(verifications.identifier, reauthPasskeyKey(sessionId)),
+                    gt(verifications.expiresAt, new Date())
+                  )
+                )
+                .limit(1);
               if (!stored) throw authenticationDenied();
               const ceremony = ceremonySchema.parse(JSON.parse(stored.value));
               const verified = await verifyUserPasskey(
@@ -154,6 +153,19 @@ export const reauthentication = () =>
               );
               const grant = await withTransaction(async (tx) => {
                 await lockUser(tx, userId);
+                // Spent with the grant it buys: an attempt that rolls back
+                // leaves the ceremony for the retry its 503 invites. Expiry is
+                // read again here, since the lock may have outlasted it.
+                const [spent] = await tx
+                  .delete(verifications)
+                  .where(
+                    and(
+                      eq(verifications.id, stored.id),
+                      gt(verifications.expiresAt, new Date())
+                    )
+                  )
+                  .returning({ id: verifications.id });
+                if (!spent) throw authenticationDenied();
                 const [credential] = await tx
                   .select()
                   .from(passkeys)
@@ -198,11 +210,7 @@ export const reauthentication = () =>
               });
               return ctx.json({ success: true, data: grant });
             } catch (error) {
-              // Unlike the options endpoint: any other failure is a denial.
-              if (error instanceof CustomError)
-                throw toAuthApiError(error, MSG_INVALID_CREDENTIALS);
-              if (isDeadlock(error)) throw databaseContended(error);
-              throw authenticationDenied();
+              throw asAuthError(error, MSG_INVALID_CREDENTIALS);
             }
           }
         ),

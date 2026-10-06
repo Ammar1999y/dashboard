@@ -130,7 +130,7 @@ import { resetSqliteStores } from '../helpers/sqlite';
 const PEPPERED_HASH = /^p\d+:[^:]+:\$argon2id\$/;
 
 /**
- * 45 s, and it is not padding. Every OTP response carries `ensureMinDelay`'s
+ * 45 s, and it is not padding. Every OTP response carries the
  * `MINIMUM_RESPONSE_MS` anti-timing floor, and the tests that prove a rotation end to end pay
  * two Argon2id hashes at 64 MiB plus two sign-in verifies on top. At Bun's 5 s
  * default the slow tests fail on the clock rather than on an assertion, which is

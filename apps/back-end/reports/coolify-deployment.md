@@ -653,10 +653,11 @@ a free pool slot. Measured on Bun 1.4.2: a `max: 1, connectionTimeout: 2` pool
 with its connection reserved left a second query pending for 6 s without error.
 `withTransaction` therefore bounds its own wait: a transaction that gets no
 connection within `POOL_ACQUIRE_TIMEOUT_MS` (10 s, `db/limits.ts`) answers 503
-and logs `postgres connection not acquired in time`. The bound also covers
-opening a connection, so a run of that line is pool exhaustion OR an unreachable
-database: check that the database answers before hunting for leaked
-transactions. Plain `db` queries outside a transaction still queue without a
+and logs a `ConnectionTimeoutError` whose message starts `postgres connection
+not acquired in time` (a scheduled job's failure line names the class alone).
+The bound also covers opening a connection, so a run of those lines is pool
+exhaustion OR an unreachable database: check that the database answers before
+hunting for leaked transactions. Plain `db` queries outside a transaction still queue without a
 limit. A pool that fills with transactions waiting on something that never
 comes stays full until each holder ends; a pool query issued from inside a
 transaction, which waits for a second connection while holding the first, is
@@ -874,8 +875,8 @@ and it is not obvious from either of them.
 `bun:sqlite` is **synchronous**, so a contended statement blocks the whole event
 loop — not one request. Measured: one external process holding `BEGIN IMMEDIATE`
 for 4 s made a concurrent limiter call block for **2 282 ms** (the `busy_timeout`
-ceiling) and then return `degraded`. `enforceRateLimit` turns `degraded` into
-`503` on every fail-closed path, confirmed end to end:
+ceiling) and then report a store failure (`storeFailure`). `enforceRateLimit`
+turns it into `503` on every fail-closed path, confirmed end to end:
 
 ```text
 ip-limit route (dash/roles)  -> 503  Retry-After: 30
@@ -1717,22 +1718,35 @@ process (exit 137, no output) means one upload restarts the container. The fix
 is `Math.min(entry.size, limit, bytes.length)` in `readStream`; after it,
 `largestAllocation` must be `2048`.
 
-**d. The anonymous OTP floor still hides a known account under SQLite
-contention.** `MINIMUM_RESPONSE_MS` is `BUSY_TIMEOUT_MS` plus 500 ms for the rest
-of a known account's branch, counted from the account lookup. On the Windows
-harness, the global-budget charge under a held writer lock took 2301 ms, which
-leaves about 200 ms of margin. Run the suite's contention case on a host sized
-like the VPS, against a throwaway PostgreSQL of the same version. Never run it
-against the production server: the harness creates and drops databases, which
-is why `TEST_DATABASE_URL` must be absent there (§3).
+**d. The anonymous OTP floor on this host.** Every anonymous OTP answer that
+follows the account lookup waits until `MINIMUM_RESPONSE_MS` after it, and the
+work only a known account does is cut `FLOOR_SETTLE_MS` before that (both in
+`lib/http/timing-floor.ts`): a send answers at the floor and finishes its
+issuance after the response, and a verify's transaction is rolled back at the
+cut and answered as an unknown identifier. Contention therefore cannot make a
+known identifier answer later, as long as the cut, the rollback and the answer
+fit in `FLOOR_SETTLE_MS`. That assumes a database round trip far below it, which
+the harness, with PostgreSQL on the same machine, cannot show for the VPS.
+
+Run the timing suite on a host sized like the VPS, against a throwaway
+PostgreSQL of the same version and network distance. Never run it against the
+production server: the harness creates and drops databases, which is why
+`TEST_DATABASE_URL` must be absent there (§3).
 
 ```sh
 bun run test:integration otp-timing-oracle
 ```
 
-It must pass. If "stays under the floor" fails, a known identifier answers
-measurably later than an unknown one on this host: raise `KNOWN_BRANCH_WORK_MS`
-in `lib/http/timing-floor.ts` until it passes.
+It must pass. Its contention cases ("PostgreSQL contention on the known branch",
+"a verify against other writers of its proof rows", "PostgreSQL and SQLite
+contention together, on a real socket") require a known and an unknown
+identifier to answer on the floor. A known one answering late means the round
+trip does not fit: raise `FLOOR_SETTLE_MS`.
+
+In production, alert on `otp.verify.deadlineExceeded`. Each line is a verify
+cut at its deadline and answered as a wrong code, possibly a right one. A steady
+rate means the floor leaves a real verify too little time on this host: raise
+`KNOWN_BRANCH_WORK_MS`, which moves the floor and the cut together.
 
 ## 9. Scheduled tasks
 
@@ -2359,9 +2373,10 @@ bucket CORS rule in the Cloudflare console — the API token cannot (measured
 
 ## 14. Google OAuth sign-in
 
-Added 2026-09-07. Local behavioral and migration tests are recorded in
-[oauth-sign-in-implementation.md](oauth-sign-in-implementation.md). These
-instructions have not been executed against a live Google project or Coolify VPS.
+Added 2026-09-07. Local behavioral and migration tests are
+`tests/integration/oauth-*.test.ts` and `tests/process/oauth-migration.test.ts`.
+These instructions have not been executed against a live Google project or
+Coolify VPS.
 
 ### Configuration and migration
 

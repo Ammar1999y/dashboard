@@ -11,6 +11,7 @@ import {
   accounts,
   users,
   verificationCodes,
+  verifications,
   verificationSessions,
 } from '@/db/schema';
 import { TransactionDeadlineError } from '@/db/transaction';
@@ -431,6 +432,19 @@ describe('PostgreSQL contention on the known branch', () => {
             baseline.sinceLookup + CONTENTION_SLACK_MS
           );
         }
+        // The answer hides the cut; the operator still sees it, once, by
+        // route and never by identifier.
+        const cuts = logged.mock.calls
+          .flat()
+          .filter(
+            (line) =>
+              typeof line === 'object' &&
+              line !== null &&
+              Reflect.get(line, 'msg') === 'otp.verify.deadlineExceeded'
+          );
+        expect(cuts).toHaveLength(1);
+        expect(cuts[0]).toMatchObject({ purpose: route.purpose });
+        expect(JSON.stringify(cuts)).not.toContain(user.email);
 
         // Past the lock's release, where a request still running would commit.
         await hold.finished;
@@ -1186,6 +1200,129 @@ describe('a transaction deadline is absolute', () => {
     }
   }, 20_000);
 
+  test('work after the last statement that outlasts the deadline commits nothing', async () => {
+    const user = await seedUser();
+    const attempt = withTransaction(
+      async (tx) => {
+        await tx
+          .update(users)
+          .set({ failedLoginAttempts: 7 })
+          .where(eq(users.id, user.userId));
+        await Bun.sleep(BUDGET_MS + 200);
+      },
+      undefined,
+      Date.now() + BUDGET_MS
+    );
+
+    await expect(attempt).rejects.toBeInstanceOf(TransactionDeadlineError);
+    expect(await failedAttempts(user.userId)).toBe(0);
+  }, 20_000);
+
+  test.each([
+    [
+      'before it is sent',
+      async (tx: Tx) => {
+        await Bun.sleep(BUDGET_MS + 200);
+        await tx.execute(sql`select 1`);
+      },
+    ],
+    [
+      'inside a nested transaction',
+      (tx: Tx) =>
+        tx.transaction((inner) => inner.execute(sql`select pg_sleep(3)`)),
+    ],
+  ])(
+    'a body that catches a cut %s cannot commit what ran before it',
+    async (_label, cutStatement) => {
+      const user = await seedUser();
+      const attempt = withTransaction(
+        async (tx) => {
+          await tx
+            .update(users)
+            .set({ failedLoginAttempts: 7 })
+            .where(eq(users.id, user.userId));
+          try {
+            await cutStatement(tx);
+          } catch {
+            // the body survives the cut and returns
+          }
+        },
+        undefined,
+        Date.now() + BUDGET_MS
+      );
+
+      await expect(attempt).rejects.toBeInstanceOf(TransactionDeadlineError);
+      expect(await failedAttempts(user.userId)).toBe(0);
+    },
+    20_000
+  );
+
+  test('every statement shape the codebase sends runs cut, and commits', async () => {
+    const user = await seedUser();
+    const marker = `deadline-probe-${user.userId}`;
+    await withTransaction(
+      async (tx) => {
+        await tx.execute(sql`select 1`);
+        await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.id, user.userId))
+          .for('update');
+        await tx.query.users.findFirst({ where: eq(users.id, user.userId) });
+        await tx
+          .insert(verifications)
+          .values({
+            identifier: marker,
+            value: '-',
+            expiresAt: new Date(Date.now() + 60_000),
+          })
+          .onConflictDoNothing();
+        await tx
+          .update(users)
+          .set({ failedLoginAttempts: 3 })
+          .where(eq(users.id, user.userId))
+          .returning({ id: users.id });
+        await tx.transaction(async (inner) => {
+          await inner
+            .delete(verifications)
+            .where(eq(verifications.identifier, marker));
+        });
+        const [setting] = await tx.execute<{ statement_timeout: string }>(
+          sql`show statement_timeout`
+        );
+        expect(setting?.statement_timeout).not.toBe('0');
+      },
+      undefined,
+      Date.now() + 10_000
+    );
+    expect(await failedAttempts(user.userId)).toBe(3);
+  }, 20_000);
+
+  test('any other use of the cut client fails loudly instead of running uncut', async () => {
+    // The client Drizzle's session holds, where a new driver call would go.
+    const cutClient = (tx: Tx): unknown => {
+      const session: unknown = Reflect.get(tx, 'session');
+      return typeof session === 'object' && session !== null
+        ? Reflect.get(session, 'client')
+        : undefined;
+    };
+    const uses: readonly ((client: unknown) => unknown)[] = [
+      (client) =>
+        Reflect.apply(client as () => unknown, undefined, [['select 1']]),
+      (client) => Reflect.get(client as object, 'array'),
+    ];
+    for (const use of uses)
+      await expect(
+        withTransaction(
+          async (tx) => {
+            await use(cutClient(tx));
+          },
+          undefined,
+          Date.now() + 10_000
+        )
+      ).rejects.toThrow('not served on a transaction with a deadline');
+  }, 20_000);
+
   test('a deadline already behind it runs nothing', async () => {
     let ran = false;
     await expect(
@@ -1289,6 +1426,61 @@ describe('a refund of a failed delivery', () => {
     } finally {
       hold.release();
       logged.mockRestore();
+    }
+  }, 20_000);
+});
+
+describe('a send held in its global budget charge', () => {
+  test('lets a write that only references the user through, and still holds off every other locker', async () => {
+    resetSqliteStores();
+    const user = await seedUser({ emailVerified: false });
+    const charging = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const spy = spyOn(
+      rateLimit,
+      'enforceOtpGlobalSendBudget'
+    ).mockImplementation(async () => {
+      charging.resolve();
+      await release.promise;
+    });
+    // A wait on the user's row fails at once instead of passing unnoticed.
+    const withoutWaiting = (work: (tx: Tx) => Promise<unknown>) =>
+      withTransaction(async (tx) => {
+        await tx.execute(sql`set local lock_timeout = '300ms'`);
+        await work(tx);
+      });
+    try {
+      const sending = processOtpSend({
+        userId: user.userId,
+        identifier: user.email,
+        channel: 'email',
+        purpose: 'verify_contact',
+        sendTo: user.email,
+        entityName: CONTACT_LABEL.email,
+        deferDelivery: () => {},
+      });
+      await charging.promise;
+
+      // Its foreign key takes `KEY SHARE` on the user.
+      await withoutWaiting((tx) =>
+        tx.insert(verificationSessions).values({
+          userId: user.userId,
+          channel: 'email',
+          identifier: user.email,
+          purpose: 'forgot_password',
+        })
+      );
+      const queued = await withoutWaiting((tx) =>
+        lockUser(tx, user.userId)
+      ).catch((error: unknown) => error);
+      // `lock_not_available`: the lock timeout fired.
+      expect(queued).toMatchObject({ cause: { errno: '55P03' } });
+
+      release.resolve();
+      await sending;
+    } finally {
+      release.resolve();
+      spy.mockRestore();
     }
   }, 20_000);
 });

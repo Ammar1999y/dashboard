@@ -38,13 +38,21 @@ export async function lockEligibleAuthUser(tx: Tx, where: SQL) {
   return (await roleAllowsLoginFor(tx, user.roleId)) ? user : null;
 }
 
-// First in the canonical lock order: users → everything else.
-export async function lockUser(tx: Tx, userId: EntityID): Promise<void> {
+/**
+ * First in the canonical lock order: users → everything else. `no key update`
+ * serialises with every other locker the same way, but lets an insert that
+ * references the user through a foreign key (a session, an audit row) proceed.
+ */
+export async function lockUser(
+  tx: Tx,
+  userId: EntityID,
+  strength: 'update' | 'no key update' = 'update'
+): Promise<void> {
   await tx
     .select({ id: users.id })
     .from(users)
     .where(eq(users.id, userId))
-    .for('update');
+    .for(strength);
 }
 
 /**

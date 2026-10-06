@@ -17,7 +17,7 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { twoFactorPasskeyVerifySchema } from '@app/shared/validation/two-factor';
 
-import { errorClassOf, logSanitized } from '@/utils/log';
+import { logSanitized } from '@/utils/log';
 
 import { parseAuthBody } from '../context';
 import { authError } from '../errors';
@@ -151,13 +151,10 @@ export const twoFactorPasskey = () =>
                 stored.value
               );
             } catch (error) {
+              // A denial is a guess; a database fault is no verdict, so the
+              // outer catch refunds it and the boundary answers it.
+              if (!isAPIError(error)) throw error;
               await chargeFailure();
-              logSanitized('error', {
-                msg: 'twoFactor.passkey.verifyFailed',
-                errorClass: errorClassOf(error),
-                // An `APIError` is a denial whose message is the client's answer.
-                ...(!isAPIError(error) && { error }),
-              });
               throw authError(
                 HTTP_STATUS.UNAUTHORIZED,
                 twoFactorMsg.invalidCode

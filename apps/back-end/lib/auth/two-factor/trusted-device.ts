@@ -23,11 +23,13 @@ import { twoFactorMsg } from '@app/shared/messages/auth';
 import { MSG_INVALID_INPUT, MSG_NOT_FOUND } from '@app/shared/messages/common';
 import { validID } from '@app/shared/utils';
 
-import { logSanitized } from '@/utils/log';
+import { bestEffort } from '@/utils/log';
 
 import { authAuditMeta, bodyRecord } from '../context';
 import { authError, sessionRequired } from '../errors';
 import { envelopeResponse } from '../plugin-openapi';
+import { lockSessionOwner } from '../session/live';
+import { withAuthTransaction } from '../transaction';
 import {
   expiresIn,
   randomToken,
@@ -52,13 +54,13 @@ export async function markTwoFactorProven(
   ctx: AuthContext,
   sessionId: string
 ): Promise<void> {
-  await ctx.context.internalAdapter
-    .createVerificationValue({
+  await bestEffort('twoFactor.proof.recordFailed', () =>
+    ctx.context.internalAdapter.createVerificationValue({
       value: sessionId,
       identifier: twoFactorProofKey(sessionId),
       expiresAt: expiresIn(TWO_FACTOR_PROOF_MAX_AGE_S),
     })
-    .catch(() => {});
+  );
 }
 
 /** Single-use: a second "remember this device" needs a second verification. */
@@ -66,9 +68,9 @@ async function consumeTwoFactorProof(
   ctx: AuthContext,
   sessionId: string
 ): Promise<boolean> {
-  const consumed = await ctx.context.internalAdapter
-    .consumeVerificationValue(twoFactorProofKey(sessionId))
-    .catch(() => null);
+  const consumed = await ctx.context.internalAdapter.consumeVerificationValue(
+    twoFactorProofKey(sessionId)
+  );
   return consumed?.value === sessionId;
 }
 
@@ -142,33 +144,32 @@ export async function consumeDeviceTrust(
   return true;
 }
 
+/**
+ * ⚠️ Proof and row under the user lock that method removal revokes trust with
+ * (`revokeTwoFactorState`): removal then either waits and deletes this row, or
+ * runs first and takes the proof. Spent apart, a removal could land between.
+ */
 async function grantDeviceTrust(
   ctx: AuthContext,
-  userId: EntityID
+  userId: EntityID,
+  sessionId: string
 ): Promise<void> {
   const identifier = trustDeviceKey(randomToken(IDENTIFIER_BYTES));
   const meta = authAuditMeta(ctx);
-  const expiresAt = expiresIn(TRUST_DEVICE_MAX_AGE_S);
 
-  try {
-    await withTransaction((tx) =>
-      tx.insert(trustedDevices).values({
-        userId,
-        trustIdentifier: identifier,
-        userAgent: meta.userAgent,
-        ipAddress: meta.ip,
-        expiresAt,
-      })
-    );
-  } catch (error) {
-    // Raised, not swallowed: `{ trusted: true }` would claim a device nothing recorded.
-    logSanitized('error', {
-      msg: 'twoFactor.trustDevice.failed',
+  await withAuthTransaction(ctx, async (tx) => {
+    if (!(await lockSessionOwner(tx, userId, sessionId)))
+      throw sessionRequired();
+    if (!(await consumeTwoFactorProof(ctx, sessionId)))
+      throw authError(HTTP_STATUS.FORBIDDEN, twoFactorMsg.trustRequiresProof);
+    await tx.insert(trustedDevices).values({
       userId,
-      error,
+      trustIdentifier: identifier,
+      userAgent: meta.userAgent,
+      ipAddress: meta.ip,
+      expiresAt: expiresIn(TRUST_DEVICE_MAX_AGE_S),
     });
-    throw authError(HTTP_STATUS.INTERNAL_ERROR, twoFactorMsg.sendError);
-  }
+  });
 
   const cookie = ctx.context.createAuthCookie(TRUST_COOKIE_NAME, {
     maxAge: TRUST_DEVICE_MAX_AGE_S,
@@ -248,13 +249,7 @@ export const trustedDevice = () =>
           const sessionId = validID(ctx.context.session?.session.id);
           if (!sessionId) throw sessionRequired();
 
-          if (!(await consumeTwoFactorProof(ctx, sessionId)))
-            throw authError(
-              HTTP_STATUS.FORBIDDEN,
-              twoFactorMsg.trustRequiresProof
-            );
-
-          await grantDeviceTrust(ctx, userId);
+          await grantDeviceTrust(ctx, userId, sessionId);
           return ctx.json({ success: true, data: { trusted: true } });
         }
       ),

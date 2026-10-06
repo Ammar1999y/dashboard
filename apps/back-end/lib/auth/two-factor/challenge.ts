@@ -30,7 +30,7 @@ import { contactKindOf } from '@app/shared/validation/enums';
 import { auditLog, boundedAuditMeta } from '@/lib/audit';
 import { contactOf } from '@/lib/users/contact';
 
-import { logSanitized } from '@/utils/log';
+import { bestEffort } from '@/utils/log';
 
 import { authError } from '../errors';
 import {
@@ -99,9 +99,9 @@ async function readChallengeState(
   ctx: AuthContext,
   challengeId: string
 ): Promise<ChallengeState | null> {
-  const row = await ctx.context.internalAdapter
-    .findVerificationValue(twoFactorStateKey(challengeId))
-    .catch(() => null);
+  const row = await ctx.context.internalAdapter.findVerificationValue(
+    twoFactorStateKey(challengeId)
+  );
   if (!row || row.expiresAt <= new Date()) return null;
   return parseChallengeState(row.value);
 }
@@ -233,13 +233,15 @@ export function spendChallengeAttempt(
   return spendAttemptBudget({
     allowed: TWO_FACTOR_ALLOWED_ATTEMPTS,
     consume: () =>
-      ctx.context.internalAdapter
-        .consumeVerificationValue(identifier)
-        .catch(() => null),
+      ctx.context.internalAdapter.consumeVerificationValue(identifier),
     rearm: async (value, expiresAt) => {
-      await ctx.context.internalAdapter
-        .createVerificationValue({ value, identifier, expiresAt })
-        .catch(() => {});
+      await bestEffort('twoFactor.attempts.rearmFailed', () =>
+        ctx.context.internalAdapter.createVerificationValue({
+          value,
+          identifier,
+          expiresAt,
+        })
+      );
     },
     exhaust: () => invalidateChallenge(ctx, challengeId),
   });
@@ -250,21 +252,24 @@ async function dropCompanionRows(
   ctx: AuthContext,
   challengeId: string
 ): Promise<void> {
-  await ctx.context.internalAdapter
-    .deleteVerificationByIdentifier(twoFactorAttemptsKey(challengeId))
-    .catch(() => {});
-  await ctx.context.internalAdapter
-    .deleteVerificationByIdentifier(twoFactorStateKey(challengeId))
-    .catch(() => {});
+  for (const identifier of [
+    twoFactorAttemptsKey(challengeId),
+    twoFactorStateKey(challengeId),
+  ])
+    await bestEffort('twoFactor.challenge.cleanupFailed', () =>
+      ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier)
+    );
 }
 
 async function invalidateChallenge(
   ctx: AuthContext,
   challengeId: string
 ): Promise<void> {
-  await ctx.context.internalAdapter
-    .deleteVerificationByIdentifier(challengeId)
-    .catch(() => {});
+  // Best-effort: every caller has spent the attempt counter, so a row left
+  // behind can no longer be verified against.
+  await bestEffort('twoFactor.challenge.cleanupFailed', () =>
+    ctx.context.internalAdapter.deleteVerificationByIdentifier(challengeId)
+  );
   await dropCompanionRows(ctx, challengeId);
   expireCookie(ctx, ctx.context.createAuthCookie(TWO_FACTOR_COOKIE_NAME));
   // Or a later `rememberMe: true` in this browser inherits this `false`.
@@ -373,35 +378,32 @@ async function recordCompletionEvent(params: {
   rememberMe: boolean;
   apiPath: string;
 }): Promise<void> {
-  try {
-    await withTransaction((tx) =>
-      auditLog(tx, {
-        userId: params.user.id,
-        userEmail: params.user.email,
-        action: 'UPDATE',
-        tableName: 'sessions',
-        recordId: params.session.id,
-        oldData: null,
-        newData: {
-          twoFactorCompleted: true,
-          firstFactor: params.firstFactor,
-          secondFactor: params.completedWith,
-          rememberMe: params.rememberMe,
-        },
-        meta: boundedAuditMeta(
-          params.session.ipAddress ?? null,
-          params.session.userAgent,
-          params.apiPath
-        ),
-      })
-    );
-  } catch (error) {
-    logSanitized('error', {
-      msg: 'twoFactor.completionAudit.failed',
-      userId: params.user.id,
-      error,
-    });
-  }
+  await bestEffort(
+    'twoFactor.completionAudit.failed',
+    () =>
+      withTransaction((tx) =>
+        auditLog(tx, {
+          userId: params.user.id,
+          userEmail: params.user.email,
+          action: 'UPDATE',
+          tableName: 'sessions',
+          recordId: params.session.id,
+          oldData: null,
+          newData: {
+            twoFactorCompleted: true,
+            firstFactor: params.firstFactor,
+            secondFactor: params.completedWith,
+            rememberMe: params.rememberMe,
+          },
+          meta: boundedAuditMeta(
+            params.session.ipAddress ?? null,
+            params.session.userAgent,
+            params.apiPath
+          ),
+        })
+      ),
+    { userId: params.user.id }
+  );
 }
 
 // The plugin's `valid()` consumed the challenge but cannot read the companion
@@ -414,7 +416,12 @@ export async function recordPluginCompletion(
   const challengeId = await readChallengeCookie(ctx);
   if (!challengeId) return;
 
-  const issued = await readChallengeState(ctx, challengeId);
+  // Best-effort like the rest of this tail: the session already exists.
+  const issued = await bestEffort(
+    'twoFactor.completion.stateReadFailed',
+    () => readChallengeState(ctx, challengeId),
+    { userId: created.user.id, skipped: 'completion audit' }
+  );
   await dropCompanionRows(ctx, challengeId);
 
   const userId = validID(created.user.id);

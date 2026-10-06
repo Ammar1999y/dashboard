@@ -63,6 +63,7 @@ import * as r2 from '@/lib/r2/client';
 import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
+import { failTableWrites } from '../helpers/faults';
 import {
   clearObjectStoreFailures,
   corruptNextCopy,
@@ -450,6 +451,38 @@ describe('upload into a folder', () => {
         .select({ status: files.status })
         .from(files)
         .where(eq(files.folderId, empty))
+    ).toEqual([{ status: 'pending' }]);
+  });
+
+  test('a foreign object whose pending row cannot be removed still answers 500, and the failed removal is logged', async () => {
+    const folder = await createFolder(admin(), 'Collision kept');
+    preconditionFailNextPut('foreign');
+    const disarm = await failTableWrites('files', 'delete', 'XX000');
+    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const collided = await call(
+        admin(),
+        'POST',
+        `/api/dash/media/files?folder=${folder}`,
+        svgForm()
+      );
+      expect(collided.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
+      const lines = logged.mock.calls.map((args) => Bun.inspect(args));
+      const removal = lines.filter((line) =>
+        line.includes('media.upload pending row delete failed')
+      );
+      expect(removal).toHaveLength(1);
+      expect(removal[0]).toContain('XX000');
+    } finally {
+      await disarm();
+      logged.mockRestore();
+    }
+    // Kept for the sweep, as an ambiguous write's row is.
+    expect(
+      await db
+        .select({ status: files.status })
+        .from(files)
+        .where(eq(files.folderId, folder))
     ).toEqual([{ status: 'pending' }]);
   });
 

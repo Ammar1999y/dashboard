@@ -1,4 +1,3 @@
-import type { FilterColumnSpecs } from '@app/shared/data-table/column-specs';
 import type { MediaScope } from '@app/shared/validation/media';
 
 import { and, count, eq, isNotNull } from 'drizzle-orm';
@@ -6,12 +5,11 @@ import { and, count, eq, isNotNull } from 'drizzle-orm';
 import { db } from '@/db';
 import { files } from '@/db/schema';
 
+import { MEDIA_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
-import { BUCKET_TYPES, FILE_KINDS } from '@app/shared/validation/enums';
 import { MEDIA_SCOPES } from '@app/shared/validation/media';
-import { KNOWN_MIME_TYPES } from '@app/shared/validation/media-types';
 
 import { parseDataTableParams } from '@/lib/data-table/params';
 import { requireId } from '@/lib/http/input';
@@ -27,22 +25,6 @@ import {
 import { UNFILED_RETENTION_DAYS, unfiledNow } from '@/lib/media/lifecycle';
 import { ENABLED_VISIBILITIES } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
-
-/**
- * `displayName` has a trigram index (`db/migrations/002_media_trgm_indexes.sql`).
- * Closed sets make an unknown member a 422, not a cast error. `mimeType` covers
- * what may EXIST, not what may be uploaded, so holding a type back does not hide
- * rows already of it.
- */
-export const MEDIA_FILTER_COLUMNS: FilterColumnSpecs = {
-  displayName: { type: 'text' },
-  sizeBytes: { type: 'number' },
-  mimeType: { type: 'select', values: KNOWN_MIME_TYPES },
-  kind: { type: 'select', values: FILE_KINDS },
-  bucketType: { type: 'select', values: BUCKET_TYPES },
-  createdAt: { type: 'date' },
-  updatedAt: { type: 'date' },
-};
 
 /** Parameters this route reads itself; the data-table parser rejects unknown keys. */
 const OWN_PARAMS = new Set(['folder', 'scope']);

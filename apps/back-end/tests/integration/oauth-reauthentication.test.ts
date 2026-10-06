@@ -11,13 +11,23 @@ import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import { accounts, passkeys, sessions, users } from '@/db/schema';
+import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
+import {
+  accounts,
+  passkeys,
+  sessions,
+  users,
+  verifications,
+} from '@/db/schema';
 import * as z from 'zod';
 
 import { auth } from '@/lib/auth';
 import * as passwords from '@/lib/auth/password/hash';
+import * as reauthWindow from '@/lib/auth/reauth/window';
 import { hasAdminReauth } from '@/lib/auth/reauth/window';
 import * as rotation from '@/lib/auth/session/rotation';
+import * as eligibility from '@/lib/auth/user-eligibility';
+import { reauthPasskeyKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables, waitForUserLock } from '../helpers/database';
@@ -181,6 +191,86 @@ test('the server offers password and passkey for a Google-linked account and a v
   });
   expect(updated.status).toBe(200);
   await signIn({ ...owner, password: 'Changed!Passw0rd123' });
+});
+
+test('a passkey reauthentication rolled back as a deadlock victim can be retried with the same assertion, once', async () => {
+  const { owner, device, cookie, sessionId } = await fixture();
+  const started = await call('/api/auth/reauth/passkey/options', cookie, {});
+  const options = z
+    .object({ data: z.object({ challenge: z.string() }) })
+    .parse(await started.json());
+  const assertion = device.assertion({
+    challenge: options.data.challenge,
+    origin: PUBLIC_ORIGIN,
+    rpId: new URL(PUBLIC_ORIGIN).hostname,
+  });
+  const victim = spyOn(reauthWindow, 'mintAdminReauth').mockImplementationOnce(
+    () =>
+      Promise.reject(Object.assign(new Error('deadlock'), { errno: '40P01' }))
+  );
+  const logged = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const refused = await call('/api/auth/reauth/passkey/verify', cookie, {
+      response: assertion,
+    });
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get('retry-after')).toBe(
+      String(DATABASE_RETRY_AFTER_S)
+    );
+    expect(await hasAdminReauth(sessionId, owner.userId)).toBe(false);
+
+    const retried = await call('/api/auth/reauth/passkey/verify', cookie, {
+      response: assertion,
+    });
+    expect(retried.status).toBe(200);
+    expect(await hasAdminReauth(sessionId, owner.userId)).toBe(true);
+    await expect(
+      call('/api/auth/reauth/passkey/verify', cookie, { response: assertion })
+    ).resolves.toHaveProperty('status', 401);
+  } finally {
+    victim.mockRestore();
+    logged.mockRestore();
+  }
+});
+
+test('a ceremony that expires while the verify waits for the user lock opens no window', async () => {
+  const { owner, device, cookie, sessionId } = await fixture();
+  const started = await call('/api/auth/reauth/passkey/options', cookie, {});
+  const options = z
+    .object({ data: z.object({ challenge: z.string() }) })
+    .parse(await started.json());
+  const assertion = device.assertion({
+    challenge: options.data.challenge,
+    origin: PUBLIC_ORIGIN,
+    rpId: new URL(PUBLIC_ORIGIN).hostname,
+  });
+  // A shortened lifetime, still live at the verify's first read.
+  const expiresAt = new Date(Date.now() + 1500);
+  await db
+    .update(verifications)
+    .set({ expiresAt })
+    .where(eq(verifications.identifier, reauthPasskeyKey(sessionId)));
+
+  // The wait for the user lock, outlasting the ceremony: the spend must read
+  // the clock after `lockUser` returns. Not a real holder: in full parallel
+  // runs the request waiting on one never sent its next statement
+  // (`reports/remaining-issues-fix-review-resolution.md`).
+  const lockUser = eligibility.lockUser;
+  const waited = spyOn(eligibility, 'lockUser').mockImplementation(
+    async (...args) => {
+      await Bun.sleep(Math.max(0, expiresAt.getTime() - Date.now()) + 200);
+      return lockUser(...args);
+    }
+  );
+  try {
+    await expect(
+      call('/api/auth/reauth/passkey/verify', cookie, { response: assertion })
+    ).resolves.toHaveProperty('status', 401);
+    expect(waited).toHaveBeenCalled();
+  } finally {
+    waited.mockRestore();
+  }
+  expect(await hasAdminReauth(sessionId, owner.userId)).toBe(false);
 });
 
 test('an unavailable method is not offered; a session alone cannot change a credential', async () => {

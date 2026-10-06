@@ -1,4 +1,4 @@
-import type { JWTPayload } from 'jose';
+import type { JWTPayload, ProtectedHeaderParameters } from 'jose';
 
 import {
   createRemoteJWKSet,
@@ -21,7 +21,10 @@ const ID_TOKEN_ALGORITHMS = ['RS256'];
 export class GoogleProviderFault extends Error {
   constructor(
     public readonly kind:
-      'token_response_malformed' | 'signing_keys_unavailable',
+      | 'token_endpoint_unavailable'
+      | 'token_endpoint_redirected'
+      | 'token_response_malformed'
+      | 'signing_keys_unavailable',
     options?: ErrorOptions
   ) {
     super(kind, options);
@@ -46,16 +49,11 @@ function isTokenFailure(error: unknown) {
 }
 
 /**
- * Better Auth's `verifyGoogleIdToken` runs these checks but answers `null` for
- * every failure, including an unreachable or empty key set, so a Google outage
- * is indistinguishable from a forged token. The checks are the same: RS256 only,
- * Google's two issuer spellings, this client as audience, a token no older than
- * an hour, and the flow's nonce. The key set is fetched on every call, as there.
- * A token with no `kid`, or a key set with a duplicate one, is refused where the
- * original tried every candidate key; Google issues neither.
- *
- * Throws `GoogleIdentityDenied` for a token that fails verification and
- * `GoogleProviderFault` when the signing keys cannot be had.
+ * Better Auth's `verifyGoogleIdToken` answers `null` for every failure, an
+ * unreachable or empty key set included, so a Google outage is
+ * indistinguishable from a forged token. A token with no `kid`, or a key set
+ * with a duplicate one, is refused where the original tried every candidate
+ * key; Google issues neither.
  */
 export async function verifyGoogleIdToken(params: {
   token: string;
@@ -63,13 +61,21 @@ export async function verifyGoogleIdToken(params: {
   nonce: string;
 }): Promise<JWTPayload> {
   const denied = () => new GoogleIdentityDenied('id_token_invalid');
-  let algorithm: string | undefined;
+  let header: ProtectedHeaderParameters;
   try {
-    algorithm = decodeProtectedHeader(params.token).alg;
+    header = decodeProtectedHeader(params.token);
   } catch {
     throw denied();
   }
-  if (!algorithm || !ID_TOKEN_ALGORITHMS.includes(algorithm)) throw denied();
+  // Refused here: jose answers an unrecognised `crit` with the
+  // `JOSENotSupported` it also raises for key material it cannot use, which is
+  // a fault. Google sets no `crit`.
+  if (
+    header.crit !== undefined ||
+    !header.alg ||
+    !ID_TOKEN_ALGORITHMS.includes(header.alg)
+  )
+    throw denied();
 
   const keys = createRemoteJWKSet(GOOGLE_CERTS_URL);
   try {

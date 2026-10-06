@@ -46,6 +46,7 @@ import {
   assertSqlMigrationHistory,
   migrationHash,
   readSqlMigrations,
+  tableExists,
 } from '@/db/migration-ledger';
 
 import { referrerContractViolations } from '@/lib/media/referrer-contract';
@@ -124,19 +125,28 @@ interface LedgerRow {
 
 /** The ledger, oldest first — the order the migrator wrote it in. */
 async function ledgerRows(): Promise<LedgerRow[] | null> {
-  const [probe]: unknown[] = await client`
-    select to_regclass('drizzle.__drizzle_migrations') is not null as present
-  `;
-  const present =
-    typeof probe === 'object' && probe !== null && 'present' in probe
-      ? probe.present
-      : undefined;
-  if (!present) return null;
-  return (await client`
+  if (!(await tableExists(client, 'drizzle.__drizzle_migrations'))) return null;
+  const rows: unknown[] = await client`
     select hash, created_at
     from drizzle.__drizzle_migrations
     order by created_at asc, id asc
-  `) as LedgerRow[];
+  `;
+  return rows.map((row) => {
+    if (
+      typeof row !== 'object' ||
+      row === null ||
+      !('hash' in row) ||
+      !('created_at' in row) ||
+      typeof row.hash !== 'string' ||
+      !(
+        typeof row.created_at === 'string' ||
+        typeof row.created_at === 'number' ||
+        typeof row.created_at === 'bigint'
+      )
+    )
+      throw new Error('malformed drizzle migration ledger row');
+    return { hash: row.hash, created_at: row.created_at };
+  });
 }
 
 const DRIZZLE_JOURNAL: LedgerSource = {

@@ -97,12 +97,12 @@ export interface RouteDefinition {
   /**
    * Can answer 401 `REAUTH_REQUIRED`: the handler asks for the
    * re-authentication window, through `requirePermission`'s `reauth` or a
-   * function that calls `requireReauthWindow`. Omitted means never;
+   * function that reaches `requireReauthWindow`.
    * `tests/unit/route-auth-flags.test.ts` holds each route to its handler.
    */
-  reauth?: boolean;
-  /** Checks the account password, so a locked account answers 429. Omitted means never. */
-  checksPassword?: boolean;
+  reauth: boolean;
+  /** Checks the account password, so a locked account answers 429. */
+  checksPassword: boolean;
 }
 
 /** The policy half of a route — what the document is built from. */

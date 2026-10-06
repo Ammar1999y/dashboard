@@ -343,6 +343,9 @@ describe('the production environment gate refuses a missing variable', () => {
 
     expect(outcome.exitCode).not.toBe(0);
     expect(outcome.output).not.toInclude('server started');
+    expect(rejectionReason(outcome.output)).toStartWith(
+      `Could not claim the SQLite directory ${sqliteDir}`
+    );
   }, 60_000);
 
   test('a relative SQLITE_DIR fails the boot', async () => {

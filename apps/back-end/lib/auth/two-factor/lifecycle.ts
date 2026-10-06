@@ -53,10 +53,12 @@ export async function enableMethod(
   });
 }
 
-type PasskeyEnrolmentOutcome = 'recorded' | 'no-passkey' | 'failed';
+type PasskeyEnrolmentOutcome =
+  | { outcome: 'recorded' | 'no-passkey' }
+  | { outcome: 'failed'; cause: unknown };
 
 // Never throws: the plugin already persisted the credential, so the caller
-// decides the registration's answer.
+// decides the registration's answer and logs the cause.
 export async function recordPasskeyEnrolment(
   ctx: AuthContext,
   session: RequestSession,
@@ -79,12 +81,12 @@ export async function recordPasskeyEnrolment(
           )
         )
         .limit(1);
-      if (owned.length === 0) return 'no-passkey';
+      if (owned.length === 0) return { outcome: 'no-passkey' };
 
       await enableMethod(tx, ctx, session, 'passkey');
-      return 'recorded';
+      return { outcome: 'recorded' };
     });
-  } catch {
-    return 'failed';
+  } catch (cause) {
+    return { outcome: 'failed', cause };
   }
 }

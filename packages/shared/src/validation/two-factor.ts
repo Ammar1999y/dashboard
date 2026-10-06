@@ -163,13 +163,20 @@ export const twoFactorPasskeyVerifySchema = z.object({
 /** A row this schema stores by UUID: a trusted device, a passkey. */
 export const ownedRowSchema = z.object({ id: idSchema });
 
-/** What `/two-factor/passkey/grant` answers with; single use, and bound to the session. */
+/** The random bytes behind a `/two-factor/passkey/grant` grant. */
+export const REAUTH_GRANT_BYTES = 24;
+
+/** Long enough for a WebAuthn ceremony a user has to walk through, and no longer. */
+export const REAUTH_GRANT_MAX_AGE_S = 600;
+
+/** What `/two-factor/passkey/grant` answers with; single use, and bound to the account. */
 export const passkeyGrantSchema = z
   .string()
-  .min(1)
-  .max(200)
+  // Unpadded base64url.
+  .length(Math.ceil((REAUTH_GRANT_BYTES * 4) / 3))
+  .regex(/^[\w-]+$/)
   .describe(
-    'The token POST /two-factor/passkey/grant answered with. Single use, bound to this session, valid for 10 minutes.'
+    `The token POST /two-factor/passkey/grant answered with. Single use, bound to this account, valid for ${REAUTH_GRANT_MAX_AGE_S / 60} minutes.`
   );
 
 export const passkeyDeleteSchema = ownedRowSchema.extend({

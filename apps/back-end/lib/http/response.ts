@@ -1,7 +1,7 @@
 import type { Handler, HandlerCookie, HandlerOutput } from './contract';
 import type { PaginationMeta } from '@app/shared/types/api';
 
-import { isDeadlock, isInvalidTextEncoding } from '@/db/errors';
+import { isDatabaseContention, isInvalidTextEncoding } from '@/db/errors';
 import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import { isAPIError } from 'better-auth/api';
 
@@ -15,7 +15,11 @@ import {
   MSG_SERVICE_UNAVAILABLE,
 } from '@app/shared/messages/common';
 
-import { errorClassOf, logSanitized, thrownAt } from '@/utils/log';
+import {
+  errorClassOf,
+  logSanitized,
+  logServerErrorResponse,
+} from '@/utils/log';
 
 import { responsePayload } from './contract';
 import { serializeSetCookie } from './cookies';
@@ -105,13 +109,7 @@ export function handleApiError(
 ): HandlerOutput<null> {
   if (error instanceof CustomError) {
     if (error.status !== undefined && error.status >= 500)
-      logSanitized('error', {
-        msg: 'server error response',
-        status: error.status,
-        errorClass: errorClassOf(error),
-        thrownAt: thrownAt(error),
-        cause: error.cause,
-      });
+      logServerErrorResponse(error);
     const errorHeaders = error.responseHeaders;
     const headers =
       errorHeaders || extraHeaders
@@ -132,8 +130,9 @@ export function handleApiError(
       ...(extraHeaders && { headers: extraHeaders }),
     });
 
-  // The backstop for a writer that misses the users → roles lock order.
-  if (isDeadlock(error)) {
+  // A deadlock is the backstop for a writer that misses the users → roles lock
+  // order; no connection in time is an exhausted pool or a database outage.
+  if (isDatabaseContention(error)) {
     logSanitized('error', error);
     return apiError({
       message: MSG_SERVICE_UNAVAILABLE,

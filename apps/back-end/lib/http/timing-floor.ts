@@ -8,7 +8,6 @@ import { handleApiError } from './response';
  * What a known account's branch does besides its one SQLite write (the global
  * send budget), which may wait out the whole busy timeout. Headroom for the
  * uncontended case, not a bound: contention is cut off at `floorDeadline`.
- * Measured in `otp-timing-oracle.test.ts`.
  *
  * TODO: Re-measure on the deployment host; the harness runs PostgreSQL locally,
  * and `FLOOR_SETTLE_MS` assumes a database round trip far below it.
@@ -31,8 +30,8 @@ const KNOWN_BRANCH_WORK_MS = 500;
  *
  * Provider delivery is deferred on the send paths and is not part of it.
  *
- * Not covered: `/forgot-password/complete`, which only a recovery-grant holder
- * reaches, so no unknown identifier exists to differ from.
+ * Padded but not cut off: `/forgot-password/complete`, which only a
+ * recovery-grant holder reaches, so no unknown identifier exists to differ from.
  */
 export const MINIMUM_RESPONSE_MS = BUSY_TIMEOUT_MS + KNOWN_BRANCH_WORK_MS;
 
@@ -48,13 +47,8 @@ const FLOOR_SETTLE_MS = 250;
  * response. Verify paths answer a refusal, so their work is rolled back and
  * never outlives it (`TransactionDeadlineError`).
  */
-export function floorDeadline(startedAt: number): number {
+function floorDeadline(startedAt: number): number {
   return startedAt + MINIMUM_RESPONSE_MS - FLOOR_SETTLE_MS;
-}
-
-export async function ensureMinDelay(elapsed: number): Promise<void> {
-  if (elapsed < MINIMUM_RESPONSE_MS)
-    await new Promise((r) => setTimeout(r, MINIMUM_RESPONSE_MS - elapsed));
 }
 
 /**
@@ -64,6 +58,28 @@ export async function ensureMinDelay(elapsed: number): Promise<void> {
  * and spends none of the floor.
  */
 export type StartTimingFloor = () => number;
+
+/**
+ * One request's floor: `start` once account-dependent work begins, and
+ * `settle` on every way out, which waits out the floor if it started.
+ */
+export function timingFloor(): {
+  start: StartTimingFloor;
+  settle: () => Promise<void>;
+} {
+  let started: number | undefined;
+  return {
+    start: () => {
+      started ??= Date.now();
+      return floorDeadline(started);
+    },
+    settle: async () => {
+      if (started === undefined) return;
+      const left = MINIMUM_RESPONSE_MS - (Date.now() - started);
+      if (left > 0) await new Promise((r) => setTimeout(r, left));
+    },
+  };
+}
 
 /**
  * `withApiErrors` for the anonymous surfaces: once `startFloor` has run, every
@@ -81,20 +97,16 @@ export function withTimingFloor(
   rewriteError?: (error: unknown) => unknown
 ): Handler {
   return async (ctx) => {
-    let started: number | undefined;
-    const startFloor = () => {
-      started ??= Date.now();
-      return floorDeadline(started);
-    };
+    const floor = timingFloor();
     try {
-      return await handler(ctx, startFloor);
+      return await handler(ctx, floor.start);
     } catch (error) {
       return handleApiError(
         rewriteError ? rewriteError(error) : error,
         fallbackMessage
       );
     } finally {
-      if (started !== undefined) await ensureMinDelay(Date.now() - started);
+      await floor.settle();
     }
   };
 }

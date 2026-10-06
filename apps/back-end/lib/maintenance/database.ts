@@ -79,7 +79,11 @@ const MAX_BATCHES = 40;
 
 interface SweepCount {
   removed: number;
-  /** True when the per-run ceiling was reached and rows almost certainly remain. */
+  /**
+   * True when the per-run ceiling was reached and rows almost certainly remain.
+   * False means nothing more was deletable now, not that nothing remains: a row
+   * another transaction holds is skipped, and the next scheduled run takes it.
+   */
   hasMore: boolean;
 }
 

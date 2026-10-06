@@ -139,6 +139,17 @@ export const CHANNEL_UNAVAILABLE_ROUTES = new Set([
   'POST /api/dash/users/me/change-phone',
 ]);
 
+/**
+ * Routes that spend a single-use input before a later transaction that can
+ * answer 503, so retrying with the same input can find it spent.
+ */
+export const SPENT_INPUT_REMEDIES: Readonly<Record<string, string>> = {
+  'POST /api/auth/forgot-password/reset':
+    'A retry with the same code can find it already spent; request a new code.',
+  'POST /api/auth/forgot-password/complete':
+    'A retry can find the recovery grant spent; start account recovery again.',
+};
+
 export const OPERATION_DOCS: Record<
   string,
   { summary: string; tag: string; description?: string }

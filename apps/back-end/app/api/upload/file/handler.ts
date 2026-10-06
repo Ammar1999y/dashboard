@@ -10,13 +10,7 @@ import { requireAnyPermission, requireSession } from '@/lib/http/session';
 import { requestActor } from '@/lib/media/actor';
 import { toMediaFile } from '@/lib/media/files';
 import { resolveUploadPurpose } from '@/lib/media/policy';
-import {
-  acceptUpload,
-  UPLOAD_ADMISSION_LIMIT,
-  UPLOAD_ADMISSION_SCOPE,
-} from '@/lib/media/upload';
-import { isVisibilityEnabled } from '@/lib/r2/client';
-import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
+import { acceptUpload } from '@/lib/media/upload';
 
 /**
  * Authorised against the resource the file is FOR: a standalone "may upload"
@@ -54,20 +48,6 @@ export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
   const purpose = resolveUploadPurpose(resource, ctx.query.get('purpose'));
   if (!purpose)
     throw new CustomError(mediaMsg.invalidPurpose, HTTP_STATUS.BAD_REQUEST);
-  if (!isVisibilityEnabled(purpose.visibility))
-    throw new CustomError(
-      mediaMsg.visibilityDisabled,
-      HTTP_STATUS.UNPROCESSABLE
-    );
-
-  // Per USER: an IP bucket lets one account spend its NAT neighbours' budget.
-  // The coarse per-IP bound runs earlier, in the adapter.
-  await enforceRateLimit({
-    scope: UPLOAD_ADMISSION_SCOPE,
-    identifier: userIdentifier(caller.userId),
-    limit: UPLOAD_ADMISSION_LIMIT,
-    failClosed: true,
-  });
 
   const row = await acceptUpload(ctx, requestActor(ctx, caller), {
     field: 'files',

@@ -47,6 +47,9 @@ export function scheduleWhenOwner(
         logLine('error', {
           msg: 'writer lock claim failed',
           errorClass: errorClassOf(error),
+          // `tryAcquireWriterLock`'s operator text, which the boot gate logs
+          // too; no request data reaches it.
+          reason: error instanceof Error ? error.message : String(error),
         });
         return;
       }

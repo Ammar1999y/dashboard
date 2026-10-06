@@ -1,10 +1,11 @@
 import { beforeEach, expect, spyOn, test } from 'bun:test';
 import crypto from 'node:crypto';
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, like, notLike } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
+import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import {
   accounts,
   auditLogs,
@@ -14,7 +15,6 @@ import {
   users,
   verifications,
 } from '@/db/schema';
-import { verifyGoogleIdToken } from 'better-auth/social-providers';
 import * as z from 'zod';
 
 import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
@@ -23,8 +23,11 @@ import {
   MSG_REAUTH_REQUIRED,
 } from '@app/shared/messages/auth';
 import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
+import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
 
 import { auth } from '@/lib/auth';
+import { verifyGoogleIdToken } from '@/lib/auth/oauth/id-token';
+import { TOKEN_EXCHANGE_TIMEOUT_MS } from '@/lib/auth/oauth/token-exchange';
 import * as passkeyAssertion from '@/lib/auth/passkey-assertion';
 import * as adminReauth from '@/lib/auth/reauth/window';
 import * as eligibility from '@/lib/auth/user-eligibility';
@@ -35,6 +38,7 @@ import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { failVerificationWrites } from '../helpers/faults';
 import { startGoogle } from '../helpers/google';
 import { dropMockedClockWindows, resetRateLimits } from '../helpers/rate-limit';
 import {
@@ -248,6 +252,49 @@ test('a result-storage failure withdraws the session before answering a server f
   }
 });
 
+test('a fault reading the redirect result answers 503 and leaves the result for the retry', async () => {
+  const owner = await seedUser();
+  const flow = await startGoogle(
+    { sub: 'result-read-subject', email: owner.email },
+    { callbackURL: '/finish' }
+  );
+  const redirected = await flow.callback();
+  expect(redirected.status).toBe(302);
+  const cookie = mergeCookies(flow.cookie, redirected.headers.getSetCookie());
+  // The result row only: the owner row is consumed first, so a fault on the
+  // second consume is the one that used to strand it.
+  const [result] = await db
+    .select({ identifier: verifications.identifier })
+    .from(verifications)
+    .where(
+      and(
+        like(verifications.identifier, 'oauth-result-%'),
+        notLike(verifications.identifier, 'oauth-result-owner-%')
+      )
+    );
+  if (!result) throw new Error('the callback stored no result');
+  const disarm = await failVerificationWrites(
+    'delete',
+    result.identifier,
+    '40P01'
+  );
+  const logged = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const refused = await call('/api/auth/oauth/result', cookie);
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get('retry-after')).toBe(
+      String(DATABASE_RETRY_AFTER_S)
+    );
+    expect(logged).toHaveBeenCalledTimes(1);
+  } finally {
+    await disarm();
+    logged.mockRestore();
+  }
+  const retried = await call('/api/auth/oauth/result', cookie);
+  expect(retried.status).toBe(200);
+  expect(await retried.json()).toMatchObject({ data: { loggedIn: true } });
+});
+
 test('post-commit identity admission failure has its own abandonment audit reason', async () => {
   const owner = await seedUser();
   const flow = await startGoogle({
@@ -315,7 +362,7 @@ test('removing a link between identity lookup and user locking reaches the link-
   }
 });
 
-test('unexpected token exchange failures are observable without leaking the provider error', async () => {
+test('a token exchange whose transport fails is observable without leaking the provider error', async () => {
   const owner = await seedUser();
   const flow = await startGoogle({
     sub: 'transport-subject',
@@ -335,7 +382,9 @@ test('unexpected token exchange failures are observable without leaking the prov
     });
     expect(JSON.stringify(log.mock.calls)).toContain('oauth.signIn.failed');
     expect(JSON.stringify(log.mock.calls)).toContain('token_exchange');
-    expect(JSON.stringify(log.mock.calls)).toContain('unexpected_failure');
+    expect(JSON.stringify(log.mock.calls)).toContain(
+      'token_endpoint_unavailable'
+    );
     expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
     expect(warning).not.toHaveBeenCalled();
   } finally {
@@ -586,20 +635,21 @@ test('administrative reauthentication-required errors retain their machine code 
   });
 });
 
-test('the installed Google verifier accepts a token without exp, so the callback must require it', async () => {
+test('a token without exp is refused, by the verifier and through the callback', async () => {
   const owner = await seedUser();
   const flow = await startGoogle({
     sub: 'missing-exp-subject',
     email: owner.email,
     exp: undefined,
   });
-  const claims = await verifyGoogleIdToken({
-    token: flow.token,
-    audience: 'harness.apps.googleusercontent.com',
-    nonce: flow.url.searchParams.get('nonce') ?? '',
-  });
-  expect(claims).toBeTruthy();
-  expect(claims?.exp).toBeUndefined();
+  // `jwtVerify` checks exp only when the token has one.
+  await expect(
+    verifyGoogleIdToken({
+      token: flow.token,
+      audience: 'harness.apps.googleusercontent.com',
+      nonce: flow.url.searchParams.get('nonce') ?? '',
+    })
+  ).rejects.toMatchObject({ reason: 'id_token_invalid' });
   await expect(flow.callback()).resolves.toHaveProperty('status', 401);
 });
 
@@ -1062,6 +1112,110 @@ test.each([
     )
 );
 
+test('a token endpoint that redirects is a provider fault, and is not followed', () =>
+  expectProviderFault(
+    {
+      arrange: answerTokenEndpoint(
+        () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://evil.example/token' },
+          })
+      ),
+    },
+    { stage: 'token_exchange', reason: 'token_endpoint_redirected' }
+  ));
+
+test('a token endpoint that never answers is abandoned at the bound, its request cancelled', async () => {
+  const cancelled: Promise<void>[] = [];
+  const stalled = Bun.serve({
+    port: 0,
+    fetch: (request) => {
+      const gone = Promise.withResolvers<void>();
+      request.signal.addEventListener('abort', () => gone.resolve());
+      cancelled.push(gone.promise);
+      return new Promise<Response>(() => {});
+    },
+  });
+  try {
+    const started = performance.now();
+    await expectProviderFault(
+      {
+        arrange: () =>
+          scriptEgress('oauth2.googleapis.com', async (request) =>
+            fetch(`http://127.0.0.1:${stalled.port}/token`, {
+              method: 'POST',
+              body: await request.text(),
+              signal: request.signal,
+            })
+          ),
+      },
+      { stage: 'token_exchange', reason: 'token_endpoint_unavailable' }
+    );
+    // Both modes, each cut at the bound rather than left to the runtime.
+    expect(performance.now() - started).toBeLessThan(
+      2 * TOKEN_EXCHANGE_TIMEOUT_MS + 5000
+    );
+    expect(cancelled).toHaveLength(2);
+    await Promise.all(cancelled);
+  } finally {
+    await stalled.stop(true);
+  }
+}, 40_000);
+
+test('a state naming a verification row the start endpoint did not issue goes to the lost-state page', async () => {
+  // A passkey registration challenge: its id is a 32-character token like a
+  // state, and its value is no state.
+  const owner = await seedUser();
+  const signedIn = await signIn(owner);
+  const options = await call(
+    '/api/auth/passkey/generate-register-options',
+    signedIn.cookie
+  );
+  expect(options.status).toBe(200);
+  const challengeCookie = options.headers
+    .getSetCookie()
+    .find((cookie) => cookie.includes('better-auth-passkey='));
+  const challenge = decodeURIComponent(
+    challengeCookie?.split(';', 1)[0]?.split('=', 2)[1] ?? ''
+  ).split('.', 1)[0];
+  if (!challenge) throw new Error('no passkey challenge cookie');
+  const log = spyOn(console, 'error').mockImplementation(() => {});
+  const warning = spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const target = new URL('/api/auth/oauth/google/callback', PUBLIC_ORIGIN);
+    target.searchParams.set('state', challenge);
+    target.searchParams.set('code', 'any');
+    const response = await app.handle(
+      new Request(target, { headers: baseHeaders({ cookie: signedIn.cookie }) })
+    );
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      `${PUBLIC_ORIGIN}${OAUTH_STATE_LOST_PAGE}`
+    );
+    expect(log).not.toHaveBeenCalled();
+    expect(warning.mock.calls).toEqual([
+      [
+        {
+          msg: 'oauth.signIn.failed',
+          provider: 'google',
+          stage: 'state',
+          reason: 'state_lost',
+        },
+      ],
+    ]);
+    expect(
+      await db
+        .select({ id: verifications.id })
+        .from(verifications)
+        .where(eq(verifications.identifier, challenge))
+    ).toHaveLength(1);
+  } finally {
+    log.mockRestore();
+    warning.mockRestore();
+  }
+});
+
 test.each([
   ['a 500', () => new Response('error', { status: 500 })],
   ['a 404', () => new Response('missing', { status: 404 })],
@@ -1154,6 +1308,16 @@ test.each([
     'alg none',
     { tamper: rewriteHeader((header) => ({ ...header, alg: 'none' })) },
   ],
+  [
+    'an unrecognised crit header',
+    {
+      tamper: rewriteHeader((header) => ({
+        ...header,
+        crit: ['probe'],
+        probe: true,
+      })),
+    },
+  ],
   ['a string that is not a JWT', { token: 'not.a.jwt' }],
   ['a single segment', { token: 'x' }],
 ] as [string, CallbackScript][])(
@@ -1214,19 +1378,35 @@ test.each([
     expectRefusal({ query }, { stage: 'state', reason })
 );
 
-test('a callback whose one-shot marker is already spent is a warning, in both modes', () =>
-  expectRefusal(
-    {
-      arrange: async (flow) => {
-        await db
-          .delete(verifications)
-          .where(
-            eq(
-              verifications.identifier,
-              oauthOnceKey(flow.url.searchParams.get('state') ?? '')
-            )
-          );
-      },
+// The marker is checked before the state is read, so a spent one is a used
+// state: the flow's callbackURL is never reached.
+test('a callback whose one-shot marker is already spent goes to the lost-state page, in both modes', async () => {
+  const outcomes = await answerInBothModes({
+    arrange: async (flow) => {
+      await db
+        .delete(verifications)
+        .where(
+          eq(
+            verifications.identifier,
+            oauthOnceKey(flow.url.searchParams.get('state') ?? '')
+          )
+        );
     },
-    { stage: 'state', reason: 'state_replayed' }
-  ));
+  });
+  for (const outcome of outcomes) {
+    expect(outcome.response.status).toBe(302);
+    expect(outcome.response.headers.get('location')).toBe(
+      `${PUBLIC_ORIGIN}${OAUTH_STATE_LOST_PAGE}`
+    );
+    expect(outcome.warnings).toEqual([
+      {
+        msg: 'oauth.signIn.failed',
+        provider: 'google',
+        stage: 'state',
+        reason: 'state_lost',
+      },
+    ]);
+    expect(outcome.errors).toEqual([]);
+  }
+  await expectNothingGranted();
+});

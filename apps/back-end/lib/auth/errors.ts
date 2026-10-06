@@ -1,6 +1,6 @@
 import type { HookContext } from './context';
 
-import { isDeadlock } from '@/db/errors';
+import { isDatabaseContention } from '@/db/errors';
 import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import { APIError, isAPIError } from 'better-auth/api';
 
@@ -19,7 +19,7 @@ import {
 } from '@app/shared/messages/auth';
 import { MSG_SERVICE_UNAVAILABLE } from '@app/shared/messages/common';
 
-import { logSanitized } from '@/utils/log';
+import { logSanitized, logServerErrorResponse } from '@/utils/log';
 
 type AuthErrorStatus = NonNullable<ConstructorParameters<typeof APIError>[0]>;
 
@@ -39,16 +39,20 @@ export function authErrorCodeFirst(
   return new APIError(status, { code: CUSTOM_AUTH_CODE, message });
 }
 
-/**
- * `handleApiError`'s deadlock answer, in Better Auth's shape. Logged here: a 5xx
- * `APIError` is not logged again downstream, and the deadlock is the lock-order
- * bug this exists to expose.
- */
-export function databaseContended(cause: unknown): APIError {
-  logSanitized('error', cause);
+/** `handleApiError`'s answer to `isDatabaseContention`, in Better Auth's shape. */
+export function databaseUnavailable(): APIError {
   return authError(HTTP_STATUS.SERVICE_UNAVAILABLE, MSG_SERVICE_UNAVAILABLE, {
     'Retry-After': String(DATABASE_RETRY_AFTER_S),
   });
+}
+
+/**
+ * `databaseUnavailable`, logging the fault: a 5xx `APIError` is not logged
+ * again downstream, and a deadlock is the lock-order bug this exists to expose.
+ */
+function databaseContended(cause: unknown): APIError {
+  logSanitized('error', cause);
+  return databaseUnavailable();
 }
 
 export function authenticationDenied(): APIError {
@@ -110,14 +114,22 @@ export function toAuthApiError(
 /** `toAuthApiError` for a caught value: an `APIError` or a non-project throw passes through. */
 export function asAuthError(caught: unknown, genericMessage: string): unknown {
   if (caught instanceof APIError) return caught;
-  if (caught instanceof CustomError)
+  if (caught instanceof CustomError) {
+    // Here, as `handleApiError` does: the `APIError` it becomes is not logged
+    // downstream, and a 500 becomes a 4xx.
+    if (
+      caught.status !== undefined &&
+      caught.status >= HTTP_STATUS.INTERNAL_ERROR
+    )
+      logServerErrorResponse(caught);
     return toAuthApiError(caught, genericMessage);
-  if (isDeadlock(caught)) return databaseContended(caught);
+  }
+  if (isDatabaseContention(caught)) return databaseContended(caught);
   return caught;
 }
 
 // Own-property read: `constructor` would resolve to an inherited function.
-export function localisedAuthMessage(code: unknown): string | undefined {
+function localisedAuthMessage(code: unknown): string | undefined {
   return typeof code === 'string' && Object.hasOwn(betterAuthMsg, code)
     ? betterAuthMsg[code]
     : undefined;

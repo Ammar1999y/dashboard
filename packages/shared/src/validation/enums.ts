@@ -54,6 +54,10 @@ export type FileKind = (typeof FILE_KINDS)[number];
 export const BUCKET_TYPES = ['public', 'private'] as const;
 export type BucketType = (typeof BUCKET_TYPES)[number];
 
+// ⚠️ Changing this list requires a DB migration (file_transition pgEnum).
+export const FILE_TRANSITIONS = ['to_public', 'to_private', 'cleanup'] as const;
+export type FileTransition = (typeof FILE_TRANSITIONS)[number];
+
 const PHONE_CHANNEL_SET = new Set<OtpChannel>(PHONE_OTP_CHANNELS);
 
 /**

@@ -17,7 +17,7 @@ import { contactKindOf } from '@app/shared/validation/enums';
 
 import { auditLog } from '@/lib/audit';
 
-import { logLine } from '@/utils/log';
+import { logLine, logSanitized } from '@/utils/log';
 
 import { canEvaluateOtp, verifyOtpCode } from './hash';
 import {
@@ -79,13 +79,24 @@ interface ProcessOtpVerifyOptions {
 
 async function transactionWithin<T>(
   fn: (tx: Tx) => Promise<T>,
-  deadline: number | undefined
+  { deadline, purpose }: Pick<ProcessOtpVerifyOptions, 'deadline' | 'purpose'>
 ): Promise<T> {
+  const started = Date.now();
   try {
     return await withTransaction(fn, undefined, deadline);
   } catch (error) {
-    if (error instanceof TransactionDeadlineError) throw invalidOrExpiredCode();
-    throw error;
+    if (!(error instanceof TransactionDeadlineError)) throw error;
+    // The answer hides whether the code was right, so this line is the only
+    // trace that a correct one may have been refused.
+    logSanitized('error', {
+      msg: 'otp.verify.deadlineExceeded',
+      purpose,
+      elapsedMs: Date.now() - started,
+      error,
+    });
+    const refusal = invalidOrExpiredCode();
+    refusal.cause = error;
+    throw refusal;
   }
 }
 
@@ -100,17 +111,19 @@ type VerifyOutcome =
       evaluated: boolean;
     };
 
-export async function processOtpVerify({
-  userId,
-  userEmail,
-  channel,
-  purpose,
-  identifier,
-  code,
-  auditMeta,
-  deadline,
-  onVerified,
-}: ProcessOtpVerifyOptions): Promise<void> {
+export async function processOtpVerify(
+  options: ProcessOtpVerifyOptions
+): Promise<void> {
+  const {
+    userId,
+    userEmail,
+    channel,
+    purpose,
+    identifier,
+    code,
+    auditMeta,
+    onVerified,
+  } = options;
   // Keyed on contact kind, so switching sms -> whatsapp buys no second allowance.
   const contactKind = contactKindOf(channel);
 
@@ -327,7 +340,7 @@ export async function processOtpVerify({
       return { kind: 'blocked', blockedUntil: blockUntil, evaluated: true };
     }
     return { kind: 'mismatch' };
-  }, deadline);
+  }, options);
 
   if (outcome.kind === 'matched') return;
 
@@ -353,6 +366,6 @@ export function verifyOtpOrAutoVerify(
   }
 ): Promise<void> {
   return OTP_AUTO_VERIFY
-    ? transactionWithin((tx) => opts.onVerified(tx, null), opts.deadline)
+    ? transactionWithin((tx) => opts.onVerified(tx, null), opts)
     : processOtpVerify(opts);
 }

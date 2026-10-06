@@ -41,33 +41,8 @@ const CLIENT_REFUSAL_PREFIXES = [
   'Blocked cross-site navigation login attempt',
 ] as const;
 
-/**
- * `parseState` logs this for every failure, expired and replayed callbacks and
- * database exceptions alike. Only a `StateError` is a client refusal, and the
- * class is not exported, so it is recognised by the codes it throws
- * (`better-auth/dist/state.mjs`); `state_generation_error` is a fault.
- */
-const STATE_PARSE_FAILURE_PREFIX = 'Failed to parse state';
-const STATE_REFUSAL_CODES: ReadonlySet<unknown> = new Set([
-  'state_not_found',
-  'state_mismatch',
-  'state_invalid',
-  'state_security_mismatch',
-]);
-
-function isStateRefusal(logged: unknown): boolean {
-  return (
-    typeof logged === 'object' &&
-    logged !== null &&
-    STATE_REFUSAL_CODES.has(Reflect.get(logged, 'code'))
-  );
-}
-
-function isClientRefusal(message: string, args: readonly unknown[]): boolean {
-  return (
-    CLIENT_REFUSAL_PREFIXES.some((prefix) => message.startsWith(prefix)) ||
-    (message.startsWith(STATE_PARSE_FAILURE_PREFIX) && isStateRefusal(args[0]))
-  );
+function isClientRefusal(message: string): boolean {
+  return CLIENT_REFUSAL_PREFIXES.some((prefix) => message.startsWith(prefix));
 }
 
 export const auth = betterAuth({
@@ -114,13 +89,14 @@ export const auth = betterAuth({
 
   logger: {
     // `warn` is per-request client-failure chatter (`User not found`,
-    // `Invalid password`), not faults.
+    // `Invalid password`). `error` still carries some caller-triggered
+    // refusals, which `log` demotes (`isClientRefusal`).
     level: 'error',
     log: (level, message, ...args: unknown[]) => {
       logSanitized(
         level === 'debug' || level === 'info'
           ? 'log'
-          : isClientRefusal(message, args)
+          : isClientRefusal(message)
             ? 'warn'
             : level,
         { msg: 'betterAuth', message, args }

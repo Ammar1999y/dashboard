@@ -128,6 +128,30 @@ export const BETTER_AUTH_LOCAL_THROTTLE_PATHS = new Set([
 ]);
 
 /**
+ * Paths that spend a single-use input before a later transaction that can
+ * answer 503, so retrying with the same input can find it spent. The remedy,
+ * what that retry actually needs, replaces the 503's "retry". A path whose 503
+ * rolls its spend back keeps the retry (`/two-factor/verify-backup-code`,
+ * `/oauth/result`).
+ */
+export const BETTER_AUTH_SPENT_INPUT_REMEDIES: Readonly<
+  Record<string, string>
+> = {
+  '/passwordless/verify':
+    'a retry with the same code can find it already spent; request a new code.',
+  '/two-factor/otp/verify':
+    'signing in, a retry can find the challenge spent, so start a new sign-in; an enrolment can retry after `Retry-After`.',
+  '/two-factor/verify-totp':
+    'a retry with the same code can find it already spent; wait for the authenticator’s next code.',
+  '/two-factor/passkey/verify':
+    'a retry can find the challenge spent, so start a new sign-in.',
+  '/passkey/delete-passkey':
+    'a retry with the same grant can find it spent; request a new one at `/two-factor/passkey/grant`.',
+  '/oauth/google/callback':
+    'the sign-in state and Google’s code are single-use, so start a new sign-in.',
+};
+
+/**
  * Paths whose handler maps a database 503 itself, so it answers in Better
  * Auth's error shape as well as the wildcard's envelope.
  */
@@ -138,7 +162,8 @@ export const BETTER_AUTH_DATABASE_FAULT_PATHS = new Set([
 /**
  * Paths that check the account password (`requireReauthPassword`, or the proof
  * `/two-factor/get-totp-uri` takes), so a locked account answers 429 there in
- * Better Auth's error shape.
+ * Better Auth's error shape, and a request with neither a password nor an open
+ * re-authentication window answers 401 `REAUTH_REQUIRED`.
  */
 export const BETTER_AUTH_PASSWORD_LOCKOUT_PATHS = new Set([
   '/two-factor/get-totp-uri',

@@ -32,11 +32,12 @@ import { generateUuidV7 } from '@/lib/id';
 import {
   headObjectInR2,
   isPreconditionFailedError,
+  isVisibilityEnabled,
   uploadToR2,
 } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-import { errorTypeOf, logSanitized } from '@/utils/log';
+import { bestEffort, errorTypeOf, logSanitized } from '@/utils/log';
 
 import { auditAs } from './actor';
 import { fileTypeFor } from './allowlist';
@@ -50,16 +51,6 @@ import {
 } from './image/process';
 import { objectKey } from './keys';
 import { requirePublishGrant } from './policy';
-
-/**
- * Per user per minute, charged BEFORE the body is read: the kind budgets need
- * the bytes to know the kind, so this bounds the parsing an account over one
- * of them can still cause.
- */
-export const UPLOAD_ADMISSION_LIMIT = 20;
-
-/** Shared by both upload routes, so the allowance is per user, not per route. */
-export const UPLOAD_ADMISSION_SCOPE = 'upload.admission';
 
 /**
  * In megapixels, not requests: the encoder is process-global and serialized, so
@@ -383,17 +374,20 @@ async function settleKeyCollision(params: {
   // was not written by this request.
   if (head?.checksumSha256 && matchesRow(head, params)) return;
   if (head)
-    await db
-      .delete(files)
-      .where(and(eq(files.id, id), eq(files.status, 'pending')))
-      .catch(() => {});
-  logSanitized('error', {
+    await bestEffort(
+      'media.upload pending row delete failed',
+      () =>
+        db
+          .delete(files)
+          .where(and(eq(files.id, id), eq(files.status, 'pending'))),
+      { id }
+    );
+  throw serverFault(mediaMsg.storeFailed, {
     msg: head
       ? 'media.upload key collision'
       : 'media.upload precondition failed with nothing at the key',
     id,
   });
-  throw new CustomError(mediaMsg.storeFailed, HTTP_STATUS.INTERNAL_ERROR);
 }
 
 /**
@@ -521,9 +515,20 @@ async function storeUpload(params: {
 }
 
 /**
- * Reads the body, so whether the target's visibility is enabled, and the
- * admission limit, are the route's to check before calling this. The publish
- * grant a public target needs is checked here, for every route.
+ * Per user per minute, charged BEFORE the body is read: the kind budgets need
+ * the bytes to know the kind, so this bounds the parsing an account over one
+ * of them can still cause.
+ */
+const UPLOAD_ADMISSION_LIMIT = 20;
+
+/** Shared by both upload routes, so the allowance is per user, not per route. */
+const UPLOAD_ADMISSION_SCOPE = 'upload.admission';
+
+/**
+ * Every upload route's path from its own permission check to the stored row.
+ * The publish grant a public target needs comes first, so a caller without it
+ * is refused before the admission limit charges it; the charges come before
+ * `readFormData()`, which buffers the whole body.
  */
 export async function acceptUpload(
   ctx: HandlerInput,
@@ -531,7 +536,19 @@ export async function acceptUpload(
   target: UploadTarget & { field: string }
 ): Promise<MediaFileRow> {
   if (target.visibility === 'public') await requirePublishGrant(ctx.headers);
-  // Must precede `readFormData()`, which buffers the whole body.
+  if (!isVisibilityEnabled(target.visibility))
+    throw new CustomError(
+      mediaMsg.visibilityDisabled,
+      HTTP_STATUS.UNPROCESSABLE
+    );
+  // Per USER: an IP bucket lets one account spend its NAT neighbours' budget.
+  // The coarse per-IP bound runs earlier, in the adapter.
+  await enforceRateLimit({
+    scope: UPLOAD_ADMISSION_SCOPE,
+    identifier: userIdentifier(actor.userId),
+    limit: UPLOAD_ADMISSION_LIMIT,
+    failClosed: true,
+  });
   await chargeUploadBodyBudget(actor.userId, ctx.headers);
 
   const entry = takeSingleFile(await ctx.readFormData(), target.field);

@@ -14,7 +14,7 @@
  * cost one attempt between them. `budget is not readable between a spend and its
  * outcome` is the case that fails against it.
  */
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import type { AuthContext } from '@/lib/auth/context';
 
 import {
@@ -164,4 +164,35 @@ test('a missing counter row refuses rather than granting a fresh budget', async 
   const { ctx } = stubContext({});
   const attempt = await spendChallengeAttempt(ctx, CHALLENGE);
   expect(attempt.ok).toBe(false);
+});
+
+test('a fault consuming the counter propagates instead of reading as an exhausted budget', async () => {
+  const { ctx } = stubContext({ [COUNTER]: '0' });
+  const fault = new Error('connection terminated');
+  ctx.context.internalAdapter.consumeVerificationValue = async () => {
+    throw fault;
+  };
+  await expect(spendChallengeAttempt(ctx, CHALLENGE)).rejects.toBe(fault);
+});
+
+test('a fault re-arming the counter is logged once and settles the attempt', async () => {
+  const { ctx } = stubContext({ [COUNTER]: '1' });
+  const attempt = await spendChallengeAttempt(ctx, CHALLENGE);
+  expect(attempt.ok).toBe(true);
+  ctx.context.internalAdapter.createVerificationValue = async () => {
+    throw new Error('connection terminated');
+  };
+  const logged = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await expect(attempt.recordFailure()).resolves.toBeUndefined();
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(Bun.inspect(logged.mock.calls[0])).toContain(
+      'twoFactor.attempts.rearmFailed'
+    );
+  } finally {
+    logged.mockRestore();
+  }
+  // Fails closed: the counter row is gone, so the next spend is refused.
+  const next = await spendChallengeAttempt(ctx, CHALLENGE);
+  expect(next.ok).toBe(false);
 });

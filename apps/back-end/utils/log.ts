@@ -457,6 +457,38 @@ export function errorClassOf(error: unknown): string {
   return error instanceof Error ? error.name : 'Unknown';
 }
 
+/**
+ * The one line a 5xx `CustomError` is logged with, by whichever boundary
+ * answers it: where it was thrown and the diagnosis it carries as `cause`.
+ */
+export function logServerErrorResponse(error: CustomError): void {
+  logSanitized('error', {
+    msg: 'server error response',
+    status: error.status,
+    errorClass: errorClassOf(error),
+    thrownAt: thrownAt(error),
+    cause: error.cause,
+  });
+}
+
+/**
+ * Work whose failure must not change the answer: a fault is logged once and
+ * answered `undefined`. Never for a read or a consume a refusal depends on; a
+ * fault there must propagate to the boundary that answers 503 or 500.
+ */
+export async function bestEffort<T>(
+  msg: string,
+  work: () => Promise<T>,
+  fields: Record<string, unknown> = {}
+): Promise<T | undefined> {
+  try {
+    return await work();
+  } catch (error) {
+    logSanitized('error', { msg, ...fields, error });
+    return undefined;
+  }
+}
+
 /** `errorClassOf`, but a non-`Error` throw is named by its `typeof`. */
 export function errorTypeOf(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;

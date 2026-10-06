@@ -141,3 +141,21 @@ export const OTHER_RECORDS: CountForms = {
   many: '# سجلاً آخر',
   other: '# سجل آخر',
 };
+
+// Genitive: «بعد …».
+export const DAYS: CountForms = {
+  one: 'يوم واحد',
+  two: 'يومين',
+  few: '# أيام',
+  many: '# يوماً',
+  other: '# يوم',
+};
+
+// Genitive: «إنهاء …».
+export const SESSIONS: CountForms = {
+  one: 'جلسة واحدة',
+  two: 'جلستين',
+  few: '# جلسات',
+  many: '# جلسة',
+  other: '# جلسة',
+};

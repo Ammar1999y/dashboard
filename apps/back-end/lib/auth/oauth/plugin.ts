@@ -2,7 +2,11 @@ import type { AuthContext } from '../context';
 import type { BetterAuthPlugin } from 'better-auth';
 import type { APIError } from 'better-auth/api';
 
-import { isDeadlock } from '@/db/errors';
+import { and, eq, gt } from 'drizzle-orm';
+
+import { db } from '@/db';
+import { isDatabaseContention } from '@/db/errors';
+import { verifications } from '@/db/schema';
 import { createAuthEndpoint, isAPIError } from 'better-auth/api';
 import { deleteSessionCookie, expireCookie } from 'better-auth/cookies';
 import { generateState, parseState } from 'better-auth/oauth2';
@@ -26,14 +30,14 @@ import { auditLog } from '@/lib/audit';
 import { verifyTurnstileRequest } from '@/lib/captcha';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { errorClassOf, logSanitized } from '@/utils/log';
+import { errorClassOf, logSanitized, thrownAt } from '@/utils/log';
 
 import { authAuditMeta, requestHeaders } from '../context';
 import {
   authenticationDenied,
   authError,
   authErrorCodeFirst,
-  databaseContended,
+  databaseUnavailable,
   toAuthApiError,
 } from '../errors';
 import { BASE64URL_32_BYTES_PATTERN } from '../keyring';
@@ -65,6 +69,7 @@ import {
   GoogleIdentityDenied,
   resolveGoogleIdentity,
 } from './identity';
+import { exchangeGoogleCode } from './token-exchange';
 
 /** `generateState`'s token: 32 of `generateRandomString`'s `a-z0-9A-Z-_`. */
 const OAUTH_STATE_PATTERN = /^[\w-]{32}$/;
@@ -113,6 +118,38 @@ function isLostState(error: unknown): boolean {
 }
 
 /**
+ * `parseState`, with its failure line handed to `onFailure` rather than the
+ * logger: the redirect it throws drops the cause, so the callback logs that
+ * line as its own, once. The library logs nothing else there.
+ */
+function parseStateLoggingTo(
+  ctx: Parameters<typeof parseState>[0],
+  onFailure: (logged: unknown) => void
+) {
+  return parseState({
+    ...ctx,
+    context: {
+      ...ctx.context,
+      logger: {
+        ...ctx.context.logger,
+        error: (_message: string, logged?: unknown) => onFailure(logged),
+      },
+    },
+  });
+}
+
+/** A `StateError`'s code (the class is not exported), or undefined. */
+function stateCodeOf(logged: unknown): string | undefined {
+  const code: unknown =
+    typeof logged === 'object' && logged !== null
+      ? Reflect.get(logged, 'code')
+      : undefined;
+  return typeof code === 'string' && /^state_[a-z_]{1,40}$/.test(code)
+    ? code
+    : undefined;
+}
+
+/**
  * The answer for a fault that says nothing about the credentials, or undefined
  * when the failure is a refusal. A refusal is `GoogleIdentityDenied` or an
  * `APIError` below 500; everything else is infrastructure and must not read as
@@ -123,7 +160,7 @@ function serverFailure(
   readingState: boolean
 ): APIError | undefined {
   if (error instanceof GoogleIdentityDenied) return undefined;
-  if (isDeadlock(error)) return databaseContended(error);
+  if (isDatabaseContention(error)) return databaseUnavailable();
   if (error instanceof CustomError) {
     const status = error.status ?? HTTP_STATUS.INTERNAL_ERROR;
     return status === HTTP_STATUS.SERVICE_UNAVAILABLE
@@ -139,6 +176,17 @@ function serverFailure(
       : undefined;
   }
   return authError(HTTP_STATUS.INTERNAL_ERROR, MSG_INTERNAL_ERROR);
+}
+
+/**
+ * What a failure line keeps besides the class: a database fault (driver errors
+ * are logged without their bound values), or the diagnosis one of ours carries.
+ */
+function faultDetail(error: unknown): Record<string, unknown> {
+  if (isDatabaseContention(error)) return { fault: error };
+  if (error instanceof CustomError)
+    return { thrownAt: thrownAt(error), cause: error.cause };
+  return {};
 }
 
 /** RFC 6749 section 5.2 codes, the only provider text safe to log: free-text fields can carry anything. */
@@ -342,8 +390,8 @@ export const oauth = () =>
             method: 'GET',
             query: z.object({
               code: z.string().min(1).max(4096).optional(),
-              // `generateState`'s own shape, so the lookup it drives can never
-              // name one of this application's verification rows.
+              // `generateState`'s own shape. Not proof the state is ours: a
+              // passkey challenge row shares it, hence the marker check below.
               state: z.string().regex(OAUTH_STATE_PATTERN),
               error: z.string().max(256).optional(),
               iss: z.string().max(255).optional(),
@@ -359,11 +407,28 @@ export const oauth = () =>
             let destination: string | null = null;
             let stage = 'state';
             let readingState = false;
+            let stateFailure: unknown;
             try {
               if (!googleProvider || !GOOGLE_CREDENTIALS)
                 throw authenticationDenied();
               readingState = true;
-              const state = await parseState(ctx);
+              // `parseState` parses whatever verification row the value names,
+              // and answers any other row's value with a 500. Only one the
+              // start endpoint marked is read.
+              const [issued] = await db
+                .select({ id: verifications.id })
+                .from(verifications)
+                .where(
+                  and(
+                    eq(verifications.identifier, oauthOnceKey(ctx.query.state)),
+                    gt(verifications.expiresAt, new Date())
+                  )
+                )
+                .limit(1);
+              if (!issued) throw new GoogleIdentityDenied('state_lost');
+              const state = await parseStateLoggingTo(ctx, (logged) => {
+                stateFailure = logged;
+              });
               readingState = false;
               const flow = flowSchema.parse(state.flow);
               destination = returnURL(flow.returnURL ?? undefined);
@@ -385,22 +450,19 @@ export const oauth = () =>
                 throw new GoogleIdentityDenied('code_missing');
               if (!state.idTokenNonce) throw authenticationDenied();
               stage = 'token_exchange';
-              const tokens = await googleProvider
-                .validateAuthorizationCode({
-                  code: ctx.query.code,
-                  codeVerifier: state.codeVerifier,
-                  redirectURI: GOOGLE_REDIRECT_URI,
-                })
-                .catch((error: unknown) => {
-                  throw isTokenEndpointRefusal(error)
-                    ? new GoogleIdentityDenied('token_exchange_refused')
-                    : error;
-                });
-              if (typeof tokens.idToken !== 'string' || !tokens.idToken)
-                throw new GoogleProviderFault('token_response_malformed');
+              const idToken = await exchangeGoogleCode({
+                code: ctx.query.code,
+                codeVerifier: state.codeVerifier,
+                redirectURI: GOOGLE_REDIRECT_URI,
+                credentials: GOOGLE_CREDENTIALS,
+              }).catch((error: unknown) => {
+                throw isTokenEndpointRefusal(error)
+                  ? new GoogleIdentityDenied('token_exchange_refused')
+                  : error;
+              });
               stage = 'token_verification';
               const claims = await verifyGoogleIdToken({
-                token: tokens.idToken,
+                token: idToken,
                 audience: GOOGLE_CREDENTIALS.clientId,
                 nonce: state.idTokenNonce,
               });
@@ -516,10 +578,25 @@ export const oauth = () =>
                 throw error;
               }
             } catch (error) {
-              const failure = serverFailure(error, readingState);
+              // What `parseState` caught, when its redirect stands for a fault
+              // rather than a lost state: the redirect drops the cause, so the
+              // answer and the line are both derived from the fault itself.
+              const fault =
+                readingState &&
+                stateFailure !== undefined &&
+                !isLostState(error)
+                  ? stateFailure
+                  : error;
+              const failure = serverFailure(fault, readingState);
+              const denial = error instanceof GoogleIdentityDenied;
+              const stateLost = denial
+                ? error.reason === 'state_lost'
+                : readingState && isLostState(error);
+              // After both reads: `parseState`'s redirect sets its `Location`
+              // on these headers, which its thrown error shares, and it must
+              // not ride on whatever is answered instead.
+              ctx.responseHeaders?.delete('location');
               if (failure) {
-                // `parseState` redirects into these headers; its `Location` would otherwise ride on the 5xx.
-                ctx.responseHeaders?.delete('location');
                 logSanitized('error', {
                   msg: 'oauth.signIn.failed',
                   provider: 'google',
@@ -529,14 +606,17 @@ export const oauth = () =>
                     : error instanceof GoogleProviderFault
                       ? error.kind
                       : 'unexpected_failure',
-                  // The class only: a provider or driver message can carry credentials or SQL parameters.
-                  errorClass: errorClassOf(error),
+                  // The class and what `faultDetail` keeps: a provider or driver
+                  // message can carry credentials or SQL parameters.
+                  errorClass: errorClassOf(fault),
                   providerError: tokenEndpointErrorCode(error),
+                  ...faultDetail(fault),
                 });
                 throw failure;
               }
-              const denial = error instanceof GoogleIdentityDenied;
-              const stateLost = readingState && isLostState(error);
+              const stateCode = stateLost
+                ? stateCodeOf(stateFailure)
+                : undefined;
               logSanitized(denial || stateLost ? 'warn' : 'error', {
                 msg: 'oauth.signIn.failed',
                 provider: 'google',
@@ -546,6 +626,7 @@ export const oauth = () =>
                   : stateLost
                     ? 'state_lost'
                     : 'authentication_denied',
+                ...(stateCode && { stateCode }),
               });
               if (destination)
                 return completeResponse(
@@ -556,9 +637,6 @@ export const oauth = () =>
                 );
               if (stateLost)
                 return ctx.redirect(`${PUBLIC_ORIGIN}${OAUTH_STATE_LOST_PAGE}`);
-              // `parseState` answers with a redirect into these headers, and
-              // its `Location` would otherwise ride on the 401.
-              ctx.responseHeaders?.delete('location');
               throw authenticationDenied();
             }
           }
@@ -582,15 +660,23 @@ export const oauth = () =>
             );
             if (!token || !BASE64URL_32_BYTES_PATTERN.test(token))
               throw authenticationDenied();
+            // Together, and the cookie kept until they commit: a fault between
+            // two separate consumes left the result unreadable for the retry
+            // its 503 invites.
+            const { owner, result } = await withAuthTransaction(
+              ctx,
+              async () => ({
+                owner:
+                  await ctx.context.internalAdapter.consumeVerificationValue(
+                    oauthResultOwnerKey(token)
+                  ),
+                result:
+                  await ctx.context.internalAdapter.consumeVerificationValue(
+                    oauthResultKey(token)
+                  ),
+              })
+            );
             expireCookie(ctx, cookie);
-            const owner =
-              await ctx.context.internalAdapter.consumeVerificationValue(
-                oauthResultOwnerKey(token)
-              );
-            const result =
-              await ctx.context.internalAdapter.consumeVerificationValue(
-                oauthResultKey(token)
-              );
             if (!owner || !result) throw authenticationDenied();
             const parsed = oauthResultSchema.safeParse(
               JSON.parse(result.value)

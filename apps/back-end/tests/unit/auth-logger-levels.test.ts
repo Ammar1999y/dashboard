@@ -13,10 +13,6 @@ function emit(level: 'error' | 'warn', message: string, ...args: unknown[]) {
   log(level, message, ...args);
 }
 
-function stateError(code: string) {
-  return Object.assign(new Error('State mismatch'), { code });
-}
-
 test.each([
   'Invalid origin: https://evil.example/attacker-text',
   'Invalid callbackURL: https://evil.example',
@@ -47,53 +43,12 @@ test('any other library error stays at error', () => {
   }
 });
 
-test.each([
-  'state_not_found',
-  'state_mismatch',
-  'state_invalid',
-  'state_security_mismatch',
-])(
-  'a state refusal (%s) behind Failed to parse state is logged at warn',
-  (code) => {
-    const error = spyOn(console, 'error').mockImplementation(() => {});
-    const warn = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      emit('error', 'Failed to parse state', stateError(code));
-      expect(error).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledTimes(1);
-    } finally {
-      error.mockRestore();
-      warn.mockRestore();
-    }
-  }
-);
-
-test.each([
-  new Error('connection terminated'),
-  new Error('Failed query', {
-    cause: Object.assign(new Error('deadlock detected'), { errno: '40P01' }),
-  }),
-  stateError('state_generation_error'),
-  undefined,
-])('any other failure behind Failed to parse state stays at error', (cause) => {
-  const error = spyOn(console, 'error').mockImplementation(() => {});
-  const warn = spyOn(console, 'warn').mockImplementation(() => {});
-  try {
-    emit('error', 'Failed to parse state', cause);
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(warn).not.toHaveBeenCalled();
-  } finally {
-    error.mockRestore();
-    warn.mockRestore();
-  }
-});
-
-test('a database exception behind Failed to parse state keeps its details in the error line', () => {
+test('a library error keeps the details of what it carries in the error line', () => {
   const error = spyOn(console, 'error').mockImplementation(() => {});
   try {
     emit(
       'error',
-      'Failed to parse state',
+      'Failed to create session',
       new Error('connection terminated unexpectedly')
     );
     expect(Bun.inspect(error.mock.calls[0])).toContain(

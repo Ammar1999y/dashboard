@@ -62,7 +62,7 @@ describe('rateLimit refuses a cost it cannot account for', () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.degraded).toBe(false);
+    expect(result.storeFailure).toBeNull();
     expect(result.remaining).toBe(0);
     // The row is the budget. A refusal that still wrote one would have spent it.
     expect(storedRows()).toEqual([]);

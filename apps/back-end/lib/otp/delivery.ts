@@ -2,7 +2,6 @@ import type { OtpChannel, OtpPurpose } from '@app/shared/validation/enums';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 
 import { CustomError } from '@app/shared/error-class';
-import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   otpHtmlFor,
   otpMsg,
@@ -10,9 +9,8 @@ import {
   otpTextFor,
 } from '@app/shared/messages/otp';
 
+import { serverFault } from '@/lib/http/response';
 import { sendMailWithDeadline } from '@/lib/smtp';
-
-import { logSanitized } from '@/utils/log';
 
 import { OTP_DELIVERY_OUTBOX } from './config';
 import { recordOutboxDelivery } from './outbox';
@@ -69,12 +67,37 @@ function readErrorField(
 }
 
 /**
- * ⚠️ Nothing provider-controlled is logged: providers echo the submitted text,
+ * ⚠️ Nothing provider-controlled goes in: providers echo the submitted text,
  * which holds the plaintext OTP. Provider codes, if ever needed, go in a
  * hard-coded allowlist, never a pattern over provider output.
  */
-function logProviderFailure(channel: OtpChannel, response: Response) {
-  logSanitized('error', {
+interface DeliveryDiagnosis {
+  msg: string;
+  channel: OtpChannel;
+  status?: number;
+  smtpCode?: string;
+  rejected?: number;
+  errorName?: string;
+}
+
+/** The diagnoses built below; any other `cause` is dropped at the boundary. */
+const VETTED_DIAGNOSES = new WeakSet<object>();
+
+/** Logged once, by whichever boundary answers it, with the diagnosis as `cause`. */
+function deliveryFailure(
+  message: string,
+  diagnosis: DeliveryDiagnosis
+): CustomError {
+  VETTED_DIAGNOSES.add(diagnosis);
+  return serverFault(message, diagnosis);
+}
+
+function providerFailure(
+  message: string,
+  channel: OtpChannel,
+  response: Response
+): CustomError {
+  return deliveryFailure(message, {
     msg: 'otp.provider.failed',
     channel,
     status: response.status,
@@ -98,10 +121,7 @@ async function sendOtpSms(phoneNumber: string, text: string) {
     }),
   });
 
-  if (!response.ok) {
-    logProviderFailure('sms', response);
-    throw new CustomError(otpMsg.smsSendError, HTTP_STATUS.INTERNAL_ERROR);
-  }
+  if (!response.ok) throw providerFailure(otpMsg.smsSendError, 'sms', response);
 }
 
 async function sendOtpWhatsApp(phoneNumber: string, text: string) {
@@ -120,10 +140,8 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
     body: formData,
   });
 
-  if (!response.ok) {
-    logProviderFailure('whatsapp', response);
-    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
-  }
+  if (!response.ok)
+    throw providerFailure(otpMsg.sendError, 'whatsapp', response);
 
   // A non-JSON 2xx body makes `response.json()` throw a SyntaxError that
   // quotes the body.
@@ -131,12 +149,11 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
   try {
     data = await response.json();
   } catch {
-    logSanitized('error', {
+    throw deliveryFailure(otpMsg.sendError, {
       msg: 'otp.provider.unparsable',
       channel: 'whatsapp',
       status: response.status,
     });
-    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 
   if (
@@ -145,9 +162,8 @@ async function sendOtpWhatsApp(phoneNumber: string, text: string) {
     !('status' in data) ||
     !data.status
   ) {
-    // Application-level rejection on a 2xx; nothing from `data` is logged.
-    logProviderFailure('whatsapp', response);
-    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
+    // Application-level rejection on a 2xx; nothing from `data` is kept.
+    throw providerFailure(otpMsg.sendError, 'whatsapp', response);
   }
 }
 
@@ -175,32 +191,30 @@ async function sendOtpEmail(
     // The transport error must not escape: an SMTP rejection quotes the
     // message it rejected, which contains the code.
     const rawCode = readErrorField(error, 'code');
-    logSanitized('error', {
+    throw deliveryFailure(otpMsg.emailSendError, {
       msg: 'otp.provider.failed',
       channel: 'email',
       smtpCode:
         rawCode !== null && SMTP_ERROR_CODES.has(rawCode) ? rawCode : 'UNKNOWN',
     });
-    throw new CustomError(otpMsg.emailSendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 
   // A per-recipient refusal resolves instead of throwing; with one recipient it
   // means nothing was sent.
-  if (info.rejected && info.rejected.length > 0) {
-    logSanitized('error', {
+  if (info.rejected && info.rejected.length > 0)
+    throw deliveryFailure(otpMsg.emailSendError, {
       msg: 'otp.provider.rejected',
       channel: 'email',
       // A count, never the address: nothing payload-derived leaves here.
       rejected: info.rejected.length,
     });
-    throw new CustomError(otpMsg.emailSendError, HTTP_STATUS.INTERNAL_ERROR);
-  }
 }
 
 /**
- * ⚠️ The containment boundary: callers log what they catch, so no error may
- * leave with provider- or payload-derived text. The text is built inside the
- * `try` so nothing can throw past it.
+ * ⚠️ The containment boundary: it logs nothing, and whoever answers the error
+ * logs it with its `cause`, so no error may leave with provider- or
+ * payload-derived text. The text is built inside the `try` so nothing can throw
+ * past it.
  */
 export async function deliverOtp(
   channel: OtpChannel,
@@ -232,16 +246,24 @@ export async function deliverOtp(
       error instanceof CustomError &&
       SAFE_DELIVERY_MESSAGES.has(message)
     ) {
-      // Fresh: only the message was checked, and the serialiser copies other fields.
-      throw new CustomError(message, HTTP_STATUS.INTERNAL_ERROR);
+      // Fresh, carrying only a diagnosis built here: the serialiser copies
+      // every other field of the error.
+      const { cause } = error;
+      throw serverFault(
+        message,
+        typeof cause === 'object' &&
+          cause !== null &&
+          VETTED_DIAGNOSES.has(cause)
+          ? cause
+          : undefined
+      );
     }
 
     // The class name only; `message` and `response` can quote the provider.
-    logSanitized('error', {
+    throw deliveryFailure(otpMsg.sendError, {
       msg: 'otp.delivery.unexpectedError',
       channel,
       errorName: readErrorField(error, 'name') ?? 'Unknown',
     });
-    throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
   }
 }

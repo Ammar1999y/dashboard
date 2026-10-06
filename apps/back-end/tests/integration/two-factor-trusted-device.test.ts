@@ -5,7 +5,7 @@
  * brings the challenge back. Without the second half, "the challenge was
  * skipped" is indistinguishable from "2FA silently stopped working".
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
 import { eq } from 'drizzle-orm';
@@ -20,7 +20,7 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import { auth } from '@/lib/auth';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { resetTables } from '../helpers/database';
+import { resetTables, waitForUserLock } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
 import {
   baseHeaders,
@@ -472,6 +472,66 @@ describe('the skip, and taking it away', () => {
       .from(trustedDevices)
       .where(eq(trustedDevices.userId, owner.userId));
     expect(rows).toHaveLength(0);
+  });
+
+  test('a trust request racing a method removal leaves no trust behind', async () => {
+    // Paused with its proof already spent, as a slow request would be. Spent
+    // and written outside the user lock, its row landed after the removal's
+    // revocation and skipped the remaining factor at the next sign-in.
+    const owner = await seedUser();
+    const enrolled = await enrolTotp(owner, true);
+    const context = await auth.$context;
+    const consume = context.internalAdapter.consumeVerificationValue;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const paused = spyOn(
+      context.internalAdapter,
+      'consumeVerificationValue'
+    ).mockImplementation(async (...args) => {
+      const consumed = await consume(...args);
+      if (args[0].startsWith('2fa-proven-')) {
+        entered.resolve();
+        await release.promise;
+      }
+      return consumed;
+    });
+    let trusted: Response;
+    try {
+      const trusting = request(
+        'POST',
+        '/api/auth/two-factor/trust-device',
+        {},
+        enrolled.jar
+      );
+      await entered.promise;
+      const removing = request(
+        'POST',
+        '/api/auth/two-factor/methods/disable',
+        { method: 'backup_code', password: owner.password },
+        enrolled.jar
+      );
+      // Queued behind the trust request's lock, or, with none, already done.
+      await Promise.race([removing, waitForUserLock()]);
+      release.resolve();
+      const [trustAnswer, removed] = await Promise.all([trusting, removing]);
+      trusted = trustAnswer;
+      expect(removed.status).toBe(HTTP_STATUS.OK);
+    } finally {
+      release.resolve();
+      paused.mockRestore();
+    }
+
+    expect(
+      await db
+        .select({ id: trustedDevices.id })
+        .from(trustedDevices)
+        .where(eq(trustedDevices.userId, owner.userId))
+    ).toHaveLength(0);
+    const again = await signIn(
+      mergeCookies(enrolled.jar, trusted.headers.getSetCookie()),
+      owner
+    );
+    expect(again.body).toMatchObject({ twoFactorRedirect: true });
   });
 
   test('a device id that is not the caller’s is refused', async () => {

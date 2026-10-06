@@ -21,6 +21,8 @@ import { verifications } from '@/db/schema';
 
 import { validID } from '@app/shared/utils';
 
+import { bestEffort } from '@/utils/log';
+
 import {
   asContactKind,
   readEnrolmentState,
@@ -167,11 +169,13 @@ export function spendRecoveryAttempt(token: string): Promise<AttemptSpend> {
             expiresAt: verifications.expiresAt,
           });
         return row ?? null;
-      }).catch(() => null),
+      }),
     rearm: async (value, expiresAt) => {
-      await withTransaction((tx) =>
-        tx.insert(verifications).values({ identifier, value, expiresAt })
-      ).catch(() => {});
+      await bestEffort('recovery.attempts.rearmFailed', () =>
+        withTransaction((tx) =>
+          tx.insert(verifications).values({ identifier, value, expiresAt })
+        )
+      );
     },
     exhaust: () => invalidateRecoveryGrant(token),
   });
@@ -205,15 +209,19 @@ export async function consumeRecoveryGrant(
   return true;
 }
 
+// Best-effort: the attempt counter is already spent, so a grant left behind
+// can no longer complete.
 async function invalidateRecoveryGrant(token: string): Promise<void> {
-  await withTransaction(async (tx) => {
-    for (const identifier of [
-      recoveryKey(token),
-      recoveryStateKey(token),
-      recoveryAttemptsKey(token),
-    ])
-      await tx
-        .delete(verifications)
-        .where(eq(verifications.identifier, identifier));
-  }).catch(() => {});
+  await bestEffort('recovery.grant.invalidateFailed', () =>
+    withTransaction(async (tx) => {
+      for (const identifier of [
+        recoveryKey(token),
+        recoveryStateKey(token),
+        recoveryAttemptsKey(token),
+      ])
+        await tx
+          .delete(verifications)
+          .where(eq(verifications.identifier, identifier));
+    })
+  );
 }

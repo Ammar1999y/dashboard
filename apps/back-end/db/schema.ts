@@ -61,6 +61,7 @@ import {
 import {
   BUCKET_TYPES,
   FILE_KINDS,
+  FILE_TRANSITIONS,
   OTP_CHANNELS,
   OTP_PURPOSES,
   TWO_FACTOR_METHODS,
@@ -161,11 +162,7 @@ export const fileKind = pgEnum('file_kind', FILE_KINDS);
  * bucket (`to_public`/`to_private`), or the copy is done and the stale one
  * awaits deletion (`cleanup`). `NULL` is the settled state.
  */
-export const fileTransitionEnum = [
-  'to_public',
-  'to_private',
-  'cleanup',
-] as const;
+export const fileTransitionEnum = FILE_TRANSITIONS;
 export const fileTransition = pgEnum('file_transition', fileTransitionEnum);
 
 export const users = pgTable(

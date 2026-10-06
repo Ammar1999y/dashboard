@@ -8,7 +8,7 @@
  * credential is rejected — the case an `allowCredentials` hint cannot catch,
  * because a client can ignore that hint.
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
 import { and, eq, sql } from 'drizzle-orm';
@@ -37,6 +37,7 @@ import { generateUuidV7 } from '@/lib/id';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { failTableWrites } from '../helpers/faults';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 import { buildRegistrationResponse } from '../helpers/webauthn';
@@ -229,6 +230,31 @@ describe('registering a passkey', () => {
       signedIn.cookie
     );
     expect(await astral.text()).not.toContain(MSG_INVALID_INPUT);
+  });
+
+  test('an enrolment the hook cannot record answers 500 and logs why', async () => {
+    const user = await seedUser();
+    const disarm = await failTableWrites(
+      'two_factor_methods',
+      'insert',
+      'XX000'
+    );
+    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { verified } = await register(user, true);
+      expect(verified.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
+      const unrecorded = logged.mock.calls
+        .map((args) => Bun.inspect(args))
+        .filter((line) =>
+          line.includes('twoFactor.enrolPasskey.intentUnrecorded')
+        );
+      expect(unrecorded).toHaveLength(1);
+      // The caught fault rides on the line as its cause.
+      expect(unrecorded[0]).toContain('XX000');
+    } finally {
+      await disarm();
+      logged.mockRestore();
+    }
   });
 
   test('refuses a ceremony with no re-authentication grant', async () => {

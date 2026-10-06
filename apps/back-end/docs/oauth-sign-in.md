@@ -73,8 +73,9 @@ claims.
 Without `callbackURL`, the callback returns its JSON outcome directly. An invalid
 or unbound callback receives a generic failure rather than an untrusted redirect.
 A callback whose sign-in state is gone (the 5-minute state expired, the callback
-was already used, or the flow started in another browser) cannot read the
-`callbackURL` it carried, so it redirects to `OAUTH_STATE_LOST_PAGE`
+was already used, the flow started in another browser, or the state was never
+issued here) cannot read the `callbackURL` it carried, so it redirects to
+`OAUTH_STATE_LOST_PAGE`
 (`@app/shared/validation/oauth`, the sign-in page with `?oauth=expired`) in either
 mode. That page must read `oauth=expired` and show a "start again" message.
 Disabled Google paths return 404, including at the Better Auth handler boundary.
@@ -141,26 +142,38 @@ as documented for those operations.
 
 ## Implementation and verification
 
-`lib/auth/oauth/plugin.ts` is a narrow Better Auth plugin: it uses the installed library's
-Google authorization URL, code exchange, state and ID-token verifier. Its
-transaction bridges the existing Drizzle adapter and session hook so linking,
-email verification and session admission agree before commit. General account
-linking stays disabled. Google tokens and profiles are not persisted; the account
-stores only provider, issuer, stable subject and local user association.
+`lib/auth/oauth/plugin.ts` is a narrow Better Auth plugin: it uses the installed
+library's Google authorization URL and state. The code exchange sends the
+library's own request (PKCE verifier, client authentication, redirect URI) with
+an abort signal, because the library's exchange has no timeout
+(`lib/auth/oauth/token-exchange.ts`). The ID token is verified with `jose`,
+because the library's verifier answers a Google outage like a forged token
+(`lib/auth/oauth/id-token.ts`). Its transaction bridges the existing Drizzle
+adapter and session hook so linking, email verification and session admission
+agree before commit. General account linking stays disabled. Google tokens and
+profiles are not persisted; the account stores only provider, issuer, stable
+subject and local user association.
 
 Proof start times and the revocation timestamp use the database clock, including
 passkey ceremonies. This blocks an already-verified proof from reopening a window
 after a password change that retains its session. Google callback failures emit
 structured `oauth.signIn.failed` events with stage and controlled reason codes;
-they omit tokens, provider payloads, email, subject and raw exception messages.
+they omit tokens, provider payloads, email, subject and raw exception messages;
+a database fault is logged sanitized, without its bound values.
 Identity-policy denials use the warning level; unexpected failures use the error
-level. Other callback failures retain their error-level diagnostics.
-The verifier collapses invalid tokens and JWKS failures into a null verdict, so
-those share the token-verification stage. Link creation and removal are audited.
+level. Other callback failures retain their error-level diagnostics. Each
+failure is one line: a state the library refuses is a warning, `state_lost`
+with the library's state code, and a fault reading the state is an error,
+`state_unavailable`, answered and logged like a fault at any other stage.
+A token that fails verification is a refusal: 401, or the stored failure for a
+callbackURL, logged as a warning. Google failing to answer is a provider fault,
+never a refusal: a 500 logged at error level with its reason, which is
+`token_endpoint_unavailable` (no answer in time, or no transport),
+`token_endpoint_redirected`, `token_response_malformed` (no ID token) or
+`signing_keys_unavailable`. Link creation and removal are audited.
 
 Retained OAuth tests cover the routed exchange with signed RSA tokens and a
 controlled Google transport, real signed WebAuthn assertions, local OTP
 completion, independent callback races, generic denials, configuration gates and
 both email-change routes. The migration test runs the real deployment migrator
-against clean and previous schemas. See the [implementation handoff](../reports/oauth-sign-in-implementation.md)
-for exact final commands and deployment limitations.
+against clean and previous schemas.

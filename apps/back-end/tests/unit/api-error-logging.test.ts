@@ -7,6 +7,7 @@
  */
 import { expect, spyOn, test } from 'bun:test';
 
+import { ConnectionTimeoutError } from '@/db/errors';
 import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import { APIError } from 'better-auth/api';
 
@@ -92,12 +93,16 @@ test('an unmapped 4xx APIError is answered 500 and logged without its message', 
   }
 });
 
-test('a deadlock is answered 503, the retryable answer, and logged', () => {
-  // How `bun:sql` reports a SQLSTATE: in `errno`, under a Drizzle wrapper.
-  const error = new Error('Failed query', {
-    cause: Object.assign(new Error('deadlock detected'), { errno: '40P01' }),
-  });
-
+test.each([
+  [
+    'a deadlock',
+    // How `bun:sql` reports a SQLSTATE: in `errno`, under a Drizzle wrapper.
+    new Error('Failed query', {
+      cause: Object.assign(new Error('deadlock detected'), { errno: '40P01' }),
+    }),
+  ],
+  ['no pooled connection in time', new ConnectionTimeoutError(100)],
+])('%s is answered 503, the retryable answer, and logged', (_label, error) => {
   const logged = spyOn(console, 'error').mockImplementation(() => {});
   try {
     const output = handleApiError(error, 'fallback');

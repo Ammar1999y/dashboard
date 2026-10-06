@@ -5,6 +5,10 @@ import type { EntityID } from '@app/shared/types';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import { validID } from '@app/shared/utils';
+import {
+  REAUTH_GRANT_BYTES,
+  REAUTH_GRANT_MAX_AGE_S,
+} from '@app/shared/validation/two-factor';
 
 import { authAuditMeta, bodyRecord } from '../context';
 import { authError, reauthenticationRequired } from '../errors';
@@ -13,18 +17,13 @@ import { expiresIn, randomToken, reauthGrantKey } from '../verifications';
 import { verifyReauthPassword } from './password';
 import { hasAdminReauth } from './window';
 
-const GRANT_BYTES = 24;
-
-/** Long enough for a WebAuthn ceremony a user has to walk through, and no longer. */
-const REAUTH_GRANT_MAX_AGE_S = 600;
-
 type ReauthPurpose = 'two_factor_enrolment';
 
 export async function mintReauthGrant(
   ctx: AuthContext,
   params: { userId: EntityID; purpose: ReauthPurpose }
 ): Promise<string> {
-  const token = randomToken(GRANT_BYTES);
+  const token = randomToken(REAUTH_GRANT_BYTES);
   await ctx.context.internalAdapter.createVerificationValue({
     value: params.userId,
     identifier: reauthGrantKey(params.purpose, token),
@@ -40,9 +39,9 @@ export async function consumeReauthGrant(
   if (typeof params.token !== 'string' || params.token.length === 0)
     return false;
 
-  const consumed = await ctx.context.internalAdapter
-    .consumeVerificationValue(reauthGrantKey(params.purpose, params.token))
-    .catch(() => null);
+  const consumed = await ctx.context.internalAdapter.consumeVerificationValue(
+    reauthGrantKey(params.purpose, params.token)
+  );
   if (!consumed || consumed.expiresAt <= new Date()) return false;
   return validID(consumed.value) === params.userId;
 }

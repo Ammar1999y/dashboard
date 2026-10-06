@@ -32,8 +32,13 @@ import {
   QUERY_VALIDATION_ROUTES,
   SESSION_COOKIE_ROUTES,
   SET_COOKIE_HEADER,
+  SPENT_INPUT_REMEDIES,
 } from './route-tables';
 import { SUCCESS_DATA_SCHEMAS } from './success-schemas';
+
+/** What a client does with a 401 `REAUTH_REQUIRED`, on either route family. */
+export const REAUTH_REQUIRED_REMEDY =
+  'open the re-authentication window at `POST /api/dash/auth/reauth`, then retry.';
 
 export function operationKey(entry: RouteManifestEntry): string {
   return `${entry.method} ${entry.path}`;
@@ -244,7 +249,7 @@ function commonResponses(entry: RouteManifestEntry): JsonSchema {
   if (entry.auth !== 'public') {
     responses['401'] = errorResponse(
       entry.reauth
-        ? 'No session, or the session row is no longer live. With code `REAUTH_REQUIRED` the session is fine but the re-authentication window is closed: open it at `POST /api/dash/auth/reauth`, then retry.'
+        ? `No session, or the session row is no longer live. With code \`REAUTH_REQUIRED\` the session is fine but the re-authentication window is closed: ${REAUTH_REQUIRED_REMEDY}`
         : 'No session, or the session row is no longer live.'
     );
   }
@@ -291,6 +296,7 @@ function commonResponses(entry: RouteManifestEntry): JsonSchema {
         ? 'No OTP channel able to verify this contact is enabled.'
         : '',
       'No database connection came free in time, or a transaction was aborted to break a deadlock.',
+      SPENT_INPUT_REMEDIES[key] ?? '',
     ]
       .filter(Boolean)
       .join(' '),

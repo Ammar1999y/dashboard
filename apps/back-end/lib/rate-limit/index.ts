@@ -63,8 +63,8 @@ function ipBucket(ip: string): string {
 export function ipIdentifier(headers: Headers): string {
   const ip = getClientIp(headers);
   if (!ip) {
-    // Every caller answers through `handleApiError`, which logs this cause
-    // with the 503: one line, not two.
+    // Not logged here: every caller answers through `handleApiError`, which
+    // logs the 503 with this cause.
     const refusal = new CustomError(
       MSG_MISSING_CLIENT_IP,
       HTTP_STATUS.SERVICE_UNAVAILABLE
@@ -233,13 +233,15 @@ export async function enforceRateLimit(opts: {
     window,
     cost: opts.cost,
     yieldWhenBusy: opts.yieldWhenBusy,
+    failClosed: opts.failClosed,
   });
 
-  if (result.degraded && opts.failClosed) {
+  if (result.storeFailure && opts.failClosed) {
     const error = new CustomError(
       MSG_SERVICE_UNAVAILABLE,
       HTTP_STATUS.SERVICE_UNAVAILABLE
     );
+    error.cause = result.storeFailure;
     error.responseHeaders = { 'Retry-After': '30' };
     throw error;
   }

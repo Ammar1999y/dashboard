@@ -33,9 +33,11 @@ import { openApiDocument } from '@/lib/http/openapi/document';
 import { toPublishedManifest } from '@/lib/http/route-manifest';
 import { generateUuidV7 } from '@/lib/id';
 
+import { errorClassOf } from '@/utils/log';
 import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
+import { connectionClosedError, driverError } from '../helpers/faults';
 import { startGoogle } from '../helpers/google';
 import { sentMail, settleDelivery } from '../helpers/mailbox';
 import { seedOtpProof } from '../helpers/otp';
@@ -665,25 +667,80 @@ describe('Google sign-in through the routed OAuth exchange', () => {
     }
   );
 
-  test('a database fault reading the state is not reported as a lost state', async () => {
+  // The redirect `parseState` throws drops the cause, so the answer and the
+  // one line come from the fault the library caught, by the rule every stage
+  // uses: contention is 503 and logged sanitized, anything else 500 by class.
+  test.each([
+    ['a closed connection', connectionClosedError, 500],
+    ['a deadlock', () => driverError('40P01'), 503],
+  ] as const)(
+    '%s reading the state is not reported as a lost state',
+    async (_label, makeFault, status) => {
+      const owner = await seedUser();
+      const flow = await startGoogle({
+        sub: 'state-fault',
+        email: owner.email,
+      });
+      const fault = await makeFault();
+      const context = await auth.$context;
+      const lookup = spyOn(
+        context.internalAdapter,
+        'findVerificationValue'
+      ).mockRejectedValue(fault);
+      const logged = spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const response = await flow.callback();
+        expect(lookup).toHaveBeenCalled();
+        expect(response.status).toBe(status);
+        expect(response.headers.get('retry-after')).toBe(
+          status === 503 ? String(DATABASE_RETRY_AFTER_S) : null
+        );
+        // Not even `parseState`'s own error redirect rides on the answer.
+        expect(response.headers.get('location')).toBeNull();
+        expect(logged).toHaveBeenCalledTimes(1);
+        const line = Bun.inspect(logged.mock.calls[0]);
+        expect(line).toContain('oauth.signIn.failed');
+        expect(line).toContain('state_unavailable');
+        expect(line).toContain(errorClassOf(fault));
+        if (status === 503) expect(line).toContain('40P01');
+        else
+          expect(line).not.toContain(
+            fault instanceof Error ? fault.message : String(fault)
+          );
+      } finally {
+        lookup.mockRestore();
+        logged.mockRestore();
+      }
+    }
+  );
+
+  test('a state refused after its marker was found is one warning naming the refusal', async () => {
     const owner = await seedUser();
-    const flow = await startGoogle({ sub: 'state-fault', email: owner.email });
-    const context = await auth.$context;
-    const lookup = spyOn(
-      context.internalAdapter,
-      'findVerificationValue'
-    ).mockRejectedValue(new Error('connection terminated'));
-    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    const flow = await startGoogle({
+      sub: 'state-refusal',
+      email: owner.email,
+    });
+    const errors = spyOn(console, 'error').mockImplementation(() => {});
+    const warnings = spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const response = await flow.callback();
-      expect(lookup).toHaveBeenCalled();
-      expect(response.status).toBe(500);
-      expect(response.headers.get('retry-after')).toBeNull();
-      // Not even `parseState`'s own error redirect rides on the answer.
-      expect(response.headers.get('location')).toBeNull();
+      // Opened in another browser: the marker exists, the state cookie does not.
+      const response = await app.handle(
+        new Request(
+          `${PUBLIC_ORIGIN}/api/auth/oauth/google/callback?state=${flow.url.searchParams.get('state')}&code=harness-code`,
+          { headers: baseHeaders() }
+        )
+      );
+      expect(response.headers.get('location')).toBe(
+        `${PUBLIC_ORIGIN}${OAUTH_STATE_LOST_PAGE}`
+      );
+      expect(errors).not.toHaveBeenCalled();
+      expect(warnings).toHaveBeenCalledTimes(1);
+      const line = Bun.inspect(warnings.mock.calls[0]);
+      expect(line).toContain('state_lost');
+      expect(line).toContain('state_security_mismatch');
     } finally {
-      lookup.mockRestore();
-      logged.mockRestore();
+      errors.mockRestore();
+      warnings.mockRestore();
     }
   });
 

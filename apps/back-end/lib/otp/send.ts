@@ -116,8 +116,11 @@ export async function processOtpSend({
   const result = await withTransaction(async (tx) => {
     // ⚠️ First, as `processOtpVerify` takes it: every writer of the user's proof
     // rows queues on this one lock, so none holds a proof row while waiting for
-    // another.
-    await lockUser(tx, userId);
+    // another. `no key update` because it is held across the budget charge
+    // below, which can wait out the SQLite busy timeout (`should-ignore.md`
+    // #13): a write that only references this user, an audit row or a session
+    // insert, need not wait for it. Every other locker of the row still does.
+    await lockUser(tx, userId, 'no key update');
 
     // FOR UPDATE locks nothing before the row exists, so two first sends would
     // both INSERT. Keyed like the unique index, on contact kind.

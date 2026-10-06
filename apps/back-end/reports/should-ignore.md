@@ -129,8 +129,9 @@
     `chk_phone_number_format` enforces `^9665[0-9]{8}$`; future international /
     non-mobile support would require a migration. Acceptable for current local
     launch (does not contradict #11, which is about email/password checks).
-57. **Retired.** The user-delete ↔ role-delete lock order is fixed: every
-    writer takes users before roles.
+
+<!-- 57: deleted at the owner's request; the entries after it keep their numbers. -->
+
 58. **OTP Send Collapses 429 to Generic 200 (by design)** —
     `app/api/auth/otp/send/handler.ts` — masking `TOO_MANY_REQUESTS` is a
     deliberate privacy contract: the endpoint returns an identical
@@ -263,8 +264,8 @@
     - **Summary:** `OTP_GLOBAL_SEND_CAP_PER_DAY` uses a FIXED 24h window anchored on UTC midnight (`windowStart = now - (now % windowMs)`), so 2000 charges at `23:59:59.999Z` and 2000 more at `00:00:00.000Z` dispatch 4000 paid messages inside one second and leave the whole of day two at zero. A cap that can be doubled in a burst is not a strict daily cap. Deferred: the fix is a sliding window, which is a change to the shared limiter primitive rather than to this one budget. See `TODO.md`.
 
 13. **The Global OTP Budget Is Charged From Inside the PostgreSQL Transaction**
-    - **Locations:** `utils/otp.ts` (`processOtpSend`), `lib/rate-limit/api.ts`
-    - **Summary:** `enforceOtpGlobalSendBudget` is the last statement inside `withTransaction`, so a synchronous `bun:sqlite` write happens while holding a `FOR UPDATE` row lock, an advisory lock and one of `MAX_POOL_CONNECTIONS` (10). Under SQLite writer contention that statement was measured blocking for 2 282 ms. It is the one limiter call in the codebase made while holding PostgreSQL locks, and the comment directly below it explains why `sendOtp` was moved OUT of the transaction for exactly this reason. Secondarily, the charge is not atomic with the commit: a successful charge followed by a failed COMMIT permanently burns one unit of the daily budget with nothing sent, and there is deliberately no refund primitive. Deferred: moving it out needs a decision about what happens between the charge and the commit, which is the same problem the absent refund primitive describes. See `TODO.md`.
+    - **Locations:** `lib/otp/send.ts` (`processOtpSend`), `lib/rate-limit/index.ts` (`enforceOtpGlobalSendBudget`)
+    - **Summary:** `enforceOtpGlobalSendBudget` is the last statement inside `withTransaction`. It no longer blocks the thread (`yieldWhenBusy` retries on timers), but under SQLite writer contention it still waits up to `BUSY_TIMEOUT_MS` (a held writer lock was measured at 2 282 ms) while the transaction holds the user's row (`FOR NO KEY UPDATE`), the per-contact advisory lock, the proof and code rows, and one of `MAX_POOL_CONNECTIONS` (10). For that wait every other locker of the user's row queues behind it: password sign-in and sign-in admission, credential rotation, and a verify of any purpose, which on the anonymous routes can reach its floor deadline and answer as an unknown identifier (logged as `otp.verify.deadlineExceeded`). A write that only references the user (an audit row, a session insert) does not wait. It is the one limiter call in the codebase made while holding PostgreSQL locks; provider delivery was moved after the commit for the same reason. Secondarily, the charge is not atomic with the commit: a successful charge followed by a failed COMMIT permanently burns one unit of the daily budget with nothing sent, and there is deliberately no refund primitive. Deferred: moving it out needs a decision about what happens between the charge and the commit, which is the same problem the absent refund primitive describes. See `TODO.md`.
 
 14. **`@knipignore` Masks Dead Exports and Unused Helpers**
     - **Locations:** `app.ts`, `lib/data-table/config.ts`, `utils/validation/rules.ts`, `utils/index.ts`, `knip.jsonc`

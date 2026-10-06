@@ -43,8 +43,8 @@ interface RateLimitResult {
   remaining: number;
   /** Seconds until the next request is allowed; 0 on success. */
   retryAfter: number;
-  /** The store failed and the check failed open. */
-  degraded: boolean;
+  /** The store failed and the check failed open: what failed, or null. */
+  storeFailure: StoreFailureLog | null;
 }
 
 /**
@@ -71,6 +71,11 @@ export async function rateLimit(opts: {
    * every request in the process, so the lookup's outcome shows in their timing.
    */
   yieldWhenBusy?: boolean;
+  /**
+   * The caller refuses when the store fails, so the failure is its refusal's
+   * `cause` and is not logged here too.
+   */
+  failClosed?: boolean;
 }): Promise<RateLimitResult> {
   const windowMs = opts.window * 1000;
   const cost = opts.cost ?? 1;
@@ -83,7 +88,7 @@ export async function rateLimit(opts: {
       limit: opts.limit,
       remaining: 0,
       retryAfter: opts.window,
-      degraded: false,
+      storeFailure: null,
     };
 
   try {
@@ -117,7 +122,7 @@ export async function rateLimit(opts: {
           1,
           Math.ceil((windowStart + windowMs - now) / 1000)
         ),
-        degraded: false,
+        storeFailure: null,
       };
     }
 
@@ -127,16 +132,17 @@ export async function rateLimit(opts: {
       limit: opts.limit,
       remaining: Math.max(0, opts.limit - used),
       retryAfter: 0,
-      degraded: false,
+      storeFailure: null,
     };
   } catch (error) {
-    logSanitized('error', describeStoreFailure(error, opts));
+    const storeFailure = describeStoreFailure(error, opts);
+    if (!opts.failClosed) logSanitized('error', storeFailure);
     return {
       success: true,
       limit: opts.limit,
       remaining: opts.limit,
       retryAfter: 0,
-      degraded: true,
+      storeFailure,
     };
   }
 }

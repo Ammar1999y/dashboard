@@ -2,7 +2,15 @@
  * Framework-independent post-response work. Audit writes remain transactional
  * because losing them after a committed mutation would break the audit trail.
  */
-import { errorClassOf, logLine, serializeForLog } from '@/utils/log';
+import { CustomError } from '@app/shared/error-class';
+
+import {
+  errorClassOf,
+  logLine,
+  logSanitized,
+  serializeForLog,
+  thrownAt,
+} from '@/utils/log';
 
 type AfterResponseTask = () => void | Promise<void>;
 
@@ -62,10 +70,16 @@ function track(queue: AfterResponseTask[], path: string): void {
       try {
         await task();
       } catch (error) {
-        logLine('error', {
+        // The class only, unless it is ours: a `CustomError`'s `cause` is the
+        // diagnosis its raiser chose to log, as `logServerErrorResponse` does.
+        logSanitized('error', {
           msg: 'after-response task failed',
           path,
           errorClass: errorClassOf(error),
+          ...(error instanceof CustomError && {
+            thrownAt: thrownAt(error),
+            cause: error.cause,
+          }),
         });
       }
     }

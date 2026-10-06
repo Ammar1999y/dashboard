@@ -108,8 +108,11 @@ export function collapseProofThrottle(
   return error;
 }
 
-// None depends on whether the account exists, 429 only because a proof-state
-// 429 is collapsed first (`collapseProofThrottle` below): this is the one guard.
+// A 429 or 422 never depends on whether the account exists, the 429 only
+// because a proof-state 429 is collapsed first (`collapseProofThrottle` below):
+// this is the one guard. A 5xx does when a known account's transaction raised
+// it, which no request can cause at will, and a server fault must not read as a
+// wrong code.
 const ANONYMOUS_VERIFY_SURFACED: ReadonlySet<number> = new Set([
   HTTP_STATUS.TOO_MANY_REQUESTS,
   HTTP_STATUS.SERVICE_UNAVAILABLE,

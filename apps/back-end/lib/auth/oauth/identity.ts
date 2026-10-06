@@ -34,6 +34,7 @@ export class GoogleIdentityDenied extends APIError {
       | 'user_cancelled'
       | 'authorization_error'
       | 'issuer_mismatch'
+      | 'state_lost'
       | 'state_replayed'
       | 'code_missing'
   ) {
