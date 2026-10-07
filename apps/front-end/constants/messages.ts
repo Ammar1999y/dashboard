@@ -136,15 +136,3 @@ export const MSG_ITEM_SUBTITLE_TOO_LONG = (max: number) =>
 export const MSG_ITEM_DESCRIPTION_TOO_LONG = (max: number) =>
   `وصف العنصر يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
 export const MSG_ITEMS_INVALID = 'قم بإدخال العناصر بشكل صحيح';
-
-export const MSG_PROJECT_TITLE_TOO_SHORT = (min: number) =>
-  `عنوان المشروع يجب أن يكون ${countOf(min, CHARACTERS)} على الأقل`;
-export const MSG_PROJECT_TITLE_TOO_LONG = (max: number) =>
-  `عنوان المشروع يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
-export const MSG_PROJECT_DESCRIPTION_TOO_LONG = (max: number) =>
-  `وصف المشروع يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
-
-export const MSG_CATEGORY_TITLE_TOO_SHORT = (min: number) =>
-  `عنوان التصنيف يجب أن يكون ${countOf(min, CHARACTERS)} على الأقل`;
-export const MSG_CATEGORY_TITLE_TOO_LONG = (max: number) =>
-  `عنوان التصنيف يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;

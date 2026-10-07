@@ -29,47 +29,6 @@ export const dashboardNav: readonly NavSection[] = [
           },
         ],
       },
-
-      {
-        title: 'إداره المشاريع',
-        path: '/dash/projects',
-        icon: 'uim:briefcase',
-        children: [
-          {
-            title: 'التصنيفات',
-            path: '/dash/projects/categories',
-            children: [
-              {
-                title: 'إضافة تصنيف',
-                hidden: true,
-                path: '/dash/projects/categories/new',
-              },
-              {
-                title: 'تعديل التصنيف',
-                hidden: true,
-                path: '/dash/projects/categories/[id]/edit',
-              },
-            ],
-          },
-          {
-            title: 'المشاريع',
-            path: '/dash/projects',
-            exactMatch: true,
-            children: [
-              {
-                title: 'إضافة مشروع',
-                hidden: true,
-                path: '/dash/projects/new',
-              },
-              {
-                title: 'تعديل المشروع',
-                hidden: true,
-                path: '/dash/projects/[id]/edit',
-              },
-            ],
-          },
-        ],
-      },
     ],
   },
   {

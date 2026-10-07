@@ -30,7 +30,7 @@ A mock build also changes two files outside `mocks/`, both keyed on the same fla
 
 ## Pending back-end
 
-Categories, projects, sections and settings have no back-end route yet. `handlers/content.ts` is their only implementation; it parses bodies with the forms' own schemas, as their routes will, and holds the rules the server holds for users and roles: a section slug is unique (409), a project's category must exist (404), and a category with projects or a section a settings nav link points at (`#slug`) is not deleted (400). Settings is one row, upserted whole: every save answers 200. When a route ships with the same contract, delete its handler: the front-end needs no change.
+Sections and settings have no back-end route yet. `handlers/content.ts` is their only implementation; it parses bodies with the forms' own schemas, as their routes will, and holds the rules the server holds for users and roles: a section slug is unique (409), and a section a settings nav link points at (`#slug`) is not deleted (400). Settings is one row, upserted whole: every save answers 200. When a route ships with the same contract, delete its handler: the front-end needs no change.
 
 ## Layout
 
@@ -39,7 +39,7 @@ Categories, projects, sections and settings have no back-end route yet. `handler
 | `handlers/auth.ts`        | `get-session`, `sign-in/email`, `sign-out`, `/api/dev/sign-up`    |
 | `handlers/users.ts`       | users list (server-paged), detail, create, update, delete         |
 | `handlers/permissions.ts` | roles picker, permissions list (server-paged) and CRUD            |
-| `handlers/content.ts`     | projects, categories, sections, settings (no back-end yet)        |
+| `handlers/content.ts`     | sections, settings (no back-end yet)                              |
 | `handlers/media.ts`       | `POST /api/upload/file`, as the server admits files               |
 | `lib/data-table.ts`       | paging, sort, search and filters for `useServerDataTable` tables  |
 | `lib/crud.ts`             | list/detail/create/update/delete for tables loaded whole          |
@@ -56,7 +56,7 @@ To mock a new endpoint, add a handler next to its neighbours. A resource whose l
 ```js
 mockApi.fail('/api/dash/users', 500); // every method on that path returns 500
 mockApi.fail('/api/dash/users/:id', 422, 'رسالة'); // custom status and message
-mockApi.offline('/api/dash/projects'); // network error
+mockApi.offline('/api/dash/sections'); // network error
 mockApi.latency(3000); // slow every request
 mockApi.restore(); // undo the overrides above
 mockApi.reset(); // back to seed data, signed out

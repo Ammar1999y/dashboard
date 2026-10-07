@@ -27,11 +27,6 @@ import {
 interface CrudRules<Body, Row> {
   /** A unique index: a write repeating another row's value answers 409. */
   unique?: ReadonlyArray<{ field: keyof Body; message: string }>;
-  /** A foreign key: an id the other table does not hold answers 404. */
-  references?: ReadonlyArray<{
-    field: keyof Body;
-    table: { find: (id: EntityID) => unknown };
-  }>;
   /** A restricting foreign key elsewhere: deleting a row in use answers 400. */
   referencedBy?: ReadonlyArray<{
     inUse: (row: Row) => boolean;
@@ -54,17 +49,12 @@ export function crud<
   body: { create: C; update: U },
   rules: CrudRules<z.output<C>, z.output<C> & StoredRow> = {}
 ) {
-  const { unique = [], references = [], referencedBy = [] } = rules;
+  const { unique = [], referencedBy = [] } = rules;
 
   function assertIntegrity(
     values: Partial<z.output<C> & StoredRow>,
     exceptId?: EntityID
   ): void {
-    for (const { field, table } of references) {
-      const value = values[field];
-      if (typeof value === 'string' && !table.find(value))
-        throw notFoundError();
-    }
     for (const { field, message } of unique) {
       const value = values[field];
       if (

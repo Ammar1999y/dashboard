@@ -5,14 +5,6 @@ import { MSG_UPDATED } from '@app/shared/messages/common';
 
 import { generateEntityId } from '@/utils/generate-id';
 import {
-  createCategorySchema,
-  updateCategoryBodySchema,
-} from '@/utils/validation/categories';
-import {
-  createProjectSchema,
-  updateProjectBodySchema,
-} from '@/utils/validation/projects';
-import {
   createSectionSchema,
   updateSectionBodySchema,
 } from '@/utils/validation/sections';
@@ -22,7 +14,7 @@ import { crud } from '../lib/crud';
 import { now } from '../lib/db';
 import { api, ok, readJsonBody } from '../lib/http';
 import { contentMsg } from '../lib/messages';
-import { categories, projects, sections, settings } from '../store';
+import { sections, settings } from '../store';
 
 /** A nav link the section picker wrote names the section by `#slug`. */
 const linksToSection = (slug: string) =>
@@ -33,26 +25,6 @@ const linksToSection = (slug: string) =>
 // that back-end will. Swapping in the real routes needs no front-end change if
 // they keep this contract.
 export const contentHandlers = [
-  // Ahead of projects: `/api/dash/projects/:id` would also match `categories`.
-  ...crud(
-    '/api/dash/projects/categories',
-    categories,
-    { create: createCategorySchema, update: updateCategoryBodySchema },
-    {
-      referencedBy: [
-        {
-          inUse: ({ id }) => projects.all().some((p) => p.categoryId === id),
-          message: contentMsg.categoryHasProjects,
-        },
-      ],
-    }
-  ),
-  ...crud(
-    '/api/dash/projects',
-    projects,
-    { create: createProjectSchema, update: updateProjectBodySchema },
-    { references: [{ field: 'categoryId', table: categories }] }
-  ),
   ...crud(
     '/api/dash/sections',
     sections,

@@ -1,6 +1,6 @@
 # Data table
 
-The list table behind every dashboard list page: server-paged (`users`, `permissions`) or loaded whole and paged in the browser (`categories`, `projects`, `sections`).
+The list table behind every dashboard list page: server-paged (`users`, `permissions`) or loaded whole and paged in the browser (`sections`).
 
 Read this before changing anything here, or anything it depends on outside this folder: the column files of each feature, `store/url-store.ts`, `lib/api/query.ts`, `lib/data-table/query.ts`, `mocks/lib/data-table.ts`, `styles/table.css` and `@app/shared/data-table/*`. Most rules below exist because breaking them once made the header or rows stop updating, or made the table slow at 100 rows.
 

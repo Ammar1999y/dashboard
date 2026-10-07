@@ -1,7 +1,5 @@
 import type { MockRole, MockUser, MockUserRole } from './store';
-import type { CategoryClient } from '@/types/categories';
 import type { PagePermission } from '@/types/permission';
-import type { ProjectClient } from '@/types/projects';
 import type { SectionClient } from '@/types/sections';
 import type { SettingsClient } from '@/types/settings';
 
@@ -170,69 +168,6 @@ const others = NAMES.map((name, i): MockUser => {
 
 const USERS: MockUser[] = [...[...others].reverse(), admin];
 
-const webCategory: CategoryClient = {
-  id: seedId(),
-  title: 'تطوير الويب',
-  isActive: true,
-  createdAt: daysAgo(80),
-  updatedAt: daysAgo(80),
-};
-
-const mobileCategory: CategoryClient = {
-  id: seedId(),
-  title: 'تطبيقات الجوال',
-  isActive: true,
-  createdAt: daysAgo(70),
-  updatedAt: daysAgo(20),
-};
-
-const designCategory: CategoryClient = {
-  id: seedId(),
-  title: 'تصميم الهوية',
-  isActive: false,
-  createdAt: daysAgo(40),
-  updatedAt: daysAgo(40),
-};
-
-const CATEGORIES: CategoryClient[] = [
-  designCategory,
-  mobileCategory,
-  webCategory,
-];
-
-const PROJECTS: ProjectClient[] = [
-  {
-    id: seedId(),
-    title: 'متجر إلكتروني',
-    description: 'منصة بيع متكاملة مع بوابة دفع',
-    link: 'https://example.com/store',
-    categoryId: webCategory.id,
-    isActive: true,
-    createdAt: daysAgo(15),
-    updatedAt: daysAgo(5),
-  },
-  {
-    id: seedId(),
-    title: 'تطبيق حجوزات',
-    description: 'تطبيق لحجز المواعيد للعيادات',
-    link: 'https://example.com/booking',
-    categoryId: mobileCategory.id,
-    isActive: true,
-    createdAt: daysAgo(35),
-    updatedAt: daysAgo(35),
-  },
-  {
-    id: seedId(),
-    title: 'هوية شركة ناشئة',
-    description: 'شعار ودليل استخدام الهوية',
-    link: '',
-    categoryId: designCategory.id,
-    isActive: false,
-    createdAt: daysAgo(55),
-    updatedAt: daysAgo(55),
-  },
-];
-
 const SECTIONS: SectionClient[] = [
   {
     id: seedId(),
@@ -306,7 +241,5 @@ const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 export const seedRoles = () => copy(ROLES);
 export const seedUsers = () => copy(USERS);
-export const seedCategories = () => copy(CATEGORIES);
-export const seedProjects = () => copy(PROJECTS);
 export const seedSections = () => copy(SECTIONS);
 export const seedSettings = () => copy(SETTINGS);

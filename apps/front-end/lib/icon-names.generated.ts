@@ -133,5 +133,4 @@ export type IconName =
   | 'fluent:table-resize-column-20-regular'
   | 'fluent:text-direction-horizontal-left-24-regular'
   | 'hugeicons:column-delete'
-  | 'uim:briefcase'
   | 'icon-park-twotone:layout-five';

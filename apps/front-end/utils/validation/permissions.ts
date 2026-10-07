@@ -15,7 +15,7 @@ export type UpdatePermissionOutput = z.output<
   typeof adminUpdatePermissionBodySchema
 >;
 
-/** See the note on DEFAULT_CATEGORY in ./categories. */
+/** See the note on DEFAULT_SECTION in ./sections. */
 export const DEFAULT_PERMISSION: DefaultValues<CreatePermissionInput> = {
   roleName: '',
   description: '',
@@ -23,7 +23,7 @@ export const DEFAULT_PERMISSION: DefaultValues<CreatePermissionInput> = {
   permissions: [],
 };
 
-/** See the note on toCategoryForm in ./categories. */
+/** See the note on toSectionForm in ./sections. */
 export const toPermissionForm = (
   record: PermissionClient
 ): UpdatePermissionInput => ({

@@ -21,7 +21,7 @@ export type UpdateUserInput = z.input<typeof adminUpdateUserBodySchema>;
 export type CreateUserOutput = z.output<typeof createUserSchema>;
 export type UpdateUserOutput = z.output<typeof adminUpdateUserBodySchema>;
 
-/** See the note on DEFAULT_CATEGORY in ./categories. */
+/** See the note on DEFAULT_SECTION in ./sections. */
 export const DEFAULT_USER: DefaultValues<CreateUserInput> = {
   name: '',
   email: '',
@@ -33,7 +33,7 @@ export const DEFAULT_USER: DefaultValues<CreateUserInput> = {
 };
 
 /**
- * See the note on toCategoryForm in ./categories. The password is never seeded
+ * See the note on toSectionForm in ./sections. The password is never seeded
  * from a record — the API does not return one, and an empty field is what the
  * update schema reads as "leave it alone".
  */

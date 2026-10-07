@@ -1,6 +1,4 @@
-import type { CategoryClient } from '@/types/categories';
 import type { PagePermission } from '@/types/permission';
-import type { ProjectClient } from '@/types/projects';
 import type { SectionClient } from '@/types/sections';
 import type { SettingsClient } from '@/types/settings';
 import type { UserClient } from '@/types/user';
@@ -10,8 +8,6 @@ import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 
 import { singleton, table } from './lib/db';
 import {
-  seedCategories,
-  seedProjects,
   seedRoles,
   seedSections,
   seedSettings,
@@ -76,8 +72,6 @@ export interface MockSession {
 
 export const users = table<MockUser>('users', seedUsers);
 export const roles = table<MockRole>('roles', seedRoles);
-export const categories = table<CategoryClient>('categories', seedCategories);
-export const projects = table<ProjectClient>('projects', seedProjects);
 export const sections = table<SectionClient>('sections', seedSections);
 export const settings = singleton<SettingsClient | null>(
   'settings',

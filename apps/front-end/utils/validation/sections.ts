@@ -90,7 +90,10 @@ export const createSectionSchema = z.object({
   items: itemsSchema,
 });
 
-/** See the note on updateCategoryBodySchema in ./categories. */
+/**
+ * Strict, and `isActive` has no default: a misspelled or omitted field must
+ * fail rather than reactivate the row, as in the users and roles update bodies.
+ */
 export const updateSectionBodySchema = createSectionSchema
   .extend({
     isActive: z.boolean(),
@@ -105,7 +108,11 @@ export type UpdateSectionInput = z.input<typeof updateSectionBodySchema>;
 export type CreateSectionOutput = z.output<typeof createSectionSchema>;
 export type UpdateSectionOutput = z.output<typeof updateSectionBodySchema>;
 
-/** See the note on DEFAULT_CATEGORY in ./categories. */
+/**
+ * The empty form, shared by the create page and the edit page — the edit page
+ * needs it too, so that a record missing an optional field still gives every
+ * input a value and React never switches one from uncontrolled to controlled.
+ */
 export const DEFAULT_SECTION: DefaultValues<CreateSectionInput> = {
   title: '',
   subtitle: '',
@@ -116,7 +123,13 @@ export const DEFAULT_SECTION: DefaultValues<CreateSectionInput> = {
   items: [],
 };
 
-/** See the note on toCategoryForm in ./categories. */
+/**
+ * A stored record as the edit form's `values`: exactly the update body's
+ * fields, since that schema is strict and the id travels in the path. Explicit
+ * per field so every input has a value from its first render — spreading the
+ * record would leave an absent optional field `undefined` and make React switch
+ * it to controlled on the first keystroke.
+ */
 export const toSectionForm = (record: SectionClient): UpdateSectionInput => ({
   title: record.title,
   subtitle: record.subtitle ?? '',
