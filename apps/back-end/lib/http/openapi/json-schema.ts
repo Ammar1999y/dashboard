@@ -8,8 +8,10 @@ export function isJsonSchema(value: unknown): value is JsonSchema {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+type Override = NonNullable<z.core.ToJSONSchemaParams['override']>;
+
 /**
- * Zod → JSON Schema, or null when the converter throws.
+ * A request schema → JSON Schema, or null when the converter throws.
  *
  * `unrepresentable: 'any'` because several schemas use `z.preprocess` and
  * refinements with no JSON Schema equivalent: a document missing one constraint
@@ -19,7 +21,29 @@ export function isJsonSchema(value: unknown): value is JsonSchema {
  * `$schema` is dropped because the result is spliced in as a subschema, and
  * under 2020-12 that keyword belongs to a schema resource root.
  */
-export function toJsonSchema(schema: z.ZodType): JsonSchema | null {
+export function toJsonSchema(schema: z.ZodType): JsonSchema | null;
+/**
+ * A response schema, as the server writes it. It throws instead: the build and
+ * the container start convert every response, so a schema the converter
+ * cannot represent stops the deploy rather than publishing less than clients
+ * parse.
+ */
+export function toJsonSchema(
+  schema: z.ZodType,
+  output: { override: Override }
+): JsonSchema;
+export function toJsonSchema(
+  schema: z.ZodType,
+  output?: { override: Override }
+): JsonSchema | null {
+  if (output) {
+    const { $schema: _dialect, ...converted } = z.toJSONSchema(schema, {
+      io: 'output',
+      unrepresentable: 'throw',
+      override: output.override,
+    });
+    return converted;
+  }
   try {
     const { $schema: _dialect, ...converted } = z.toJSONSchema(schema, {
       io: 'input',

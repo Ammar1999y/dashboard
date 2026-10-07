@@ -45,6 +45,10 @@ import {
   MAX_REQUEST_BODY_BYTES,
 } from '@/lib/http/request';
 import { apiError, handleApiError, toWebResponse } from '@/lib/http/response';
+import {
+  checkBetterAuthResponse,
+  responseCheckMode,
+} from '@/lib/http/response-check';
 import { applyResponsePolicy } from '@/lib/http/response-policy';
 import {
   allowHeader,
@@ -54,6 +58,8 @@ import {
 import { applySecurityHeaders } from '@/lib/http/security-headers';
 
 const lookupMethods = createRouteLookup(REGISTERED_ROUTES, ROUTE_PREFIXES);
+/** The table routes take theirs in `toRegisteredRoutes`; the prefix route's is read here. */
+const responseCheck = responseCheckMode();
 const lookupBodyCeiling = createBodyCeilingLookup(
   REGISTERED_ROUTES,
   ROUTE_PREFIXES
@@ -411,7 +417,12 @@ function register(instance: typeof base): typeof base {
                     request,
                     lookupBodyCeiling(url.pathname)
                   );
-            return localiseAuthError(await auth.handler(forwarded));
+            return await checkBetterAuthResponse(
+              responseCheck,
+              subPath,
+              request.method,
+              await localiseAuthError(await auth.handler(forwarded))
+            );
           } catch (error) {
             // This wildcard bypasses the adapter that normally maps API
             // errors — the 413 `boundedBodyRequest` throws included.

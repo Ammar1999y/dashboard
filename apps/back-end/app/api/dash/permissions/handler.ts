@@ -32,64 +32,69 @@ import { PERMISSION_AUDIT_VERSION } from '@/lib/permissions/audit';
 import { standardScopeFilter } from '@/lib/permissions/roles';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
-  const { userId, scope } = await requirePermission(ctx, {
-    resource: 'permissions',
-    action: 'view',
-  });
-
-  await enforceRateLimit({
-    scope: 'permissions.get',
-    identifier: userIdentifier(userId),
-    limit: 60,
-  });
-
-  const { where, orderBy, limit, offset, paginationMeta } =
-    parseDataTableParams(roles, {
-      url: ctx.url,
-      filterableColumns: PERMISSIONS_FILTER_COLUMNS,
-      searchableColumns: ['roleName', 'description'],
-      defaultSort: { id: 'createdAt', desc: true },
+export const GET = withApiErrors(
+  'GET /api/dash/permissions',
+  MSG_FETCH_ERROR,
+  async (ctx) => {
+    const { userId, scope } = await requirePermission(ctx, {
+      resource: 'permissions',
+      action: 'view',
     });
 
-  const baseFilter = and(
-    standardScopeFilter(),
-    scope === 'own' ? eq(roles.createdBy, userId) : undefined,
-    where
-  );
+    await enforceRateLimit({
+      scope: 'permissions.get',
+      identifier: userIdentifier(userId),
+      limit: 60,
+    });
 
-  const [rolesWithCounts, [totalRow]] = await Promise.all([
-    db
-      .select({
-        id: roles.id,
-        roleName: roles.roleName,
-        description: roles.description,
-        isActive: roles.isActive,
-        createdAt: roles.createdAt,
-        updatedAt: roles.updatedAt,
-        usersCount: sql<number>`(
+    const { where, orderBy, limit, offset, paginationMeta } =
+      parseDataTableParams(roles, {
+        url: ctx.url,
+        filterableColumns: PERMISSIONS_FILTER_COLUMNS,
+        searchableColumns: ['roleName', 'description'],
+        defaultSort: { id: 'createdAt', desc: true },
+      });
+
+    const baseFilter = and(
+      standardScopeFilter(),
+      scope === 'own' ? eq(roles.createdBy, userId) : undefined,
+      where
+    );
+
+    const [rolesWithCounts, [totalRow]] = await Promise.all([
+      db
+        .select({
+          id: roles.id,
+          roleName: roles.roleName,
+          description: roles.description,
+          isActive: roles.isActive,
+          createdAt: roles.createdAt,
+          updatedAt: roles.updatedAt,
+          usersCount: sql<number>`(
           SELECT COUNT(*) FROM users
           WHERE role_id = ${roles.id} AND deleted_at IS NULL
         )`.mapWith(Number),
-      })
-      .from(roles)
-      .where(baseFilter)
-      .orderBy(...orderBy)
-      .limit(limit)
-      .offset(offset),
-    db.select({ total: count() }).from(roles).where(baseFilter),
-  ]);
+        })
+        .from(roles)
+        .where(baseFilter)
+        .orderBy(...orderBy)
+        .limit(limit)
+        .offset(offset),
+      db.select({ total: count() }).from(roles).where(baseFilter),
+    ]);
 
-  const total = totalRow?.total ?? 0;
+    const total = totalRow?.total ?? 0;
 
-  return apiSuccess({
-    message: MSG_FETCHED,
-    data: rolesWithCounts,
-    meta: paginationMeta(total),
-  });
-});
+    return apiSuccess({
+      message: MSG_FETCHED,
+      data: rolesWithCounts,
+      meta: paginationMeta(total),
+    });
+  }
+);
 
 export const POST = withApiErrors(
+  'POST /api/dash/permissions',
   MSG_CREATE_ERROR,
   async (ctx) => {
     const {

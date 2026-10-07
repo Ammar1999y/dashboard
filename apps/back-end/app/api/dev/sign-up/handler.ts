@@ -24,6 +24,7 @@ import { apiSuccess, withApiErrors } from '@/lib/http/response';
  * unauthenticated request.
  */
 export const POST = withApiErrors(
+  'POST /api/dev/sign-up',
   MSG_CREATE_ERROR,
   async (ctx) => {
     const { name, email, password } = await readJsonBody(ctx, devSignUpSchema);

@@ -14,37 +14,41 @@ import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
  * answers `scope: 'all'` and the uploader narrowing never applies: publishing
  * is an editorial decision about the file, not about who uploaded it.
  */
-export const POST = withApiErrors(mediaMsg.updateError, async (ctx) => {
-  const caller = await requirePermission(ctx, {
-    resource: 'media',
-    action: 'publish',
-    // Not the cookie cache: this changes who on the internet can read the
-    // object, so the grant behind it has to be the current one.
-    forceDB: true,
-  });
+export const POST = withApiErrors(
+  'POST /api/dash/media/files/:id/publish',
+  mediaMsg.updateError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'publish',
+      // Not the cookie cache: this changes who on the internet can read the
+      // object, so the grant behind it has to be the current one.
+      forceDB: true,
+    });
 
-  // Two R2 calls and a HeadObject per file.
-  await enforceRateLimit({
-    scope: 'media.files.visibility',
-    identifier: userIdentifier(caller.userId),
-    limit: 10,
-    failClosed: true,
-  });
+    // Two R2 calls and a HeadObject per file.
+    await enforceRateLimit({
+      scope: 'media.files.visibility',
+      identifier: userIdentifier(caller.userId),
+      limit: 10,
+      failClosed: true,
+    });
 
-  const id = requireId(
-    ctx.params.id,
-    mediaMsg.fileNotFound,
-    HTTP_STATUS.NOT_FOUND
-  );
+    const id = requireId(
+      ctx.params.id,
+      mediaMsg.fileNotFound,
+      HTTP_STATUS.NOT_FOUND
+    );
 
-  const row = await transitionFile({
-    id,
-    to: 'public',
-    actor: requestActor(ctx, caller, 'all'),
-  });
+    const row = await transitionFile({
+      id,
+      to: 'public',
+      actor: requestActor(ctx, caller, 'all'),
+    });
 
-  return apiSuccess({
-    message: mediaMsg.published,
-    data: await toMediaFile(row),
-  });
-});
+    return apiSuccess({
+      message: mediaMsg.published,
+      data: await toMediaFile(row),
+    });
+  }
+);

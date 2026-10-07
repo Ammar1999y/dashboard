@@ -4,14 +4,10 @@ import { and, eq, gt } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { passkeys, verifications } from '@/db/schema';
-import { createAuthEndpoint } from 'better-auth/api';
 import * as z from 'zod';
 
 import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
-import {
-  REAUTH_METHODS,
-  reauthPasskeySchema,
-} from '@app/shared/validation/reauth';
+import { reauthPasskeySchema } from '@app/shared/validation/reauth';
 import { isTwoFactorMethodEnabled } from '@app/shared/validation/two-factor';
 
 import { auditLog } from '@/lib/audit';
@@ -25,7 +21,7 @@ import {
   passkeyOptions,
   verifyUserPasskey,
 } from '../passkey-assertion';
-import { envelopeResponse } from '../plugin-openapi';
+import { pluginEndpoint } from '../plugin-endpoint';
 import { authenticationStartedAt } from '../session/authentication-time';
 import { lockSessionOwner } from '../session/live';
 import { lockUser } from '../user-eligibility';
@@ -45,29 +41,9 @@ export const reauthentication = () =>
   ({
     id: 'reauthentication',
     endpoints: {
-      reauthMethods: createAuthEndpoint(
+      reauthMethods: pluginEndpoint(
         '/reauth/methods',
-        {
-          method: 'GET',
-          metadata: {
-            openapi: envelopeResponse(
-              'Methods available for this authenticated account.',
-              {
-                type: 'object',
-                properties: {
-                  methods: {
-                    type: 'array',
-                    items: {
-                      type: 'string',
-                      enum: [...REAUTH_METHODS],
-                    },
-                  },
-                },
-                required: ['methods'],
-              }
-            ),
-          },
-        },
+        { method: 'GET' },
         async (ctx) => {
           const { userId } = await requireReauthSession(ctx);
           return ctx.json({
@@ -77,17 +53,9 @@ export const reauthentication = () =>
         }
       ),
       ...(isTwoFactorMethodEnabled('passkey') && {
-        reauthPasskeyOptions: createAuthEndpoint(
+        reauthPasskeyOptions: pluginEndpoint(
           '/reauth/passkey/options',
-          {
-            method: 'POST',
-            metadata: {
-              openapi: envelopeResponse(
-                'User-verifying WebAuthn options bound to this session.',
-                { type: 'object' }
-              ),
-            },
-          },
+          { method: 'POST' },
           async (ctx) => {
             try {
               const { userId, sessionId } = await requireReauthSession(ctx);
@@ -116,19 +84,9 @@ export const reauthentication = () =>
             }
           }
         ),
-        reauthPasskeyVerify: createAuthEndpoint(
+        reauthPasskeyVerify: pluginEndpoint(
           '/reauth/passkey/verify',
-          {
-            method: 'POST',
-            body: reauthPasskeySchema,
-            metadata: {
-              openapi: envelopeResponse('Reauthentication granted.', {
-                type: 'object',
-                properties: { expiresIn: { type: 'integer' } },
-                required: ['expiresIn'],
-              }),
-            },
-          },
+          { method: 'POST', body: reauthPasskeySchema },
           async (ctx) => {
             try {
               const { userId, sessionId, userEmail } =

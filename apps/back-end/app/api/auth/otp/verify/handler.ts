@@ -29,6 +29,7 @@ import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 import { logSanitized } from '@/utils/log';
 
 export const POST = withTimingFloor(
+  'POST /api/auth/otp/verify',
   otpMsg.verifyError,
   async (ctx, startFloor) => {
     requireFeature(OTP_ENABLED);

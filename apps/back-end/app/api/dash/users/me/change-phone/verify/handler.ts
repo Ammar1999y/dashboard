@@ -22,6 +22,7 @@ import { commitPhoneChange } from '@/lib/users/contact-change';
  * the number committed in the same transaction, so there is no replay window.
  */
 export const POST = withApiErrors(
+  'POST /api/dash/users/me/change-phone/verify',
   MSG_UPDATE_ERROR,
   async (ctx) => {
     requireFeature(PHONE_ENABLED);

@@ -162,7 +162,7 @@ export type BetterAuthBody<K extends BetterAuthRoute> = z.input<
  * fix is to annotate the offending preprocess parameter with the wire type, as
  * `validation/rules.ts` describes.
  */
-type UnknownFieldsOf<T, Depth extends readonly unknown[] = []> =
+export type UnknownFieldsOf<T, Depth extends readonly unknown[] = []> =
   // Bounded rather than unbounded: a body is a handful of levels deep, and an
   // unbounded walk is what makes this kind of type explode on a recursive one.
   Depth['length'] extends 5
@@ -177,7 +177,7 @@ type UnknownFieldsOf<T, Depth extends readonly unknown[] = []> =
           }[keyof T]
         : never;
 
-type Assert<T extends true> = T;
+export type Assert<T extends true> = T;
 
 /**
  * The bodies with a deliberately opaque region.

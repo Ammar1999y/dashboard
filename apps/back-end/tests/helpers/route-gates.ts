@@ -20,6 +20,12 @@ export const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 
 export type Gate = 'window' | 'password' | 'reauthRequired';
 
+/** The calls that define a Better Auth endpoint: the library's, and our keyed wrapper. */
+const ENDPOINT_FACTORIES: ReadonlySet<string> = new Set([
+  'createAuthEndpoint',
+  'pluginEndpoint',
+]);
+
 /** Keyed `file#name`, the file relative to the workspace. */
 const GATES: ReadonlyMap<string, Gate> = new Map([
   ['lib/auth/reauth/window.ts#requireReauthWindow', 'window'],
@@ -168,7 +174,7 @@ export interface RouteGateAnalyzer {
   reach(root: ts.Node): ReadonlySet<Gate>;
   /** Each top-level variable's initializer in `file`, by name. */
   initializers(file: string): Map<string, ts.Expression>;
-  /** Each `createAuthEndpoint` call in `file`: its literal path and its handler. */
+  /** Each endpoint `file` defines: its literal path and its handler. */
   authEndpoints(file: string): { path: string; handler: ts.Node }[];
 }
 
@@ -180,6 +186,24 @@ export function createRouteGateAnalyzer(
     options: compilerOptions(),
   });
   const checker = program.getTypeChecker();
+
+  /**
+   * `pluginEndpoint` (`lib/auth/plugin-endpoint.ts`) hands its own `path` on to
+   * `createAuthEndpoint`. That call defines no endpoint: each `pluginEndpoint`
+   * call site does, with its literal path and its handler.
+   */
+  function forwardsWrapperPath(call: ts.CallExpression): boolean {
+    const [pathArgument] = call.arguments;
+    if (!pathArgument || !ts.isIdentifier(pathArgument)) return false;
+    const declaration =
+      checker.getSymbolAtLocation(pathArgument)?.valueDeclaration;
+    return (
+      declaration !== undefined &&
+      ts.isParameter(declaration) &&
+      ts.isFunctionDeclaration(declaration.parent) &&
+      declaration.parent.name?.text === 'pluginEndpoint'
+    );
+  }
 
   function sourceFileOf(file: string): ts.SourceFile {
     const source = program.getSourceFile(path.join(REPO_ROOT, file));
@@ -427,7 +451,8 @@ export function createRouteGateAnalyzer(
         if (
           ts.isCallExpression(node) &&
           ts.isIdentifier(node.expression) &&
-          node.expression.text === 'createAuthEndpoint'
+          ENDPOINT_FACTORIES.has(node.expression.text) &&
+          !forwardsWrapperPath(node)
         ) {
           const [pathArgument] = node.arguments;
           const handler = node.arguments.at(-1);

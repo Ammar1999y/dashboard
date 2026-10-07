@@ -262,6 +262,29 @@ describe('removing one method', () => {
       cookie
     );
     expect(unqualifiedDefault.status).toBe(HTTP_STATUS.UNPROCESSABLE);
+
+    // Its opposite: with the contact named it is a reorder, and needs no proof.
+    const qualifiedDefault = await call(
+      'POST',
+      '/api/auth/two-factor/methods/default',
+      { method: 'otp', contactKind: 'phone' },
+      cookie
+    );
+    expect(qualifiedDefault.status).toBe(HTTP_STATUS.OK);
+    expect(await qualifiedDefault.json()).toEqual({
+      success: true,
+      data: { defaultMethod: 'otp:phone' },
+    });
+    const defaults = await db
+      .select({ method: twoFactorMethods.method })
+      .from(twoFactorMethods)
+      .where(
+        and(
+          eq(twoFactorMethods.userId, user.userId),
+          eq(twoFactorMethods.isDefault, true)
+        )
+      );
+    expect(defaults).toEqual([{ method: 'otp' }]);
   });
 
   test('is refused when the surviving row is not a factor a challenge would offer', async () => {

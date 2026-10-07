@@ -9,30 +9,34 @@ import { requestActor } from '@/lib/media/actor';
 import { createFolder } from '@/lib/media/folders';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-export const POST = withApiErrors(mediaMsg.updateError, async (ctx) => {
-  const caller = await requirePermission(ctx, {
-    resource: 'media',
-    action: 'create',
-  });
+export const POST = withApiErrors(
+  'POST /api/dash/media/folders',
+  mediaMsg.updateError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'create',
+    });
 
-  await enforceRateLimit({
-    scope: 'media.folders.post',
-    identifier: userIdentifier(caller.userId),
-    limit: 30,
-    failClosed: true,
-  });
+    await enforceRateLimit({
+      scope: 'media.folders.post',
+      identifier: userIdentifier(caller.userId),
+      limit: 30,
+      failClosed: true,
+    });
 
-  const input = await readJsonBody(ctx, createFolderSchema);
+    const input = await readJsonBody(ctx, createFolderSchema);
 
-  const folder = await createFolder({
-    parentId: input.parentId ?? null,
-    name: input.name,
-    actor: requestActor(ctx, caller, 'all'),
-  });
+    const folder = await createFolder({
+      parentId: input.parentId ?? null,
+      name: input.name,
+      actor: requestActor(ctx, caller, 'all'),
+    });
 
-  return apiSuccess({
-    message: mediaMsg.folderCreated,
-    data: { id: folder.id, name: folder.name },
-    status: HTTP_STATUS.CREATED,
-  });
-});
+    return apiSuccess({
+      message: mediaMsg.folderCreated,
+      data: { id: folder.id, name: folder.name },
+      status: HTTP_STATUS.CREATED,
+    });
+  }
+);

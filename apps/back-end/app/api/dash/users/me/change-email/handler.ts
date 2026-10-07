@@ -29,6 +29,7 @@ import {
  * of verification, and the change commits at once.
  */
 export const POST = withApiErrors(
+  'POST /api/dash/users/me/change-email',
   MSG_UPDATE_ERROR,
   async (ctx) => {
     const { userId, sessionId } = await requireSession(ctx);

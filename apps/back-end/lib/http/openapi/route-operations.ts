@@ -10,7 +10,6 @@ import {
   errorResponse,
   PRE_AUTH_RESPONSES,
   RETRY_AFTER_HEADER,
-  successEnvelopeSchema,
 } from './envelope';
 import { isJsonSchema, OPENAPI_VERSION } from './json-schema';
 import {
@@ -28,13 +27,12 @@ import {
   ID_NOT_FOUND_ROUTES,
   NOT_FOUND_ROUTES,
   OPERATION_DOCS,
-  PAGINATED_SUCCESS_ROUTES,
   QUERY_VALIDATION_ROUTES,
   SESSION_COOKIE_ROUTES,
   SET_COOKIE_HEADER,
   SPENT_INPUT_REMEDIES,
 } from './route-tables';
-import { SUCCESS_DATA_SCHEMAS } from './success-schemas';
+import { successBodySchema } from './success-schemas';
 
 /** What a client does with a 401 `REAUTH_REQUIRED`, on either route family. */
 export const REAUTH_REQUIRED_REMEDY =
@@ -173,16 +171,10 @@ const OPENAPI_DOCUMENT_RESPONSE: JsonSchema = {
 };
 
 function successResponseFor(key: string): JsonSchema {
-  const data = SUCCESS_DATA_SCHEMAS[key];
-  if (!data) throw new Error(`No success data schema for ${key}`);
   return {
     description: CONTACT_CHANGE_DESCRIPTIONS[key] ?? 'Success.',
     ...(SESSION_COOKIE_ROUTES.has(key) && { headers: SET_COOKIE_HEADER }),
-    content: {
-      'application/json': {
-        schema: successEnvelopeSchema(data, PAGINATED_SUCCESS_ROUTES.has(key)),
-      },
-    },
+    content: { 'application/json': { schema: successBodySchema(key) } },
   };
 }
 

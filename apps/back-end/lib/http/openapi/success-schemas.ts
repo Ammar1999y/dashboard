@@ -1,565 +1,382 @@
+/**
+ * The success responses of the route table and of this project's own Better
+ * Auth plugin endpoints, converted from the shared response schemas
+ * (`@app/shared/response-contract`). Nothing here restates a shape:
+ * this file adds only what the document says and the browser bundle must not
+ * carry, and decides which schemas are published once as components.
+ */
 import type { JsonSchema } from './json-schema';
 
-import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
-import {
-  FONT_SCALE_MAX,
-  FONT_SCALE_MIN,
-  PRESET_NAME_MAX,
-} from '@app/shared/validation/constants';
-import {
-  COLOR_MODES,
-  PRESET_NAME_PATTERN,
-  THEME_LAYOUTS,
-} from '@app/shared/validation/preferences';
-
-import { OTP_BASE_RESEND_DELAY_S } from '@/lib/otp/throttle';
+import * as z from 'zod';
 
 import {
-  BUCKET_TYPE_SCHEMA,
-  componentRef,
-  DATE_TIME_SCHEMA,
-  MEDIA_BREADCRUMB_SCHEMA,
-  MEDIA_FILE_PROPERTIES,
-  MEDIA_FOLDER_PROPERTIES,
-  NULL_SCHEMA,
-  NULLABLE_CONTACT_KIND_SCHEMA,
-  NULLABLE_CURSOR_SCHEMA,
-  NULLABLE_DEFAULT_METHOD_SCHEMA,
-  NULLABLE_OTP_CHANNEL_SCHEMA,
-  NULLABLE_STRING_SCHEMA,
-  PAGE_PERMISSION_SCHEMA,
-  UUID_SCHEMA,
-} from './components';
+  BETTER_AUTH_RESPONSES,
+  isBetterAuthResponseRoute,
+  isResponseRoute,
+  RESPONSE_DATA,
+  responseEnvelope,
+} from '@app/shared/response-contract';
+import { reauthGrantSchema } from '@app/shared/responses/auth';
+import {
+  passkeyRequestOptionsSchema,
+  removedMethodSchema,
+  twoFactorChallengeSchema,
+} from '@app/shared/responses/better-auth';
+import {
+  createdFolderSchema,
+  deletedFilesSchema,
+  deletedFolderSchema,
+  folderListingSchema,
+  mediaFileDetailsSchema,
+  mediaFileSchema,
+  mediaFolderHitSchema,
+  mediaFolderSchema,
+  mediaUsageSchema,
+  movedFilesSchema,
+  searchListingSchema,
+  unfiledListingSchema,
+  updatedFileSchema,
+  updatedFolderSchema,
+  uploadedFilesSchema,
+} from '@app/shared/responses/media';
+import {
+  storedPreferencesSchema,
+  userDetailSchema,
+} from '@app/shared/responses/users';
+import { preferencesSchema } from '@app/shared/validation/preferences';
 
-const ROLE_SUMMARY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    id: UUID_SCHEMA,
-    roleName: { type: 'string' },
-  },
-  required: ['id', 'roleName'],
-  additionalProperties: false,
-};
-const NULLABLE_ROLE_SUMMARY_SCHEMA: JsonSchema = {
-  anyOf: [ROLE_SUMMARY_SCHEMA, NULL_SCHEMA],
-};
-const ROLE_ID_SCHEMA: JsonSchema = {
-  anyOf: [UUID_SCHEMA, { const: CUSTOM_ROLE_VALUE }],
-};
-const NULLABLE_ROLE_ID_SCHEMA: JsonSchema = {
-  anyOf: [UUID_SCHEMA, { const: CUSTOM_ROLE_VALUE }, NULL_SCHEMA],
-};
-
-const SESSION_SUMMARY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    id: UUID_SCHEMA,
-    ipAddress: NULLABLE_STRING_SCHEMA,
-    userAgent: NULLABLE_STRING_SCHEMA,
-    createdAt: DATE_TIME_SCHEMA,
-    isCurrent: { type: 'boolean' },
-  },
-  required: ['id', 'ipAddress', 'userAgent', 'createdAt', 'isCurrent'],
-  additionalProperties: false,
-};
-const UPDATED_AT_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: { updatedAt: DATE_TIME_SCHEMA },
-  required: ['updatedAt'],
-  additionalProperties: false,
-};
-const CREATED_ID_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: { id: UUID_SCHEMA },
-  required: ['id'],
-  additionalProperties: false,
-};
-const OTP_SENT_SCHEMA: JsonSchema = {
-  type: 'object',
-  // A `const`, and it has to stay one: the anonymous surfaces answer identically
-  // for a real and an invented identifier, so the value cannot vary with the
-  // row. Only the `FLAT_RESEND_PURPOSES` qualify; a surface that returns its
-  // row's own countdown uses `OTP_LADDER_SENT_SCHEMA`.
-  properties: { nextAllowedIn: { const: OTP_BASE_RESEND_DELAY_S } },
-  required: ['nextAllowedIn'],
-  additionalProperties: false,
-};
-/**
- * For surfaces reached after proving something — a session or a recovery grant
- * — which return the row's real exponential delay. `lib/auth/two-factor/otp.ts`
- * publishes the same shape for `/two-factor/otp/send`.
- */
-const OTP_LADDER_SENT_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    nextAllowedIn: { type: 'integer', minimum: OTP_BASE_RESEND_DELAY_S },
-  },
-  required: ['nextAllowedIn'],
-  additionalProperties: false,
-};
-const VERIFIED_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: { verified: { const: true } },
-  required: ['verified'],
-  additionalProperties: false,
-};
-const CONTACT_CHANGE_SCHEMA: JsonSchema = {
-  oneOf: [
-    {
-      type: 'object',
-      properties: { autoVerified: { const: true } },
-      required: ['autoVerified'],
-      additionalProperties: false,
-    },
-    {
-      type: 'object',
-      properties: { otpSent: { const: true } },
-      required: ['otpSent'],
-      additionalProperties: false,
-    },
-  ],
-};
-
-/** Mirrors `preferencesSchema` key for key; a field added there is added here. */
-const PREFERENCES_DOCUMENT_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    preset: {
-      type: 'string',
-      maxLength: PRESET_NAME_MAX,
-      pattern: PRESET_NAME_PATTERN,
-      description:
-        'A theme preset the client resolves. It falls back to its built-in theme for one it does not know, so this server does not hold the list.',
-    },
-    colorMode: { type: 'string', enum: [...COLOR_MODES] },
-    themeLayout: { type: 'string', enum: [...THEME_LAYOUTS] },
-    fontScale: {
-      type: 'number',
-      minimum: FONT_SCALE_MIN,
-      maximum: FONT_SCALE_MAX,
-    },
-    containerStretch: { type: 'boolean' },
-  },
-  required: [
-    'preset',
-    'colorMode',
-    'themeLayout',
-    'fontScale',
-    'containerStretch',
-  ],
-  additionalProperties: false,
-};
-
-const PREFERENCES_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    preferences: PREFERENCES_DOCUMENT_SCHEMA,
-    updatedAt: {
-      anyOf: [DATE_TIME_SCHEMA, NULL_SCHEMA],
-      description:
-        'Server-side write time. Null only when nothing has ever been saved, so a stored choice of the defaults is distinguishable from no choice.',
-    },
-  },
-  required: ['preferences', 'updatedAt'],
-  additionalProperties: false,
-};
-
-const RECOVERY_OPTION_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    id: { type: 'string' },
-    method: { type: 'string', enum: ['totp', 'otp', 'backup_code'] },
-    contactKind: NULLABLE_CONTACT_KIND_SCHEMA,
-    channel: NULLABLE_OTP_CHANNEL_SCHEMA,
-  },
-  required: ['id', 'method', 'contactKind', 'channel'],
-  additionalProperties: false,
-};
-
-const RESET_DONE_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: { reset: { const: true } },
-  required: ['reset'],
-  additionalProperties: false,
-};
+import { componentRef } from './components';
+import { toJsonSchema } from './json-schema';
 
 /**
- * An account with a second factor never gets `reset: true` from `/reset`: it
- * gets a grant, and `/complete` writes the password against a proven factor.
+ * Published once under `components.schemas`, and referenced from every other
+ * use of the same instance.
  */
-const RESET_OUTCOME_SCHEMA: JsonSchema = {
-  anyOf: [
-    RESET_DONE_SCHEMA,
+export const RESPONSE_COMPONENTS = [
+  { name: 'MediaFile', schema: mediaFileSchema },
+  { name: 'MediaFileDetails', schema: mediaFileDetailsSchema },
+  { name: 'MediaFolder', schema: mediaFolderSchema },
+  { name: 'MediaFolderHit', schema: mediaFolderHitSchema },
+  { name: 'MediaUsage', schema: mediaUsageSchema },
+  { name: 'TwoFactorChallenge', schema: twoFactorChallengeSchema },
+  { name: 'PasskeyRequestOptions', schema: passkeyRequestOptionsSchema },
+] as const satisfies readonly { name: string; schema: z.ZodType }[];
+
+export type ResponseComponentName =
+  (typeof RESPONSE_COMPONENTS)[number]['name'];
+
+const COMPONENT_REFS = new Map<z.core.$ZodType, JsonSchema>([
+  ...RESPONSE_COMPONENTS.map(
+    ({ name, schema }): [z.core.$ZodType, JsonSchema] => [
+      schema,
+      componentRef(name),
+    ]
+  ),
+  // The upload answer's element only adds a client-side rule (a non-empty
+  // `url`), so the document keeps publishing it as the component.
+  [uploadedFilesSchema.element, componentRef('MediaFile')],
+]);
+
+const STORED_NAME = 'The stored, normalised name.';
+const STORED_NAME_IF_SENT = `${STORED_NAME} Present when one was sent.`;
+
+/**
+ * What the document says about a shared response schema beyond the schema
+ * itself, by instance: prose, which the browser bundle must not carry, and
+ * `dependentRequired`, which `z.fromJSONSchema` cannot read back. Keyed by
+ * instance rather than by route, because a component's prose would otherwise
+ * repeat on every route that returns it.
+ */
+const DOCUMENT_KEYWORDS = new Map<z.core.$ZodType, JsonSchema>([
+  [
+    mediaFileSchema.shape.transition,
     {
-      type: 'object',
-      properties: {
-        reset: { const: false },
-        twoFactorRequired: { const: true },
-        grant: { type: 'string' },
-        options: { type: 'array', items: RECOVERY_OPTION_SCHEMA },
-        defaultMethod: NULLABLE_DEFAULT_METHOD_SCHEMA,
-      },
-      required: [
-        'reset',
-        'twoFactorRequired',
-        'grant',
-        'options',
-        'defaultMethod',
-      ],
-      additionalProperties: false,
+      description:
+        'Non-null while a visibility change is in flight, and each value tells a client something different: `to_public`/`to_private` mean the copy is being made and verified and `url` still answers from the OLD bucket, so the change is in progress; `cleanup` means the flip is done and `url` is final, and only the stale copy in the other bucket (and, for a public one, its edge cache) is still being removed by the nightly sweep — nothing is pending for the client. `url` always points at the current bucket. Removing the object from the origin is unconditional; evicting an edge copy needs the configured cache purge; a copy already in a browser stays readable until its `Cache-Control` lifetime ends and cannot be recalled.',
     },
   ],
-};
-
-/** What every list response carries about this deployment's capabilities. */
-const MEDIA_CAPABILITY_PROPERTIES = {
-  visibilities: {
-    type: 'array',
-    items: BUCKET_TYPE_SCHEMA,
-    uniqueItems: true,
-    description: 'The buckets this deployment has configured.',
-  },
-  canPublish: {
-    type: 'boolean',
-    description: 'Whether the caller holds `media.publish`.',
-  },
-} as const;
-
-const MEDIA_LIST_SCHEMA: JsonSchema = {
-  oneOf: [
+  [
+    mediaFileSchema.shape.folderId,
     {
-      type: 'object',
+      description:
+        'Null for a file uploaded for a record rather than into the library.',
+    },
+  ],
+  [
+    mediaFileSchema.shape.unfiledAt,
+    {
+      description:
+        'When the nightly sweep first found the file unfiled — active, in no folder, referenced by no record. It is deleted `retentionDays` (see `scope=unfiled`) after this unless moved into a folder; null otherwise.',
+    },
+  ],
+  [
+    mediaFileSchema.shape.url,
+    {
+      description:
+        'Permanent public URL for a public object; otherwise a signed URL valid for one hour. Never store it.',
+    },
+  ],
+  [
+    mediaFileDetailsSchema.shape.downloadUrl,
+    {
+      description:
+        'Signed URL, valid for one hour, that downloads the file under its current display name.',
+    },
+  ],
+  [
+    mediaFileDetailsSchema.shape.usedBy,
+    { description: 'Owners the caller may view.' },
+  ],
+  [
+    mediaFileDetailsSchema.shape.hiddenUsages,
+    { description: 'Owners on pages the caller may not view.' },
+  ],
+  [
+    mediaFolderSchema.shape.parentId,
+    { description: 'Null for a root folder.' },
+  ],
+  [
+    mediaFolderHitSchema.shape.breadcrumbs,
+    { description: 'Root → the folder itself.' },
+  ],
+  [
+    uploadedFilesSchema,
+    {
+      description:
+        'One pending file. It is not listable until the record it is for is saved and claims it.',
+    },
+  ],
+  [
+    folderListingSchema.shape.visibilities,
+    { description: 'The buckets this deployment has configured.' },
+  ],
+  [
+    folderListingSchema.shape.canPublish,
+    { description: 'Whether the caller holds `media.publish`.' },
+  ],
+  [
+    folderListingSchema,
+    {
       description:
         'The folder view (`scope=folder`): breadcrumbs from the root, the subfolders, and one page of files.',
-      properties: {
-        ...MEDIA_CAPABILITY_PROPERTIES,
-        breadcrumbs: { type: 'array', items: MEDIA_BREADCRUMB_SCHEMA },
-        folders: { type: 'array', items: componentRef('MediaFolder') },
-        files: { type: 'array', items: componentRef('MediaFile') },
-      },
-      required: [
-        'visibilities',
-        'canPublish',
-        'breadcrumbs',
-        'folders',
-        'files',
-      ],
-      additionalProperties: false,
-    },
-    {
-      type: 'object',
-      description:
-        'The library search (`scope=all`): one page of files across every folder and, when `search` is given, up to twenty folders whose name matches, each with its path from the root.',
-      properties: {
-        ...MEDIA_CAPABILITY_PROPERTIES,
-        files: { type: 'array', items: componentRef('MediaFile') },
-        folders: {
-          type: 'array',
-          items: componentRef('MediaFolderHit'),
-        },
-        foldersTruncated: {
-          type: 'boolean',
-          description:
-            'More folders match than the twenty returned. The files beside them are fully paginated through `meta`; the folder hits are a navigation aid and are capped, so a narrower `search` is the way to reach the rest.',
-        },
-      },
-      required: [
-        'visibilities',
-        'canPublish',
-        'files',
-        'folders',
-        'foldersTruncated',
-      ],
-      additionalProperties: false,
-    },
-    {
-      type: 'object',
-      description:
-        'The unfiled view (`scope=unfiled`): one page of active files in no folder that no record references — uploads whose record is gone. Each is deleted `retentionDays` after its `unfiledAt` stamp unless moved into a folder with `PUT /api/dash/media/files/{id}`.',
-      properties: {
-        ...MEDIA_CAPABILITY_PROPERTIES,
-        files: { type: 'array', items: componentRef('MediaFile') },
-        retentionDays: {
-          type: 'integer',
-          minimum: 1,
-          description: 'Days an unfiled file survives after `unfiledAt`.',
-        },
-      },
-      required: ['visibilities', 'canPublish', 'files', 'retentionDays'],
-      additionalProperties: false,
     },
   ],
-};
-
-/** One shape for both delete modes, empty folder or subtree. */
-const FOLDER_DELETE_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    folders: {
-      type: 'integer',
-      minimum: 0,
+  [
+    searchListingSchema,
+    {
+      description:
+        'The library search (`scope=all`): one page of files across every folder and, when `search` is given, up to twenty folders whose name matches, each with its path from the root.',
+    },
+  ],
+  [
+    searchListingSchema.shape.foldersTruncated,
+    {
+      description:
+        'More folders match than the twenty returned. The files beside them are fully paginated through `meta`; the folder hits are a navigation aid and are capped, so a narrower `search` is the way to reach the rest.',
+    },
+  ],
+  [
+    unfiledListingSchema,
+    {
+      description:
+        'The unfiled view (`scope=unfiled`): one page of active files in no folder that no record references — uploads whose record is gone. Each is deleted `retentionDays` after its `unfiledAt` stamp unless moved into a folder with `PUT /api/dash/media/files/{id}`.',
+    },
+  ],
+  [
+    unfiledListingSchema.shape.retentionDays,
+    { description: 'Days an unfiled file survives after `unfiledAt`.' },
+  ],
+  [
+    deletedFilesSchema.shape.deleted,
+    { description: 'Gone from the database and from the object store.' },
+  ],
+  [
+    deletedFilesSchema.shape.pending,
+    {
+      description:
+        'Committed to deletion and already gone from every listing and every media route, but the object store refused the delete or the configured cache purge failed; the nightly sweep finishes them. There is no completion signal and none is needed: these ids never come back, and no endpoint reports their progress. An edge copy is evicted only when the purge is configured; a copy already in a browser stays readable until its `Cache-Control` lifetime ends and cannot be recalled.',
+    },
+  ],
+  [
+    movedFilesSchema.shape.unfiledAt,
+    { description: 'Every moved file is filed.' },
+  ],
+  [updatedFileSchema.shape.displayName, { description: STORED_NAME_IF_SENT }],
+  [
+    updatedFileSchema.shape.unfiledAt,
+    { description: 'Present when a folder was sent: filing clears it.' },
+  ],
+  [createdFolderSchema.shape.name, { description: STORED_NAME }],
+  [updatedFolderSchema.shape.name, { description: STORED_NAME_IF_SENT }],
+  [
+    deletedFolderSchema.shape.folders,
+    {
       description:
         'Folder rows removed. `0` from a recursive delete whose FILES went but whose folders could not: something was still in the tree — a file the sweep has yet to finish removing, or an upload that arrived while the files were being deleted. Retry once it settles.',
     },
-    deleted: {
-      type: 'array',
-      items: UUID_SCHEMA,
-      uniqueItems: true,
+  ],
+  [
+    deletedFolderSchema.shape.deleted,
+    {
       description:
         'Files gone from the database and from the object store. Always empty for a non-recursive delete, which refuses a folder that holds anything.',
     },
-    pending: {
-      type: 'array',
-      items: UUID_SCHEMA,
-      uniqueItems: true,
+  ],
+  [
+    deletedFolderSchema.shape.pending,
+    {
       description:
         'Files committed to deletion and already gone from every listing, whose object or configured cache purge the nightly sweep still has to finish.',
     },
-  },
-  required: ['folders', 'deleted', 'pending'],
-  additionalProperties: false,
+  ],
+  [
+    reauthGrantSchema.shape.expiresIn,
+    {
+      description:
+        'Seconds the window lasts. It is bound to THIS session — there is no token to send back, the same cookie carries it.',
+    },
+  ],
+  [
+    preferencesSchema.shape.preset,
+    {
+      description:
+        'A theme preset the client resolves. It falls back to its built-in theme for one it does not know, so this server does not hold the list.',
+    },
+  ],
+  [
+    storedPreferencesSchema.shape.updatedAt,
+    {
+      description:
+        'Server-side write time. Null only when nothing has ever been saved, so a stored choice of the defaults is distinguishable from no choice.',
+    },
+  ],
+  [
+    userDetailSchema,
+    {
+      dependentRequired: {
+        sessions: ['sessionsHasMore', 'sessionsNextCursor'],
+        sessionsHasMore: ['sessions', 'sessionsNextCursor'],
+        sessionsNextCursor: ['sessions', 'sessionsHasMore'],
+      },
+    },
+  ],
+  [
+    twoFactorChallengeSchema,
+    {
+      description:
+        'The first factor succeeded and the login is NOT complete: no session cookie is set, and one of the options below has to be verified next.',
+    },
+  ],
+  [
+    twoFactorChallengeSchema.shape.twoFactorMethods,
+    {
+      description:
+        'Distinct method names. Two OTP channels collapse into one entry here, so it cannot drive a choice — use `twoFactorOptions`.',
+    },
+  ],
+  [
+    twoFactorChallengeSchema.shape.twoFactorOptions.element.shape.id,
+    {
+      description:
+        'Stable option identity: `totp`, `backup_code`, `passkey`, `otp:email` or `otp:phone`.',
+    },
+  ],
+  [
+    twoFactorChallengeSchema.shape.twoFactorOptions.element.shape.nextAllowedIn,
+    {
+      description:
+        '`otp` options only: seconds before a code may be sent to this contact. `0` means a send is allowed now.',
+    },
+  ],
+  [
+    twoFactorChallengeSchema.shape.defaultMethod,
+    {
+      description:
+        '`null` means ask: only recovery material is left, and a backup code is never auto-routed to.',
+    },
+  ],
+  [
+    removedMethodSchema.shape.removedMethod,
+    {
+      description:
+        'The option that is gone, `otp:email` / `otp:phone` / `totp` / `backup_code` / `passkey`.',
+    },
+  ],
+]);
+
+interface SuccessContract {
+  /** Under `components.schemas`, each converted as a root. */
+  components: Record<string, JsonSchema>;
+  /** Each route's whole success body, envelope included. */
+  envelopes: ReadonlyMap<string, JsonSchema>;
+  /** Each plugin endpoint's whole 2xx body, keyed by its path under the prefix. */
+  betterAuth: ReadonlyMap<string, JsonSchema>;
+  /** `keywords` entries that no conversion reached. */
+  unusedKeywords: string[];
+}
+
+/** `keywords` is injectable so the leftover check can be shown to fire. */
+export function convertContract(
+  keywords: ReadonlyMap<z.core.$ZodType, JsonSchema> = DOCUMENT_KEYWORDS
+): SuccessContract {
+  const used = new Set<z.core.$ZodType>();
+  const convert = (root: z.ZodType): JsonSchema => {
+    const rootSchema: z.core.$ZodType = root;
+    return toJsonSchema(root, {
+      override: ({ zodSchema, jsonSchema }) => {
+        const ref =
+          zodSchema === rootSchema ? undefined : COMPONENT_REFS.get(zodSchema);
+        if (ref) {
+          for (const key of Object.keys(jsonSchema)) delete jsonSchema[key];
+          Object.assign(jsonSchema, ref);
+          return;
+        }
+        const added = keywords.get(zodSchema);
+        if (!added) return;
+        Object.assign(jsonSchema, added);
+        used.add(zodSchema);
+      },
+    });
+  };
+
+  return {
+    components: Object.fromEntries(
+      RESPONSE_COMPONENTS.map(({ name, schema }) => [name, convert(schema)])
+    ),
+    envelopes: new Map(
+      Object.keys(RESPONSE_DATA)
+        .filter(isResponseRoute)
+        .map((key) => [key, convert(responseEnvelope(key))])
+    ),
+    betterAuth: new Map(
+      Object.keys(BETTER_AUTH_RESPONSES)
+        .filter(isBetterAuthResponseRoute)
+        .map((path) => [path, convert(BETTER_AUTH_RESPONSES[path])])
+    ),
+    unusedKeywords: [...keywords]
+      .filter(([schema]) => !used.has(schema))
+      .map(([, added]) => JSON.stringify(added).slice(0, 80)),
+  };
+}
+
+const converted: { contract: SuccessContract | undefined } = {
+  contract: undefined,
 };
 
-export const SUCCESS_DATA_SCHEMAS: Record<string, JsonSchema> = {
-  'POST /api/auth/forgot-password/reset': RESET_OUTCOME_SCHEMA,
-  'POST /api/auth/forgot-password/second-factor/send': OTP_LADDER_SENT_SCHEMA,
-  'POST /api/auth/forgot-password/complete': RESET_DONE_SCHEMA,
-  'POST /api/auth/forgot-password/send': OTP_SENT_SCHEMA,
-  'POST /api/auth/otp/send': OTP_SENT_SCHEMA,
-  'POST /api/auth/otp/verify': VERIFIED_SCHEMA,
-  'POST /api/auth/passwordless/send': OTP_SENT_SCHEMA,
-  'POST /api/dash/auth/reauth': {
-    type: 'object',
-    properties: {
-      expiresIn: {
-        type: 'integer',
-        description:
-          'Seconds the window lasts. It is bound to THIS session — there is no token to send back, the same cookie carries it.',
-      },
-    },
-    required: ['expiresIn'],
-    additionalProperties: false,
-  },
-  'GET /api/dash/permissions': {
-    type: 'array',
-    items: {
-      type: 'object',
-      properties: {
-        id: UUID_SCHEMA,
-        roleName: { type: 'string' },
-        description: NULLABLE_STRING_SCHEMA,
-        isActive: { type: 'boolean' },
-        createdAt: DATE_TIME_SCHEMA,
-        updatedAt: DATE_TIME_SCHEMA,
-        usersCount: { type: 'integer', minimum: 0 },
-      },
-      required: [
-        'id',
-        'roleName',
-        'description',
-        'isActive',
-        'createdAt',
-        'updatedAt',
-        'usersCount',
-      ],
-      additionalProperties: false,
-    },
-  },
-  'POST /api/dash/permissions': CREATED_ID_SCHEMA,
-  'GET /api/dash/permissions/:id': {
-    type: 'object',
-    properties: {
-      id: UUID_SCHEMA,
-      roleName: { type: 'string' },
-      description: NULLABLE_STRING_SCHEMA,
-      isActive: { type: 'boolean' },
-      permissions: { type: 'array', items: PAGE_PERMISSION_SCHEMA },
-    },
-    required: ['id', 'roleName', 'description', 'isActive', 'permissions'],
-    additionalProperties: false,
-  },
-  'PUT /api/dash/permissions/:id': UPDATED_AT_SCHEMA,
-  'DELETE /api/dash/permissions/:id': NULL_SCHEMA,
-  'GET /api/dash/roles': { type: 'array', items: ROLE_SUMMARY_SCHEMA },
-  'POST /api/dash/users/me/change-email': CONTACT_CHANGE_SCHEMA,
-  'POST /api/dash/users/me/change-email/verify': VERIFIED_SCHEMA,
-  'POST /api/dash/users/:id/two-factor/reset': NULL_SCHEMA,
-  'POST /api/dash/users/me/change-password': NULL_SCHEMA,
-  'POST /api/dash/users/me/change-phone': CONTACT_CHANGE_SCHEMA,
-  'POST /api/dash/users/me/change-phone/verify': VERIFIED_SCHEMA,
-  'GET /api/dash/users/me/preferences': PREFERENCES_SCHEMA,
-  'PUT /api/dash/users/me/preferences': UPDATED_AT_SCHEMA,
-  'GET /api/dash/users': {
-    type: 'array',
-    items: {
-      type: 'object',
-      properties: {
-        id: UUID_SCHEMA,
-        name: { type: 'string' },
-        email: { type: 'string', format: 'email' },
-        isActive: { type: 'boolean' },
-        roleId: ROLE_ID_SCHEMA,
-        createdAt: DATE_TIME_SCHEMA,
-        updatedAt: DATE_TIME_SCHEMA,
-        role: ROLE_SUMMARY_SCHEMA,
-      },
-      required: [
-        'id',
-        'name',
-        'email',
-        'isActive',
-        'roleId',
-        'createdAt',
-        'updatedAt',
-        'role',
-      ],
-      additionalProperties: false,
-    },
-  },
-  'POST /api/dash/users': CREATED_ID_SCHEMA,
-  'GET /api/dash/users/:id': {
-    type: 'object',
-    properties: {
-      id: UUID_SCHEMA,
-      name: { type: 'string' },
-      email: { type: 'string', format: 'email' },
-      emailVerified: { type: 'boolean' },
-      phoneNumber: NULLABLE_STRING_SCHEMA,
-      phoneNumberVerified: { type: 'boolean' },
-      isActive: { type: 'boolean' },
-      roleId: NULLABLE_ROLE_ID_SCHEMA,
-      role: NULLABLE_ROLE_SUMMARY_SCHEMA,
-      createdAt: DATE_TIME_SCHEMA,
-      updatedAt: DATE_TIME_SCHEMA,
-      // The role's rows, as `GET /api/dash/permissions/:id` maps them — not
-      // the page-keyed `USER_PERMISSION_MATRIX_SCHEMA` of session metadata.
-      permissions: { type: 'array', items: PAGE_PERMISSION_SCHEMA },
-      sessions: { type: 'array', items: SESSION_SUMMARY_SCHEMA },
-      sessionsHasMore: { type: 'boolean' },
-      sessionsNextCursor: NULLABLE_CURSOR_SCHEMA,
-    },
-    required: [
-      'id',
-      'name',
-      'email',
-      'emailVerified',
-      'phoneNumber',
-      'phoneNumberVerified',
-      'isActive',
-      'roleId',
-      'role',
-      'createdAt',
-      'updatedAt',
-      'permissions',
-    ],
-    dependentRequired: {
-      sessions: ['sessionsHasMore', 'sessionsNextCursor'],
-      sessionsHasMore: ['sessions', 'sessionsNextCursor'],
-      sessionsNextCursor: ['sessions', 'sessionsHasMore'],
-    },
-    additionalProperties: false,
-  },
-  'PUT /api/dash/users/:id': UPDATED_AT_SCHEMA,
-  'DELETE /api/dash/users/:id': NULL_SCHEMA,
-  'GET /api/dash/users/:id/sessions': {
-    type: 'object',
-    properties: {
-      sessions: { type: 'array', items: SESSION_SUMMARY_SCHEMA },
-      nextCursor: NULLABLE_CURSOR_SCHEMA,
-    },
-    required: ['sessions', 'nextCursor'],
-    additionalProperties: false,
-  },
-  'DELETE /api/dash/users/:id/sessions': {
-    type: 'object',
-    properties: {
-      revoked: { type: 'array', items: UUID_SCHEMA, uniqueItems: true },
-    },
-    required: ['revoked'],
-    additionalProperties: false,
-  },
-  'GET /api/dash/media': MEDIA_LIST_SCHEMA,
-  'POST /api/dash/media/files': componentRef('MediaFile'),
-  'DELETE /api/dash/media/files': {
-    type: 'object',
-    properties: {
-      deleted: {
-        type: 'array',
-        items: UUID_SCHEMA,
-        uniqueItems: true,
-        description: 'Gone from the database and from the object store.',
-      },
-      pending: {
-        type: 'array',
-        items: UUID_SCHEMA,
-        uniqueItems: true,
-        description:
-          'Committed to deletion and already gone from every listing and every media route, but the object store refused the delete or the configured cache purge failed; the nightly sweep finishes them. There is no completion signal and none is needed: these ids never come back, and no endpoint reports their progress. An edge copy is evicted only when the purge is configured; a copy already in a browser stays readable until its `Cache-Control` lifetime ends and cannot be recalled.',
-      },
-    },
-    required: ['deleted', 'pending'],
-    additionalProperties: false,
-  },
-  'GET /api/dash/media/files/:id': componentRef('MediaFileDetails'),
-  'PUT /api/dash/media/files': {
-    type: 'object',
-    properties: {
-      unfiledAt: { ...NULL_SCHEMA, description: 'Every moved file is filed.' },
-      updatedAt: MEDIA_FILE_PROPERTIES.updatedAt,
-    },
-    required: ['unfiledAt', 'updatedAt'],
-    additionalProperties: false,
-  },
-  'PUT /api/dash/media/files/:id': {
-    type: 'object',
-    properties: {
-      displayName: {
-        ...MEDIA_FILE_PROPERTIES.displayName,
-        description: 'The stored, normalised name. Present when one was sent.',
-      },
-      unfiledAt: {
-        ...NULL_SCHEMA,
-        description: 'Present when a folder was sent: filing clears it.',
-      },
-      updatedAt: MEDIA_FILE_PROPERTIES.updatedAt,
-    },
-    required: ['updatedAt'],
-    additionalProperties: false,
-  },
-  'POST /api/dash/media/files/:id/publish': componentRef('MediaFile'),
-  'POST /api/dash/media/files/:id/unpublish': componentRef('MediaFile'),
-  'POST /api/dash/media/folders': {
-    type: 'object',
-    properties: {
-      id: MEDIA_FOLDER_PROPERTIES.id,
-      name: {
-        ...MEDIA_FOLDER_PROPERTIES.name,
-        description: 'The stored, normalised name.',
-      },
-    },
-    required: ['id', 'name'],
-    additionalProperties: false,
-  },
-  'PUT /api/dash/media/folders/:id': {
-    type: 'object',
-    properties: {
-      name: {
-        ...MEDIA_FOLDER_PROPERTIES.name,
-        description: 'The stored, normalised name. Present when one was sent.',
-      },
-      updatedAt: MEDIA_FOLDER_PROPERTIES.updatedAt,
-    },
-    required: ['updatedAt'],
-    additionalProperties: false,
-  },
-  'DELETE /api/dash/media/folders/:id': FOLDER_DELETE_SCHEMA,
-  'POST /api/upload/file': {
-    type: 'array',
-    items: componentRef('MediaFile'),
-    minItems: 1,
-    maxItems: 1,
-    description:
-      'One pending file. It is not listable until the record it is for is saved and claims it.',
-  },
-  'POST /api/dev/sign-up': CREATED_ID_SCHEMA,
-};
+/** Converted once per process: every input is static. */
+export function successContract(): SuccessContract {
+  converted.contract ??= convertContract();
+  return converted.contract;
+}
+
+/** The success body `key` publishes. */
+export function successBodySchema(key: string): JsonSchema {
+  const body = successContract().envelopes.get(key);
+  if (!body) throw new Error(`No success schema for ${key}`);
+  return body;
+}
+
+/** The 2xx body the plugin endpoint at `path` publishes, if it is one of ours. */
+export function betterAuthSuccessSchema(path: string): JsonSchema | undefined {
+  return successContract().betterAuth.get(path);
+}

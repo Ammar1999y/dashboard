@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { RouteManifestEntry } from '@/lib/http/route-manifest';
+import type {
+  RouteDefinition,
+  RouteManifestEntry,
+} from '@/lib/http/route-manifest';
 import type { PaginationMeta } from '@app/shared/types/api';
 
 import { ROUTES } from '@/routes';
+import * as z from 'zod';
 
 import { operatorsForSpec } from '@app/shared/data-table/column-specs';
 import {
@@ -20,6 +24,9 @@ import {
   MAX_SORT_ITEMS,
   MAX_VALUE_LENGTH,
 } from '@app/shared/data-table/parsers';
+import { isBetterAuthResponseRoute } from '@app/shared/response-contract';
+import { reauthGrantSchema } from '@app/shared/responses/auth';
+import { UUID_V7_PATTERN } from '@app/shared/utils';
 import {
   MAX_DOCUMENT_SIZE_MB,
   PASSWORD_MAX,
@@ -33,14 +40,16 @@ import { isTwoFactorMethodEnabled } from '@app/shared/validation/two-factor';
 import { auth } from '@/lib/auth';
 import {
   BETTER_AUTH_ENDPOINTS,
+  BETTER_AUTH_KNOWN_PATHS,
   betterAuthServes,
 } from '@/lib/auth/allowed-paths';
-import { BETTER_AUTH_OVERRIDDEN_RESPONSES } from '@/lib/http/openapi/better-auth';
+import { LIBRARY_VERIFIER_PATHS } from '@/lib/http/openapi/better-auth';
 import {
   BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
   BETTER_AUTH_SPENT_INPUT_REMEDIES,
   BETTER_AUTH_TRUSTED_RESPONSES,
 } from '@/lib/http/openapi/better-auth-tables';
+import { successSourceProblems } from '@/lib/http/openapi/consistency';
 import { openApiDocument } from '@/lib/http/openapi/document';
 import {
   memoiseOpenApiDocument,
@@ -48,6 +57,7 @@ import {
 } from '@/lib/http/openapi/route';
 import { operationKey } from '@/lib/http/openapi/route-operations';
 import { SPENT_INPUT_REMEDIES } from '@/lib/http/openapi/route-tables';
+import { convertContract } from '@/lib/http/openapi/success-schemas';
 import { isSafeMethod } from '@/lib/http/origin';
 import {
   toManifest,
@@ -315,6 +325,64 @@ describe('the OpenAPI document', () => {
     );
     expect(() => openApiDocument(withoutReset)).toThrow(
       "ID_NOT_FOUND_ROUTES has 'POST /api/dash/users/:id/two-factor/reset', which is not a route"
+    );
+  });
+
+  test('refuses a row wired to a handler keyed for another route', () => {
+    const handlerOf = (key: string) => {
+      const route = ROUTES.find((entry) => operationKey(entry) === key);
+      if (!route) throw new Error(`${key} is not in the route table`);
+      return route.handler;
+    };
+    const rewire = (key: string, handler: RouteDefinition['handler']) =>
+      toManifest(
+        ROUTES.map((route) =>
+          operationKey(route) === key ? { ...route, handler } : route
+        )
+      );
+
+    expect(() =>
+      openApiDocument(
+        rewire('GET /api/dash/media', handlerOf('GET /api/dash/permissions'))
+      )
+    ).toThrow(
+      "GET /api/dash/media is served by the handler keyed 'GET /api/dash/permissions'"
+    );
+    // The storage check is raw, so it never carries a key.
+    expect(() =>
+      openApiDocument(
+        rewire('GET /api/dash/media', handlerOf('GET /api/health/storage'))
+      )
+    ).toThrow(
+      'GET /api/dash/media answers the envelope but its handler is not keyed'
+    );
+  });
+
+  test('reports a document keyword that no converted response reaches', () => {
+    // The real map has none: every entry reached a conversion.
+    expect(convertContract().unusedKeywords).toEqual([]);
+    // A reached instance is not reported; a fresh one that nothing converts is.
+    const unreached = z.string();
+    expect(
+      convertContract(
+        new Map<z.core.$ZodType, Record<string, unknown>>([
+          [reauthGrantSchema.shape.expiresIn, { description: 'reached' }],
+          [unreached, { description: 'nobody converts this instance' }],
+        ])
+      ).unusedKeywords
+    ).toEqual(['{"description":"nobody converts this instance"}']);
+  });
+
+  test('names an envelope row the contract does not cover, rather than failing to build it', () => {
+    const manifest = toManifest(
+      ROUTES.map((route) =>
+        operationKey(route) === 'GET /api/health/storage'
+          ? { ...route, response: 'envelope' as const }
+          : route
+      )
+    );
+    expect(() => openApiDocument(manifest)).toThrow(
+      'GET /api/health/storage answers the envelope but has no RESPONSE_DATA entry'
     );
   });
 
@@ -1026,6 +1094,29 @@ describe('request and response contract fidelity', () => {
     expect(revokedIds?.items).toMatchObject({ format: 'uuid' });
   });
 
+  test('a generated component keeps the metadata of its shared schema and is referenced, not copied', () => {
+    expect(document).toMatchObject({
+      components: {
+        schemas: {
+          MediaFile: {
+            properties: {
+              id: { type: 'string', format: 'uuid', pattern: UUID_V7_PATTERN },
+            },
+          },
+        },
+      },
+    });
+    // The upload answer's element adds a client rule to the component, and is
+    // still published as the component.
+    expect(
+      responseSchemaOf(document, '/api/upload/file', 'post', '201')
+    ).toMatchObject({
+      properties: {
+        data: { items: { $ref: '#/components/schemas/MediaFile' } },
+      },
+    });
+  });
+
   test('Better Auth fragments are valid 3.1, filtered, and include hidden session query options', () => {
     const getSession = operationOf(document, '/api/auth/get-session', 'get');
     expect(
@@ -1053,7 +1144,9 @@ describe('request and response contract fidelity', () => {
         'MediaFolder',
         'MediaFolderHit',
         'MediaUsage',
+        'PasskeyRequestOptions',
         'Session',
+        'TwoFactorChallenge',
         'User',
         ...(isTwoFactorMethodEnabled('passkey') ? ['Passkey'] : []),
       ].toSorted(compareCodeUnits)
@@ -1215,8 +1308,15 @@ describe('the Better Auth surface, per endpoint', () => {
     expect(
       Object.keys(completed?.properties as Record<string, unknown>)
     ).toContain('token');
+    // Published once, as a component every challenging path references.
+    expect(challenged).toEqual({
+      $ref: '#/components/schemas/TwoFactorChallenge',
+    });
     const challengeKeys = Object.keys(
-      challenged?.properties as Record<string, unknown>
+      resolveRef(document, challenged ?? {}).properties as Record<
+        string,
+        unknown
+      >
     );
     expect(challengeKeys).toEqual(
       expect.arrayContaining([
@@ -1292,17 +1392,16 @@ describe('the Better Auth surface, per endpoint', () => {
     const response = responses['200'] as Record<string, unknown>;
     const content = response.content as Record<string, unknown>;
     const json = content['application/json'] as Record<string, unknown>;
-    // The same union as `/sign-in/email`: this endpoint issues the same
-    // challenge, which the plugin's own hook never would.
-    const schema = json.schema as { anyOf?: Record<string, unknown>[] };
-    expect(schema.anyOf).toHaveLength(2);
-    const [completed, challenged] = schema.anyOf ?? [];
-    expect(
-      Object.keys(completed?.properties as Record<string, unknown>)
-    ).toEqual(expect.arrayContaining(['success', 'message', 'data']));
-    expect(
-      Object.keys(challenged?.properties as Record<string, unknown>)
-    ).toContain('twoFactorRedirect');
+    // The same challenge as `/sign-in/email`, which the plugin's own hook
+    // never would issue here. Both branches are this project's, so they are
+    // published as one exclusive union.
+    const schema = json.schema as { oneOf?: Record<string, unknown>[] };
+    expect(schema.oneOf).toHaveLength(2);
+    const [completed, challenged] = schema.oneOf ?? [];
+    expect(completed?.required).toEqual(['success', 'message', 'data']);
+    expect(challenged).toEqual({
+      $ref: '#/components/schemas/TwoFactorChallenge',
+    });
   });
 
   test('betterAuthServes answers on the method, not only the path', () => {
@@ -2107,21 +2206,32 @@ describe('the statuses each Better Auth operation declares', () => {
         ]);
   });
 
-  test('every served success response is overridden or explicitly attested', () => {
+  test('every Better Auth path takes its 200 from exactly one source', () => {
     // The generated Better Auth contract describes the plugin's INTENDED
     // shapes, and two of them were wrong: both verifiers answer `{token, user}`
     // through one shared `valid()`, while the document published
     // `{status: boolean}` for one and a required `{user, session}` for the
     // other. This makes "nobody has checked" a failing state rather than a
-    // silent default.
-    const unaccounted = BETTER_AUTH_ENDPOINTS.map(
-      (endpoint) => endpoint.path
-    ).filter(
-      (endpointPath) =>
-        !BETTER_AUTH_OVERRIDDEN_RESPONSES.has(endpointPath) &&
-        !BETTER_AUTH_TRUSTED_RESPONSES.has(endpointPath)
+    // silent default, and two sources one too: they would publish one body
+    // and check another.
+    expect(successSourceProblems(BETTER_AUTH_KNOWN_PATHS)).toEqual([]);
+    expect(LIBRARY_VERIFIER_PATHS).toEqual(
+      new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code'])
     );
-    expect(unaccounted).toEqual([]);
+    expect(
+      [...BETTER_AUTH_TRUSTED_RESPONSES].filter(isBetterAuthResponseRoute)
+    ).toEqual([]);
+
+    expect(
+      successSourceProblems(new Set(['/ours', '/twice', '/nowhere']), [
+        ['OURS', new Set(['/ours', '/twice'])],
+        ['THEIRS', new Set(['/twice', '/gone'])],
+      ])
+    ).toEqual([
+      'Better Auth /twice takes its 200 from OURS and THEIRS; it must come from exactly one',
+      "Better Auth /nowhere takes its 200 from no source: give it a BETTER_AUTH_RESPONSES entry, or attest the library's in BETTER_AUTH_TRUSTED_RESPONSES",
+      "THEIRS has '/gone', which is not a Better Auth endpoint",
+    ]);
   });
 
   test('the backup-code endpoints publish the set id that binds them', () => {

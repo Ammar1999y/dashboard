@@ -17,49 +17,54 @@ import {
 import { usedBy, viewablePages } from '@/lib/media/usages';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-export const GET = withApiErrors(mediaMsg.fetchError, async (ctx) => {
-  const { userId, permissions } = await requirePermission(ctx, {
-    resource: 'media',
-    action: 'view',
-  });
+export const GET = withApiErrors(
+  'GET /api/dash/media/files/:id',
+  mediaMsg.fetchError,
+  async (ctx) => {
+    const { userId, permissions } = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'view',
+    });
 
-  await enforceRateLimit({
-    scope: 'media.files.id.get',
-    identifier: userIdentifier(userId),
-    limit: 120,
-  });
+    await enforceRateLimit({
+      scope: 'media.files.id.get',
+      identifier: userIdentifier(userId),
+      limit: 120,
+    });
 
-  const id = requireId(
-    ctx.params.id,
-    mediaMsg.fileNotFound,
-    HTTP_STATUS.NOT_FOUND
-  );
+    const id = requireId(
+      ctx.params.id,
+      mediaMsg.fileNotFound,
+      HTTP_STATUS.NOT_FOUND
+    );
 
-  const row = await findFile(id);
-  // A pending or deleting row is not a file the library has; one a record
-  // still holds is that record's, not the library's.
-  if (!row || row.status !== 'active' || !row.governed)
-    throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
+    const row = await findFile(id);
+    // A pending or deleting row is not a file the library has; one a record
+    // still holds is that record's, not the library's.
+    if (!row || row.status !== 'active' || !row.governed)
+      throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
 
-  const [file, download, usages] = await Promise.all([
-    toMediaFile(row),
-    downloadUrl(row),
-    usedBy([id], viewablePages(permissions)),
-  ]);
-  const summary = usages.get(id) ?? { visible: [], hidden: 0 };
+    const [file, download, usages] = await Promise.all([
+      toMediaFile(row),
+      downloadUrl(row),
+      usedBy([id], viewablePages(permissions)),
+    ]);
+    const summary = usages.get(id) ?? { visible: [], hidden: 0 };
 
-  return apiSuccess({
-    message: mediaMsg.fetched,
-    data: {
-      ...file,
-      downloadUrl: download,
-      usedBy: summary.visible,
-      hiddenUsages: summary.hidden,
-    },
-  });
-});
+    return apiSuccess({
+      message: mediaMsg.fetched,
+      data: {
+        ...file,
+        downloadUrl: download,
+        usedBy: summary.visible,
+        hiddenUsages: summary.hidden,
+      },
+    });
+  }
+);
 
 export const PUT = withApiErrors(
+  'PUT /api/dash/media/files/:id',
   mediaMsg.updateError,
   async (ctx) => {
     const caller = await requirePermission(ctx, {
@@ -94,9 +99,8 @@ export const PUT = withApiErrors(
         ...(input.displayName !== undefined && {
           displayName: updated.displayName,
         }),
-        ...(input.folderId !== undefined && {
-          unfiledAt: updated.unfiledAt,
-        }),
+        // `updateFile` files the row, which clears the stamp.
+        ...(input.folderId !== undefined && { unfiledAt: null }),
         updatedAt: updated.updatedAt,
       },
     });

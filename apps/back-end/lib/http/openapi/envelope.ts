@@ -1,23 +1,6 @@
 import type { JsonSchema } from './json-schema';
 
-import { componentRef, PAGINATION_META_SCHEMA } from './components';
-
-export function successEnvelopeSchema(
-  data: JsonSchema,
-  paginated = false
-): JsonSchema {
-  return {
-    type: 'object',
-    properties: {
-      success: { const: true },
-      message: { type: 'string' },
-      data,
-      ...(paginated && { meta: PAGINATION_META_SCHEMA }),
-    },
-    required: ['success', 'message', 'data', ...(paginated ? ['meta'] : [])],
-    additionalProperties: false,
-  };
-}
+import { componentRef } from './components';
 
 /** A response whose body is this API's error envelope. */
 export function errorResponse(

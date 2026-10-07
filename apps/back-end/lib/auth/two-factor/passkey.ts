@@ -10,7 +10,7 @@ import type { BetterAuthPlugin } from 'better-auth';
 
 import { withTransaction } from '@/db';
 import { VERIFICATION_IDENTIFIER_MAX } from '@/db/limits';
-import { createAuthEndpoint, isAPIError } from 'better-auth/api';
+import { isAPIError } from 'better-auth/api';
 import * as z from 'zod';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -26,7 +26,7 @@ import {
   passkeyOptions,
   verifyUserPasskey,
 } from '../passkey-assertion';
-import { envelopeResponse } from '../plugin-openapi';
+import { pluginEndpoint } from '../plugin-endpoint';
 import {
   expiresIn,
   replaceVerification,
@@ -53,17 +53,9 @@ export const twoFactorPasskey = () =>
   ({
     id: 'two-factor-passkey',
     endpoints: {
-      twoFactorPasskeyOptions: createAuthEndpoint(
+      twoFactorPasskeyOptions: pluginEndpoint(
         '/two-factor/passkey/options',
-        {
-          method: 'POST',
-          metadata: {
-            openapi: envelopeResponse(
-              'WebAuthn authentication options, scoped to the challenge user.',
-              { type: 'object' }
-            ),
-          },
-        },
+        { method: 'POST' },
         async (ctx) => {
           const challenge = await requireTwoFactorChallenge(ctx, {
             method: 'passkey',
@@ -90,17 +82,9 @@ export const twoFactorPasskey = () =>
         }
       ),
 
-      twoFactorPasskeyVerify: createAuthEndpoint(
+      twoFactorPasskeyVerify: pluginEndpoint(
         '/two-factor/passkey/verify',
-        {
-          method: 'POST',
-          body: z.record(z.string(), z.unknown()),
-          metadata: {
-            openapi: envelopeResponse(
-              'The passkey assertion was verified and the sign-in completed.'
-            ),
-          },
-        },
+        { method: 'POST', body: z.record(z.string(), z.unknown()) },
         async (ctx) => {
           const challenge = await requireTwoFactorChallenge(ctx, {
             method: 'passkey',

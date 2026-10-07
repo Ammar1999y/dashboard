@@ -22,7 +22,6 @@ import {
   verifications,
 } from '@/db/schema';
 import { createOTP } from '@better-auth/utils/otp';
-import { createAuthEndpoint } from 'better-auth/api';
 import {
   generateRandomString,
   symmetricDecrypt,
@@ -33,6 +32,7 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { otpMsg } from '@app/shared/messages/otp';
 import { validID } from '@app/shared/utils';
+import { optionId } from '@app/shared/validation/enums';
 import {
   isTwoFactorMethodEnabled,
   ownedRowSchema,
@@ -45,6 +45,7 @@ import { generateUuidV7 } from '@/lib/id';
 
 import { parseAuthBody } from '../context';
 import { authError } from '../errors';
+import { pluginEndpoint } from '../plugin-endpoint';
 import { mintReauthGrant, requireReauthPassword } from '../reauth/grant';
 import { resolveRequestSession } from '../session/request';
 import { revokeTwoFactorState } from '../session/rotation';
@@ -62,7 +63,6 @@ import {
   enrolmentRows,
   listEnrolledMethods,
   matchesEnrolment,
-  optionId,
   readEnrolmentState,
   removalStrandsTwoFactor,
   removeMethodIntent,
@@ -108,13 +108,9 @@ export const twoFactorEnrolment = () =>
     endpoints: {
       // `two_factor_enabled` is deliberately NOT set here: an abandoned setup
       // must leave the account as it was.
-      startTotpEnrolment: createAuthEndpoint(
+      startTotpEnrolment: pluginEndpoint(
         '/two-factor/totp/start',
-        sessionPostOptions('A TOTP secret to enrol.', {
-          type: 'object',
-          properties: { totpURI: { type: 'string' } },
-          required: ['totpURI'],
-        }),
+        sessionPostOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'totp');
           const { userId } = session;
@@ -189,9 +185,9 @@ export const twoFactorEnrolment = () =>
       ),
 
       /** The ONLY writer that turns TOTP on. */
-      confirmTotpEnrolment: createAuthEndpoint(
+      confirmTotpEnrolment: pluginEndpoint(
         '/two-factor/totp/confirm',
-        sessionPostOptions('TOTP is enrolled and enabled.'),
+        sessionPostOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'totp');
 
@@ -292,19 +288,9 @@ export const twoFactorEnrolment = () =>
 
       // The new set id unbinds the old acknowledgement, so `backup_code` is not
       // offered until the new set is acknowledged.
-      generateBackupCodes: createAuthEndpoint(
+      generateBackupCodes: pluginEndpoint(
         '/two-factor/generate-backup-codes',
-        sessionPostOptions(
-          'A fresh set of backup codes. `setId` NAMES this set and must be sent back to /two-factor/backup-codes/acknowledge.',
-          {
-            type: 'object',
-            properties: {
-              backupCodes: { type: 'array', items: { type: 'string' } },
-              setId: { type: 'string', format: 'uuid' },
-            },
-            required: ['backupCodes', 'setId'],
-          }
-        ),
+        sessionPostOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'backup_code');
           const { userId } = session;
@@ -365,11 +351,9 @@ export const twoFactorEnrolment = () =>
         }
       ),
 
-      acknowledgeBackupCodes: createAuthEndpoint(
+      acknowledgeBackupCodes: pluginEndpoint(
         '/two-factor/backup-codes/acknowledge',
-        sessionPostOptions(
-          'The backup codes were acknowledged. `setId` must name the set the caller was shown; a different current set answers 409.'
-        ),
+        sessionPostOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'backup_code');
 
@@ -419,15 +403,9 @@ export const twoFactorEnrolment = () =>
         }
       ),
 
-      listTwoFactorMethods: createAuthEndpoint(
+      listTwoFactorMethods: pluginEndpoint(
         '/two-factor/methods',
-        sessionGetOptions('The caller’s enrolled methods.', {
-          type: 'object',
-          properties: {
-            methods: { type: 'array', items: { type: 'object' } },
-          },
-          required: ['methods'],
-        }),
+        sessionGetOptions(),
         async (ctx) => {
           const userId = validID(ctx.context.session?.user.id);
           if (!userId) throw challengeMissingError();
@@ -444,19 +422,9 @@ export const twoFactorEnrolment = () =>
        * leave 2FA on with nothing. A removal leaving nothing a challenge offers
        * is refused too — see `removalStrandsTwoFactor`.
        */
-      disableTwoFactorMethod: createAuthEndpoint(
+      disableTwoFactorMethod: pluginEndpoint(
         '/two-factor/methods/disable',
-        sessionPostOptions('The method was removed.', {
-          type: 'object',
-          properties: {
-            removedMethod: {
-              type: 'string',
-              description:
-                'The option that is gone, `otp:email` / `otp:phone` / `totp` / `backup_code` / `passkey`.',
-            },
-          },
-          required: ['removedMethod'],
-        }),
+        sessionPostOptions(),
         async (ctx) => {
           const session = await requireSession(ctx);
           const { userId } = session;
@@ -509,9 +477,9 @@ export const twoFactorEnrolment = () =>
       ),
 
       /** The method a challenge routes to first, within what is enrolled. */
-      setDefaultTwoFactorMethod: createAuthEndpoint(
+      setDefaultTwoFactorMethod: pluginEndpoint(
         '/two-factor/methods/default',
-        sessionPostOptions('The default method was set.'),
+        sessionPostOptions(),
         async (ctx) => {
           const session = await requireSession(ctx);
           const { userId } = session;
@@ -554,13 +522,9 @@ export const twoFactorEnrolment = () =>
        * intent, flag and trusted devices behind. The password proof arrives as
        * the enrolment grant, consumed in `path-policy.ts`.
        */
-      deletePasskey: createAuthEndpoint(
+      deletePasskey: pluginEndpoint(
         '/passkey/delete-passkey',
-        sessionPostOptions('The passkey was deleted.', {
-          type: 'object',
-          properties: { deleted: { type: 'boolean' } },
-          required: ['deleted'],
-        }),
+        sessionPostOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'passkey');
           const { userId } = session;
@@ -621,9 +585,9 @@ export const twoFactorEnrolment = () =>
 
       // Replaces the plugin's `/two-factor/disable`, which leaves intent rows,
       // trusted devices and live challenges behind.
-      disableTwoFactor: createAuthEndpoint(
+      disableTwoFactor: pluginEndpoint(
         '/two-factor/disable',
-        sessionPostOptions('Two-factor authentication is off.'),
+        sessionPostOptions(),
         async (ctx) => {
           const session = await requireSession(ctx);
           const { userId } = session;
@@ -649,13 +613,9 @@ export const twoFactorEnrolment = () =>
 
       // The library's ceremony bodies cannot carry a password, so it is proven
       // here and spent by `/passkey/verify-registration` and `/passkey/delete-passkey`.
-      passkeyEnrolmentGrant: createAuthEndpoint(
+      passkeyEnrolmentGrant: pluginEndpoint(
         '/two-factor/passkey/grant',
-        sessionPostOptions('A single-use enrolment grant.', {
-          type: 'object',
-          properties: { grant: { type: 'string' } },
-          required: ['grant'],
-        }),
+        sessionPostOptions(),
         async (ctx) => {
           const { userId } = await requireSession(ctx, 'passkey');
           await requireReauthPassword(ctx, userId);

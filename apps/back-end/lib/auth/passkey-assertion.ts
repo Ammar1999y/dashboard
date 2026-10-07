@@ -1,8 +1,11 @@
 import type { Executor } from '@/db';
+import type { Assert } from '@app/shared/contract';
+import type { passkeyRequestOptionsSchema } from '@app/shared/responses/better-auth';
 import type { EntityID } from '@app/shared/types';
 import type {
   AuthenticationResponseJSON,
   AuthenticatorTransportFuture,
+  PublicKeyCredentialRequestOptionsJSON,
   VerifiedAuthenticationResponse,
 } from '@simplewebauthn/server';
 
@@ -41,6 +44,34 @@ function transports(value: string | null) {
   const parsed = transportListSchema.safeParse(value?.split(','));
   return parsed.success ? parsed.data : undefined;
 }
+
+type Fits<A, B> = [A] extends [B] ? true : false;
+type SameKeys<A, B> = Fits<
+  Exclude<keyof A, keyof B> | Exclude<keyof B, keyof A>,
+  never
+>;
+type PublishedOptions = z.output<typeof passkeyRequestOptionsSchema>;
+type LibraryOptions = PublicKeyCredentialRequestOptionsJSON;
+
+/**
+ * The published options schema mirrors the library's type, so an upgrade that
+ * changes the type fails here: every value the library builds parses, what
+ * parses is the type the browser's ceremony takes (the browser package
+ * declares the same interface), and neither names a key the other lacks.
+ */
+export type PasskeyOptionsMirrorTheLibrary = Assert<
+  [
+    Fits<LibraryOptions, z.input<typeof passkeyRequestOptionsSchema>>,
+    Fits<PublishedOptions, LibraryOptions>,
+    SameKeys<LibraryOptions, PublishedOptions>,
+    SameKeys<
+      NonNullable<LibraryOptions['extensions']>,
+      NonNullable<PublishedOptions['extensions']>
+    >,
+  ] extends [true, true, true, true]
+    ? true
+    : false
+>;
 
 export async function passkeyOptions(
   userId: EntityID,

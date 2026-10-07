@@ -23,6 +23,7 @@ import { commitEmailChange } from '@/lib/users/contact-change';
  * sessions revoked, so there is no verify→commit replay window.
  */
 export const POST = withApiErrors(
+  'POST /api/dash/users/me/change-email/verify',
   MSG_UPDATE_ERROR,
   async (ctx) => {
     const { session, userId } = await requireSession(ctx);

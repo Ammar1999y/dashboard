@@ -1,4 +1,5 @@
-import type { Handler, HandlerInput, HandlerOutput } from './contract';
+import type { HandlerInput, RouteHandler, RouteOutput } from './contract';
+import type { ResponseRoute } from '@app/shared/response-contract';
 
 import { BUSY_TIMEOUT_MS } from '@/lib/sqlite/database';
 
@@ -88,15 +89,16 @@ export function timingFloor(): {
  * `rewriteError` rewrites the error before `handleApiError` sees it, which is how
  * a route collapses account-revealing statuses into one generic refusal.
  */
-export function withTimingFloor(
+export function withTimingFloor<K extends ResponseRoute>(
+  key: K,
   fallbackMessage: string,
   handler: (
     ctx: HandlerInput,
     startFloor: StartTimingFloor
-  ) => Promise<HandlerOutput>,
+  ) => Promise<RouteOutput<K>>,
   rewriteError?: (error: unknown) => unknown
-): Handler {
-  return async (ctx) => {
+): RouteHandler<K> {
+  const floored = async (ctx: HandlerInput): Promise<RouteOutput<K>> => {
     const floor = timingFloor();
     try {
       return await handler(ctx, floor.start);
@@ -109,4 +111,5 @@ export function withTimingFloor(
       await floor.settle();
     }
   };
+  return Object.assign(floored, { routeKey: key });
 }

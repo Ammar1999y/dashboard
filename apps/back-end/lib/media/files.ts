@@ -1,9 +1,12 @@
 import type { Actor } from './actor';
 import type { Executor, Tx } from '@/db';
 import type { File as FileRow } from '@/db/schema';
+import type { ServerValue } from '@/lib/http/contract';
 import type { ObjectHead } from '@/lib/r2/client';
+import type { mediaFileSchema } from '@app/shared/responses/media';
 import type { EntityID } from '@app/shared/types';
 import type { SQL } from 'drizzle-orm';
+import type * as z from 'zod';
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
@@ -226,25 +229,8 @@ export function matchesRow(
   return head.checksumSha256 === checksumSha256Of(row.sha256);
 }
 
-/** The wire shape, shared by every route that returns a file. */
-export interface MediaFile {
-  id: string;
-  kind: FileRow['kind'];
-  displayName: string;
-  mimeType: string;
-  sizeBytes: number;
-  bucketType: FileRow['bucketType'];
-  transition: FileRow['transition'];
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  folderId: string | null;
-  uploadedBy: string | null;
-  unfiledAt: Date | null;
-  url: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
+/** What every route that returns a file sends. */
+export type MediaFile = ServerValue<z.output<typeof mediaFileSchema>>;
 
 /**
  * The type table, not the allowlist: a type disabled after files of it were

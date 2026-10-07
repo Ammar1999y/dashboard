@@ -499,6 +499,26 @@ describe('`own` scope on GET /api/dash/permissions', () => {
     expect(listed.ids).toContain(roleIds.ofOwnActor);
     expect(listed.ids).toContain(roleIds.ofAdmin);
   });
+
+  test('the detail read is scoped the same way: its own role, and not found for the other', async () => {
+    const own = await app.handle(
+      authedRequest(
+        fx().permsOwn,
+        `/api/dash/permissions/${roleIds.ofOwnActor}`
+      )
+    );
+    expect(own.status).toBe(HTTP_STATUS.OK);
+    expect(await own.json()).toMatchObject({
+      success: true,
+      data: { id: roleIds.ofOwnActor },
+    });
+
+    const hidden = await app.handle(
+      authedRequest(fx().permsOwn, `/api/dash/permissions/${roleIds.ofAdmin}`)
+    );
+    expect(hidden.status).toBe(HTTP_STATUS.NOT_FOUND);
+    expect(await hidden.json()).toEqual(NOT_FOUND_BODY);
+  });
 });
 
 /**

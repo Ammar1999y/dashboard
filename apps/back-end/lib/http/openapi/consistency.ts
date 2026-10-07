@@ -2,6 +2,12 @@ import type { RouteManifestEntry } from '../route-manifest';
 import type { JsonSchema } from './json-schema';
 
 import { BETTER_AUTH_BODIES, REQUEST_BODIES } from '@app/shared/contract';
+import {
+  BETTER_AUTH_RESPONSES,
+  isResponseRoute,
+  PAGINATED_ROUTES,
+  RESPONSE_DATA,
+} from '@app/shared/response-contract';
 
 import {
   BETTER_AUTH_ALLOWED_PATH_SET,
@@ -18,10 +24,12 @@ import {
   betterAuthDocumentPath,
   generatedBetterAuthOperation,
   generatedBetterAuthResponse,
+  LIBRARY_VERIFIER_PATHS,
 } from './better-auth';
 import {
   BETTER_AUTH_PATH_STATUSES,
   BETTER_AUTH_SUMMARIES,
+  BETTER_AUTH_TRUSTED_RESPONSES,
 } from './better-auth-tables';
 import { COMPONENT_SCHEMAS } from './components';
 import { isJsonSchema } from './json-schema';
@@ -40,11 +48,10 @@ import {
   ID_NOT_FOUND_ROUTES,
   NOT_FOUND_ROUTES,
   OPERATION_DOCS,
-  PAGINATED_SUCCESS_ROUTES,
   QUERY_VALIDATION_ROUTES,
   SESSION_COOKIE_ROUTES,
 } from './route-tables';
-import { SUCCESS_DATA_SCHEMAS } from './success-schemas';
+import { RESPONSE_COMPONENTS, successContract } from './success-schemas';
 
 /** Every table keyed `METHOD path`, in the order its leftovers are reported. */
 const ROUTE_KEYED_TABLES: readonly (readonly [string, Iterable<string>])[] = [
@@ -61,8 +68,8 @@ const ROUTE_KEYED_TABLES: readonly (readonly [string, Iterable<string>])[] = [
   ['SESSION_COOKIE_ROUTES', SESSION_COOKIE_ROUTES],
   ['OTP_SEND_ROUTES', OTP_SEND_ROUTES],
   ['OPERATION_DOCS', Object.keys(OPERATION_DOCS)],
-  ['SUCCESS_DATA_SCHEMAS', Object.keys(SUCCESS_DATA_SCHEMAS)],
-  ['PAGINATED_SUCCESS_ROUTES', PAGINATED_SUCCESS_ROUTES],
+  ['RESPONSE_DATA', Object.keys(RESPONSE_DATA)],
+  ['PAGINATED_ROUTES', PAGINATED_ROUTES],
 ];
 
 /** Methods in a stable order, so one collision reads the same on every run. */
@@ -81,8 +88,24 @@ export function openApiConsistencyProblems(
     const key = operationKey(entry);
     if (!(key in OPERATION_DOCS))
       problems.push(`${key} has no OPERATION_DOCS entry`);
-    if (entry.response === 'envelope' && !(key in SUCCESS_DATA_SCHEMAS))
-      problems.push(`${key} has no concrete success data schema`);
+    if (entry.response === 'envelope' && !isResponseRoute(key))
+      problems.push(
+        `${key} answers the envelope but has no RESPONSE_DATA entry`
+      );
+    if (entry.response !== 'envelope' && isResponseRoute(key))
+      problems.push(
+        `${key} has a RESPONSE_DATA entry but answers '${entry.response}'`
+      );
+    // The key is what types the handler's answers, so a row wired to another
+    // route's handler would publish one contract and serve another.
+    if (entry.handlerKey !== undefined && entry.handlerKey !== key)
+      problems.push(
+        `${key} is served by the handler keyed '${entry.handlerKey}'`
+      );
+    if (entry.response === 'envelope' && entry.handlerKey === undefined)
+      problems.push(
+        `${key} answers the envelope but its handler is not keyed, so nothing checks what it returns`
+      );
     if (entry.body === 'json' && !(key in REQUEST_BODIES))
       problems.push(
         `${key} declares body: 'json' but has no REQUEST_BODIES entry`
@@ -110,8 +133,12 @@ export function openApiConsistencyProblems(
         `${key} has a BODY_SCHEMA_REFUSALS entry but declares body: '${entry.body}'`
       );
 
-    // `toElysiaHandler` answers these ahead of every handler.
-    if (key in OPERATION_DOCS) {
+    // `toElysiaHandler` answers these ahead of every handler. An envelope row
+    // without its contract has no operation to build; it is reported above.
+    if (
+      key in OPERATION_DOCS &&
+      (entry.response !== 'envelope' || isResponseRoute(key))
+    ) {
       const { responses } = tableOperation(entry).operation;
       const adapterStatuses = [
         ...(isSafeMethod(entry.method) ? [] : ['403']),
@@ -136,6 +163,11 @@ export function openApiConsistencyProblems(
     for (const key of tableKeys)
       if (isLeftover(key))
         problems.push(`${table} has '${key}', which is not a route`);
+
+  for (const keywords of successContract().unusedKeywords)
+    problems.push(
+      `DOCUMENT_KEYWORDS has ${keywords}, which no converted response reaches`
+    );
 
   // Existence is checked against the paths servable under ANY configuration —
   // a method flag can switch most of these off — and the method only where the
@@ -167,7 +199,13 @@ export function openApiConsistencyProblems(
         );
       const operation = generatedBetterAuthOperation(endpoint.path, method);
       if (operation) {
-        for (const status of ['200', '400', '404', '500'])
+        // Only an attested library 200 is read from the generated schema.
+        for (const status of [
+          ...(BETTER_AUTH_TRUSTED_RESPONSES.has(endpoint.path) ? ['200'] : []),
+          '400',
+          '404',
+          '500',
+        ])
           if (!generatedBetterAuthResponse(endpoint.path, method, status))
             problems.push(
               `Better Auth's generated schema has no ${status} response for ${method} ${endpoint.path}`
@@ -185,6 +223,7 @@ export function openApiConsistencyProblems(
         `BETTER_AUTH_SUMMARIES has '${key}', which is not a Better Auth endpoint`
       );
   }
+  problems.push(...successSourceProblems(BETTER_AUTH_KNOWN_PATHS));
 
   // The Better Auth producer ASSIGNS a whole path item after the table routes
   // merge theirs per method, so a shared PATH loses the table's operations
@@ -208,6 +247,48 @@ export function openApiConsistencyProblems(
   return problems;
 }
 
+/** Where a Better Auth path's 200 comes from; exactly one of these names it. */
+export const SUCCESS_SOURCES: readonly (readonly [
+  string,
+  ReadonlySet<string>,
+])[] = [
+  ['BETTER_AUTH_RESPONSES', new Set(Object.keys(BETTER_AUTH_RESPONSES))],
+  ['LIBRARY_VERIFIER_RESPONSES', LIBRARY_VERIFIER_PATHS],
+  ['BETTER_AUTH_TRUSTED_RESPONSES', BETTER_AUTH_TRUSTED_RESPONSES],
+];
+
+/**
+ * Every Better Auth path, under every configuration, takes its 200 from exactly
+ * one source, and no source names a path that does not exist. Two sources would
+ * publish one body and check another.
+ */
+export function successSourceProblems(
+  paths: ReadonlySet<string>,
+  sources = SUCCESS_SOURCES
+): string[] {
+  const problems: string[] = [];
+  for (const path of paths) {
+    const named = sources
+      .filter(([, keys]) => keys.has(path))
+      .map(([name]) => name);
+    if (named.length === 0)
+      problems.push(
+        `Better Auth ${path} takes its 200 from no source: give it a BETTER_AUTH_RESPONSES entry, or attest the library's in BETTER_AUTH_TRUSTED_RESPONSES`
+      );
+    else if (named.length > 1)
+      problems.push(
+        `Better Auth ${path} takes its 200 from ${named.join(' and ')}; it must come from exactly one`
+      );
+  }
+  for (const [name, keys] of sources)
+    for (const key of keys)
+      if (!paths.has(key))
+        problems.push(
+          `${name} has '${key}', which is not a Better Auth endpoint`
+        );
+  return problems;
+}
+
 /**
  * `referencedBetterAuthSchemas` spreads last into `components.schemas`, so a
  * Better Auth schema sharing a project schema's name would replace it under
@@ -218,11 +299,15 @@ export function openApiConsistencyProblems(
 export function schemaCollisionProblems(
   betterAuthSchemas: JsonSchema
 ): string[] {
+  const projectNames = new Set<string>([
+    ...Object.keys(COMPONENT_SCHEMAS),
+    ...RESPONSE_COMPONENTS.map(({ name }) => name),
+  ]);
   return Object.keys(betterAuthSchemas)
-    .filter((name) => name in COMPONENT_SCHEMAS)
+    .filter((name) => projectNames.has(name))
     .map(
       (name) =>
-        `components.schemas '${name}' is defined by COMPONENT_SCHEMAS AND by Better Auth; the merge would keep only the second, under every $ref this document emits`
+        `components.schemas '${name}' is defined by this project AND by Better Auth; the merge would keep only the second, under every $ref this document emits`
     );
 }
 

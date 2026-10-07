@@ -7,7 +7,7 @@ import { and, eq, gt } from 'drizzle-orm';
 import { db } from '@/db';
 import { isDatabaseContention } from '@/db/errors';
 import { verifications } from '@/db/schema';
-import { createAuthEndpoint, isAPIError } from 'better-auth/api';
+import { isAPIError } from 'better-auth/api';
 import { deleteSessionCookie, expireCookie } from 'better-auth/cookies';
 import { generateState, parseState } from 'better-auth/oauth2';
 import { google } from 'better-auth/social-providers';
@@ -19,9 +19,9 @@ import {
   MSG_INTERNAL_ERROR,
   MSG_INVALID_INPUT,
 } from '@app/shared/messages/common';
+import { oauthOutcomeSchema } from '@app/shared/responses/better-auth';
 import {
   googleStartSchema,
-  OAUTH_PROVIDERS,
   OAUTH_STATE_LOST_PAGE,
 } from '@app/shared/validation/oauth';
 import { TWO_FACTOR_ENABLED } from '@app/shared/validation/two-factor';
@@ -41,7 +41,7 @@ import {
   toAuthApiError,
 } from '../errors';
 import { BASE64URL_32_BYTES_PATTERN } from '../keyring';
-import { envelopeResponse } from '../plugin-openapi';
+import { pluginEndpoint } from '../plugin-endpoint';
 import { recordAbandonedSession } from '../session/audit';
 import { authenticationStartedAt } from '../session/authentication-time';
 import { deliverSessionCookie } from '../session/cookie';
@@ -87,13 +87,6 @@ const flowSchema = z.object({
   rememberMe: z.boolean(),
   returnURL: z.string().nullable(),
 });
-
-const outcomeData = {
-  type: 'object',
-  properties: { loggedIn: { const: true } },
-  required: ['loggedIn'],
-  additionalProperties: false,
-};
 
 const googleProvider = GOOGLE_CREDENTIALS
   ? google({
@@ -248,33 +241,37 @@ function returnURL(input: string | undefined) {
   return url.href;
 }
 
-/**
- * Everything `GET /oauth/google/callback` may hand to `GET /oauth/result`.
- *
- * A closed union, and validated on the way OUT rather than trusted: the value
- * round-trips through a `verification` row as JSON, so this is the boundary that
- * decides the endpoint's contract. Each branch is LOOSE so the fields its
- * envelope carries beyond the discriminator — the session body's user, the
- * challenge's options — survive without being restated here, where they would
- * be a second copy of two shapes owned elsewhere.
- */
-const oauthResultSchema = z.union([
-  z.looseObject({ success: z.literal(true) }),
-  z.looseObject({ twoFactorRedirect: z.literal(true) }),
-  z.looseObject({ success: z.literal(false) }),
-]);
+type OAuthOutcome = z.output<typeof oauthOutcomeSchema>;
 
-async function completeResponse(
+/** Kept in place of an outcome when the sign-in was refused; never answered. */
+const refusalSchema = z.object({ success: z.literal(false) });
+
+/**
+ * Everything `GET /oauth/google/callback` may hand to `GET /oauth/result`: the
+ * published outcome, or the refusal marker, which the result answers with the
+ * same 401 as the direct callback. Parsed when it is written as well as when
+ * it is read: a body the reader would refuse is refused before it is kept, while
+ * the callback can still answer for it, and not after both rows are consumed.
+ */
+const keptResultSchema = z.union([oauthOutcomeSchema, refusalSchema]);
+
+type KeptResult = z.output<typeof keptResultSchema>;
+
+const isRefusal = (kept: KeptResult): kept is z.output<typeof refusalSchema> =>
+  'success' in kept && !kept.success;
+
+/** Keeps `result` for `GET /oauth/result` and sends the browser on to `destination`. */
+async function keepForResult(
   ctx: AuthContext,
-  body: object,
-  destination: string | null,
+  result: KeptResult,
+  destination: string,
   userId: string
 ) {
-  if (!destination) return ctx.json(body);
+  const value = JSON.stringify(keptResultSchema.parse(result));
   const token = randomToken(32);
   await ctx.context.internalAdapter.createVerificationValue({
     identifier: oauthResultKey(token),
-    value: JSON.stringify(body),
+    value,
     expiresAt: expiresIn(OAUTH_RESULT_MAX_AGE_S),
   });
   await ctx.context.internalAdapter.createVerificationValue({
@@ -295,28 +292,24 @@ async function completeResponse(
   return ctx.redirect(destination);
 }
 
+/** The outcome as the direct callback answers it, or kept behind a redirect. */
+async function completeResponse(
+  ctx: AuthContext,
+  outcome: OAuthOutcome,
+  destination: string | null,
+  userId: string
+) {
+  if (!destination) return ctx.json(outcome);
+  return keepForResult(ctx, outcome, destination, userId);
+}
+
 export const oauth = () =>
   ({
     id: 'existing-user-oauth',
     endpoints: {
-      authCapabilities: createAuthEndpoint(
+      authCapabilities: pluginEndpoint(
         '/capabilities',
-        {
-          method: 'GET',
-          metadata: {
-            openapi: envelopeResponse('Enabled OAuth sign-in providers.', {
-              type: 'object',
-              properties: {
-                oauthProviders: {
-                  type: 'array',
-                  items: { type: 'string', enum: [...OAUTH_PROVIDERS] },
-                },
-              },
-              required: ['oauthProviders'],
-              additionalProperties: false,
-            }),
-          },
-        },
+        { method: 'GET' },
         (ctx) =>
           ctx.json({
             success: true,
@@ -324,22 +317,9 @@ export const oauth = () =>
           })
       ),
       ...(GOOGLE_ENABLED && {
-        googleStart: createAuthEndpoint(
+        googleStart: pluginEndpoint(
           '/oauth/google/start',
-          {
-            method: 'POST',
-            body: googleStartSchema,
-            metadata: {
-              openapi: envelopeResponse(
-                'Navigate to the returned Google authorization URL.',
-                {
-                  type: 'object',
-                  properties: { url: { type: 'string', format: 'uri' } },
-                  required: ['url'],
-                }
-              ),
-            },
-          },
+          { method: 'POST', body: googleStartSchema },
           async (ctx) => {
             if (!googleProvider) throw authenticationDenied();
             if (!(await verifyTurnstileRequest(requestHeaders(ctx))))
@@ -384,7 +364,7 @@ export const oauth = () =>
             });
           }
         ),
-        googleCallback: createAuthEndpoint(
+        googleCallback: pluginEndpoint(
           '/oauth/google/callback',
           {
             method: 'GET',
@@ -396,12 +376,6 @@ export const oauth = () =>
               error: z.string().max(256).optional(),
               iss: z.string().max(255).optional(),
             }),
-            metadata: {
-              openapi: envelopeResponse(
-                'Google sign-in result or local two-factor challenge. A supplied callbackURL receives a redirect; retrieve the result once at /oauth/result.',
-                outcomeData
-              ),
-            },
           },
           async (ctx) => {
             let destination: string | null = null;
@@ -629,29 +603,16 @@ export const oauth = () =>
                 ...(stateCode && { stateCode }),
               });
               if (destination)
-                return completeResponse(
-                  ctx,
-                  { success: false },
-                  destination,
-                  '-'
-                );
+                return keepForResult(ctx, { success: false }, destination, '-');
               if (stateLost)
                 return ctx.redirect(`${PUBLIC_ORIGIN}${OAUTH_STATE_LOST_PAGE}`);
               throw authenticationDenied();
             }
           }
         ),
-        oauthResult: createAuthEndpoint(
+        oauthResult: pluginEndpoint(
           '/oauth/result',
-          {
-            method: 'GET',
-            metadata: {
-              openapi: envelopeResponse(
-                'Consume the Google redirect result once.',
-                outcomeData
-              ),
-            },
-          },
+          { method: 'GET' },
           async (ctx) => {
             const cookie = ctx.context.createAuthCookie('oauth_result');
             const token = await ctx.getSignedCookie(
@@ -678,17 +639,15 @@ export const oauth = () =>
             );
             expireCookie(ctx, cookie);
             if (!owner || !result) throw authenticationDenied();
-            const parsed = oauthResultSchema.safeParse(
-              JSON.parse(result.value)
-            );
-            // Both records are consumed, so a rejection is unrecoverable: every
-            // envelope the callback stores has to be a branch of the union.
+            const parsed = keptResultSchema.safeParse(JSON.parse(result.value));
+            // Both records are consumed, so a rejection is unrecoverable; the
+            // callback parses what it keeps for this reason.
             if (!parsed.success) {
               logSanitized('error', { msg: 'oauth.result.unrecognised' });
               throw authenticationDenied();
             }
             // The same denial the direct callback answers, so both modes share one failure envelope.
-            if (parsed.data.success === false) throw authenticationDenied();
+            if (isRefusal(parsed.data)) throw authenticationDenied();
             return ctx.json(parsed.data);
           }
         ),

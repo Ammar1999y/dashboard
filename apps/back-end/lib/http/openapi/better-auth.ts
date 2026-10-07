@@ -9,8 +9,8 @@ import type * as z from 'zod';
 import { roleScope } from '@/db/schema';
 
 import { BETTER_AUTH_BODIES } from '@app/shared/contract';
+import { isBetterAuthResponseRoute } from '@app/shared/response-contract';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
-import { TWO_FACTOR_METHODS } from '@app/shared/validation/enums';
 import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
 import { passkeyGrantSchema } from '@app/shared/validation/two-factor';
 
@@ -25,16 +25,16 @@ import {
   BETTER_AUTH_LOCAL_THROTTLE_PATHS,
   BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
   BETTER_AUTH_PATH_STATUSES,
+  BETTER_AUTH_RESPONSE_DESCRIPTIONS,
   BETTER_AUTH_SPENT_INPUT_REMEDIES,
   BETTER_AUTH_STATUS_DESCRIPTIONS,
   BETTER_AUTH_SUMMARIES,
+  CHALLENGE_INSTEAD,
   TWO_FACTOR_CHALLENGE_PATHS,
 } from './better-auth-tables';
 import {
   CAPTCHA_HEADER_PARAMETER,
-  NULLABLE_CONTACT_KIND_SCHEMA,
-  NULLABLE_DEFAULT_METHOD_SCHEMA,
-  NULLABLE_OTP_CHANNEL_SCHEMA,
+  componentRef,
   NULLABLE_STRING_SCHEMA,
   USER_PERMISSION_MATRIX_SCHEMA,
   UUID_SCHEMA,
@@ -43,6 +43,7 @@ import { bodyTooLargeResponse, PRE_AUTH_RESPONSES } from './envelope';
 import { isJsonSchema, normalizeOpenApi31, toJsonSchema } from './json-schema';
 import { requestBody } from './request-bodies';
 import { operationSlug, REAUTH_REQUIRED_REMEDY } from './route-operations';
+import { betterAuthSuccessSchema } from './success-schemas';
 
 const BETTER_AUTH_OPENAPI = await auth.api.generateOpenAPISchema();
 const BETTER_AUTH_CONTEXT = await auth.$context;
@@ -185,66 +186,6 @@ function withAlternativeJsonBody(
   };
 }
 
-const TWO_FACTOR_OPTION_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    id: {
-      type: 'string',
-      description:
-        'Stable option identity: `totp`, `backup_code`, `passkey`, `otp:email` or `otp:phone`.',
-    },
-    method: {
-      type: 'string',
-      enum: [...TWO_FACTOR_METHODS],
-    },
-    contactKind: NULLABLE_CONTACT_KIND_SCHEMA,
-    channel: NULLABLE_OTP_CHANNEL_SCHEMA,
-    nextAllowedIn: {
-      type: 'integer',
-      minimum: 0,
-      description:
-        '`otp` options only: seconds before a code may be sent to this contact. `0` means a send is allowed now.',
-    },
-  },
-  required: ['id', 'method', 'contactKind', 'channel'],
-};
-
-/**
- * The second 200 both first-factor endpoints can answer. Not in Better Auth's
- * generated contract: the plugin's challenge hook is replaced
- * (`twoFactorSignInGuard`) and `/passwordless/verify` is this project's
- * endpoint. Without it a generated client reads the challenge as a session.
- */
-const TWO_FACTOR_CHALLENGE_SCHEMA: JsonSchema = {
-  type: 'object',
-  description:
-    'The first factor succeeded and the login is NOT complete: no session cookie is set, and one of the options below has to be verified next.',
-  properties: {
-    twoFactorRedirect: { const: true },
-    twoFactorMethods: {
-      type: 'array',
-      items: {
-        type: 'string',
-        enum: [...TWO_FACTOR_METHODS],
-      },
-      description:
-        'Distinct method names. Two OTP channels collapse into one entry here, so it cannot drive a choice — use `twoFactorOptions`.',
-    },
-    twoFactorOptions: { type: 'array', items: TWO_FACTOR_OPTION_SCHEMA },
-    defaultMethod: {
-      ...NULLABLE_DEFAULT_METHOD_SCHEMA,
-      description:
-        '`null` means ask: only recovery material is left, and a backup code is never auto-routed to.',
-    },
-  },
-  required: [
-    'twoFactorRedirect',
-    'twoFactorMethods',
-    'twoFactorOptions',
-    'defaultMethod',
-  ],
-};
-
 const VERIFIER_SESSION_SCHEMA: JsonSchema = {
   type: 'object',
   description:
@@ -257,16 +198,15 @@ const VERIFIER_SESSION_SCHEMA: JsonSchema = {
 };
 
 /**
- * A path's 200 where the library's generated document is wrong about it. Both
- * verifiers answer through the shared `valid()` in
- * `better-auth/plugins/two-factor/verify-two-factor.mjs`, which returns
- * `{ token, user }`, not the shapes the plugin's metadata declares.
- *
- * ⚠️ Every served success response must be overridden here or listed in
- * `BETTER_AUTH_TRUSTED_RESPONSES`; `tests/unit/openapi-contract.test.ts`
- * refuses a path in neither.
+ * The 200 of the two verifiers that pass the library's body through, where the
+ * library's generated document is wrong about it. Both answer through the
+ * shared `valid()` in `better-auth/plugins/two-factor/verify-two-factor.mjs`,
+ * which returns `{ token, user }`, not the shapes the plugin's metadata
+ * declares. Every other served path takes its 200 from the shared
+ * `BETTER_AUTH_RESPONSES` or is attested in `BETTER_AUTH_TRUSTED_RESPONSES`;
+ * `consistency.ts` refuses a path in none of the three, or in two.
  */
-const BETTER_AUTH_RESPONSES: Record<string, JsonSchema> = {
+const LIBRARY_VERIFIER_RESPONSES: Record<string, JsonSchema> = {
   '/two-factor/verify-totp': {
     description:
       'The authenticator code was accepted and the sign-in is complete.',
@@ -279,9 +219,21 @@ const BETTER_AUTH_RESPONSES: Record<string, JsonSchema> = {
   },
 };
 
-export const BETTER_AUTH_OVERRIDDEN_RESPONSES: ReadonlySet<string> = new Set(
-  Object.keys(BETTER_AUTH_RESPONSES)
+export const LIBRARY_VERIFIER_PATHS: ReadonlySet<string> = new Set(
+  Object.keys(LIBRARY_VERIFIER_RESPONSES)
 );
+
+/** A path's 200 when this project, not the library's generated document, decides it. */
+function decidedSuccessResponse(path: string): JsonSchema | undefined {
+  if (isBetterAuthResponseRoute(path))
+    return {
+      description: BETTER_AUTH_RESPONSE_DESCRIPTIONS[path],
+      content: {
+        'application/json': { schema: betterAuthSuccessSchema(path) },
+      },
+    };
+  return LIBRARY_VERIFIER_RESPONSES[path];
+}
 
 function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
   const statuses = [
@@ -333,13 +285,12 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
 
   for (const status of statuses) {
     const generated =
-      status === '200' && path in BETTER_AUTH_RESPONSES
-        ? BETTER_AUTH_RESPONSES[path]
-        : generatedBetterAuthResponse(
-            path,
-            method,
-            status === '422' ? '400' : status
-          );
+      (status === '200' ? decidedSuccessResponse(path) : undefined) ??
+      generatedBetterAuthResponse(
+        path,
+        method,
+        status === '422' ? '400' : status
+      );
     responses[status] = {
       ...generated,
       ...(isDescribedStatus(status) && {
@@ -361,23 +312,18 @@ function betterAuthResponses(path: string, method: HttpMethod): JsonSchema {
       bodyPolicyCeiling(BETTER_AUTH_ROUTE_PREFIX.body)
     );
 
-  if (
-    path === '/oauth/google/callback' ||
-    path === '/oauth/result' ||
-    (method === 'POST' && TWO_FACTOR_CHALLENGE_PATHS.has(path))
-  )
-    // The two shapes share no required key, so a client tells them apart on
-    // `twoFactorRedirect` alone.
+  // The library's own body is the other branch, so the challenge is appended
+  // rather than published with it as one union. The two share no required key:
+  // a client tells them apart on `twoFactorRedirect` alone.
+  if (method === 'POST' && TWO_FACTOR_CHALLENGE_PATHS.has(path)) {
+    const challenge = componentRef('TwoFactorChallenge');
     responses['200'] = withAlternativeJsonBody(
       responses['200'],
-      TWO_FACTOR_CHALLENGE_SCHEMA,
-      'A two-factor account is answered with the challenge branch instead, and no session cookie.',
-      {
-        content: {
-          'application/json': { schema: TWO_FACTOR_CHALLENGE_SCHEMA },
-        },
-      }
+      challenge,
+      CHALLENGE_INSTEAD,
+      { content: { 'application/json': { schema: challenge } } }
     );
+  }
 
   if (path === '/oauth/google/callback')
     responses['302'] = {

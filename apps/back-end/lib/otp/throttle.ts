@@ -9,11 +9,9 @@ import { verificationSessions } from '@/db/schema';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { otpMsg } from '@app/shared/messages/otp';
+import { OTP_BASE_RESEND_DELAY_S } from '@app/shared/validation/constants';
 
 import { OTP_BLOCK_DURATION_HOURS } from './limits';
-
-/** The first rung, and the whole ladder on the anonymous surfaces. */
-export const OTP_BASE_RESEND_DELAY_S = 30;
 
 /**
  * Anonymous sends answer one body for real and invented identifiers, so they can

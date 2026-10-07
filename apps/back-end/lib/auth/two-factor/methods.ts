@@ -16,7 +16,11 @@ import {
   users,
 } from '@/db/schema';
 
-import { CONTACT_KINDS, contactKindOf } from '@app/shared/validation/enums';
+import {
+  CONTACT_KINDS,
+  contactKindOf,
+  optionId,
+} from '@app/shared/validation/enums';
 import {
   ENABLED_TWO_FACTOR_METHODS,
   isTwoFactorOtpChannelEnabled,
@@ -46,21 +50,13 @@ export interface EnrolmentState {
   };
 }
 
-// Everything downstream keys on `id`: a method name cannot tell an OTP to the
-// email from one to the phone, which are different possessions.
+/** `id` is `optionId`'s, which everything downstream keys on. */
 export interface OfferedOption {
   id: string;
   method: TwoFactorMethod;
   contactKind: ContactKind | null;
   /** Delivery preference for an `otp` option; never part of its identity. */
   channel: OtpChannel | null;
-}
-
-export function optionId(
-  method: TwoFactorMethod,
-  contactKind: ContactKind | null
-): string {
-  return method === 'otp' ? `otp:${contactKind ?? 'unknown'}` : method;
 }
 
 export function asContactKind(value: unknown): ContactKind | null {

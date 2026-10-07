@@ -25,7 +25,7 @@ import {
 // `.strict()`, so a misspelled `dleete` is a 422 rather than a grant silently
 // never written. Real but unavailable actions are handled by value in
 // `normalizeActionsForPage`.
-const permissionSchema = z
+export const permissionSchema = z
   .object(
     PERMISSION_ACTION_NAMES.reduce(
       (acc, action) => {

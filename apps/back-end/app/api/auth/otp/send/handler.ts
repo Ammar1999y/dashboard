@@ -73,6 +73,7 @@ function autoVerifyContact(
 }
 
 export const POST = withTimingFloor(
+  'POST /api/auth/otp/send',
   otpMsg.sendError,
   async (ctx, startFloor) => {
     requireFeature(OTP_ENABLED);

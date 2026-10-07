@@ -34,32 +34,36 @@ function requireUploadResource(query: URLSearchParams): DashboardPage {
   return resource;
 }
 
-export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
-  await requireSession(ctx);
+export const POST = withApiErrors(
+  'POST /api/upload/file',
+  mediaMsg.uploadFailed,
+  async (ctx) => {
+    await requireSession(ctx);
 
-  const resource = requireUploadResource(ctx.query);
-  const caller = await requireAnyPermission(ctx, {
-    resource,
-    actions: UPLOAD_ACTIONS,
-  });
+    const resource = requireUploadResource(ctx.query);
+    const caller = await requireAnyPermission(ctx, {
+      resource,
+      actions: UPLOAD_ACTIONS,
+    });
 
-  // After the permission check, like `resource`: an unauthorised caller must
-  // not learn which purposes exist.
-  const purpose = resolveUploadPurpose(resource, ctx.query.get('purpose'));
-  if (!purpose)
-    throw new CustomError(mediaMsg.invalidPurpose, HTTP_STATUS.BAD_REQUEST);
+    // After the permission check, like `resource`: an unauthorised caller must
+    // not learn which purposes exist.
+    const purpose = resolveUploadPurpose(resource, ctx.query.get('purpose'));
+    if (!purpose)
+      throw new CustomError(mediaMsg.invalidPurpose, HTTP_STATUS.BAD_REQUEST);
 
-  const row = await acceptUpload(ctx, requestActor(ctx, caller), {
-    field: 'files',
-    visibility: purpose.visibility,
-    kinds: purpose.kinds,
-    folderId: null,
-    activate: false,
-  });
+    const row = await acceptUpload(ctx, requestActor(ctx, caller), {
+      field: 'files',
+      visibility: purpose.visibility,
+      kinds: purpose.kinds,
+      folderId: null,
+      activate: false,
+    });
 
-  return apiSuccess({
-    message: mediaMsg.uploaded,
-    data: [await toMediaFile(row)],
-    status: HTTP_STATUS.CREATED,
-  });
-});
+    return apiSuccess({
+      message: mediaMsg.uploaded,
+      data: [await toMediaFile(row)],
+      status: HTTP_STATUS.CREATED,
+    });
+  }
+);

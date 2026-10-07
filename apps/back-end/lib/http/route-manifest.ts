@@ -9,6 +9,7 @@
 import type { BodyPolicy, Handler } from './contract';
 
 import { bodyPolicyCeiling } from './request';
+import { responseCheckMode, withResponseCheck } from './response-check';
 
 /**
  * Methods this application registers. Not `string`: the 405 boundary
@@ -105,11 +106,14 @@ export interface RouteDefinition {
   checksPassword: boolean;
 }
 
-/** The policy half of a route — what the document is built from. */
+/**
+ * The policy half of a route — what the document is built from — and the key
+ * its handler was wrapped with, which the build holds to `method` and `path`.
+ */
 export type RouteManifestEntry = Omit<
   RouteDefinition,
   'handler' | 'timeoutSeconds' | 'enabled'
->;
+> & { handlerKey?: Handler['routeKey'] };
 
 /** One sub-path of a prefix, with the methods that path actually answers. */
 export interface RoutePrefixPath {
@@ -171,12 +175,10 @@ export function toManifest(
   routes: readonly RouteDefinition[]
 ): RouteManifestEntry[] {
   return routes.map(
-    ({
-      handler: _handler,
-      timeoutSeconds: _timeout,
-      enabled: _enabled,
-      ...entry
-    }) => entry
+    ({ handler, timeoutSeconds: _timeout, enabled: _enabled, ...entry }) =>
+      handler.routeKey === undefined
+        ? entry
+        : { ...entry, handlerKey: handler.routeKey }
   );
 }
 
@@ -197,19 +199,27 @@ export function isDevelopmentOnlyPath(path: string): boolean {
 
 /**
  * The routes THIS PROCESS serves: what `app.ts` registers and answers 404/405
- * and OPTIONS from. `ROUTES` stays the complete table, because
+ * and OPTIONS from, each handler held to its response contract outside
+ * production (`withResponseCheck`). `ROUTES` stays the complete table, because
  * `scripts/build-openapi.ts` builds the deployed document from it and
  * `scripts/find-unused-files.ts` reads it statically.
  */
 export function toRegisteredRoutes(
   routes: readonly RouteDefinition[],
-  development = process.env.NODE_ENV === 'development'
+  development = process.env.NODE_ENV === 'development',
+  check = responseCheckMode()
 ): readonly RouteDefinition[] {
-  return routes.filter(
-    (route) =>
-      route.enabled !== false &&
-      (development || !isDevelopmentOnlyPath(route.path))
-  );
+  return routes
+    .filter(
+      (route) =>
+        route.enabled !== false &&
+        (development || !isDevelopmentOnlyPath(route.path))
+    )
+    .map((route) =>
+      check === null
+        ? route
+        : { ...route, handler: withResponseCheck(route.handler, check) }
+    );
 }
 
 /**

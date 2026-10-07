@@ -26,71 +26,79 @@ function requireRecursive(query: URLSearchParams): boolean {
   return true;
 }
 
-export const PUT = withApiErrors(mediaMsg.updateError, async (ctx) => {
-  const caller = await requirePermission(ctx, {
-    resource: 'media',
-    action: 'edit',
-  });
+export const PUT = withApiErrors(
+  'PUT /api/dash/media/folders/:id',
+  mediaMsg.updateError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'edit',
+    });
 
-  await enforceRateLimit({
-    scope: 'media.folders.id.put',
-    identifier: userIdentifier(caller.userId),
-    limit: 30,
-    failClosed: true,
-  });
+    await enforceRateLimit({
+      scope: 'media.folders.id.put',
+      identifier: userIdentifier(caller.userId),
+      limit: 30,
+      failClosed: true,
+    });
 
-  const folderId = requireId(
-    ctx.params.id,
-    mediaMsg.folderNotFound,
-    HTTP_STATUS.NOT_FOUND
-  );
+    const folderId = requireId(
+      ctx.params.id,
+      mediaMsg.folderNotFound,
+      HTTP_STATUS.NOT_FOUND
+    );
 
-  const input = await readJsonBody(ctx, updateFolderSchema);
+    const input = await readJsonBody(ctx, updateFolderSchema);
 
-  const folder = await updateFolder({
-    folderId,
-    name: input.name,
-    parentId: input.parentId,
-    actor: grantedActor(ctx, caller),
-  });
+    const folder = await updateFolder({
+      folderId,
+      name: input.name,
+      parentId: input.parentId,
+      actor: grantedActor(ctx, caller),
+    });
 
-  return apiSuccess({
-    message: mediaMsg.updated,
-    data: {
-      ...(input.name !== undefined && { name: folder.name }),
-      updatedAt: folder.updatedAt,
-    },
-  });
-});
+    return apiSuccess({
+      message: mediaMsg.updated,
+      data: {
+        ...(input.name !== undefined && { name: folder.name }),
+        updatedAt: folder.updatedAt,
+      },
+    });
+  }
+);
 
-export const DELETE = withApiErrors(mediaMsg.deleteError, async (ctx) => {
-  const caller = await requirePermission(ctx, {
-    resource: 'media',
-    action: 'delete',
-  });
+export const DELETE = withApiErrors(
+  'DELETE /api/dash/media/folders/:id',
+  mediaMsg.deleteError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'delete',
+    });
 
-  await enforceRateLimit({
-    scope: 'media.folders.id.delete',
-    identifier: userIdentifier(caller.userId),
-    limit: 30,
-    failClosed: true,
-  });
+    await enforceRateLimit({
+      scope: 'media.folders.id.delete',
+      identifier: userIdentifier(caller.userId),
+      limit: 30,
+      failClosed: true,
+    });
 
-  const folderId = requireId(
-    ctx.params.id,
-    mediaMsg.folderNotFound,
-    HTTP_STATUS.NOT_FOUND
-  );
-  const recursive = requireRecursive(ctx.query);
+    const folderId = requireId(
+      ctx.params.id,
+      mediaMsg.folderNotFound,
+      HTTP_STATUS.NOT_FOUND
+    );
+    const recursive = requireRecursive(ctx.query);
 
-  const actor = grantedActor(ctx, caller);
-  const outcome = recursive
-    ? await deleteFolderTree({
-        folderId,
-        actor,
-        viewable: viewablePages(caller.permissions),
-      })
-    : await deleteFolder({ folderId, actor });
+    const actor = grantedActor(ctx, caller);
+    const outcome = recursive
+      ? await deleteFolderTree({
+          folderId,
+          actor,
+          viewable: viewablePages(caller.permissions),
+        })
+      : await deleteFolder({ folderId, actor });
 
-  return apiSuccess({ message: mediaMsg.deleted, data: outcome });
-});
+    return apiSuccess({ message: mediaMsg.deleted, data: outcome });
+  }
+);

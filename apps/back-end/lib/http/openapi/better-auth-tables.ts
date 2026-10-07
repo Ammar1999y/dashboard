@@ -2,6 +2,8 @@
  * The Better Auth corrections that are data alone, keyed by the path under the
  * prefix; `better-auth.ts` applies them to the library's generated document.
  */
+import type { BetterAuthResponseRoute } from '@app/shared/response-contract';
+
 export const BETTER_AUTH_SUMMARIES: Record<string, string> = {
   'GET /capabilities': 'Read enabled OAuth sign-in providers',
   'GET /reauth/methods': 'Read usable reauthentication methods',
@@ -176,48 +178,70 @@ export const BETTER_AUTH_PASSWORD_LOCKOUT_PATHS = new Set([
   '/two-factor/otp/send',
 ]);
 
-/** The paths whose 200 is a union of "signed in" and "challenged". */
-export const TWO_FACTOR_CHALLENGE_PATHS: ReadonlySet<string> = new Set([
-  '/sign-in/email',
-  '/passwordless/verify',
-]);
+/** Our plugin endpoints that answer a redirect in place of a body in one mode. */
+export const REDIRECTING_PLUGIN_PATHS = [
+  '/oauth/google/callback',
+] as const satisfies readonly BetterAuthResponseRoute[];
 
 /**
- * Paths whose generated 200 was read and found to match what is served. An
- * explicit attestation, so "unchecked" and "checked and correct" differ.
+ * The library's own paths whose 200 this project's hook can replace with the
+ * two-factor challenge (`twoFactorSignInGuard`). Our own endpoints publish the
+ * challenge inside their `BETTER_AUTH_RESPONSES` union instead.
+ */
+export const TWO_FACTOR_CHALLENGE_PATHS: ReadonlySet<string> = new Set([
+  '/sign-in/email',
+]);
+
+export const CHALLENGE_INSTEAD =
+  'A two-factor account is answered with the challenge branch instead, and no session cookie.';
+
+/** The description of each plugin endpoint's 200, whose body the shared registry gives. */
+export const BETTER_AUTH_RESPONSE_DESCRIPTIONS = {
+  '/capabilities': 'Enabled OAuth sign-in providers.',
+  '/reauth/methods': 'Methods available for this authenticated account.',
+  '/reauth/passkey/options':
+    'User-verifying WebAuthn options bound to this session.',
+  '/reauth/passkey/verify': 'Reauthentication granted.',
+  '/oauth/google/start': 'Navigate to the returned Google authorization URL.',
+  '/oauth/google/callback': `Google sign-in result or local two-factor challenge. A supplied callbackURL receives a redirect; retrieve the result once at /oauth/result. ${CHALLENGE_INSTEAD}`,
+  '/oauth/result': `Consume the Google redirect result once. ${CHALLENGE_INSTEAD}`,
+  '/passwordless/verify': `Passwordless sign-in succeeded. ${CHALLENGE_INSTEAD}`,
+  '/two-factor/totp/start': 'A TOTP secret to enrol.',
+  '/two-factor/totp/confirm': 'TOTP is enrolled and enabled.',
+  '/two-factor/generate-backup-codes':
+    'A fresh set of backup codes. `setId` NAMES this set and must be sent back to /two-factor/backup-codes/acknowledge.',
+  '/two-factor/backup-codes/acknowledge':
+    'The backup codes were acknowledged. `setId` must name the set the caller was shown; a different current set answers 409.',
+  '/two-factor/methods': 'The caller’s enrolled methods.',
+  '/two-factor/methods/disable': 'The method was removed.',
+  '/two-factor/methods/default': 'The default method was set.',
+  '/two-factor/disable': 'Two-factor authentication is off.',
+  '/two-factor/passkey/grant': 'A single-use enrolment grant.',
+  '/two-factor/otp/send': 'A second-factor code was sent.',
+  '/two-factor/otp/verify':
+    'The second factor was verified: a sign-in completed, or the OTP method was enrolled.',
+  '/two-factor/passkey/options':
+    'WebAuthn authentication options, scoped to the challenge user.',
+  '/two-factor/passkey/verify':
+    'The passkey assertion was verified and the sign-in completed.',
+  '/two-factor/trust-device': 'This device is now trusted.',
+  '/two-factor/trusted-devices': 'The caller’s trusted devices.',
+  '/two-factor/trusted-devices/revoke': 'The device was revoked.',
+  '/passkey/delete-passkey': 'The passkey was deleted.',
+} as const satisfies Record<BetterAuthResponseRoute, string>;
+
+/**
+ * The library's own paths whose generated 200 was read and found to match what
+ * is served. An explicit attestation, so "unchecked" and "checked and correct"
+ * differ.
  */
 export const BETTER_AUTH_TRUSTED_RESPONSES: ReadonlySet<string> = new Set([
-  '/capabilities',
-  '/reauth/methods',
-  '/reauth/passkey/options',
-  '/reauth/passkey/verify',
   '/get-session',
   '/sign-out',
   '/sign-in/email',
-  '/passwordless/verify',
-  '/oauth/google/start',
-  '/oauth/google/callback',
-  '/oauth/result',
-  '/two-factor/disable',
   '/two-factor/get-totp-uri',
-  '/two-factor/totp/start',
-  '/two-factor/totp/confirm',
-  '/two-factor/trust-device',
-  '/two-factor/trusted-devices',
-  '/two-factor/trusted-devices/revoke',
-  '/two-factor/methods',
-  '/two-factor/methods/disable',
-  '/two-factor/methods/default',
-  '/two-factor/backup-codes/acknowledge',
-  '/two-factor/generate-backup-codes',
-  '/two-factor/otp/send',
-  '/two-factor/otp/verify',
-  '/two-factor/passkey/grant',
-  '/two-factor/passkey/options',
-  '/two-factor/passkey/verify',
   '/passkey/generate-register-options',
   '/passkey/verify-registration',
   '/passkey/list-user-passkeys',
-  '/passkey/delete-passkey',
   '/passkey/update-passkey',
 ]);

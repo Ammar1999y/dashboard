@@ -246,10 +246,29 @@ export async function assertOwnedStandardRole(
   assertReaches(role, scope, actorUserId);
 }
 
+interface RoleRow {
+  id: EntityID;
+  roleName: string;
+  scope: string;
+}
+
+interface PublicRoleFields {
+  roleId: EntityID | typeof CUSTOM_ROLE_VALUE;
+  role: { id: EntityID; roleName: string };
+}
+
 /** A user's role as the API publishes it: a custom role's id is masked. */
 export function publicRoleFields(
+  roleId: EntityID,
+  role: RoleRow
+): PublicRoleFields;
+export function publicRoleFields(
   roleId: EntityID | null,
-  role: { id: EntityID; roleName: string; scope: string } | null | undefined
+  role: RoleRow | null | undefined
+): { [K in keyof PublicRoleFields]: PublicRoleFields[K] | null };
+export function publicRoleFields(
+  roleId: EntityID | null,
+  role: RoleRow | null | undefined
 ) {
   return {
     roleId: role?.scope === CUSTOM_ROLE_VALUE ? CUSTOM_ROLE_VALUE : roleId,

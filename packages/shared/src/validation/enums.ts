@@ -73,3 +73,22 @@ export type ContactKind = (typeof CONTACT_KINDS)[number];
 /** The contact a code over `channel` proves possession of. */
 export const contactKindOf = (channel: OtpChannel): ContactKind =>
   isPhoneChannel(channel) ? 'phone' : 'email';
+
+/**
+ * A second factor's identity, which everything downstream keys on: a method
+ * name cannot tell an OTP to the email from one to the phone, which are
+ * different possessions.
+ */
+export function optionId(
+  method: TwoFactorMethod,
+  contactKind: ContactKind | null
+): string {
+  return method === 'otp' ? `otp:${contactKind ?? 'unknown'}` : method;
+}
+
+/** Every id `optionId` gives a factor that can be offered. */
+export const TWO_FACTOR_OPTION_IDS = TWO_FACTOR_METHODS.flatMap((method) =>
+  method === 'otp'
+    ? CONTACT_KINDS.map((kind) => optionId(method, kind))
+    : [optionId(method, null)]
+);

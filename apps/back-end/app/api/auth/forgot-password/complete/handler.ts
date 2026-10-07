@@ -42,6 +42,7 @@ import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
  * write's transaction.
  */
 export const POST = withTimingFloor(
+  'POST /api/auth/forgot-password/complete',
   otpMsg.passwordResetError,
   async (ctx, startFloor) => {
     requireFeature(OTP_ENABLED);

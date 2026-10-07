@@ -26,6 +26,7 @@ import {
  * once ownership is proven by OTP, or at once under OTP_AUTO_VERIFY.
  */
 export const POST = withApiErrors(
+  'POST /api/dash/users/me/change-phone',
   MSG_UPDATE_ERROR,
   async (ctx) => {
     requireFeature(PHONE_ENABLED);

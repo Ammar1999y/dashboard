@@ -24,6 +24,7 @@ import {
 } from './consistency';
 import { isJsonSchema, OPENAPI_VERSION } from './json-schema';
 import { tableOperation } from './route-operations';
+import { successContract } from './success-schemas';
 
 /**
  * The document's version: the application's, plus a digest of the document
@@ -119,7 +120,11 @@ export function openApiDocument(
       { name: 'Contract', description: 'The generated OpenAPI document.' },
     ],
     components: {
-      schemas: { ...COMPONENT_SCHEMAS, ...betterAuthSchemas },
+      schemas: {
+        ...COMPONENT_SCHEMAS,
+        ...successContract().components,
+        ...betterAuthSchemas,
+      },
       securitySchemes: securitySchemes(),
     },
     paths,

@@ -358,12 +358,6 @@ export const OPERATION_DOCS: Record<
   },
 };
 
-export const PAGINATED_SUCCESS_ROUTES = new Set([
-  'GET /api/dash/permissions',
-  'GET /api/dash/users',
-  'GET /api/dash/media',
-]);
-
 /** Email commits revoke the current session; `refreshSessionCookies` clears its cookie cache. */
 export const SESSION_COOKIE_ROUTES = new Set([
   'POST /api/dash/users/me/change-email',

@@ -16,33 +16,37 @@ import { readJsonBody } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
 
-export const POST = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
-  const startedAt = await authenticationStartedAt();
-  const { userId, sessionId } = await requireSession(ctx);
+export const POST = withApiErrors(
+  'POST /api/dash/auth/reauth',
+  MSG_UPDATE_ERROR,
+  async (ctx) => {
+    const startedAt = await authenticationStartedAt();
+    const { userId, sessionId } = await requireSession(ctx);
 
-  await enforceReauthAttemptLimit(userId);
+    await enforceReauthAttemptLimit(userId);
 
-  const input = await readJsonBody(ctx, adminReauthSchema, {
-    message: MSG_INVALID_CREDENTIALS,
-    status: HTTP_STATUS.UNAUTHORIZED,
-  });
+    const input = await readJsonBody(ctx, adminReauthSchema, {
+      message: MSG_INVALID_CREDENTIALS,
+      status: HTTP_STATUS.UNAUTHORIZED,
+    });
 
-  const accepted = await verifySessionPassword(
-    userId,
-    input.password,
-    getAuditMeta(ctx),
-    'reauth_admin'
-  );
-  if (!accepted)
-    throw new CustomError(MSG_INVALID_CREDENTIALS, HTTP_STATUS.UNAUTHORIZED);
+    const accepted = await verifySessionPassword(
+      userId,
+      input.password,
+      getAuditMeta(ctx),
+      'reauth_admin'
+    );
+    if (!accepted)
+      throw new CustomError(MSG_INVALID_CREDENTIALS, HTTP_STATUS.UNAUTHORIZED);
 
-  const { expiresIn } = await mintAdminReauth(userId, sessionId, {
-    startedAt,
-  });
-  // No token in the body: the window is bound to THIS session, and a bearer
-  // token would add a secret to leak and no security.
-  return apiSuccess({
-    message: MSG_REAUTH_GRANTED,
-    data: { expiresIn },
-  });
-});
+    const { expiresIn } = await mintAdminReauth(userId, sessionId, {
+      startedAt,
+    });
+    // No token in the body: the window is bound to THIS session, and a bearer
+    // token would add a secret to leak and no security.
+    return apiSuccess({
+      message: MSG_REAUTH_GRANTED,
+      data: { expiresIn },
+    });
+  }
+);

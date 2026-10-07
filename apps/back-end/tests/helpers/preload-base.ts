@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { drainAfterResponse } from '@/lib/http/after-response';
+import { takeResponseMismatches } from '@/lib/http/response-mismatches';
 
 import {
   assertNoEgressViolations,
@@ -152,6 +153,8 @@ beforeEach(async () => {
  */
 afterEach(async () => {
   await drainAfterResponse(DEFERRED_WORK_DRAIN_MS);
+  // Taken before anything can throw, so none leaks into the next test.
+  const mismatches = takeResponseMismatches();
   try {
     assertNoEgressViolations();
   } finally {
@@ -159,6 +162,10 @@ afterEach(async () => {
     resetMailbox();
     resetObjectStore();
   }
+  if (mismatches.length > 0)
+    throw new Error(
+      `a response broke its published contract, so the check answered 500 (lib/http/response-check.ts):\n  ${mismatches.join('\n  ')}`
+    );
 });
 
 process.on('exit', () => {

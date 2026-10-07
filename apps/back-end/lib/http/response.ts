@@ -1,4 +1,15 @@
-import type { Handler, HandlerCookie, HandlerOutput } from './contract';
+import type {
+  HandlerCookie,
+  HandlerError,
+  HandlerInput,
+  HandlerOutput,
+  HandlerRaw,
+  PaginatedOutput,
+  RouteHandler,
+  RouteOutput,
+  SuccessOutput,
+} from './contract';
+import type { ResponseRoute } from '@app/shared/response-contract';
 import type { PaginationMeta } from '@app/shared/types/api';
 
 import { isDatabaseContention, isInvalidTextEncoding } from '@/db/errors';
@@ -25,10 +36,8 @@ import { responsePayload } from './contract';
 import { serializeSetCookie } from './cookies';
 import { DEFAULT_CACHE_CONTROL } from './response-policy';
 
-interface ApiSuccessOptions<T = unknown> {
+interface ApiSuccessOptions {
   message: string;
-  data?: T;
-  meta?: PaginationMeta;
   status?: number;
   headers?: Record<string, string>;
   cookies?: HandlerCookie[];
@@ -41,14 +50,26 @@ interface ApiErrorOptions {
   headers?: Record<string, string>;
 }
 
-export function apiSuccess<T = unknown>({
+export function apiSuccess<T>(
+  options: ApiSuccessOptions & { data: T; meta: PaginationMeta }
+): PaginatedOutput<T>;
+export function apiSuccess<T>(
+  options: ApiSuccessOptions & { data: T; meta?: undefined }
+): SuccessOutput<T>;
+export function apiSuccess(
+  options: ApiSuccessOptions & { data?: undefined; meta?: undefined }
+): SuccessOutput<null>;
+export function apiSuccess({
   message,
   data,
   meta,
   status = HTTP_STATUS.OK,
   headers,
   cookies,
-}: ApiSuccessOptions<T>): HandlerOutput<T | null> {
+}: ApiSuccessOptions & {
+  data?: unknown;
+  meta?: PaginationMeta;
+}): SuccessOutput<unknown> {
   return {
     status,
     body: {
@@ -76,7 +97,7 @@ export function apiRaw({
   body: unknown;
   status?: number;
   headers?: Record<string, string>;
-}): HandlerOutput<never> {
+}): HandlerRaw {
   return {
     status,
     body: { raw: body },
@@ -89,7 +110,7 @@ export function apiError({
   code,
   status = HTTP_STATUS.BAD_REQUEST,
   headers,
-}: ApiErrorOptions): HandlerOutput<null> {
+}: ApiErrorOptions): HandlerError {
   return {
     status,
     body: { success: false, message, data: null, ...(code && { code }) },
@@ -106,7 +127,7 @@ export function handleApiError(
   error: unknown,
   fallbackMessage?: string,
   extraHeaders?: Record<string, string>
-): HandlerOutput<null> {
+): HandlerError {
   if (error instanceof CustomError) {
     if (error.status !== undefined && error.status >= 500)
       logServerErrorResponse(error);
@@ -164,21 +185,25 @@ export function handleApiError(
 }
 
 /**
- * A handler whose throws become the error envelope. `mapError` claims the
- * errors the route answers specially and returns `undefined` for the rest.
+ * A handler whose throws become the error envelope. `key` names its
+ * `RESPONSE_DATA` route, which types every success the handler returns.
+ * `mapError` claims the errors the route answers specially and returns
+ * `undefined` for the rest.
  */
-export function withApiErrors(
+export function withApiErrors<K extends ResponseRoute>(
+  key: K,
   fallbackMessage: string,
-  handler: Handler,
-  mapError?: (error: unknown) => HandlerOutput<null> | undefined
-): Handler {
-  return async (ctx) => {
+  handler: (ctx: HandlerInput) => Promise<RouteOutput<K>>,
+  mapError?: (error: unknown) => HandlerError | undefined
+): RouteHandler<K> {
+  const guarded = async (ctx: HandlerInput): Promise<RouteOutput<K>> => {
     try {
       return await handler(ctx);
     } catch (error) {
       return mapError?.(error) ?? handleApiError(error, fallbackMessage);
     }
   };
+  return Object.assign(guarded, { routeKey: key });
 }
 
 /** A 500 carrying the fault as `cause`, which `handleApiError` logs with it. */

@@ -1,5 +1,10 @@
 import type { Actor } from './actor';
 import type { Executor, Tx } from '@/db';
+import type { ServerValue } from '@/lib/http/contract';
+import type {
+  deletedFolderSchema,
+  mediaFolderHitSchema,
+} from '@app/shared/responses/media';
 import type { EntityID } from '@app/shared/types';
 
 import { asc, eq, isNull, sql } from 'drizzle-orm';
@@ -7,6 +12,7 @@ import { asc, eq, isNull, sql } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { getConstraintName, isUniqueViolation } from '@/db/errors';
 import { files, folders } from '@/db/schema';
+import * as z from 'zod';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -29,26 +35,11 @@ interface FolderSummary {
   updatedAt: Date;
 }
 
-/**
- * One shape for both delete modes; the file half mirrors
- * `DELETE /api/dash/media/files`. `folders: 0` beside deleted files means the
- * tree still held something when its folders were due to go.
- */
-export interface FolderDeleteOutcome {
-  folders: number;
-  deleted: EntityID[];
-  pending: EntityID[];
-}
+export type FolderDeleteOutcome = ServerValue<
+  z.output<typeof deletedFolderSchema>
+>;
 
-interface Breadcrumb {
-  id: string;
-  name: string;
-}
-
-interface FolderHit extends FolderSummary {
-  /** Root → the folder itself. */
-  breadcrumbs: Breadcrumb[];
-}
+type FolderHit = ServerValue<z.output<typeof mediaFolderHitSchema>>;
 
 /**
  * Capped, not paged: a navigation aid beside the paginated file list. The cap
@@ -65,14 +56,32 @@ const FOLDER_COLUMNS = {
   updatedAt: folders.updatedAt,
 } as const;
 
-/**
- * A row of a raw statement. The driver types it `Record<string, any>` whatever
- * `execute<T>` is given, so the SQL text is the only statement of its shape.
+/*
+ * The rows of the raw statements below. The driver types them
+ * `Record<string, any>` whatever `execute<T>` is given, so each is parsed
+ * against the columns its SQL selects: ids as text, timestamps as the `Date`
+ * the driver returns.
  */
-type RawRow = Awaited<ReturnType<Executor['execute']>>[number];
+const folderRowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  parent_id: z.string().nullable(),
+  created_by: z.string().nullable(),
+  created_at: z.date(),
+  updated_at: z.date(),
+});
 
-/** A row selecting `id`, `name`, `parent_id`, `created_by` (ids as text), `created_at`, `updated_at`. */
-function toFolderSummary(row: RawRow): FolderSummary {
+const breadcrumbRowSchema = z.object({ id: z.string(), name: z.string() });
+
+const subtreeRowSchema = folderRowSchema.extend({ level: z.number() });
+
+const folderHitRowSchema = folderRowSchema.extend({
+  breadcrumbs: z.array(breadcrumbRowSchema),
+});
+
+const depthRowSchema = z.object({ depth: z.number().nullable() });
+
+function toFolderSummary(row: z.output<typeof folderRowSchema>): FolderSummary {
   return {
     id: row.id,
     name: row.name,
@@ -122,8 +131,8 @@ export async function lockTree(tx: Tx): Promise<void> {
 export async function breadcrumbs(
   folderId: EntityID,
   executor: Executor = db
-): Promise<Breadcrumb[]> {
-  const rows = await executor.execute<{ id: string; name: string }>(sql`
+): Promise<z.output<typeof breadcrumbRowSchema>[]> {
+  const rows = await executor.execute(sql`
     with recursive up as (
       select id, parent_id, name, 1 as depth
       from folders where id = ${folderId}::uuid
@@ -134,7 +143,7 @@ export async function breadcrumbs(
     )
     select id::text as id, name from up order by depth desc
   `);
-  return rows.map((row) => ({ id: row.id, name: row.name }));
+  return rows.map((row) => breadcrumbRowSchema.parse(row));
 }
 
 /** 1 for a root folder. `null` when the folder does not exist. */
@@ -142,7 +151,7 @@ async function depthOf(
   executor: Tx,
   folderId: EntityID
 ): Promise<number | null> {
-  const rows = await executor.execute<{ depth: number | string }>(sql`
+  const [row] = await executor.execute(sql`
     with recursive up as (
       select id, parent_id, 1 as depth from folders where id = ${folderId}::uuid
       union all
@@ -152,8 +161,7 @@ async function depthOf(
     )
     select max(depth) as depth from up
   `);
-  const depth = rows[0]?.depth;
-  return depth == null ? null : Number(depth);
+  return depthRowSchema.parse(row).depth;
 }
 
 /**
@@ -182,10 +190,10 @@ export async function subtreeFolders(
     from down join folders f on f.id = down.id
     order by down.level desc, f.id
   `);
-  return rows.map((row) => ({
-    ...toFolderSummary(row),
-    level: Number(row.level),
-  }));
+  return rows.map((row) => {
+    const parsed = subtreeRowSchema.parse(row);
+    return { ...toFolderSummary(parsed), level: parsed.level };
+  });
 }
 
 /** Every folder under `folderId`, itself included, with the subtree's height. */
@@ -315,10 +323,10 @@ export async function searchFolders(
     order by lower(h.name), h.id
   `);
   return {
-    folders: rows.slice(0, FOLDER_SEARCH_LIMIT).map((row) => ({
-      ...toFolderSummary(row),
-      breadcrumbs: row.breadcrumbs,
-    })),
+    folders: rows.slice(0, FOLDER_SEARCH_LIMIT).map((row) => {
+      const hit = folderHitRowSchema.parse(row);
+      return { ...toFolderSummary(hit), breadcrumbs: hit.breadcrumbs };
+    }),
     truncated: rows.length > FOLDER_SEARCH_LIMIT,
   };
 }

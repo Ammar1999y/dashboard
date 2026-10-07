@@ -4,6 +4,7 @@
  * from the user row, never the request.
  */
 import type { AuthContext } from '../context';
+import type { PluginAnswer } from '../plugin-endpoint';
 import type { RequestSession } from '../session/request';
 import type { ResolvedChallenge } from './challenge';
 import type { OtpSendSurface } from '@/lib/rate-limit';
@@ -15,13 +16,12 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { users } from '@/db/schema';
-import { createAuthEndpoint } from 'better-auth/api';
 import * as z from 'zod';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
-import { contactKindOf } from '@app/shared/validation/enums';
+import { contactKindOf, optionId } from '@app/shared/validation/enums';
 import {
   isTwoFactorOtpChannelEnabled,
   TWO_FACTOR_OTP_AVAILABLE,
@@ -30,7 +30,6 @@ import {
 } from '@app/shared/validation/two-factor';
 
 import { processOtpSend } from '@/lib/otp/send';
-import { OTP_BASE_RESEND_DELAY_S } from '@/lib/otp/throttle';
 import { otpGuessWasEvaluated, processOtpVerify } from '@/lib/otp/verify';
 import {
   enforceOtpSurfaceSendQuota,
@@ -40,7 +39,7 @@ import { contactOf } from '@/lib/users/contact';
 
 import { authAuditMeta, bodyRecord, parseAuthBody } from '../context';
 import { asAuthError, authError } from '../errors';
-import { envelopeResponse } from '../plugin-openapi';
+import { pluginEndpoint } from '../plugin-endpoint';
 import { requireReauthPassword } from '../reauth/grant';
 import { resolveRequestSession } from '../session/request';
 import { revokeOtherSessions } from '../session/rotation';
@@ -52,7 +51,7 @@ import {
   spendChallengeAttempt,
 } from './challenge';
 import { auditLifecycle } from './lifecycle';
-import { optionId, recordEnabledMethod } from './methods';
+import { recordEnabledMethod } from './methods';
 
 interface OtpTarget {
   userId: EntityID;
@@ -133,25 +132,13 @@ export const twoFactorOtp = () =>
     endpoints: {
       // No captcha, deliberately: a session or a challenge cookie (which follows
       // a verified password) is a stronger gate.
-      twoFactorOtpSend: createAuthEndpoint(
+      // It answers the real delay, unlike the anonymous surfaces: behind a
+      // session or a challenge cookie a countdown leaks nothing.
+      twoFactorOtpSend: pluginEndpoint(
         '/two-factor/otp/send',
         {
           method: 'POST',
           body: z.record(z.string(), z.unknown()).optional(),
-          metadata: {
-            openapi: envelopeResponse('A second-factor code was sent.', {
-              type: 'object',
-              // The real delay, unlike anonymous surfaces: behind a session or
-              // challenge cookie a countdown leaks nothing.
-              properties: {
-                nextAllowedIn: {
-                  type: 'integer',
-                  minimum: OTP_BASE_RESEND_DELAY_S,
-                },
-              },
-              required: ['nextAllowedIn'],
-            }),
-          },
         },
         async (ctx) => {
           assertOtpAvailable();
@@ -195,17 +182,9 @@ export const twoFactorOtp = () =>
         }
       ),
 
-      twoFactorOtpVerify: createAuthEndpoint(
+      twoFactorOtpVerify: pluginEndpoint(
         '/two-factor/otp/verify',
-        {
-          method: 'POST',
-          body: z.record(z.string(), z.unknown()),
-          metadata: {
-            openapi: envelopeResponse(
-              'The second factor was verified: a sign-in completed, or the OTP method was enrolled.'
-            ),
-          },
-        },
+        { method: 'POST', body: z.record(z.string(), z.unknown()) },
         async (ctx) => {
           assertOtpAvailable();
 
@@ -260,7 +239,7 @@ async function verifyForSignIn(
   ctx: AuthContext,
   challenge: ResolvedChallenge,
   code: string
-) {
+): Promise<PluginAnswer<'/two-factor/otp/verify'>> {
   const target = signInTarget(challenge, bodyRecord(ctx).option);
 
   // Before the challenge budget: `spendChallengeAttempt` does not write the
@@ -314,7 +293,7 @@ async function verifyForEnrolment(
   ctx: AuthContext,
   requestSession: RequestSession,
   code: string
-) {
+): Promise<PluginAnswer<'/two-factor/otp/verify'>> {
   const target = await enrolmentTargetFromSession(ctx, requestSession);
   const auditMeta = authAuditMeta(ctx, '/two-factor/otp/verify');
 

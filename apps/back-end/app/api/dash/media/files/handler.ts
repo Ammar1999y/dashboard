@@ -24,32 +24,37 @@ import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
  */
 const LIBRARY_UPLOAD_VISIBILITY = 'private';
 
-export const POST = withApiErrors(mediaMsg.uploadFailed, async (ctx) => {
-  const caller = await requirePermission(ctx, {
-    resource: 'media',
-    action: 'create',
-  });
+export const POST = withApiErrors(
+  'POST /api/dash/media/files',
+  mediaMsg.uploadFailed,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'create',
+    });
 
-  // Query, not form field: it is checked before the body is parsed.
-  const folderId = requireId(ctx.query.get('folder'));
-  await requireFolder(folderId);
+    // Query, not form field: it is checked before the body is parsed.
+    const folderId = requireId(ctx.query.get('folder'));
+    await requireFolder(folderId);
 
-  const row = await acceptUpload(ctx, requestActor(ctx, caller), {
-    field: 'file',
-    visibility: LIBRARY_UPLOAD_VISIBILITY,
-    kinds: DEFAULT_UPLOAD_PURPOSE.kinds,
-    folderId,
-    activate: true,
-  });
+    const row = await acceptUpload(ctx, requestActor(ctx, caller), {
+      field: 'file',
+      visibility: LIBRARY_UPLOAD_VISIBILITY,
+      kinds: DEFAULT_UPLOAD_PURPOSE.kinds,
+      folderId,
+      activate: true,
+    });
 
-  return apiSuccess({
-    message: mediaMsg.uploaded,
-    data: await toMediaFile(row),
-    status: HTTP_STATUS.CREATED,
-  });
-});
+    return apiSuccess({
+      message: mediaMsg.uploaded,
+      data: await toMediaFile(row),
+      status: HTTP_STATUS.CREATED,
+    });
+  }
+);
 
 export const PUT = withApiErrors(
+  'PUT /api/dash/media/files',
   mediaMsg.updateError,
   async (ctx) => {
     const caller = await requirePermission(ctx, {
@@ -80,29 +85,33 @@ export const PUT = withApiErrors(
   handleFolderForeignKeyViolation
 );
 
-export const DELETE = withApiErrors(mediaMsg.deleteError, async (ctx) => {
-  const caller = await requirePermission(ctx, {
-    resource: 'media',
-    action: 'delete',
-  });
+export const DELETE = withApiErrors(
+  'DELETE /api/dash/media/files',
+  mediaMsg.deleteError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'delete',
+    });
 
-  await enforceRateLimit({
-    scope: 'media.files.delete',
-    identifier: userIdentifier(caller.userId),
-    limit: 30,
-    failClosed: true,
-  });
+    await enforceRateLimit({
+      scope: 'media.files.delete',
+      identifier: userIdentifier(caller.userId),
+      limit: 30,
+      failClosed: true,
+    });
 
-  const input = await readJsonBody(ctx, deleteFilesSchema);
+    const input = await readJsonBody(ctx, deleteFilesSchema);
 
-  const { deleted, pending } = await deleteFiles({
-    ids: input.ids,
-    actor: grantedActor(ctx, caller),
-    viewable: viewablePages(caller.permissions),
-  });
+    const { deleted, pending } = await deleteFiles({
+      ids: input.ids,
+      actor: grantedActor(ctx, caller),
+      viewable: viewablePages(caller.permissions),
+    });
 
-  return apiSuccess({
-    message: mediaMsg.deleted,
-    data: { deleted, pending },
-  });
-});
+    return apiSuccess({
+      message: mediaMsg.deleted,
+      data: { deleted, pending },
+    });
+  }
+);

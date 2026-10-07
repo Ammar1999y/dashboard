@@ -134,127 +134,135 @@ async function assertTargetReachable(
   });
 }
 
-export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
-  const {
-    currentSessionId,
-    targetId,
-    isSelf,
-    currentUserId,
-    editScope,
-    actorPermissions,
-  } = await authorizeSessionAccess(ctx, {
-    scope: 'users.id.sessions.get',
-    limit: 60,
-  });
-
-  if (!isSelf)
-    await assertTargetReachable(db, {
+export const GET = withApiErrors(
+  'GET /api/dash/users/:id/sessions',
+  MSG_FETCH_ERROR,
+  async (ctx) => {
+    const {
+      currentSessionId,
       targetId,
+      isSelf,
       currentUserId,
       editScope,
       actorPermissions,
-      lock: false,
+    } = await authorizeSessionAccess(ctx, {
+      scope: 'users.id.sessions.get',
+      limit: 60,
     });
 
-  const limit = parseLimit(ctx.query.get('limit'));
-  const cursor = parseCursor(ctx.query.get('cursor'));
-
-  const page = await readSessionsPage({
-    userId: targetId,
-    currentSessionId,
-    limit,
-    cursor,
-  });
-
-  return apiSuccess({
-    message: MSG_FETCHED,
-    data: { sessions: page.sessions, nextCursor: page.nextCursor },
-  });
-});
-
-export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
-  const {
-    session,
-    currentUserId,
-    currentSessionId,
-    targetId,
-    isSelf,
-    editScope,
-    actorPermissions,
-  } = await authorizeSessionAccess(ctx, {
-    scope: 'users.id.sessions.delete',
-    limit: 15,
-  });
-
-  const request = await readJsonBody(ctx, deleteSessionsSchema);
-  const revokeAll = 'revokeAll' in request;
-  const idsToDelete = revokeAll
-    ? []
-    : request.sessionIds.filter((id) => id !== currentSessionId);
-
-  const auditMeta = getAuditMeta(ctx);
-
-  const revoked = await withTransaction(async (tx) => {
     if (!isSelf)
-      await assertTargetUserVisibleUnlocked(tx, {
-        targetId,
-        actorUserId: currentUserId,
-        scope: editScope,
-      });
-    // The self case too: a password change in another tab holds the row and
-    // then waits for the sessions this deletes.
-    await lockTargetAndActor(tx, targetId, currentUserId, 'share');
-    if (!isSelf)
-      await assertTargetReachable(tx, {
+      await assertTargetReachable(db, {
         targetId,
         currentUserId,
         editScope,
         actorPermissions,
-        lock: true,
+        lock: false,
       });
 
-    // AFTER `assertTargetReachable`: a request naming only the acting session
-    // must still 404 for a target that does not exist.
-    if (!revokeAll && idsToDelete.length === 0) return [];
+    const limit = parseLimit(ctx.query.get('limit'));
+    const cursor = parseCursor(ctx.query.get('cursor'));
 
-    const deleted = await revokeSessionsWhere(
-      tx,
-      and(
-        eq(sessions.userId, targetId),
-        // The acting session is always preserved: "revoke all except
-        // current" must not log the operator out mid-remediation.
-        currentSessionId ? ne(sessions.id, currentSessionId) : undefined,
-        revokeAll ? undefined : inArray(sessions.id, idsToDelete)
-      )
-    );
+    const page = await readSessionsPage({
+      userId: targetId,
+      currentSessionId,
+      limit,
+      cursor,
+    });
 
-    // "Sign out everywhere" has to mean it: a trusted device skips the second
-    // factor, is keyed by its own cookie and outlives every session, so
-    // leaving it lets an attacker back in with the password alone. Only on
-    // `revokeAll` — ending named sessions is housekeeping, not containment.
-    if (revokeAll) await revokeTrustedDevices(tx, targetId);
+    return apiSuccess({
+      message: MSG_FETCHED,
+      data: { sessions: page.sessions, nextCursor: page.nextCursor },
+    });
+  }
+);
 
-    if (deleted.length > 0) {
-      await auditLog(tx, {
-        userId: currentUserId,
-        userEmail: session.user.email,
-        action: 'DELETE',
-        tableName: 'sessions',
-        recordId: targetId,
-        oldData: {
-          sessionIds: deleted,
-          count: deleted.length,
-          ...(revokeAll && { revokedAll: true }),
-        },
-        newData: {},
-        meta: auditMeta,
-      });
-    }
+export const DELETE = withApiErrors(
+  'DELETE /api/dash/users/:id/sessions',
+  MSG_DELETE_ERROR,
+  async (ctx) => {
+    const {
+      session,
+      currentUserId,
+      currentSessionId,
+      targetId,
+      isSelf,
+      editScope,
+      actorPermissions,
+    } = await authorizeSessionAccess(ctx, {
+      scope: 'users.id.sessions.delete',
+      limit: 15,
+    });
 
-    return deleted;
-  });
+    const request = await readJsonBody(ctx, deleteSessionsSchema);
+    const revokeAll = 'revokeAll' in request;
+    const idsToDelete = revokeAll
+      ? []
+      : request.sessionIds.filter((id) => id !== currentSessionId);
 
-  // The set actually revoked, so a request naming only the `isCurrent: true`
-  // row — declined by design — is distinguishable from a revocation.
-  return apiSuccess({ message: MSG_DELETED, data: { revoked } });
-});
+    const auditMeta = getAuditMeta(ctx);
+
+    const revoked = await withTransaction(async (tx) => {
+      if (!isSelf)
+        await assertTargetUserVisibleUnlocked(tx, {
+          targetId,
+          actorUserId: currentUserId,
+          scope: editScope,
+        });
+      // The self case too: a password change in another tab holds the row and
+      // then waits for the sessions this deletes.
+      await lockTargetAndActor(tx, targetId, currentUserId, 'share');
+      if (!isSelf)
+        await assertTargetReachable(tx, {
+          targetId,
+          currentUserId,
+          editScope,
+          actorPermissions,
+          lock: true,
+        });
+
+      // AFTER `assertTargetReachable`: a request naming only the acting session
+      // must still 404 for a target that does not exist.
+      if (!revokeAll && idsToDelete.length === 0) return [];
+
+      const deleted = await revokeSessionsWhere(
+        tx,
+        and(
+          eq(sessions.userId, targetId),
+          // The acting session is always preserved: "revoke all except
+          // current" must not log the operator out mid-remediation.
+          currentSessionId ? ne(sessions.id, currentSessionId) : undefined,
+          revokeAll ? undefined : inArray(sessions.id, idsToDelete)
+        )
+      );
+
+      // "Sign out everywhere" has to mean it: a trusted device skips the second
+      // factor, is keyed by its own cookie and outlives every session, so
+      // leaving it lets an attacker back in with the password alone. Only on
+      // `revokeAll` — ending named sessions is housekeeping, not containment.
+      if (revokeAll) await revokeTrustedDevices(tx, targetId);
+
+      if (deleted.length > 0) {
+        await auditLog(tx, {
+          userId: currentUserId,
+          userEmail: session.user.email,
+          action: 'DELETE',
+          tableName: 'sessions',
+          recordId: targetId,
+          oldData: {
+            sessionIds: deleted,
+            count: deleted.length,
+            ...(revokeAll && { revokedAll: true }),
+          },
+          newData: {},
+          meta: auditMeta,
+        });
+      }
+
+      return deleted;
+    });
+
+    // The set actually revoked, so a request naming only the `isCurrent: true`
+    // row — declined by design — is distinguishable from a revocation.
+    return apiSuccess({ message: MSG_DELETED, data: { revoked } });
+  }
+);

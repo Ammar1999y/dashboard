@@ -43,75 +43,81 @@ import {
 import { validateRolePermissionScope } from '@/lib/permissions/scope';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
-  const { userId, scope } = await requirePermission(ctx, {
-    resource: 'users',
-    action: 'view',
-  });
-
-  await enforceRateLimit({
-    scope: 'users.get',
-    identifier: userIdentifier(userId),
-    limit: 60,
-  });
-
-  const { where, orderBy, limit, offset, paginationMeta } =
-    parseDataTableParams(users, {
-      url: ctx.url,
-      filterableColumns: USERS_FILTER_COLUMNS,
-      searchableColumns: ['name', 'email'],
-      defaultSort: { id: 'createdAt', desc: true },
+export const GET = withApiErrors(
+  'GET /api/dash/users',
+  MSG_FETCH_ERROR,
+  async (ctx) => {
+    const { userId, scope } = await requirePermission(ctx, {
+      resource: 'users',
+      action: 'view',
     });
 
-  const baseFilter = and(
-    isNull(users.deletedAt),
-    nonSystemRoleFilter(),
-    scope === 'own' ? eq(users.createdBy, userId) : undefined,
-    where
-  );
+    await enforceRateLimit({
+      scope: 'users.get',
+      identifier: userIdentifier(userId),
+      limit: 60,
+    });
 
-  const [dashboardUsers, [totalRow]] = await Promise.all([
-    db
-      .select({
-        id: users.id,
-        name: users.name,
-        email: users.email,
-        isActive: users.isActive,
-        roleId: users.roleId,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-        role: {
-          id: roles.id,
-          roleName: roles.roleName,
-          scope: roles.scope,
-        },
-      })
-      .from(users)
-      .innerJoin(roles, eq(users.roleId, roles.id))
-      .where(baseFilter)
-      .orderBy(...orderBy)
-      .limit(limit)
-      .offset(offset),
-    db
-      .select({ total: count() })
-      .from(users)
-      .innerJoin(roles, eq(users.roleId, roles.id))
-      .where(baseFilter),
-  ]);
+    const { where, orderBy, limit, offset, paginationMeta } =
+      parseDataTableParams(users, {
+        url: ctx.url,
+        filterableColumns: USERS_FILTER_COLUMNS,
+        searchableColumns: ['name', 'email'],
+        defaultSort: { id: 'createdAt', desc: true },
+      });
 
-  const total = totalRow?.total ?? 0;
+    const baseFilter = and(
+      isNull(users.deletedAt),
+      nonSystemRoleFilter(),
+      scope === 'own' ? eq(users.createdBy, userId) : undefined,
+      where
+    );
 
-  return apiSuccess({
-    message: MSG_FETCHED,
-    data: dashboardUsers.map(({ role, ...u }) => ({
-      ...u,
-      ...publicRoleFields(u.roleId, role),
-    })),
-    meta: paginationMeta(total),
-  });
-});
+    const [dashboardUsers, [totalRow]] = await Promise.all([
+      db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          isActive: users.isActive,
+          // The inner join's own column, which cannot be null.
+          roleId: roles.id,
+          createdAt: users.createdAt,
+          updatedAt: users.updatedAt,
+          role: {
+            id: roles.id,
+            roleName: roles.roleName,
+            scope: roles.scope,
+          },
+        })
+        .from(users)
+        .innerJoin(roles, eq(users.roleId, roles.id))
+        .where(baseFilter)
+        .orderBy(...orderBy)
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ total: count() })
+        .from(users)
+        .innerJoin(roles, eq(users.roleId, roles.id))
+        .where(baseFilter),
+    ]);
+
+    const total = totalRow?.total ?? 0;
+
+    return apiSuccess({
+      message: MSG_FETCHED,
+      data: dashboardUsers.map(({ role, ...u }) => ({
+        ...u,
+        ...publicRoleFields(u.roleId, role),
+      })),
+      meta: paginationMeta(total),
+    });
+  }
+);
 
 export const POST = withApiErrors(
+  'POST /api/dash/users',
   MSG_CREATE_ERROR,
   async (ctx) => {
     const {

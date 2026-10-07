@@ -4,12 +4,12 @@ import type { PermissionRows } from '@app/shared/permissions/matrix';
 import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 import type { adminUpdateUserBodySchema } from '@app/shared/validation/auth';
-import type { z } from 'zod';
 
 import { eq, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { accounts, rolePermissions, roles, users } from '@/db/schema';
+import * as z from 'zod';
 
 import { PHONE_ENABLED } from '@app/shared/config';
 import { CustomError } from '@app/shared/error-class';
@@ -63,6 +63,12 @@ interface EditActor {
   userEmail: string;
 }
 
+/** `renameSelf`'s raw row, checked: `execute<T>` would only assert it. */
+const renamedRowSchema = z.object({
+  old_name: z.string(),
+  updated_at: z.date(),
+});
+
 // No `FOR UPDATE`: a user cannot usefully race themselves, and the WHERE refuses
 // a concurrently deactivated or deleted row.
 export async function renameSelf(
@@ -72,10 +78,7 @@ export async function renameSelf(
 ): Promise<{ updatedAt: Date }> {
   const targetId = actor.userId;
   return withTransaction(async (tx) => {
-    const updated = await tx.execute<{
-      old_name: string;
-      updated_at: Date;
-    }>(sql`
+    const updated = await tx.execute(sql`
       WITH prev AS (
         SELECT id, name FROM users WHERE id = ${targetId}
       )
@@ -88,8 +91,9 @@ export async function renameSelf(
       RETURNING prev.name AS old_name, u.updated_at AS updated_at
     `);
 
-    const row = updated[0];
-    if (!row) throw notFoundError();
+    const [returned] = updated;
+    if (!returned) throw notFoundError();
+    const row = renamedRowSchema.parse(returned);
 
     await auditLog(tx, {
       userId: actor.userId,

@@ -9,6 +9,7 @@ import { db } from '@/db';
 import { users } from '@/db/schema';
 
 import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
+import { OTP_BASE_RESEND_DELAY_S } from '@app/shared/validation/constants';
 import { contactKindOf } from '@app/shared/validation/enums';
 import { sendOtpSchema } from '@app/shared/validation/otp';
 
@@ -20,7 +21,6 @@ import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 import { logSanitized } from '@/utils/log';
 
 import { processOtpSend } from './send';
-import { OTP_BASE_RESEND_DELAY_S } from './throttle';
 
 // Exact only because these purposes' resend delay is flat (`./throttle.ts`).
 export const ANONYMOUS_SEND_DATA = { nextAllowedIn: OTP_BASE_RESEND_DELAY_S };

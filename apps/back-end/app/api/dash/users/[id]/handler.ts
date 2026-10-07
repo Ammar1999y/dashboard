@@ -39,138 +39,143 @@ import {
   assertTargetUserVisible,
 } from '@/lib/users/target-user';
 
-export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
-  const {
-    userId,
-    sessionId,
-    roleId: actorRoleId,
-    scope: viewScope,
-    permissions: actorViewPermissions,
-  } = await requirePermission(ctx, {
-    resource: 'users',
-    action: 'view',
-    throwError: false,
-  });
+export const GET = withApiErrors(
+  'GET /api/dash/users/:id',
+  MSG_FETCH_ERROR,
+  async (ctx) => {
+    const {
+      userId,
+      sessionId,
+      roleId: actorRoleId,
+      scope: viewScope,
+      permissions: actorViewPermissions,
+    } = await requirePermission(ctx, {
+      resource: 'users',
+      action: 'view',
+      throwError: false,
+    });
 
-  await enforceRateLimit({
-    scope: 'users.id.get',
-    identifier: userIdentifier(userId),
-    limit: 60,
-  });
+    await enforceRateLimit({
+      scope: 'users.id.get',
+      identifier: userIdentifier(userId),
+      limit: 60,
+    });
 
-  const targetId = requireId(ctx.params.id);
+    const targetId = requireId(ctx.params.id);
 
-  const isSelf = userId === targetId;
+    const isSelf = userId === targetId;
 
-  if (!isSelf && !viewScope) throw insufficientPermissions();
+    if (!isSelf && !viewScope) throw insufficientPermissions();
 
-  // Owner decision: `view` is a read action, so this role id is the cookie-cached
-  // copy — the revocation window every read route accepts. Forcing the database
-  // here would make the cache pointless.
-  if (isSelf && !actorRoleId) throw insufficientPermissions();
+    // Owner decision: `view` is a read action, so this role id is the cookie-cached
+    // copy — the revocation window every read route accepts. Forcing the database
+    // here would make the cache pointless.
+    if (isSelf && !actorRoleId) throw insufficientPermissions();
 
-  const userData = await db.query.users.findFirst({
-    where: liveUser(eq(users.id, targetId)),
-    columns: {
-      id: true,
-      name: true,
-      email: true,
-      emailVerified: true,
-      phoneNumber: true,
-      phoneNumberVerified: true,
-      isActive: true,
-      roleId: true,
-      createdBy: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-    with: {
-      role: {
-        columns: {
-          id: true,
-          roleName: true,
-          scope: true,
-        },
-        with: {
-          rolePermissions: {
-            columns: {
-              pageName: true,
-              permissions: true,
+    const userData = await db.query.users.findFirst({
+      where: liveUser(eq(users.id, targetId)),
+      columns: {
+        id: true,
+        name: true,
+        email: true,
+        emailVerified: true,
+        phoneNumber: true,
+        phoneNumberVerified: true,
+        isActive: true,
+        roleId: true,
+        createdBy: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      with: {
+        role: {
+          columns: {
+            id: true,
+            roleName: true,
+            scope: true,
+          },
+          with: {
+            rolePermissions: {
+              columns: {
+                pageName: true,
+                permissions: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
 
-  if (!userData) throw notFoundError();
+    if (!userData) throw notFoundError();
 
-  // The predicate the sessions subresource shares, so parent and child cannot
-  // drift.
-  const targetRoleId = assertTargetUserVisible({
-    isSelf,
-    roleId: userData.roleId,
-    createdBy: userData.createdBy,
-    role: userData.role,
-    actorUserId: userId,
-    scope: viewScope,
-  });
+    // The predicate the sessions subresource shares, so parent and child cannot
+    // drift.
+    const targetRoleId = assertTargetUserVisible({
+      isSelf,
+      roleId: userData.roleId,
+      createdBy: userData.createdBy,
+      role: userData.role,
+      actorUserId: userId,
+      scope: viewScope,
+    });
 
-  // Session metadata (IP, user-agent) is gated by the role authority the
-  // sessions endpoints require, or page one here would bypass their check.
-  const showSessions =
-    (isSelf ||
-      holdsActionOn(
-        actorViewPermissions,
-        'users',
-        'edit',
-        userData.createdBy,
-        userId
-      )) &&
-    (isSelf ||
-      (await actorCoversTargetRole(actorViewPermissions, targetRoleId, db)));
+    // Session metadata (IP, user-agent) is gated by the role authority the
+    // sessions endpoints require, or page one here would bypass their check.
+    const showSessions =
+      (isSelf ||
+        holdsActionOn(
+          actorViewPermissions,
+          'users',
+          'edit',
+          userData.createdBy,
+          userId
+        )) &&
+      (isSelf ||
+        (await actorCoversTargetRole(actorViewPermissions, targetRoleId, db)));
 
-  const permissions = userData.role?.rolePermissions
-    ? toPagePermissions(userData.role.rolePermissions)
-    : [];
+    const permissions = userData.role?.rolePermissions
+      ? toPagePermissions(userData.role.rolePermissions)
+      : [];
 
-  // Read only after every visibility gate has passed, which needs the user row
-  // first — sequential by necessity. First page only; `sessionsHasMore` and the
-  // cursor send the client to GET /dash/users/:id/sessions for the rest, and
-  // without the cursor that route re-serves page one.
-  const sessionPage = showSessions
-    ? await readSessionsPage({
-        userId: targetId,
-        currentSessionId: sessionId,
-        limit: SESSIONS_PAGE_SIZE,
-        cursor: null,
-      })
-    : null;
+    // Read only after every visibility gate has passed, which needs the user row
+    // first — sequential by necessity. First page only; `sessionsHasMore` and the
+    // cursor send the client to GET /dash/users/:id/sessions for the rest, and
+    // without the cursor that route re-serves page one.
+    const sessionPage = showSessions
+      ? await readSessionsPage({
+          userId: targetId,
+          currentSessionId: sessionId,
+          limit: SESSIONS_PAGE_SIZE,
+          cursor: null,
+        })
+      : null;
 
-  return apiSuccess({
-    message: MSG_FETCHED,
-    data: {
-      id: userData.id,
-      name: userData.name,
-      email: userData.email,
-      emailVerified: userData.emailVerified,
-      phoneNumber: userData.phoneNumber,
-      phoneNumberVerified: userData.phoneNumberVerified,
-      isActive: userData.isActive,
-      ...publicRoleFields(userData.roleId, userData.role),
-      createdAt: userData.createdAt,
-      updatedAt: userData.updatedAt,
-      permissions,
-      ...(sessionPage && {
-        sessions: sessionPage.sessions,
-        sessionsHasMore: sessionPage.hasMore,
-        sessionsNextCursor: sessionPage.nextCursor,
-      }),
-    },
-  });
-});
+    return apiSuccess({
+      message: MSG_FETCHED,
+      data: {
+        id: userData.id,
+        name: userData.name,
+        email: userData.email,
+        emailVerified: userData.emailVerified,
+        phoneNumber: userData.phoneNumber,
+        phoneNumberVerified: userData.phoneNumberVerified,
+        isActive: userData.isActive,
+        ...publicRoleFields(userData.roleId, userData.role),
+        createdAt: userData.createdAt,
+        updatedAt: userData.updatedAt,
+        permissions,
+        ...(sessionPage && {
+          sessions: sessionPage.sessions,
+          sessionsHasMore: sessionPage.hasMore,
+          sessionsNextCursor: sessionPage.nextCursor,
+        }),
+      },
+    });
+  }
+);
 
 export const PUT = withApiErrors(
+  'PUT /api/dash/users/:id',
   MSG_UPDATE_ERROR,
   async (ctx) => {
     const {
@@ -236,37 +241,41 @@ export const PUT = withApiErrors(
   handleUserConstraintViolation
 );
 
-export const DELETE = withApiErrors(MSG_DELETE_ERROR, async (ctx) => {
-  const {
-    session,
-    userId: actorUserId,
-    permissions: actorPermissions,
-    scope: deleteScope,
-  } = await requirePermission(ctx, {
-    resource: 'users',
-    action: 'delete',
-    reauth: true,
-  });
+export const DELETE = withApiErrors(
+  'DELETE /api/dash/users/:id',
+  MSG_DELETE_ERROR,
+  async (ctx) => {
+    const {
+      session,
+      userId: actorUserId,
+      permissions: actorPermissions,
+      scope: deleteScope,
+    } = await requirePermission(ctx, {
+      resource: 'users',
+      action: 'delete',
+      reauth: true,
+    });
 
-  await enforceRateLimit({
-    scope: 'users.id.delete',
-    identifier: userIdentifier(actorUserId),
-    limit: 10,
-    failClosed: true,
-  });
+    await enforceRateLimit({
+      scope: 'users.id.delete',
+      identifier: userIdentifier(actorUserId),
+      limit: 10,
+      failClosed: true,
+    });
 
-  const targetId = requireId(ctx.params.id);
+    const targetId = requireId(ctx.params.id);
 
-  if (actorUserId === targetId)
-    throw new CustomError(userMsg.cannotDeleteSelf, HTTP_STATUS.BAD_REQUEST);
+    if (actorUserId === targetId)
+      throw new CustomError(userMsg.cannotDeleteSelf, HTTP_STATUS.BAD_REQUEST);
 
-  await softDeleteUser({
-    targetId,
-    actor: { userId: actorUserId, email: session.user.email },
-    deleteScope,
-    actorPermissions,
-    auditMeta: getAuditMeta(ctx),
-  });
+    await softDeleteUser({
+      targetId,
+      actor: { userId: actorUserId, email: session.user.email },
+      deleteScope,
+      actorPermissions,
+      auditMeta: getAuditMeta(ctx),
+    });
 
-  return apiSuccess({ message: MSG_DELETED });
-});
+    return apiSuccess({ message: MSG_DELETED });
+  }
+);

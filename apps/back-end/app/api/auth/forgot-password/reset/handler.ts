@@ -56,6 +56,7 @@ const RESET_HASH_BUDGET_PER_MINUTE = OTP_MAX_VERIFY_ATTEMPTS * 3;
  * grant, and `/forgot-password/complete` writes it against a proven factor.
  */
 export const POST = withTimingFloor(
+  'POST /api/auth/forgot-password/reset',
   otpMsg.passwordResetError,
   async (ctx, startFloor) => {
     requireFeature(OTP_ENABLED);

@@ -16,6 +16,7 @@ import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
 
 // Always a real code: OTP_AUTO_VERIFY never short-circuits recovery.
 export const POST = withTimingFloor(
+  'POST /api/auth/forgot-password/send',
   otpMsg.sendError,
   async (ctx, startFloor) => {
     requireFeature(OTP_ENABLED);

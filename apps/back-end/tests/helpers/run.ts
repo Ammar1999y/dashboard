@@ -27,6 +27,8 @@
 /* eslint-disable unicorn/no-process-exit -- CLI entry point: the exit code IS
    this tool's result contract, which is the case the rule excepts */
 import { SQL } from 'bun';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { stampCoverageProvenance } from './coverage';
@@ -66,6 +68,13 @@ interface Tier {
    * (measured), so it has to be passed here.
    */
   nodeEnv: string;
+  /**
+   * Gate the run on which response-contract answers it produced
+   * (`./response-coverage.ts`). Only the tier that drives the route table as a
+   * whole: the matrix reaches a handful of its routes, so a gate there would be
+   * an allowlist of everything else.
+   */
+  contractCoverage?: true;
   /**
    * Run the tier once PER configuration, in one child each.
    *
@@ -130,6 +139,7 @@ const TIERS: Record<string, Tier> = {
     flags: ['--no-isolate'],
     workers: 'auto',
     nodeEnv: 'development',
+    contractCoverage: true,
     /**
      * Two-factor configuration is read at MODULE LOAD — the allow-list, and
      * therefore which Better Auth paths exist at all, is derived from it — so it
@@ -311,6 +321,13 @@ async function teardown(): Promise<void> {
   run.created = [];
 }
 
+// A whole-tier run only: one narrowed file cannot be expected to reach every
+// answer.
+const contractCoverageDir =
+  tier.contractCoverage && !forwardedNames[0]
+    ? mkdtempSync(path.join(os.tmpdir(), `response-coverage-${runToken}-`))
+    : null;
+
 const startedAt = Date.now();
 let exitCode = 1;
 try {
@@ -339,6 +356,10 @@ try {
           ...(row.name && { TWO_FACTOR_MATRIX: row.name }),
           NODE_ENV: tier.nodeEnv,
           ...(tier.database && { HARNESS_RUN_TOKEN: runToken }),
+          RESPONSE_CONTRACT_CHECK: 'enforce',
+          ...(contractCoverageDir && {
+            RESPONSE_CONTRACT_COVERAGE_DIR: contractCoverageDir,
+          }),
         },
         stdio: ['inherit', 'inherit', 'inherit'],
       }
@@ -355,7 +376,16 @@ try {
     // configurations are broken, and that inventory is the whole point.
     if (code !== 0) exitCode = code;
   }
+
+  if (contractCoverageDir) {
+    const { responseCoverageReport } = await import('./response-coverage');
+    const report = responseCoverageReport(contractCoverageDir);
+    console.log(`\n${report.lines.join('\n')}`);
+    if (exitCode === 0 && report.failed) exitCode = 1;
+  }
 } finally {
+  if (contractCoverageDir)
+    rmSync(contractCoverageDir, { recursive: true, force: true });
   await teardown();
   // Written after the child exits, so the stamp cannot outlive a run that never
   // finished — and only for a run that asked for coverage, so a later tier

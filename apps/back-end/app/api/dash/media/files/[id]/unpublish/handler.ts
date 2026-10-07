@@ -13,34 +13,38 @@ import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
  * Public → private, the mirror of `publish`: same grant, one shared limiter
  * scope, and the saga refuses while a public owner still references the file.
  */
-export const POST = withApiErrors(mediaMsg.updateError, async (ctx) => {
-  const caller = await requirePermission(ctx, {
-    resource: 'media',
-    action: 'publish',
-    forceDB: true,
-  });
+export const POST = withApiErrors(
+  'POST /api/dash/media/files/:id/unpublish',
+  mediaMsg.updateError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'publish',
+      forceDB: true,
+    });
 
-  await enforceRateLimit({
-    scope: 'media.files.visibility',
-    identifier: userIdentifier(caller.userId),
-    limit: 10,
-    failClosed: true,
-  });
+    await enforceRateLimit({
+      scope: 'media.files.visibility',
+      identifier: userIdentifier(caller.userId),
+      limit: 10,
+      failClosed: true,
+    });
 
-  const id = requireId(
-    ctx.params.id,
-    mediaMsg.fileNotFound,
-    HTTP_STATUS.NOT_FOUND
-  );
+    const id = requireId(
+      ctx.params.id,
+      mediaMsg.fileNotFound,
+      HTTP_STATUS.NOT_FOUND
+    );
 
-  const row = await transitionFile({
-    id,
-    to: 'private',
-    actor: requestActor(ctx, caller, 'all'),
-  });
+    const row = await transitionFile({
+      id,
+      to: 'private',
+      actor: requestActor(ctx, caller, 'all'),
+    });
 
-  return apiSuccess({
-    message: mediaMsg.unpublished,
-    data: await toMediaFile(row),
-  });
-});
+    return apiSuccess({
+      message: mediaMsg.unpublished,
+      data: await toMediaFile(row),
+    });
+  }
+);

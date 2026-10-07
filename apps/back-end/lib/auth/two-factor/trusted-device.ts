@@ -15,7 +15,7 @@ import { and, desc, eq, gt } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { trustedDevices } from '@/db/schema';
 import { createHMAC } from '@better-auth/utils/hmac';
-import { createAuthEndpoint, sessionMiddleware } from 'better-auth/api';
+import { sessionMiddleware } from 'better-auth/api';
 import { expireCookie } from 'better-auth/cookies';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -27,7 +27,7 @@ import { bestEffort } from '@/utils/log';
 
 import { authAuditMeta, bodyRecord } from '../context';
 import { authError, sessionRequired } from '../errors';
-import { envelopeResponse } from '../plugin-openapi';
+import { pluginEndpoint } from '../plugin-endpoint';
 import { lockSessionOwner } from '../session/live';
 import { withAuthTransaction } from '../transaction';
 import {
@@ -235,15 +235,9 @@ export const trustedDevice = () =>
   ({
     id: 'trusted-device',
     endpoints: {
-      trustCurrentDevice: createAuthEndpoint(
+      trustCurrentDevice: pluginEndpoint(
         '/two-factor/trust-device',
-        {
-          method: 'POST',
-          use: [sessionMiddleware],
-          metadata: {
-            openapi: envelopeResponse('This device is now trusted.'),
-          },
-        },
+        { method: 'POST', use: [sessionMiddleware] },
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
           const sessionId = validID(ctx.context.session?.session.id);
@@ -254,15 +248,9 @@ export const trustedDevice = () =>
         }
       ),
 
-      listTrustedDevices: createAuthEndpoint(
+      listTrustedDevices: pluginEndpoint(
         '/two-factor/trusted-devices',
-        sessionGetOptions('The caller’s trusted devices.', {
-          type: 'object',
-          properties: {
-            devices: { type: 'array', items: { type: 'object' } },
-          },
-          required: ['devices'],
-        }),
+        sessionGetOptions(),
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
           return ctx.json({
@@ -272,9 +260,9 @@ export const trustedDevice = () =>
         }
       ),
 
-      revokeTrustedDevice: createAuthEndpoint(
+      revokeTrustedDevice: pluginEndpoint(
         '/two-factor/trusted-devices/revoke',
-        sessionPostOptions('The device was revoked.'),
+        sessionPostOptions(),
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
 

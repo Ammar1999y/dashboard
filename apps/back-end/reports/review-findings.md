@@ -56,7 +56,27 @@
 
 ---
 
-## 2. [Medium] The REINDEX option list is not read as PostgreSQL reads it, so ordinary DDL can commit without its ledger row
+## 2. [High] A recursive folder delete can delete a file that was moved out of the folder while it ran
+
+**Where:**
+
+- `lib/media/lifecycle.ts:302-344`: `deleteFolderTree` commits its plan, then passes the captured file ids to `deleteFiles`.
+- `lib/media/lifecycle.ts:194-262`: `deleteFiles` re-checks scope, status and eligibility, but not that a file is still inside the tree.
+- `lib/media/files.ts:143-217`: `updateFile` and `moveFiles` take no tree lock.
+
+**Status:** Traced by reviewer `codex` on 2026-10-06, then verified against the code. Not reproduced with a live race.
+
+**Problem:**
+
+- A file moved to a surviving folder between the plan and the delete is deleted from its new folder.
+- Moving a whole subfolder out of the tree in that gap has the same effect on its files.
+- The folder phase's tree comparison runs only after the objects are gone, so it cannot recover them.
+
+**Fix:** plan and mark the files `deleting` in one transaction, with the file rows locked and their membership re-read once the locks are held. This is item 4 of Phase 3 in `docs/media-file-manager-plan.md`.
+
+---
+
+## 3. [Medium] The REINDEX option list is not read as PostgreSQL reads it, so ordinary DDL can commit without its ledger row
 
 **Where:**
 
@@ -106,7 +126,7 @@
 
 ---
 
-## 3. [Medium] A database fault reading the session still answers "sign in first" on grant routes, and picks the wrong branch on dual-mode routes
+## 4. [Medium] A database fault reading the session still answers "sign in first" on grant routes, and picks the wrong branch on dual-mode routes
 
 **Where:**
 
@@ -149,7 +169,7 @@
 
 ---
 
-## 4. [Medium] Open: a request waiting on a user's row lock stalled in full test runs, and the cause is unknown
+## 5. [Medium] Open: a request waiting on a user's row lock stalled in full test runs, and the cause is unknown
 
 **Where:**
 
@@ -188,7 +208,30 @@
 
 ---
 
-## 5. [Low] The route-flag hook's 120 s budget has far less headroom than was reported
+## 6. [Medium] An R2 or purge failure during a recursive delete leaves the folders behind, undeletable until the nightly sweep
+
+**Where:**
+
+- `lib/media/lifecycle.ts:115-184`: in `finishDeleting`, a row whose object R2 or the purge refused stays `deleting` and keeps its `folder_id`.
+- `lib/media/lifecycle.ts:346-374`: the folder phase counts that row and returns `folders: 0`.
+- `lib/media/lifecycle.ts:328-329`: a retry refuses with `folderBusy`, because a `deleting` row is not `active`.
+
+**Status:** Traced by reviewer `codex` on 2026-10-06, then verified against the code.
+
+**Problem:**
+
+- The folders stay listed although their files are gone.
+- Deleting them again answers `FOLDER_BUSY` until the nightly sweep has removed the row.
+- The user guide (§7) describes `folders: 0` only for a tree that changed during the delete.
+
+**Fix:** detach every row from its folder (`folder_id = null`) when it is marked `deleting`, and delete the folders in the same transaction. No constraint ties `folder_id` to `status`.
+
+- The sweep's expiry of `pending` rows (`sweepFiles`, `lib/media/lifecycle.ts:473-476`) has the same cause and gets the same rule. An abandoned upload whose object R2 refused otherwise stays `deleting` inside its folder.
+- This is in Phase 3 of `docs/media-file-manager-plan.md`.
+
+---
+
+## 7. [Low] The route-flag hook's 120 s budget has far less headroom than was reported
 
 **Where:** `tests/unit/route-auth-flags.test.ts:45-91`: the `beforeAll`, with `}, 120_000)` at `:91`. The budget was kept on a measured worst hook of about 18 s, a 6.6× margin.
 
@@ -212,7 +255,7 @@
 
 ---
 
-## 6. [Low] An untracked probe file fails the type check, so `bun run lint` cannot pass on this tree
+## 8. [Low] An untracked probe file fails the type check, so `bun run lint` cannot pass on this tree
 
 **Where:** `tests/integration/__review-proof-race.test.ts`. It is untracked and was created on 2026-10-06 at 11:50 by a review session.
 
@@ -230,7 +273,7 @@
 
 ---
 
-## 7. [Low] `caught-database-faults.test.ts` fails under load, and a timed-out case corrupts the cases after it
+## 9. [Low] Integration files on Bun's 5 s default time out under load, and a timed-out case corrupts the cases after it
 
 **Where:** `tests/integration/caught-database-faults.test.ts`.
 
@@ -241,6 +284,11 @@
 
 - With the full unit tier running alongside (`bun tests/helpers/run.ts integration caught-database-faults`): 8 pass, 7 fail. Five cases timed out at 5 s, and sign-ins took up to 8.2 s.
 - The same command with nothing else active: 15 pass, with sign-ins under 0.4 s.
+- **The same class in other files** (2026-10-06, observed during the shared-response-schemas Phase 1 work; not reproduced separately):
+  - Four full `bun run test:integration` runs each had one to three 5 s timeouts, in `upload-auth-gate` (setup), `id-canonicalization-guards`, `oauth-email-rotation` and `session-role-field`.
+  - The same run of HEAD from a scratch copy had 12 such timeouts across six files.
+  - Each file passes alone. `oauth-email-rotation` takes 2.5 s alone and 5.7–6.4 s in the full tier.
+  - A unit-tier timing assertion fails the same way under load: `media-allowlist` has a 20 ms limit and measured 45 ms, and passes alone.
 
 **Problem:**
 
@@ -251,11 +299,11 @@
 - This file is the main evidence that caught database faults no longer read as refusals. When it fails this way, the next agent reads the failures as a regression in those fixes.
 - `tests/integration/self-service-credentials.test.ts:133-139` documents the same trap and sets `setDefaultTimeout(45_000)` for it.
 
-**Fix:** set a timeout for the whole file, as `self-service-credentials.test.ts` does, sized from a run under load.
+**Fix:** give every sign-in-heavy file a whole-file timeout, as `self-service-credentials.test.ts` does, sized from a full-tier run rather than a lone one. Alternatively, lower the integration tier's worker count.
 
 ---
 
-## 8. [Low] The route-gate analyzer still reads two reachable shapes as "no gate" instead of failing
+## 10. [Low] The route-gate analyzer still reads two reachable shapes as "no gate" instead of failing
 
 **Where:** `tests/helpers/route-gates.ts`.
 
@@ -291,7 +339,7 @@ export const indexedCollection = () => actions[0]?.();
 
 ---
 
-## 9. [Low] Six code comments cite review reports that no longer exist
+## 11. [Low] Six code comments cite review reports that no longer exist
 
 **Where:**
 
@@ -305,13 +353,13 @@ export const indexedCollection = () => actions[0]?.();
 
 **Fix:** make each comment state its own reason, without a report name:
 
-- the oauth test: why it uses a spy rather than a real lock holder (#4);
-- the route-flag hook: how its budget was chosen (#5);
+- the oauth test: why it uses a spy rather than a real lock holder (#5);
+- the route-flag hook: how its budget was chosen (#7);
 - the four upload-validation comments: the behaviour each regression guards.
 
 ---
 
-## 10. [Low] New comments break the app's comment rules
+## 12. [Low] New comments break the app's comment rules
 
 **Where:**
 
@@ -330,7 +378,7 @@ export const indexedCollection = () => actions[0]?.();
 
 ---
 
-## 11. [Low] One logging rule, three copies
+## 13. [Low] One logging rule, three copies
 
 **Where:**
 
@@ -349,7 +397,7 @@ export const indexedCollection = () => actions[0]?.();
 
 ---
 
-## 12. [Low] Open decision: a 503 after a single-use input was spent cannot be retried
+## 14. [Low] Open decision: a 503 after a single-use input was spent cannot be retried
 
 **Where:**
 
@@ -387,3 +435,83 @@ export const indexedCollection = () => actions[0]?.();
   - The answer was correct and its input is already spent, so the refund gives an attacker nothing.
   - The texts can then name the remedy for each method: request an OTP, wait for the next TOTP code, or use another backup code.
 - Make each spend atomic with the work that completes the flow. That reshapes each flow, and it is impossible for the OAuth callback, because Google's code is single-use.
+
+---
+
+## 15. [Low] An upload into a folder deleted mid-upload answers 500
+
+**Where:**
+
+- `app/api/dash/media/files/handler.ts`: `POST` passes no `mapError`.
+- `lib/media/upload.ts`: `storeUpload` inserts the row after processing the image, outside any wrapper.
+
+**Status:** Read by reviewer `claude` on 2026-10-06, then verified against the code.
+
+**Problem:**
+
+- The folder is checked before the image is processed, and the row is inserted seconds later.
+- If the folder is deleted in between, the insert fails its foreign key. The failure reaches `handleApiError`, which answers 500 `uploadFailed`.
+- `PUT /files` and `PUT /files/:id` map the same violation to 404 through `handleFolderForeignKeyViolation`.
+
+**Fix:** pass `handleFolderForeignKeyViolation` to the upload route. This is in Phase 1 of `docs/media-file-manager-plan.md`.
+
+---
+
+## 16. [Low] A folder move loads its whole subtree under the library-wide lock
+
+**Where:** `lib/media/folders.ts:171-209` (`subtreeFolders`, `subtreeOf`) and `:389` (`updateFolder`).
+
+**Status:** Read by both reviewers on 2026-10-06, then verified against the code.
+
+**Problem:**
+
+- The cycle check loads every folder row of the moved subtree, only to answer one membership question and read one height.
+- It holds `lockTree` meanwhile, and every folder write waits on that lock.
+- A depth of 10 and 500 children per folder do not bound the row count.
+
+**Fix:** walk up from the destination, at most `FOLDER_MAX_DEPTH` + 1 rows, and read the height as an aggregate. This is in Phase 6 of `docs/media-file-manager-plan.md`.
+
+---
+
+## 17. [Low] The recursive delete loads every folder and file row of the subtree before it checks the 200 cap
+
+**Where:** `lib/media/lifecycle.ts:305-325`.
+
+**Status:** Read on 2026-10-06.
+
+**Problem:** a tree far over the cap is read in full, only to be refused.
+
+**Fix:** a bounded walk of at most cap + 2 folders and cap + 1 files. This is in Phase 3 of `docs/media-file-manager-plan.md`.
+
+---
+
+## 18. [Low] A failed library upload blocks deleting its folder for up to 24 hours, while the folder lists as empty
+
+**Where:**
+
+- `lib/media/folders.ts:443-450`: the empty-folder delete counts rows of any status.
+- `lib/media/lifecycle.ts:328-329`: the recursive delete refuses on non-active rows.
+- `lib/media/lifecycle.ts:39`: `PENDING_FILE_TTL` is 24 hours.
+
+**Status:** Read by reviewer `claude` on 2026-10-06, then verified against the code.
+
+**Problem:** a `pending` row is never listed. Even so, the empty-folder delete answers `FOLDER_NOT_EMPTY` and the recursive one `FOLDER_BUSY` until the sweep reaps the row.
+
+**Fix:** a library upload inserts and activates its row within one request, and R2's worst case is under a minute: 3 × (3 s + 15 s), per `lib/r2/client.ts`. So a `pending` row in a folder that is older than 10 minutes is abandoned, and it is deleted with its folder, object included.
+
+- That is the same reasoning and the same bound as `TRANSITION_STALE_AFTER` (`lib/media/visibility.ts:41`), and the two will share one constant.
+- A fresh upload still answers `FOLDER_BUSY`.
+
+This is in Phase 3 of `docs/media-file-manager-plan.md`.
+
+---
+
+## 19. [Low] Usage lookups return every referrer row (dormant)
+
+**Where:** `lib/media/usages.ts:35-45` (`usageQuery`), `:66` (`referrers`) and `:89-101` (`usedBy`).
+
+**Status:** Read by reviewer `codex` on 2026-10-06, then verified against the code. It is dormant while `USAGE_SOURCES` is empty.
+
+**Problem:** the query has no limit and no aggregation. A file with many referrers returns them all to the server: in file details, and again in every refused delete.
+
+**Fix:** `EXISTS` for whether a file is used, SQL aggregates for counts, and a capped list in file details. This is in Phase 2 of `docs/media-file-manager-plan.md`.

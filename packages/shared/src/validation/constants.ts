@@ -39,6 +39,8 @@ export const PHONE_NUMBER_MAX = 15;
 
 export const OTP_CODE_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 10;
+/** The first rung, and the whole ladder on the anonymous surfaces. */
+export const OTP_BASE_RESEND_DELAY_S = 30;
 
 export const ROLE_NAME_MIN = 1;
 export const ROLE_NAME_MAX = 100;

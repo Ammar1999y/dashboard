@@ -1,4 +1,4 @@
-import type { HandlerOutput } from './contract';
+import type { HandlerError } from './contract';
 
 import {
   getConstraintName,
@@ -63,7 +63,7 @@ function uniqueViolationConflict(
   error: unknown,
   constraints: ReadonlyMap<string, string>,
   scope: string
-): HandlerOutput<null> | undefined {
+): HandlerError | undefined {
   if (!isUniqueViolation(error)) return undefined;
   const message =
     constraints.get(getConstraintName(error)) ??
@@ -82,7 +82,7 @@ function uniqueViolationConflict(
  */
 export function handleUserUniqueViolation(
   error: unknown
-): HandlerOutput<null> | undefined {
+): HandlerError | undefined {
   return uniqueViolationConflict(error, USER_UNIQUE_CONSTRAINTS, 'users');
 }
 
@@ -117,7 +117,7 @@ function isMappedForeignKeyViolation(
 export function handleUserForeignKeyViolation(
   error: unknown,
   messages: { roleNotFound: string }
-): HandlerOutput<null> | undefined {
+): HandlerError | undefined {
   // Deliberately unmapped: `role_permissions_role_id_roles_id_fk` can only fail
   // on a role this transaction created or locked, a server invariant break
   // rather than a client mistake.
@@ -133,7 +133,7 @@ export function handleUserForeignKeyViolation(
 /** Both user mappings, unique first, for the routes that write a user row. */
 export function handleUserConstraintViolation(
   error: unknown
-): HandlerOutput<null> | undefined {
+): HandlerError | undefined {
   return (
     handleUserUniqueViolation(error) ??
     handleUserForeignKeyViolation(error, userMsg)
@@ -143,14 +143,14 @@ export function handleUserConstraintViolation(
 /** Same contract as `handleUserUniqueViolation`, for permission/role endpoints. */
 export function handlePermissionUniqueViolation(
   error: unknown
-): HandlerOutput<null> | undefined {
+): HandlerError | undefined {
   return uniqueViolationConflict(error, PERMISSION_UNIQUE_CONSTRAINTS, 'roles');
 }
 
 /** A file write whose destination folder was deleted after it was checked; same `undefined` contract. */
 export function handleFolderForeignKeyViolation(
   error: unknown
-): HandlerOutput<null> | undefined {
+): HandlerError | undefined {
   if (!isMappedForeignKeyViolation(error, FOLDER_FK_CONSTRAINTS, 'files'))
     return undefined;
   return handleApiError(

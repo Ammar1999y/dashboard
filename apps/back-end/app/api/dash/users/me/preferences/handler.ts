@@ -21,59 +21,68 @@ import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requireSession } from '@/lib/http/session';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-export const GET = withApiErrors(MSG_FETCH_ERROR, async (ctx) => {
-  const { userId } = await requireSession(ctx);
+export const GET = withApiErrors(
+  'GET /api/dash/users/me/preferences',
+  MSG_FETCH_ERROR,
+  async (ctx) => {
+    const { userId } = await requireSession(ctx);
 
-  await enforceRateLimit({
-    scope: 'users.me.preferences.get',
-    identifier: userIdentifier(userId),
-    limit: 60,
-  });
+    await enforceRateLimit({
+      scope: 'users.me.preferences.get',
+      identifier: userIdentifier(userId),
+      limit: 60,
+    });
 
-  const [row] = await db
-    .select({ ui: userPreferences.ui, updatedAt: userPreferences.updatedAt })
-    .from(userPreferences)
-    .where(eq(userPreferences.userId, userId));
+    const [row] = await db
+      .select({ ui: userPreferences.ui, updatedAt: userPreferences.updatedAt })
+      .from(userPreferences)
+      .where(eq(userPreferences.userId, userId));
 
-  // Defaults, not 404: the client reconciles against a total document.
-  return apiSuccess({
-    message: MSG_FETCHED,
-    data: {
-      preferences: sanitizePreferences(row?.ui),
-      updatedAt: row?.updatedAt ?? null,
-    },
-  });
-});
+    // Defaults, not 404: the client reconciles against a total document.
+    return apiSuccess({
+      message: MSG_FETCHED,
+      data: {
+        preferences: sanitizePreferences(row?.ui),
+        updatedAt: row?.updatedAt ?? null,
+      },
+    });
+  }
+);
 
 /**
  * `PUT`, not `PATCH`: `HttpMethod` is a closed set the 405 boundary answers from.
  * No audit entry: `audit_logs` has no retention sweep, and a debounced slider
  * would fill it with rows nobody reads.
  */
-export const PUT = withApiErrors(MSG_UPDATE_ERROR, async (ctx) => {
-  const { userId } = await requireSession(ctx);
+export const PUT = withApiErrors(
+  'PUT /api/dash/users/me/preferences',
+  MSG_UPDATE_ERROR,
+  async (ctx) => {
+    const { userId } = await requireSession(ctx);
 
-  await enforceRateLimit({
-    scope: 'users.me.preferences.put',
-    identifier: userIdentifier(userId),
-    limit: 30,
-    failClosed: true,
-  });
+    await enforceRateLimit({
+      scope: 'users.me.preferences.put',
+      identifier: userIdentifier(userId),
+      limit: 30,
+      failClosed: true,
+    });
 
-  const input = await readJsonBody(ctx, preferencesSchema);
+    const input = await readJsonBody(ctx, preferencesSchema);
 
-  const [row] = await db
-    .insert(userPreferences)
-    .values({ userId, ui: input })
-    .onConflictDoUpdate({
-      target: userPreferences.userId,
-      set: { ui: input },
-    })
-    .returning({ updatedAt: userPreferences.updatedAt });
-  if (!row) throw new CustomError(MSG_UPDATE_ERROR, HTTP_STATUS.INTERNAL_ERROR);
+    const [row] = await db
+      .insert(userPreferences)
+      .values({ userId, ui: input })
+      .onConflictDoUpdate({
+        target: userPreferences.userId,
+        set: { ui: input },
+      })
+      .returning({ updatedAt: userPreferences.updatedAt });
+    if (!row)
+      throw new CustomError(MSG_UPDATE_ERROR, HTTP_STATUS.INTERNAL_ERROR);
 
-  return apiSuccess({
-    message: MSG_UPDATED,
-    data: { updatedAt: row.updatedAt },
-  });
-});
+    return apiSuccess({
+      message: MSG_UPDATED,
+      data: { updatedAt: row.updatedAt },
+    });
+  }
+);
