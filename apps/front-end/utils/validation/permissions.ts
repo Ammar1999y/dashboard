@@ -15,7 +15,11 @@ export type UpdatePermissionOutput = z.output<
   typeof adminUpdatePermissionBodySchema
 >;
 
-/** See the note on DEFAULT_SECTION in ./sections. */
+/**
+ * The empty form, shared by the create page and the edit page — the edit page
+ * needs it too, so that a record missing an optional field still gives every
+ * input a value and React never switches one from uncontrolled to controlled.
+ */
 export const DEFAULT_PERMISSION: DefaultValues<CreatePermissionInput> = {
   roleName: '',
   description: '',
@@ -23,7 +27,13 @@ export const DEFAULT_PERMISSION: DefaultValues<CreatePermissionInput> = {
   permissions: [],
 };
 
-/** See the note on toSectionForm in ./sections. */
+/**
+ * A stored record as the edit form's `values`: exactly the update body's
+ * fields, since that schema is strict and the id travels in the path. Explicit
+ * per field so every input has a value from its first render — spreading the
+ * record would leave an absent optional field `undefined` and make React switch
+ * it to controlled on the first keystroke.
+ */
 export const toPermissionForm = (
   record: PermissionClient
 ): UpdatePermissionInput => ({

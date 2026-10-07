@@ -1,16 +1,9 @@
 import * as z from 'zod';
-import { nullableIdSchema } from '@app/shared/validation/rules';
 import {
   MSG_LIST_TOO_LONG,
   MSG_ROWS_DUPLICATE_ID,
   MSG_ROWS_DUPLICATE_KEY,
 } from '@/constants/messages';
-
-/** A select left on its placeholder submits `''`. */
-export const optionalIdSchema = z.preprocess(
-  (v: string | null | undefined) => (v === '' ? null : v),
-  nullableIdSchema
-);
 
 /** A text field that may be left out, sent empty, or cleared with `null`. */
 export const optionalTextSchema = (

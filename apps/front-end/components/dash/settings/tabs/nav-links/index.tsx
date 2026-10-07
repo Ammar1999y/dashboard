@@ -14,7 +14,6 @@ import FieldArrayItemActions from '@/components/form/field-array/item-actions';
 import FormInput from '@/components/form/form-input';
 
 import { KeyInput } from '../key-input';
-import { SectionLinkCombobox } from './section-combobox';
 
 const createItem = () => ({
   id: generateEntityId(),
@@ -91,7 +90,14 @@ const NavLinkFields = memo(({ index }: { index: number }) => (
   <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
     <FormInput name={`navLinks.${index}.title`} label='العنوان' dir='rtl' />
     <KeyInput name={`navLinks.${index}.key`} />
-    <SectionLinkCombobox index={index} className='md:col-span-2' />
+    <FormInput
+      name={`navLinks.${index}.link`}
+      label='الرابط'
+      dir='ltr'
+      placeholder='https://'
+      className='placeholder:!text-left'
+      classNameField='md:col-span-2'
+    />
   </div>
 ));
 

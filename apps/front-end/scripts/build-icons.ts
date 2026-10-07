@@ -26,14 +26,7 @@ const GENERATED = new Set([BUNDLE_FILE, NAMES_FILE]);
 const SCAN_DIRS = ['components', 'pages', 'lib', 'hooks', 'utils', 'constants'];
 const FILE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs']);
 // Each prefix is one `@iconify-json/<prefix>` devDependency.
-const PREFIXES = [
-  'solar',
-  'lucide',
-  'fluent',
-  'hugeicons',
-  'uim',
-  'icon-park-twotone',
-];
+const PREFIXES = ['solar', 'lucide', 'fluent', 'hugeicons', 'uim'];
 
 const ICON_RE =
   /['"`]([a-z][a-z0-9]*(?:-[a-z0-9]+)*):([a-z0-9]+(?:-[a-z0-9]+)*)['"`]/g;

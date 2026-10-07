@@ -11,24 +11,6 @@ export const dashboardNav: readonly NavSection[] = [
         path: '/dash',
         icon: 'solar:home-2-bold-duotone',
       },
-
-      {
-        title: 'الأقسام',
-        path: '/dash/sections',
-        icon: 'icon-park-twotone:layout-five',
-        children: [
-          {
-            title: 'إضافة قسم',
-            hidden: true,
-            path: '/dash/sections/new',
-          },
-          {
-            title: 'تعديل القسم',
-            hidden: true,
-            path: '/dash/sections/[id]/edit',
-          },
-        ],
-      },
     ],
   },
   {

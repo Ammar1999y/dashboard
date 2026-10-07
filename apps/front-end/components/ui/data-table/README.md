@@ -1,6 +1,6 @@
 # Data table
 
-The list table behind every dashboard list page: server-paged (`users`, `permissions`) or loaded whole and paged in the browser (`sections`).
+The list table behind every dashboard list page: server-paged (`users`, `permissions`), or loaded whole and paged in the browser.
 
 Read this before changing anything here, or anything it depends on outside this folder: the column files of each feature, `store/url-store.ts`, `lib/api/query.ts`, `lib/data-table/query.ts`, `mocks/lib/data-table.ts`, `styles/table.css` and `@app/shared/data-table/*`. Most rules below exist because breaking them once made the header or rows stop updating, or made the table slow at 100 rows.
 
@@ -99,4 +99,4 @@ NEXT_PUBLIC_API_MOCKING=enabled bun --bun next build --profile --webpack
 bun run start:mock   # http://localhost:3123/dev/data-table-lab
 ```
 
-`--profile` keeps React's Profiler working in production, which the lab's render timings need. After the lab, open the five list pages in mock mode and check that they render without console errors.
+`--profile` keeps React's Profiler working in production, which the lab's render timings need. After the lab, open the list pages in mock mode and check that they render without console errors.

@@ -30,7 +30,7 @@ A mock build also changes two files outside `mocks/`, both keyed on the same fla
 
 ## Pending back-end
 
-Sections and settings have no back-end route yet. `handlers/content.ts` is their only implementation; it parses bodies with the forms' own schemas, as their routes will, and holds the rules the server holds for users and roles: a section slug is unique (409), and a section a settings nav link points at (`#slug`) is not deleted (400). Settings is one row, upserted whole: every save answers 200. When a route ships with the same contract, delete its handler: the front-end needs no change.
+Settings has no back-end route yet. `handlers/content.ts` is its only implementation; it parses the body with the form's own schema, as its route will. Settings is one row, upserted whole: every save answers 200. When the route ships with the same contract, delete its handler: the front-end needs no change.
 
 ## Layout
 
@@ -39,15 +39,14 @@ Sections and settings have no back-end route yet. `handlers/content.ts` is their
 | `handlers/auth.ts`        | `get-session`, `sign-in/email`, `sign-out`, `/api/dev/sign-up`    |
 | `handlers/users.ts`       | users list (server-paged), detail, create, update, delete         |
 | `handlers/permissions.ts` | roles picker, permissions list (server-paged) and CRUD            |
-| `handlers/content.ts`     | sections, settings (no back-end yet)                              |
+| `handlers/content.ts`     | settings (no back-end yet)                                        |
 | `handlers/media.ts`       | `POST /api/upload/file`, as the server admits files               |
 | `lib/data-table.ts`       | paging, sort, search and filters for `useServerDataTable` tables  |
-| `lib/crud.ts`             | list/detail/create/update/delete for tables loaded whole          |
 | `lib/http.ts`             | the envelope, body and id parsing, the error wrapper              |
 | `lib/messages.ts`         | refusals of the pending entities, which the server has no copy of |
 | `store.ts`, `seed.ts`     | the tables and their starting rows                                |
 
-To mock a new endpoint, add a handler next to its neighbours. A resource whose list is loaded whole can usually be covered by one `crud(path, table, schemas)` call, with its `unique`, `references` and `referencedBy` rules.
+To mock a new endpoint, add a handler next to its neighbours.
 
 `tests/mocks-*.test.ts` run the real handlers under `msw/node` (`tests/mocks-harness.ts`); `bun test tests/mocks-users.test.ts` runs one.
 
@@ -56,7 +55,7 @@ To mock a new endpoint, add a handler next to its neighbours. A resource whose l
 ```js
 mockApi.fail('/api/dash/users', 500); // every method on that path returns 500
 mockApi.fail('/api/dash/users/:id', 422, 'رسالة'); // custom status and message
-mockApi.offline('/api/dash/sections'); // network error
+mockApi.offline('/api/dash/settings'); // network error
 mockApi.latency(3000); // slow every request
 mockApi.restore(); // undo the overrides above
 mockApi.reset(); // back to seed data, signed out

@@ -119,20 +119,3 @@ export const MSG_FONT_SIZE_MULTIPLIER_MAX = (max: number) =>
 export const MSG_SOCIAL_ACCOUNTS_INVALID = 'قم بإدخال حسابات التواصل بشكل صحيح';
 export const MSG_CONTACT_INFO_INVALID = 'قم بإدخال بيانات التواصل بشكل صحيح';
 export const MSG_NAV_LINKS_INVALID = 'قم بإدخال الروابط بشكل صحيح';
-
-export const MSG_SECTION_TITLE_TOO_SHORT = (min: number) =>
-  `عنوان القسم يجب أن يكون ${countOf(min, CHARACTERS)} على الأقل`;
-export const MSG_SECTION_TITLE_TOO_LONG = (max: number) =>
-  `عنوان القسم يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
-export const MSG_SECTION_SUBTITLE_TOO_LONG = (max: number) =>
-  `العنوان الفرعي يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
-export const MSG_SECTION_SHORT_DESCRIPTION_TOO_LONG = (max: number) =>
-  `الوصف المختصر يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
-export const MSG_ITEM_TITLE_REQUIRED = 'عنوان العنصر مطلوب';
-export const MSG_ITEM_TITLE_TOO_LONG = (max: number) =>
-  `عنوان العنصر يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
-export const MSG_ITEM_SUBTITLE_TOO_LONG = (max: number) =>
-  `عنوان العنصر الفرعي يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
-export const MSG_ITEM_DESCRIPTION_TOO_LONG = (max: number) =>
-  `وصف العنصر يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
-export const MSG_ITEMS_INVALID = 'قم بإدخال العناصر بشكل صحيح';

@@ -132,5 +132,4 @@ export type IconName =
   | 'lucide:ungroup'
   | 'fluent:table-resize-column-20-regular'
   | 'fluent:text-direction-horizontal-left-24-regular'
-  | 'hugeicons:column-delete'
-  | 'icon-park-twotone:layout-five';
+  | 'hugeicons:column-delete';

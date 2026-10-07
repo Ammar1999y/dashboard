@@ -9,7 +9,7 @@ interface EntityConfig {
   api: string;
   /** The list page; the create and edit pages sit under it. */
   route: string;
-  /** The entity in words, with its article: "القسم". */
+  /** The entity in words, with its article: "المستخدم". */
   noun: string;
 }
 

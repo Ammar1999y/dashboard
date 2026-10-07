@@ -1,6 +1,5 @@
 import type { MockRole, MockUser, MockUserRole } from './store';
 import type { PagePermission } from '@/types/permission';
-import type { SectionClient } from '@/types/sections';
 import type { SettingsClient } from '@/types/settings';
 
 import {
@@ -168,50 +167,6 @@ const others = NAMES.map((name, i): MockUser => {
 
 const USERS: MockUser[] = [...[...others].reverse(), admin];
 
-const SECTIONS: SectionClient[] = [
-  {
-    id: seedId(),
-    slug: 'services',
-    title: 'خدماتنا',
-    subtitle: 'ما نقدمه لعملائنا',
-    shortDescription: 'حلول تقنية متكاملة',
-    description: null,
-    isActive: true,
-    createdAt: daysAgo(30),
-    updatedAt: daysAgo(3),
-    items: [
-      {
-        id: seedId(),
-        title: 'تطوير المواقع',
-        subtitle: '',
-        description: 'مواقع سريعة ومتجاوبة',
-        isActive: true,
-        order: 0,
-      },
-      {
-        id: seedId(),
-        title: 'تطبيقات الجوال',
-        subtitle: '',
-        description: 'تطبيقات iOS و Android',
-        isActive: true,
-        order: 1,
-      },
-    ],
-  },
-  {
-    id: seedId(),
-    slug: 'about',
-    title: 'من نحن',
-    subtitle: 'تعرف علينا',
-    shortDescription: 'فريق تقني بخبرة طويلة',
-    description: null,
-    isActive: true,
-    createdAt: daysAgo(45),
-    updatedAt: daysAgo(45),
-    items: null,
-  },
-];
-
 const SETTINGS: SettingsClient = {
   id: seedId(),
   siteTitle: APP_NAME,
@@ -241,5 +196,4 @@ const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 export const seedRoles = () => copy(ROLES);
 export const seedUsers = () => copy(USERS);
-export const seedSections = () => copy(SECTIONS);
 export const seedSettings = () => copy(SETTINGS);

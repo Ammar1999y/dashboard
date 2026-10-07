@@ -175,7 +175,6 @@
         "@ianvs/prettier-plugin-sort-imports": "^4",
         "@iconify-json/fluent": "^1",
         "@iconify-json/hugeicons": "^1",
-        "@iconify-json/icon-park-twotone": "^1",
         "@iconify-json/lucide": "^1",
         "@iconify-json/solar": "^1",
         "@iconify-json/uim": "^1",
@@ -515,8 +514,6 @@
     "@iconify-json/fluent": ["@iconify-json/fluent@1.2.58", "", { "dependencies": { "@iconify/types": "*" } }, "sha512-KiWNF3LXZ4rvicH2MR8FKVN49MB++400rSiDpjVSP4V0GjsGViSPw5PJQ3pKDNPohL5wBW/ZDpo+rCYYFbmFkA=="],
 
     "@iconify-json/hugeicons": ["@iconify-json/hugeicons@1.2.35", "", { "dependencies": { "@iconify/types": "*" } }, "sha512-c06tY90JZnKhOLBAKoQ1z2pqXMRdATuYXslTKwaaIAjLzKsTIsE+GGknY6+qo/SP0U/NG9xQjr4N+zfDqOeQiQ=="],
-
-    "@iconify-json/icon-park-twotone": ["@iconify-json/icon-park-twotone@1.2.4", "", { "dependencies": { "@iconify/types": "*" } }, "sha512-AhnGngG6DxuIZMsz4FMrv0QWTRM/CZ3NnEeaceV6psKSgt/axW+hft7oQ6pIAFN9KB95Kp3hbJuhlhG3ao60eQ=="],
 
     "@iconify-json/lucide": ["@iconify-json/lucide@1.2.136", "", { "dependencies": { "@iconify/types": "*" } }, "sha512-Wk+OeDVKkw+1LELZqRR3gXWIy5jNx5XjNMvVc9KoygJYmGqclv36FYqseRuJuxBIKDggdoZWNBxNRrOkiRbtwQ=="],
 
