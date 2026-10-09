@@ -79,6 +79,11 @@ function isDeadlock(e: unknown): boolean {
   return hasSqlState(e, '40P01');
 }
 
+/** PostgreSQL `lock_not_available`: a `NOWAIT` lock found the row held. */
+export function isLockNotAvailable(e: unknown): boolean {
+  return hasSqlState(e, '55P03');
+}
+
 /** PostgreSQL `query_canceled`: a statement exceeded `statement_timeout`. */
 export function isStatementTimeout(e: unknown): boolean {
   return hasSqlState(e, '57014');

@@ -85,7 +85,7 @@ export function holdsActionOn(
  * refuse an actor with `edit` on all records when granting `editOwn`, a strict
  * subset of what they already hold.
  */
-function actorHoldsAction(
+export function actorHoldsAction(
   actorPagePerms: Partial<Record<PermissionAction, boolean>> | undefined,
   action: string
 ): boolean {

@@ -1,7 +1,5 @@
-import type { Actor, AuditActor } from './actor';
-import type { FolderDeleteOutcome } from './folders';
+import type { AuditActor } from './actor';
 import type { Tx } from '@/db';
-import type { DashboardPage } from '@app/shared/permissions/constants';
 import type { EntityID } from '@app/shared/types';
 import type { BucketType } from '@app/shared/validation/enums';
 
@@ -9,12 +7,9 @@ import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { isForeignKeyViolation } from '@/db/errors';
-import { files, folders as foldersTable } from '@/db/schema';
+import { files } from '@/db/schema';
 
-import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { mediaMsg } from '@app/shared/messages/media';
-import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
 
 import { purgeUrls } from '@/lib/cloudflare/purge';
 import {
@@ -26,10 +21,10 @@ import {
 
 import { logSanitized } from '@/utils/log';
 
-import { auditAs, withinScope } from './actor';
-import { distinctIds, governedIds } from './files';
-import { lockFolderFor, lockTree, rowCount, subtreeFolders } from './folders';
-import { unreferenced, usedBy } from './usages';
+import { auditAs } from './actor';
+import { fileNotFound } from './errors';
+import { distinctIds } from './ids';
+import { unreferenced } from './usages';
 
 /**
  * Must cover an entity form left open overnight: lowering it deletes uploads
@@ -81,7 +76,7 @@ export async function claimFiles(
     )
     .returning({ id: files.id });
   if (claimed.length !== ids.length)
-    throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.UNPROCESSABLE);
+    throw fileNotFound(HTTP_STATUS.UNPROCESSABLE);
 
   for (const row of claimed)
     await auditAs(tx, actor, {
@@ -94,7 +89,7 @@ export async function claimFiles(
   return claimed.map((row) => row.id);
 }
 
-interface DoomedRow {
+export interface DoomedRow {
   id: string;
   r2Key: string;
   bucketType: BucketType;
@@ -112,7 +107,7 @@ interface DoomedRow {
  * ⚠️ A row whose own bucket is not configured is retained: its objects are
  * still stored.
  */
-async function finishDeleting(
+export async function finishDeleting(
   rows: readonly DoomedRow[]
 ): Promise<{ removed: string[]; retained: string[] }> {
   if (rows.length === 0) return { removed: [], retained: [] };
@@ -168,212 +163,13 @@ async function finishDeleting(
     .map((row) => row.id);
   if (done.length === 0) return { removed: [], retained };
 
-  const deletedRows = await db
+  const removed = done.map((row) => row.id);
+  // A row already gone was finished by a racing sweep; its objects are gone
+  // either way, and `deleting` never reverts, so it is removed all the same.
+  await db
     .delete(files)
-    .where(
-      and(
-        inArray(
-          files.id,
-          done.map((row) => row.id)
-        ),
-        eq(files.status, 'deleting')
-      )
-    )
-    .returning({ id: files.id });
-  return { removed: deletedRows.map((row) => row.id), retained };
-}
-
-/**
- * Marking `deleting` is the only transaction, and the composite FK refuses it
- * on a referenced row before any byte is lost. Objects and rows are removed
- * after it with no transaction open (`db/limits.ts`).
- *
- * `pending` is what the store or a purge has not honoured yet: already
- * invisible, and finished by the sweep.
- */
-export async function deleteFiles(params: {
-  ids: readonly EntityID[];
-  actor: Actor;
-  /** Pages the actor may `view`, for naming the owners in a refusal. */
-  viewable: ReadonlySet<DashboardPage>;
-  /**
-   * Only owner code removing its own record's files sets this, so the library
-   * cannot delete a file an owner still holds (`mediaGoverned`).
-   */
-  authorizedByOwner?: boolean;
-}): Promise<{ deleted: EntityID[]; pending: EntityID[] }> {
-  const ids = distinctIds(params.ids);
-  const { actor } = params;
-
-  let doomed: DoomedRow[];
-  try {
-    doomed = await withTransaction(async (tx) => {
-      const rows = await tx
-        .select({
-          id: files.id,
-          r2Key: files.r2Key,
-          bucketType: files.bucketType,
-          status: files.status,
-          transition: files.transition,
-          uploadedBy: files.uploadedBy,
-          displayName: files.displayName,
-          folderId: files.folderId,
-        })
-        .from(files)
-        .where(inArray(files.id, ids))
-        .for('update');
-      const governed = await governedIds(tx, ids);
-
-      const visible = rows.filter(
-        (row) =>
-          withinScope(actor, row.uploadedBy) &&
-          (params.authorizedByOwner === true || governed.has(row.id))
-      );
-      if (visible.length !== ids.length)
-        throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
-      // The sagas must not interleave, and deleting a `pending` row lets its
-      // upload's PUT write an object nothing owns.
-      if (visible.some((row) => row.status !== 'active' || row.transition))
-        throw new CustomError(mediaMsg.fileBusy, HTTP_STATUS.CONFLICT);
-
-      await tx
-        .update(files)
-        .set({ status: 'deleting' })
-        .where(inArray(files.id, ids));
-
-      for (const row of visible)
-        await auditAs(tx, actor, {
-          action: 'DELETE',
-          tableName: 'files',
-          recordId: row.id,
-          oldData: {
-            displayName: row.displayName,
-            folderId: row.folderId,
-            bucketType: row.bucketType,
-            key: row.r2Key,
-          },
-        });
-
-      return visible.map((row) => ({
-        id: row.id,
-        r2Key: row.r2Key,
-        bucketType: row.bucketType,
-      }));
-    });
-  } catch (error) {
-    if (!isForeignKeyViolation(error)) throw error;
-    const summaries = await usedBy(ids, params.viewable);
-    const labels = new Set<string>();
-    let hidden = 0;
-    for (const summary of summaries.values()) {
-      for (const usage of summary.visible) labels.add(usage.label);
-      hidden += summary.hidden;
-    }
-    throw new CustomError(
-      labels.size > 0 || hidden > 0
-        ? mediaMsg.fileInUseBy([...labels], hidden)
-        : mediaMsg.fileInUse,
-      HTTP_STATUS.CONFLICT
-    );
-  }
-
-  const { removed, retained } = await finishDeleting(doomed);
-  return { deleted: removed, pending: retained };
-}
-
-/**
- * Plan under the tree lock, `deleteFiles`, then delete the folders under the
- * lock again: no transaction may stay open across the object store
- * (`db/limits.ts`), and going through `deleteFiles` keeps the composite FK
- * refusing a held file.
- *
- * A tree that changed in between returns `folders: 0` rather than throwing: the
- * files ARE deleted by then, and a retry after the sweep removes the folders.
- *
- * Not in `./folders.ts`, which must not import this module.
- */
-export async function deleteFolderTree(params: {
-  folderId: EntityID;
-  actor: Actor;
-  viewable: ReadonlySet<DashboardPage>;
-}): Promise<FolderDeleteOutcome> {
-  const { folderId, actor } = params;
-
-  const plan = await withTransaction(async (tx) => {
-    await lockTree(tx);
-    await lockFolderFor(tx, folderId, actor);
-    const tree = await subtreeFolders(tx, folderId);
-    // `own` narrows the whole subtree, not only its root.
-    if (tree.some((folder) => !withinScope(actor, folder.createdBy)))
-      throw new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND);
-
-    const contents = await tx
-      .select({
-        id: files.id,
-        status: files.status,
-        uploadedBy: files.uploadedBy,
-      })
-      .from(files)
-      .where(
-        inArray(
-          files.folderId,
-          tree.map((folder) => folder.id)
-        )
-      );
-    // The root is not a descendant of itself.
-    if (tree.length - 1 + contents.length > FOLDER_RECURSIVE_DELETE_MAX)
-      throw new CustomError(mediaMsg.folderTooLarge, HTTP_STATUS.UNPROCESSABLE);
-    // Refused up front: `deleteFiles` cannot delete a non-`active` row, which
-    // would strand the folders it sits in.
-    if (contents.some((row) => row.status !== 'active'))
-      throw new CustomError(mediaMsg.folderBusy, HTTP_STATUS.CONFLICT);
-    // `own` reaches the files too, refused while the tree is still intact.
-    if (contents.some((row) => !withinScope(actor, row.uploadedBy)))
-      throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
-
-    return { tree, fileIds: contents.map((row) => row.id) };
-  });
-
-  const removed =
-    plan.fileIds.length === 0
-      ? { deleted: [], pending: [] }
-      : await deleteFiles({
-          ids: plan.fileIds,
-          actor,
-          viewable: params.viewable,
-        });
-
-  const folders = await withTransaction(async (tx) => {
-    await lockTree(tx);
-    const ids = plan.tree.map((folder) => folder.id);
-    // The same tree, not one of the same size: a folder created in between is
-    // not in the plan, and the FK would refuse deleting its parent.
-    const current = await subtreeFolders(tx, folderId);
-    const tree = new Set(current.map((folder) => folder.id));
-    const [remaining] = await tx
-      .select({ count: rowCount() })
-      .from(files)
-      .where(inArray(files.folderId, ids));
-    if (
-      tree.size !== ids.length ||
-      ids.some((id) => !tree.has(id)) ||
-      (remaining?.count ?? 0) > 0
-    )
-      return 0;
-
-    // One statement: `folders.parent_id` is NO ACTION, checked at its end.
-    await tx.delete(foldersTable).where(inArray(foldersTable.id, ids));
-    for (const folder of plan.tree)
-      await auditAs(tx, actor, {
-        action: 'DELETE',
-        tableName: 'folders',
-        recordId: folder.id,
-        oldData: { name: folder.name, parentId: folder.parentId },
-      });
-    return ids.length;
-  });
-
-  return { folders, ...removed };
+    .where(and(inArray(files.id, removed), eq(files.status, 'deleting')));
+  return { removed, retained };
 }
 
 export interface FileSweepCount {
@@ -470,9 +266,11 @@ export async function sweepFiles(): Promise<FileSweepCount> {
     // composite FK. Repeated on the UPDATE: under Read Committed only the outer
     // WHERE is re-checked against a row a racing claim just made active, so
     // without it the sweep marks a referenced file and throws on the FK.
+    // Detached like every `deleting` row, so an object R2 then refuses never
+    // holds its folder.
     return tx
       .update(files)
-      .set({ status: 'deleting' })
+      .set({ status: 'deleting', folderId: null })
       .where(and(inArray(files.id, candidates), expired()))
       .returning({ id: files.id });
   });

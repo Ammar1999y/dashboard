@@ -23,13 +23,15 @@ export const FOLDER_NAME_MAX = 100;
 export const FOLDER_MAX_DEPTH = 10;
 export const FOLDER_MAX_CHILDREN = 500;
 /**
- * Descendants — subfolders plus the files inside them, NOT counting the folder
- * being deleted — that one recursive folder delete may remove. The bound is
+ * What one delete may remove besides the selected folders themselves: their
+ * subfolders and files at any depth, and the selected files. The bound is
  * what makes the operation a request rather than a job: each file costs an
  * object delete and, for a public one, a cache purge, and the caller waits for
  * all of them.
  */
 export const FOLDER_RECURSIVE_DELETE_MAX = 200;
+/** Usages a file's details name; the rest are only counted. */
+export const MEDIA_USAGE_LIST_MAX = 20;
 
 // ⚠️ Existing passwords are held to it too: see `passwordSchema`.
 export const PASSWORD_MIN = 8;

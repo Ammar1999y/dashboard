@@ -83,7 +83,9 @@ export function objectHeaders(
       isPublic: bucketType === 'public',
     }),
     // Documents are never rendered inline: a PDF on the public origin would
-    // otherwise run its scripting on that origin.
+    // otherwise run its scripting on that origin. The one inline rendering is
+    // `previewUrl` in `./files.ts`, overridden per link on the store's own
+    // origin, which carries no cookies.
     contentDisposition: getContentDisposition({
       filename: object.filename,
       inline: object.kind === 'image',

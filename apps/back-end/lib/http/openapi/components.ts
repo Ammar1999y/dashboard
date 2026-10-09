@@ -1,6 +1,7 @@
 import type { JsonSchema } from './json-schema';
 import type { ResponseComponentName } from './success-schemas';
 
+import { MEDIA_ERROR_CODES } from '@app/shared/error-codes';
 import {
   DASHBOARD_PAGE_NAMES,
   PERMISSION_ACTION_NAMES,
@@ -19,17 +20,38 @@ export const UUID_SCHEMA: JsonSchema = {
 export const NULL_SCHEMA: JsonSchema = { type: 'null' };
 export const NULLABLE_STRING_SCHEMA: JsonSchema = { type: ['string', 'null'] };
 
+const ERROR_CODE_SCHEMA: JsonSchema = {
+  type: 'string',
+  description: `Machine-readable error code when supplied; branch on it, never on \`message\`. REAUTH_REQUIRED requests a password/passkey reauthentication proof. otp_proof_throttle identifies a proof-level OTP throttle at an authenticated boundary. A media or upload refusal carries one of ${MEDIA_ERROR_CODES.join(', ')}; each operation lists the ones it answers.`,
+};
+
 const ERROR_ENVELOPE_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     success: { const: false },
     message: { type: 'string' },
-    code: {
-      type: 'string',
-      description:
-        'Machine-readable error code when supplied. REAUTH_REQUIRED requests a password/passkey reauthentication proof. otp_proof_throttle identifies a proof-level OTP throttle at an authenticated boundary.',
-    },
+    code: ERROR_CODE_SCHEMA,
     data: NULL_SCHEMA,
+  },
+  required: ['success', 'message', 'data'],
+  additionalProperties: false,
+};
+
+/**
+ * The envelope of a media refusal that can name what blocked it. Kept apart
+ * from `ErrorEnvelope`, so every other operation still publishes `data: null`.
+ */
+const MEDIA_REFUSAL_ENVELOPE_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    success: { const: false },
+    message: { type: 'string' },
+    code: ERROR_CODE_SCHEMA,
+    data: {
+      description:
+        'The ids that blocked the refusal, for the codes that name them; null otherwise. A not-found never names an id.',
+      oneOf: [componentRef('MediaRefusalData'), NULL_SCHEMA],
+    },
   },
   required: ['success', 'message', 'data'],
   additionalProperties: false,
@@ -61,6 +83,7 @@ export const USER_PERMISSION_MATRIX_SCHEMA: JsonSchema = {
  */
 export const COMPONENT_SCHEMAS = {
   ErrorEnvelope: ERROR_ENVELOPE_SCHEMA,
+  MediaRefusalEnvelope: MEDIA_REFUSAL_ENVELOPE_SCHEMA,
 } satisfies Record<string, JsonSchema>;
 
 export function componentRef(

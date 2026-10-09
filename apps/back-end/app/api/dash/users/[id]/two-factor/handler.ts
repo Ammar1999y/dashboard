@@ -3,9 +3,8 @@ import { eq } from 'drizzle-orm';
 import { withTransaction } from '@/db';
 import { roles, users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
-import { MSG_NOT_FOUND, MSG_UPDATE_ERROR } from '@app/shared/messages/common';
+import { MSG_UPDATE_ERROR } from '@app/shared/messages/common';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import {
@@ -63,11 +62,7 @@ export const POST = withApiErrors(
       failClosed: true,
     });
 
-    const targetId = requireId(
-      ctx.params.id,
-      MSG_NOT_FOUND,
-      HTTP_STATUS.NOT_FOUND
-    );
+    const targetId = requireId(ctx.params.id, notFoundError);
 
     const auditMeta = getAuditMeta(ctx);
 

@@ -1,3 +1,5 @@
+import type { MediaRefusalData } from './responses/media';
+
 class CustomError extends Error {
   /** Optional response headers to forward (e.g. Retry-After on 429). */
   public responseHeaders?: Record<string, string>;
@@ -10,7 +12,9 @@ class CustomError extends Error {
     // CustomError sees the same shape it always has.
     public override message: string,
     public status?: number,
-    public code?: string
+    public code?: string,
+    /** The error envelope's `data`: the ids that blocked a media refusal. */
+    public data?: MediaRefusalData
   ) {
     super(message);
     this.name = 'CustomError';

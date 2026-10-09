@@ -34,6 +34,10 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { files, sessions } from '@/db/schema';
 
+import {
+  FILE_CONTENT_REFUSED_CODE,
+  FILE_TYPE_NOT_ALLOWED_CODE,
+} from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
 import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
@@ -180,8 +184,8 @@ async function attempt(options: {
   return { status: response.status, body, text, reads };
 }
 
-function failure(message: string) {
-  return { success: false, message, data: null };
+function failure(message: string, code?: string) {
+  return { success: false, message, data: null, ...(code && { code }) };
 }
 
 /**
@@ -396,7 +400,9 @@ describe('the gate admits the callers it should', () => {
     const result = await attempt({ session: actor('create'), body: form });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(mediaMsg.typeNotAllowed('setup')));
+    expect(result.body).toEqual(
+      failure(mediaMsg.typeNotAllowed('setup'), FILE_TYPE_NOT_ALLOWED_CODE)
+    );
     expect(storeOps()).toEqual([]);
   });
 
@@ -409,7 +415,9 @@ describe('the gate admits the callers it should', () => {
     const result = await attempt({ session: actor('create'), body: form });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(mediaMsg.refused('fake', 'signature')));
+    expect(result.body).toEqual(
+      failure(mediaMsg.refused('fake', 'signature'), FILE_CONTENT_REFUSED_CODE)
+    );
     expect(storeOps()).toEqual([]);
   });
 });

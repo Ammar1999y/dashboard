@@ -19,6 +19,7 @@ import { serverFault } from '@/lib/http/response';
 
 import { logLine } from '@/utils/log';
 
+import { contentRefused, imageNotCompressible, imageTooLarge } from '../errors';
 import { boundedImage } from './bounded';
 
 const UNDECODABLE_CODES = new Set([
@@ -38,19 +39,15 @@ function toUploadError(error: unknown): CustomError {
 
   const code = imageErrorCode(error);
   if (code === 'ERR_IMAGE_TOO_MANY_PIXELS')
-    return new CustomError(
-      uploadMsg.tooManyPixels(Math.floor(MAX_IMAGE_PIXELS / 1_000_000)),
-      HTTP_STATUS.UNPROCESSABLE
+    return imageTooLarge(
+      uploadMsg.tooManyPixels(Math.floor(MAX_IMAGE_PIXELS / 1_000_000))
     );
   if (code !== null && UNDECODABLE_CODES.has(code))
-    return new CustomError(uploadMsg.undecodable, HTTP_STATUS.UNPROCESSABLE);
+    return contentRefused(uploadMsg.undecodable, HTTP_STATUS.UNPROCESSABLE);
   // Backstop for an encoder limit the dimension guard below does not know
   // about; still the input's fault, not the server's.
   if (code === 'ERR_IMAGE_ENCODE_FAILED')
-    return new CustomError(
-      uploadMsg.edgeTooLong(MAX_IMAGE_EDGE),
-      HTTP_STATUS.UNPROCESSABLE
-    );
+    return imageTooLarge(uploadMsg.edgeTooLong(MAX_IMAGE_EDGE));
 
   return serverFault(uploadMsg.uploadFailed, error);
 }
@@ -178,10 +175,7 @@ async function optimizeImageWithinSlot(
     const metadata = await boundedImage(input).metadata();
     // `MAX_IMAGE_PIXELS` bounds area, not a side the output format cannot hold.
     if (metadata.width > MAX_IMAGE_EDGE || metadata.height > MAX_IMAGE_EDGE)
-      throw new CustomError(
-        uploadMsg.edgeTooLong(MAX_IMAGE_EDGE),
-        HTTP_STATUS.UNPROCESSABLE
-      );
+      throw imageTooLarge(uploadMsg.edgeTooLong(MAX_IMAGE_EDGE));
 
     const originalWidth = metadata.width || initialWidth;
     const originalHeight = metadata.height || initialWidth;
@@ -203,10 +197,7 @@ async function optimizeImageWithinSlot(
     let iterations = 0;
     const measure = async (index: number) => {
       if (iterations >= MAX_ENCODE_ATTEMPTS)
-        throw new CustomError(
-          uploadMsg.targetUnreachable,
-          HTTP_STATUS.UNPROCESSABLE
-        );
+        throw imageNotCompressible(uploadMsg.targetUnreachable);
       iterations++;
       const rung = ladder[index];
       if (!rung) throw new Error('ladder index out of range');
@@ -254,10 +245,7 @@ async function optimizeImageWithinSlot(
         iterations,
       });
       if (best.size > ceiling)
-        throw new CustomError(
-          uploadMsg.targetUnreachable,
-          HTTP_STATUS.UNPROCESSABLE
-        );
+        throw imageNotCompressible(uploadMsg.targetUnreachable);
       fitting = best;
     }
 
@@ -319,9 +307,8 @@ function assertIccProfileBounded(input: Buffer): void {
   const profile = iccProfileChunk(input);
   if (profile === null) return;
 
-  const tooLarge = new CustomError(
-    uploadMsg.iccProfileTooLarge(Math.floor(MAX_ICC_PROFILE_BYTES / 1024)),
-    HTTP_STATUS.UNPROCESSABLE
+  const tooLarge = imageTooLarge(
+    uploadMsg.iccProfileTooLarge(Math.floor(MAX_ICC_PROFILE_BYTES / 1024))
   );
 
   if (!profile.deflated) {

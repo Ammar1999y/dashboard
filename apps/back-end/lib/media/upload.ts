@@ -41,6 +41,13 @@ import { bestEffort, errorTypeOf, logSanitized } from '@/utils/log';
 
 import { auditAs } from './actor';
 import { fileTypeFor } from './allowlist';
+import {
+  contentRefused,
+  fileTooLarge,
+  kindNotAllowed,
+  typeNotAllowed,
+  visibilityDisabled,
+} from './errors';
 import { FILE_COLUMNS, matchesRow } from './files';
 import { objectHeaders } from './headers';
 import { measureEncodeCost } from './image/optimize';
@@ -226,30 +233,22 @@ export async function admitUpload(
 
   const mimeType = normalizeMimeType(entry.type);
   const spec = fileTypeFor(mimeType);
-  if (!spec)
-    throw new CustomError(
-      mediaMsg.typeNotAllowed(safeName),
-      HTTP_STATUS.BAD_REQUEST
-    );
+  if (!spec) throw typeNotAllowed(mediaMsg.typeNotAllowed(safeName));
   if (!target.kinds.includes(spec.kind))
-    throw new CustomError(mediaMsg.kindNotAllowedHere, HTTP_STATUS.BAD_REQUEST);
+    throw kindNotAllowed(HTTP_STATUS.BAD_REQUEST);
 
   if (entry.size > maxBytesFor(spec.kind))
-    throw new CustomError(
+    throw fileTooLarge(
       spec.kind === 'image'
         ? uploadMsg.fileTooLarge(safeName, MAX_IMAGE_SIZE)
-        : mediaMsg.documentTooLarge(safeName, MAX_DOCUMENT_SIZE_MB),
-      HTTP_STATUS.BAD_REQUEST
+        : mediaMsg.documentTooLarge(safeName, MAX_DOCUMENT_SIZE_MB)
     );
 
   const buffer = Buffer.from(await entry.arrayBuffer());
 
   const detected = inspect(spec, buffer);
   if (!detected.ok)
-    throw new CustomError(
-      mediaMsg.refused(safeName, detected.reason),
-      HTTP_STATUS.BAD_REQUEST
-    );
+    throw contentRefused(mediaMsg.refused(safeName, detected.reason));
 
   if (spec.kind !== 'image') return { file: entry, buffer, mimeType, spec };
 
@@ -257,11 +256,10 @@ export async function admitUpload(
   // only check.
   const magic = validateMagicBytes(buffer, mimeType);
   if (!magic.valid)
-    throw new CustomError(
+    throw contentRefused(
       magic.animated
         ? uploadMsg.animatedNotAllowed(safeName)
-        : uploadMsg.contentMismatch(safeName),
-      HTTP_STATUS.BAD_REQUEST
+        : uploadMsg.contentMismatch(safeName)
     );
   const validatedSvg =
     mimeType === 'image/svg+xml'
@@ -536,11 +534,7 @@ export async function acceptUpload(
   target: UploadTarget & { field: string }
 ): Promise<MediaFileRow> {
   if (target.visibility === 'public') await requirePublishGrant(ctx.headers);
-  if (!isVisibilityEnabled(target.visibility))
-    throw new CustomError(
-      mediaMsg.visibilityDisabled,
-      HTTP_STATUS.UNPROCESSABLE
-    );
+  if (!isVisibilityEnabled(target.visibility)) throw visibilityDisabled();
   // Per USER: an IP bucket lets one account spend its NAT neighbours' budget.
   // The coarse per-IP bound runs earlier, in the adapter.
   await enforceRateLimit({

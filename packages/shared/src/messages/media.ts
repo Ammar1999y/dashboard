@@ -95,6 +95,7 @@ export const mediaMsg = {
   folderNameExists: 'يوجد مجلد بهذا الاسم في نفس المكان',
   folderNotEmpty: 'لا يمكن حذف مجلد يحتوي على ملفات أو مجلدات فرعية',
   folderTooLarge: `لا يمكن حذف مجلد يحتوي على أكثر من ${countOf(FOLDER_RECURSIVE_DELETE_MAX, ITEMS)}، احذف بعض المحتويات أولاً`,
+  selectionTooLarge: `لا يمكن حذف أكثر من ${countOf(FOLDER_RECURSIVE_DELETE_MAX, ITEMS)} في المرة الواحدة، قلّل التحديد أو احذف بعض المحتويات أولاً`,
   folderBusy:
     'يوجد ملفات قيد الرفع أو المعالجة داخل المجلد، حاول مرة أخرى بعد قليل',
   invalidRecursive: 'قيمة الحذف المتكرر غير صحيحة',

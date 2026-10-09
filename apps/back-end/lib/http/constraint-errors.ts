@@ -8,13 +8,14 @@ import {
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { mediaMsg } from '@app/shared/messages/media';
 import { permissionMsg } from '@app/shared/messages/permissions';
 import {
   MSG_EMAIL_EXISTS,
   MSG_PHONE_EXISTS,
   userMsg,
 } from '@app/shared/messages/users';
+
+import { folderNotFound } from '@/lib/media/errors';
 
 import { logSanitized } from '@/utils/log';
 
@@ -153,7 +154,5 @@ export function handleFolderForeignKeyViolation(
 ): HandlerError | undefined {
   if (!isMappedForeignKeyViolation(error, FOLDER_FK_CONSTRAINTS, 'files'))
     return undefined;
-  return handleApiError(
-    new CustomError(mediaMsg.folderNotFound, HTTP_STATUS.NOT_FOUND)
-  );
+  return handleApiError(folderNotFound());
 }

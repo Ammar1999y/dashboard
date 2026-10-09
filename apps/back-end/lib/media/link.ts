@@ -5,16 +5,22 @@ import type { Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { BucketType } from '@app/shared/validation/enums';
 
-import { and, inArray, isNotNull } from 'drizzle-orm';
+import { and, asc, inArray, isNotNull } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { files } from '@/db/schema';
 
-import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { mediaMsg } from '@app/shared/messages/media';
 
-import { distinctIds, FILE_COLUMNS } from './files';
+import {
+  fileBusy,
+  fileNotFound,
+  kindNotAllowed,
+  linkNotAllowed,
+  linkVisibilityMismatch,
+} from './errors';
+import { FILE_COLUMNS } from './files';
+import { distinctIds } from './ids';
 import { claimFiles } from './lifecycle';
 import { requirePublishGrant } from './policy';
 import { usageVisibilities } from './usages';
@@ -85,6 +91,10 @@ function eligible(
  * the promotion a private file under a public purpose is about to become
  * public, so only an already-public file under a PRIVATE purpose can be decided
  * — no promotion ever demotes. After it, the bucket has to match exactly.
+ *
+ * ⚠️ Its refusals name the files in `data`: a route that links lists their
+ * codes in `MEDIA_REFUSAL_CODES` (`lib/http/openapi/route-tables.ts`), or its
+ * document publishes `data: null`.
  */
 function assertLinkable(
   rows: readonly LinkRow[],
@@ -95,22 +105,14 @@ function assertLinkable(
   const { purpose, actor } = params;
   for (const row of rows) {
     if (!eligible(row, purpose, actor, held.get(row.id) ?? new Set()))
-      throw new CustomError(mediaMsg.linkNotAllowed, HTTP_STATUS.FORBIDDEN);
+      throw linkNotAllowed([row.id]);
     if (!purpose.kinds.includes(row.kind))
-      throw new CustomError(
-        mediaMsg.kindNotAllowedHere,
-        HTTP_STATUS.UNPROCESSABLE
-      );
-    if (row.status === 'deleting' || row.transition)
-      throw new CustomError(mediaMsg.fileBusy, HTTP_STATUS.CONFLICT);
+      throw kindNotAllowed(HTTP_STATUS.UNPROCESSABLE, [row.id]);
+    if (row.status === 'deleting' || row.transition) throw fileBusy([row.id]);
     const mismatched = afterPromotion
       ? row.bucketType !== purpose.visibility
       : purpose.visibility === 'private' && row.bucketType === 'public';
-    if (mismatched)
-      throw new CustomError(
-        mediaMsg.linkVisibilityMismatch,
-        HTTP_STATUS.CONFLICT
-      );
+    if (mismatched) throw linkVisibilityMismatch([row.id]);
   }
 }
 
@@ -129,8 +131,7 @@ async function checkLinkable(params: LinkParams): Promise<LinkRow[]> {
     .select(LINK_COLUMNS)
     .from(files)
     .where(inArray(files.id, ids));
-  if (rows.length !== ids.length)
-    throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.UNPROCESSABLE);
+  if (rows.length !== ids.length) throw fileNotFound(HTTP_STATUS.UNPROCESSABLE);
 
   assertLinkable(rows, { ...params, ids }, await usageVisibilities(ids), false);
   return rows;
@@ -202,9 +203,9 @@ export async function attachFiles(tx: Tx, params: LinkParams): Promise<void> {
     .select(FILE_COLUMNS)
     .from(files)
     .where(inArray(files.id, ids))
+    .orderBy(asc(files.id))
     .for('update');
-  if (rows.length !== ids.length)
-    throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.UNPROCESSABLE);
+  if (rows.length !== ids.length) throw fileNotFound(HTTP_STATUS.UNPROCESSABLE);
   assertLinkable(
     rows,
     { ...params, ids },

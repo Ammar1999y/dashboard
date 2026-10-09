@@ -10,6 +10,7 @@ import type {
   SuccessOutput,
 } from './contract';
 import type { ResponseRoute } from '@app/shared/response-contract';
+import type { MediaRefusalData } from '@app/shared/responses/media';
 import type { PaginationMeta } from '@app/shared/types/api';
 
 import { isDatabaseContention, isInvalidTextEncoding } from '@/db/errors';
@@ -46,14 +47,15 @@ interface ApiSuccessOptions {
 interface ApiErrorOptions {
   message: string;
   code?: string;
+  data?: MediaRefusalData;
   status?: number;
   headers?: Record<string, string>;
 }
 
-export function apiSuccess<T>(
+export function apiSuccess<const T>(
   options: ApiSuccessOptions & { data: T; meta: PaginationMeta }
 ): PaginatedOutput<T>;
-export function apiSuccess<T>(
+export function apiSuccess<const T>(
   options: ApiSuccessOptions & { data: T; meta?: undefined }
 ): SuccessOutput<T>;
 export function apiSuccess(
@@ -108,12 +110,18 @@ export function apiRaw({
 export function apiError({
   message,
   code,
+  data,
   status = HTTP_STATUS.BAD_REQUEST,
   headers,
 }: ApiErrorOptions): HandlerError {
   return {
     status,
-    body: { success: false, message, data: null, ...(code && { code }) },
+    body: {
+      success: false,
+      message,
+      data: data ?? null,
+      ...(code && { code }),
+    },
     ...(headers && { headers }),
   };
 }
@@ -139,6 +147,7 @@ export function handleApiError(
     return apiError({
       message: error.message,
       code: error.code,
+      data: error.data,
       status: error.status,
       ...(headers && { headers }),
     });

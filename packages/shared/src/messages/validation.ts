@@ -19,6 +19,7 @@ import {
   countOf,
   DIGITS,
   FILES,
+  ITEMS,
   PERMISSIONS,
   SESSIONS_NOMINATIVE,
 } from './count';
@@ -111,6 +112,9 @@ export const mediaValidationMsg = {
   displayNameInvalid: 'اسم الملف يحتوي على أحرف غير مسموحة',
   idsRequired: 'يجب تحديد ملف واحد على الأقل',
   idsTooMany: `يمكن تحديد ${countOf(IDS_ARRAY_MAX, FILES)} كحد أقصى في الطلب الواحد`,
+  selectionRequired: 'يجب تحديد عنصر واحد على الأقل',
+  selectionTooMany: `يمكن تحديد ${countOf(IDS_ARRAY_MAX, ITEMS)} كحد أقصى في الطلب الواحد`,
+  filesToRoot: 'لا يمكن نقل الملفات إلى الجذر، اختر مجلدًا',
   nothingToUpdate: 'لا يوجد ما يتم تحديثه',
 };
 

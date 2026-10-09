@@ -5,42 +5,44 @@ import type { EntityID } from '@app/shared/types';
 import type { BucketType } from '@app/shared/validation/enums';
 import type { SQL } from 'drizzle-orm';
 
-import { sql } from 'drizzle-orm';
+import { and, inArray, not, sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { files } from '@/db/schema';
+import * as z from 'zod';
 
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
+import { MEDIA_USAGE_LIST_MAX } from '@app/shared/validation/constants';
 
+import { uuidList } from './ids';
 import { USAGE_SOURCES } from './usage-sources';
 
 interface Usage {
   label: string;
   resource: DashboardPage;
   recordId: string;
+  name: string | null;
 }
 
-interface UsageSummary {
-  /** Usages on resources the caller may view. */
+interface FileUsages {
+  /** Usages on resources the caller may view, at most `MEDIA_USAGE_LIST_MAX`. */
   visible: Usage[];
-  /** How many more exist on resources the caller may not view. */
+  /** Every usage on a resource the caller may view, listed or not. */
+  visibleCount: number;
+  /** Usages on resources the caller may not view: counted, never named. */
   hidden: number;
 }
 
-/**
- * One bound parameter per id rather than one array parameter: the driver
- * encodes a JS array as JSON text, which `::uuid[]` refuses. `fileIds` is
- * bounded by the request schema (`IDS_ARRAY_MAX`).
+/*
+ * The driver types a raw statement's rows `Record<string, any>` whatever
+ * `execute<T>` is given, so each is parsed against what its SQL selects.
  */
-const usageQuery = (source: UsageSource, fileIds: readonly EntityID[]) => sql`
-  select ${sql.identifier(source.column)}::text as file_id,
-         ${sql.identifier(source.idColumn)}::text as record_id
-  from ${sql.identifier(source.table)}
-  where ${sql.identifier(source.column)} in (${sql.join(
-    fileIds.map((id) => sql`${id}::uuid`),
-    sql`, `
-  )})
-`;
+const countRowSchema = z.object({ count: z.number() });
+const fileIdRowSchema = z.object({ file_id: z.string() });
+const usageRowSchema = z.object({
+  record_id: z.string(),
+  name: z.string().nullable(),
+});
 
 /** The pages whose `view` the caller holds — what "used by" may name. */
 export function viewablePages(
@@ -53,60 +55,116 @@ export function viewablePages(
   );
 }
 
-/**
- * The driver returns `Record<string, any>[]` for a raw statement whatever
- * generic is asked for; both columns are cast to `text` in the query, so
- * `String()` is a type statement, not a conversion.
- */
-async function* referrers(
+async function referenceCount(
+  source: UsageSource,
   fileIds: readonly EntityID[],
   executor: Executor
-): AsyncGenerator<{ source: UsageSource; fileId: string; recordId: string }> {
-  for (const source of USAGE_SOURCES) {
-    const rows = await executor.execute(usageQuery(source, fileIds));
-    for (const row of rows)
-      yield {
-        source,
-        fileId: String(row['file_id']),
-        recordId: String(row['record_id']),
-      };
-  }
+): Promise<number> {
+  const [row] = await executor.execute(sql`
+    select count(*)::int as count
+    from ${sql.identifier(source.table)}
+    where ${sql.identifier(source.column)} in (${uuidList(fileIds)})
+  `);
+  return countRowSchema.parse(row).count;
 }
 
 /**
- * Who uses each file, filtered to what `viewable` allows the caller to know.
- * Hidden usages are counted, not named: the count is enough to explain a 409.
+ * The owner row is aliased `owner` for `recordName`: the source row itself, or
+ * the `ownerTable` row it points at.
  */
-export async function usedBy(
+function namedUsages(
+  source: UsageSource,
+  fileId: EntityID,
+  limit: number
+): SQL {
+  const { ownerTable, recordName } = source;
+  const reference = ownerTable ? sql`source` : sql`owner`;
+  const from = ownerTable
+    ? sql`${sql.identifier(source.table)} as source join ${sql.identifier(ownerTable)} as owner on owner.id = source.${sql.identifier(source.idColumn)}`
+    : sql`${sql.identifier(source.table)} as owner`;
+  return sql`
+    select ${reference}.${sql.identifier(source.idColumn)}::text as record_id,
+           (${recordName ?? sql`null`})::text as name
+    from ${from}
+    where ${reference}.${sql.identifier(source.column)} = ${fileId}::uuid
+    order by ${reference}.${sql.identifier(source.idColumn)}
+    limit ${limit}
+  `;
+}
+
+/**
+ * Who uses one file, filtered to what `viewable` allows the caller to know.
+ * Counts are aggregates and the named list is capped, so a file with many
+ * owners costs a bounded read.
+ */
+export async function fileUsages(
+  fileId: EntityID,
+  viewable: ReadonlySet<DashboardPage>,
+  executor: Executor = db
+): Promise<FileUsages> {
+  const usages: FileUsages = { visible: [], visibleCount: 0, hidden: 0 };
+  for (const source of USAGE_SOURCES) {
+    const count = await referenceCount(source, [fileId], executor);
+    if (count === 0) continue;
+    if (!viewable.has(source.resource)) {
+      usages.hidden += count;
+      continue;
+    }
+    usages.visibleCount += count;
+    const room = MEDIA_USAGE_LIST_MAX - usages.visible.length;
+    if (room === 0) continue;
+    const rows = await executor.execute(namedUsages(source, fileId, room));
+    for (const row of rows) {
+      const usage = usageRowSchema.parse(row);
+      usages.visible.push({
+        label: source.label,
+        resource: source.resource,
+        recordId: usage.record_id,
+        name: usage.name,
+      });
+    }
+  }
+  return usages;
+}
+
+/**
+ * What a refusal may say about who holds `fileIds`: each viewable source's
+ * label once, and how many usages sit on pages the caller may not view.
+ */
+export async function usageLabels(
   fileIds: readonly EntityID[],
   viewable: ReadonlySet<DashboardPage>,
   executor: Executor = db
-): Promise<Map<EntityID, UsageSummary>> {
-  const summaries = new Map<EntityID, UsageSummary>();
-  for (const id of fileIds) summaries.set(id, { visible: [], hidden: 0 });
-  if (fileIds.length === 0) return summaries;
-
-  for await (const { source, fileId, recordId } of referrers(
-    fileIds,
-    executor
-  )) {
-    const summary = summaries.get(fileId);
-    if (!summary) continue;
-    if (viewable.has(source.resource))
-      summary.visible.push({
-        label: source.label,
-        resource: source.resource,
-        recordId,
-      });
-    else summary.hidden += 1;
+): Promise<{ labels: string[]; hidden: number }> {
+  const labels = new Set<string>();
+  let hidden = 0;
+  if (fileIds.length === 0) return { labels: [], hidden };
+  for (const source of USAGE_SOURCES) {
+    const count = await referenceCount(source, fileIds, executor);
+    if (count === 0) continue;
+    if (viewable.has(source.resource)) labels.add(source.label);
+    else hidden += count;
   }
-  return summaries;
+  return { labels: [...labels], hidden };
+}
+
+/** The ids among `fileIds` some registered owner references; no referrer row is read. */
+export async function usedIds(
+  fileIds: readonly EntityID[],
+  executor: Executor = db
+): Promise<Set<EntityID>> {
+  if (fileIds.length === 0 || !hasUsageSources()) return new Set();
+  const rows = await executor
+    .select({ id: files.id })
+    .from(files)
+    .where(and(inArray(files.id, [...fileIds]), not(unreferenced())));
+  return new Set(rows.map((row) => row.id));
 }
 
 /**
  * The link boundary decides eligibility from this: a file a private record
- * holds is that record's, whatever the caller may write elsewhere. `usedBy`
- * answers who may be told.
+ * holds is that record's, whatever the caller may write elsewhere.
+ * `fileUsages` answers who may be told.
  */
 export async function usageVisibilities(
   fileIds: readonly EntityID[],
@@ -116,8 +174,15 @@ export async function usageVisibilities(
   for (const id of fileIds) held.set(id, new Set());
   if (fileIds.length === 0) return held;
 
-  for await (const { source, fileId } of referrers(fileIds, executor))
-    held.get(fileId)?.add(source.visibility);
+  for (const source of USAGE_SOURCES) {
+    const rows = await executor.execute(sql`
+      select distinct ${sql.identifier(source.column)}::text as file_id
+      from ${sql.identifier(source.table)}
+      where ${sql.identifier(source.column)} in (${uuidList(fileIds)})
+    `);
+    for (const row of rows)
+      held.get(fileIdRowSchema.parse(row).file_id)?.add(source.visibility);
+  }
   return held;
 }
 

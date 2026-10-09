@@ -1,7 +1,5 @@
 import { encode } from 'blurhash';
 
-import { CustomError } from '@app/shared/error-class';
-import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   hasRasterSignature,
   isAnimatedRaster,
@@ -13,6 +11,7 @@ import { uploadMsg } from '@app/shared/messages/media';
 import { errorTypeOf, logSanitized } from '@/utils/log';
 
 import { FILE_TYPE_TABLE } from '../allowlist';
+import { contentRefused, imageTooLarge, typeNotAllowed } from '../errors';
 import { optimizeImage } from './optimize';
 import { imageToRgba } from './rgba';
 import { sanitizeSvgServer, svgOptimizerServer } from './svg';
@@ -131,12 +130,10 @@ export function validateSvgUpload(
     reason: result.reason,
     errors: result.errors,
   });
-  throw new CustomError(
-    svgRefusalMessage(result.reason, fileName),
-    result.reason === 'too-many-pixels' || result.reason === 'edge-too-long'
-      ? HTTP_STATUS.UNPROCESSABLE
-      : HTTP_STATUS.BAD_REQUEST
-  );
+  const message = svgRefusalMessage(result.reason, fileName);
+  throw result.reason === 'too-many-pixels' || result.reason === 'edge-too-long'
+    ? imageTooLarge(message)
+    : contentRefused(message);
 }
 
 /** Writes neither an object nor a row; `lib/media/upload.ts` stores the result. */
@@ -145,10 +142,7 @@ export async function processImage(
 ): Promise<ProcessedImage> {
   const { file, mimeType } = input;
   if (!isAllowedImageType(mimeType)) {
-    throw new CustomError(
-      uploadMsg.invalidMimeType(mimeType),
-      HTTP_STATUS.BAD_REQUEST
-    );
+    throw typeNotAllowed(uploadMsg.invalidMimeType(mimeType));
   }
 
   let buffer = input.buffer;

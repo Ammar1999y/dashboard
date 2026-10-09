@@ -9,12 +9,18 @@ import { MEDIA_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns'
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
-import { MEDIA_SCOPES } from '@app/shared/validation/media';
+import {
+  MEDIA_SCOPES,
+  mediaDeleteSelectionSchema,
+  mediaMoveSelectionSchema,
+} from '@app/shared/validation/media';
 
 import { parseDataTableParams } from '@/lib/data-table/params';
-import { requireId } from '@/lib/http/input';
+import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
+import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
+import { grantedActor } from '@/lib/media/actor';
 import { FILE_COLUMNS, toMediaFiles } from '@/lib/media/files';
 import {
   breadcrumbs,
@@ -23,6 +29,13 @@ import {
   searchFolders,
 } from '@/lib/media/folders';
 import { UNFILED_RETENTION_DAYS, unfiledNow } from '@/lib/media/lifecycle';
+import {
+  DELETE_LIMIT,
+  deleteSelection,
+  MOVE_LIMIT,
+  moveSelection,
+} from '@/lib/media/selection';
+import { viewablePages } from '@/lib/media/usages';
 import { ENABLED_VISIBILITIES } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
@@ -159,5 +172,63 @@ export const GET = withApiErrors(
       },
       meta,
     });
+  }
+);
+
+export const PUT = withApiErrors(
+  'PUT /api/dash/media',
+  mediaMsg.updateError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'edit',
+    });
+
+    await enforceRateLimit({
+      ...MOVE_LIMIT,
+      identifier: userIdentifier(caller.userId),
+      failClosed: true,
+    });
+
+    const input = await readJsonBody(ctx, mediaMoveSelectionSchema);
+
+    const moved = await moveSelection({
+      fileIds: input.fileIds ?? [],
+      folderIds: input.folderIds ?? [],
+      to: input.to,
+      actor: grantedActor(ctx, caller),
+    });
+
+    return apiSuccess({ message: mediaMsg.updated, data: moved });
+  },
+  handleFolderForeignKeyViolation
+);
+
+export const DELETE = withApiErrors(
+  'DELETE /api/dash/media',
+  mediaMsg.deleteError,
+  async (ctx) => {
+    const caller = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'delete',
+    });
+
+    await enforceRateLimit({
+      ...DELETE_LIMIT,
+      identifier: userIdentifier(caller.userId),
+      failClosed: true,
+    });
+
+    const input = await readJsonBody(ctx, mediaDeleteSelectionSchema);
+
+    const outcome = await deleteSelection({
+      fileIds: input.fileIds ?? [],
+      folderIds: input.folderIds ?? [],
+      recursive: input.recursive === true,
+      actor: grantedActor(ctx, caller),
+      viewable: viewablePages(caller.permissions),
+    });
+
+    return apiSuccess({ message: mediaMsg.deleted, data: outcome });
   }
 );

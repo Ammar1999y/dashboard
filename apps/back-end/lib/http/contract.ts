@@ -4,6 +4,7 @@ import type {
   ResponseData,
   ResponseRoute,
 } from '@app/shared/response-contract';
+import type { MediaRefusalData } from '@app/shared/responses/media';
 import type { PaginationMeta } from '@app/shared/types/api';
 
 /**
@@ -95,7 +96,7 @@ interface ErrorBody {
   success: false;
   message: string;
   code?: string;
-  data: null;
+  data: MediaRefusalData | null;
 }
 
 /**

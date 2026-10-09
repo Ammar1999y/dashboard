@@ -26,13 +26,18 @@ import {
   createdFolderSchema,
   deletedFilesSchema,
   deletedFolderSchema,
+  deletePreviewSchema,
   folderListingSchema,
   mediaFileDetailsSchema,
   mediaFileSchema,
+  mediaFolderDetailsSchema,
   mediaFolderHitSchema,
   mediaFolderSchema,
+  mediaRefusalDataSchema,
+  mediaStatsSchema,
   mediaUsageSchema,
   movedFilesSchema,
+  movedSelectionSchema,
   searchListingSchema,
   unfiledListingSchema,
   updatedFileSchema,
@@ -43,6 +48,10 @@ import {
   storedPreferencesSchema,
   userDetailSchema,
 } from '@app/shared/responses/users';
+import {
+  FOLDER_RECURSIVE_DELETE_MAX,
+  MEDIA_USAGE_LIST_MAX,
+} from '@app/shared/validation/constants';
 import { preferencesSchema } from '@app/shared/validation/preferences';
 
 import { componentRef } from './components';
@@ -58,6 +67,7 @@ export const RESPONSE_COMPONENTS = [
   { name: 'MediaFolder', schema: mediaFolderSchema },
   { name: 'MediaFolderHit', schema: mediaFolderHitSchema },
   { name: 'MediaUsage', schema: mediaUsageSchema },
+  { name: 'MediaRefusalData', schema: mediaRefusalDataSchema },
   { name: 'TwoFactorChallenge', schema: twoFactorChallengeSchema },
   { name: 'PasskeyRequestOptions', schema: passkeyRequestOptionsSchema },
 ] as const satisfies readonly { name: string; schema: z.ZodType }[];
@@ -78,6 +88,10 @@ const COMPONENT_REFS = new Map<z.core.$ZodType, JsonSchema>([
 ]);
 
 const STORED_NAME = 'The stored, normalised name.';
+const SIGNED_LINK =
+  'A signed URL that stays the same for ten minutes and is valid for sixty to seventy. Never store it.';
+const DELETED_NAME = 'Null once that account is deleted.';
+const DIRECT_ONLY = 'Direct contents only.';
 const STORED_NAME_IF_SENT = `${STORED_NAME} Present when one was sent.`;
 
 /**
@@ -113,19 +127,69 @@ const DOCUMENT_KEYWORDS = new Map<z.core.$ZodType, JsonSchema>([
     mediaFileSchema.shape.url,
     {
       description:
-        'Permanent public URL for a public object; otherwise a signed URL valid for one hour. Never store it.',
+        "Permanent public URL for a public object. Otherwise a signed URL that stays the same for ten minutes and is valid for sixty to seventy, which a private image's response lets the browser cache for those ten minutes. Never store it.",
     },
   ],
   [
-    mediaFileDetailsSchema.shape.downloadUrl,
+    mediaFileSchema.shape.inUse,
     {
       description:
-        'Signed URL, valid for one hour, that downloads the file under its current display name.',
+        'Whether any record references the file; such a file cannot be deleted.',
+    },
+  ],
+  [mediaFileSchema.shape.uploadedByName, { description: DELETED_NAME }],
+  [
+    mediaFileDetailsSchema.shape.downloadUrl,
+    {
+      description: `Downloads the file under its current display name, never from a cache. ${SIGNED_LINK}`,
+    },
+  ],
+  [
+    mediaFileDetailsSchema.shape.previewUrl,
+    {
+      description: `A PDF only, null for anything else: renders it inline, never from a cache, on the object store's own origin, which carries no cookies. ${SIGNED_LINK}`,
     },
   ],
   [
     mediaFileDetailsSchema.shape.usedBy,
-    { description: 'Owners the caller may view.' },
+    {
+      description: `Owners the caller may view, at most ${MEDIA_USAGE_LIST_MAX}.`,
+    },
+  ],
+  [
+    mediaFileDetailsSchema.shape.visibleUsages,
+    { description: 'Every owner the caller may view, listed or not.' },
+  ],
+  [
+    mediaUsageSchema.shape.name,
+    { description: "The owner record's name, where its source defines one." },
+  ],
+  [mediaFolderSchema.shape.createdByName, { description: DELETED_NAME }],
+  [mediaFolderSchema.shape.subfolderCount, { description: DIRECT_ONLY }],
+  [
+    mediaFolderSchema.shape.fileCount,
+    { description: `${DIRECT_ONLY} Active files.` },
+  ],
+  [
+    mediaFolderDetailsSchema.shape.totals,
+    {
+      description:
+        'The whole subtree: every folder below this one, and the active files and their bytes at any depth.',
+    },
+  ],
+  [
+    mediaStatsSchema,
+    {
+      description:
+        'Every folder, and the active files the library governs with their bytes.',
+    },
+  ],
+  [
+    mediaRefusalDataSchema,
+    {
+      description:
+        'What blocked a media refusal: files for a file code, folders for a folder code.',
+    },
   ],
   [
     mediaFileDetailsSchema.shape.hiddenUsages,
@@ -210,16 +274,85 @@ const DOCUMENT_KEYWORDS = new Map<z.core.$ZodType, JsonSchema>([
   [updatedFolderSchema.shape.name, { description: STORED_NAME_IF_SENT }],
   [
     deletedFolderSchema.shape.folders,
-    {
-      description:
-        'Folder rows removed. `0` from a recursive delete whose FILES went but whose folders could not: something was still in the tree — a file the sweep has yet to finish removing, or an upload that arrived while the files were being deleted. Retry once it settles.',
-    },
+    { description: 'Folders deleted, descendants included.' },
+  ],
+  [
+    deletedFolderSchema.shape.folderIds,
+    { description: 'Every deleted folder, descendants included.' },
   ],
   [
     deletedFolderSchema.shape.deleted,
     {
       description:
-        'Files gone from the database and from the object store. Always empty for a non-recursive delete, which refuses a folder that holds anything.',
+        'Files gone from the database and from the object store, abandoned uploads in a deleted folder included.',
+    },
+  ],
+  [
+    deletePreviewSchema.shape.folders,
+    {
+      description:
+        'Folders the delete would remove, the selected ones included.',
+    },
+  ],
+  [
+    deletePreviewSchema.shape.files,
+    { description: 'Files the delete would remove.' },
+  ],
+  [
+    deletePreviewSchema.shape.limit,
+    {
+      description: `Items one delete may remove besides the selected folders: ${FOLDER_RECURSIVE_DELETE_MAX}.`,
+    },
+  ],
+  [
+    deletePreviewSchema.shape.exceedsLimit,
+    {
+      description:
+        'The delete would answer `SELECTION_TOO_LARGE`. The lists are then null, not computed, and the counts are lower bounds.',
+    },
+  ],
+  [
+    deletePreviewSchema.shape.nonEmptyFolderIds,
+    {
+      description:
+        'Without `recursive`, the selected folders holding more than abandoned uploads (`FOLDER_NOT_EMPTY`).',
+    },
+  ],
+  [
+    deletePreviewSchema.shape.busyFileIds,
+    { description: 'Files changing visibility (`FILE_BUSY`).' },
+  ],
+  [
+    deletePreviewSchema.shape.inUseFileIds,
+    { description: 'Files a record references (`FILE_IN_USE`).' },
+  ],
+  [
+    deletePreviewSchema.shape.unfinishedFolderIds,
+    {
+      description:
+        'Folders holding an upload younger than ten minutes (`FOLDER_BUSY`).',
+    },
+  ],
+  [
+    movedSelectionSchema.shape.fileIds,
+    { description: 'Files actually moved.' },
+  ],
+  [
+    movedSelectionSchema.shape.folderIds,
+    {
+      description:
+        'Folders actually re-parented; their contents moved with them and are not listed.',
+    },
+  ],
+  [
+    movedSelectionSchema.shape.unfiledAt,
+    { description: 'Every moved file is filed.' },
+  ],
+  [
+    movedSelectionSchema.shape.updatedAt,
+    {
+      description:
+        'Stored on every selected item, moved or already at the destination; not on the contents of a moved folder.',
     },
   ],
   [

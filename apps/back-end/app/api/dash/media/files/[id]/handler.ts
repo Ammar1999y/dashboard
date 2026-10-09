@@ -1,5 +1,3 @@
-import { CustomError } from '@app/shared/error-class';
-import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
 import { updateFileSchema } from '@app/shared/validation/media';
 
@@ -8,13 +6,16 @@ import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { grantedActor } from '@/lib/media/actor';
+import { fileNotFound } from '@/lib/media/errors';
 import {
   downloadUrl,
   findFile,
+  previewUrl,
   toMediaFile,
   updateFile,
 } from '@/lib/media/files';
-import { usedBy, viewablePages } from '@/lib/media/usages';
+import { signingWindow } from '@/lib/media/signing';
+import { fileUsages, viewablePages } from '@/lib/media/usages';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 export const GET = withApiErrors(
@@ -32,32 +33,31 @@ export const GET = withApiErrors(
       limit: 120,
     });
 
-    const id = requireId(
-      ctx.params.id,
-      mediaMsg.fileNotFound,
-      HTTP_STATUS.NOT_FOUND
-    );
+    const id = requireId(ctx.params.id, fileNotFound);
 
     const row = await findFile(id);
     // A pending or deleting row is not a file the library has; one a record
     // still holds is that record's, not the library's.
-    if (!row || row.status !== 'active' || !row.governed)
-      throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
+    if (!row || row.status !== 'active' || !row.governed) throw fileNotFound();
 
-    const [file, download, usages] = await Promise.all([
-      toMediaFile(row),
-      downloadUrl(row),
-      usedBy([id], viewablePages(permissions)),
+    const usages = await fileUsages(id, viewablePages(permissions));
+    const inUse = usages.visibleCount + usages.hidden > 0;
+    const window = signingWindow(Date.now());
+    const [file, download, preview] = await Promise.all([
+      toMediaFile(row, { usedIds: new Set(inUse ? [id] : []) }),
+      downloadUrl(row, window),
+      previewUrl(row, window),
     ]);
-    const summary = usages.get(id) ?? { visible: [], hidden: 0 };
 
     return apiSuccess({
       message: mediaMsg.fetched,
       data: {
         ...file,
         downloadUrl: download,
-        usedBy: summary.visible,
-        hiddenUsages: summary.hidden,
+        previewUrl: preview,
+        usedBy: usages.visible,
+        visibleUsages: usages.visibleCount,
+        hiddenUsages: usages.hidden,
       },
     });
   }
@@ -79,11 +79,7 @@ export const PUT = withApiErrors(
       failClosed: true,
     });
 
-    const id = requireId(
-      ctx.params.id,
-      mediaMsg.fileNotFound,
-      HTTP_STATUS.NOT_FOUND
-    );
+    const id = requireId(ctx.params.id, fileNotFound);
 
     const input = await readJsonBody(ctx, updateFileSchema);
     const updated = await updateFile({

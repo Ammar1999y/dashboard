@@ -46,6 +46,8 @@ import {
   CONFLICT_ROUTES,
   CREATED_ROUTES,
   ID_NOT_FOUND_ROUTES,
+  MEDIA_REFUSAL_CODES,
+  MEDIA_REFUSALS_WITHOUT_IDS,
   NOT_FOUND_ROUTES,
   OPERATION_DOCS,
   QUERY_VALIDATION_ROUTES,
@@ -70,6 +72,8 @@ const ROUTE_KEYED_TABLES: readonly (readonly [string, Iterable<string>])[] = [
   ['OPERATION_DOCS', Object.keys(OPERATION_DOCS)],
   ['RESPONSE_DATA', Object.keys(RESPONSE_DATA)],
   ['PAGINATED_ROUTES', PAGINATED_ROUTES],
+  ['MEDIA_REFUSAL_CODES', Object.keys(MEDIA_REFUSAL_CODES)],
+  ['MEDIA_REFUSALS_WITHOUT_IDS', MEDIA_REFUSALS_WITHOUT_IDS],
 ];
 
 /** Methods in a stable order, so one collision reads the same on every run. */
@@ -148,6 +152,12 @@ export function openApiConsistencyProblems(
         if (!isJsonSchema(responses) || !(status in responses))
           problems.push(
             `${key} does not publish the ${status} its adapter answers`
+          );
+      const coded = Object.keys(MEDIA_REFUSAL_CODES[key] ?? {});
+      for (const status of coded)
+        if (!isJsonSchema(responses) || !(status in responses))
+          problems.push(
+            `${key} lists media codes under ${status}, which it does not publish`
           );
     }
   }

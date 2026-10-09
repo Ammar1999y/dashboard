@@ -2,6 +2,8 @@
 import type { RouteManifestEntry, RouteQueryParam } from '../route-manifest';
 import type { JsonSchema } from './json-schema';
 
+import { MEDIA_CODES_WITH_IDS } from '@/lib/media/errors';
+
 import { isSafeMethod } from '../origin';
 import { bodyPolicyCeiling } from '../request';
 import { CAPTCHA_HEADER_PARAMETER, UUID_SCHEMA } from './components';
@@ -25,6 +27,8 @@ import {
   CONTACT_CHANGE_DESCRIPTIONS,
   CREATED_ROUTES,
   ID_NOT_FOUND_ROUTES,
+  MEDIA_REFUSAL_CODES,
+  MEDIA_REFUSALS_WITHOUT_IDS,
   NOT_FOUND_ROUTES,
   OPERATION_DOCS,
   QUERY_VALIDATION_ROUTES,
@@ -170,6 +174,29 @@ const OPENAPI_DOCUMENT_RESPONSE: JsonSchema = {
   },
 };
 
+/** Each published status of a media route, re-described by the codes it can carry. */
+function withMediaCodes(key: string, responses: JsonSchema): void {
+  const table = MEDIA_REFUSAL_CODES[key];
+  if (!table) return;
+  for (const [status, codes] of Object.entries(table)) {
+    const published = responses[status];
+    if (
+      !isJsonSchema(published) ||
+      typeof published['description'] !== 'string'
+    )
+      continue;
+    const headers = published['headers'];
+    responses[status] = errorResponse(
+      `${published['description']} Media refusals: ${codes.map((code) => `\`${code}\``).join(', ')}.`,
+      isJsonSchema(headers) ? headers : undefined,
+      !MEDIA_REFUSALS_WITHOUT_IDS.has(key) &&
+        codes.some((code) => MEDIA_CODES_WITH_IDS.has(code))
+        ? 'MediaRefusalEnvelope'
+        : 'ErrorEnvelope'
+    );
+  }
+}
+
 function successResponseFor(key: string): JsonSchema {
   return {
     description: CONTACT_CHANGE_DESCRIPTIONS[key] ?? 'Success.',
@@ -222,7 +249,9 @@ function commonResponses(entry: RouteManifestEntry): JsonSchema {
 
   if (CONFLICT_ROUTES.has(key))
     responses['409'] = errorResponse(
-      'A unique value or permission assignment already exists.'
+      key in MEDIA_REFUSAL_CODES
+        ? 'The operation conflicts with the state of the library.'
+        : 'A unique value or permission assignment already exists.'
     );
 
   const bodyRefusal = BODY_SCHEMA_REFUSALS[key];
@@ -295,6 +324,7 @@ function commonResponses(entry: RouteManifestEntry): JsonSchema {
     { 'Retry-After': RETRY_AFTER_HEADER }
   );
 
+  withMediaCodes(key, responses);
   return responses;
 }
 
@@ -344,6 +374,7 @@ export function tableOperation(entry: RouteManifestEntry): {
     summary: docs.summary,
     ...(docs.description && { description: docs.description }),
     tags: [docs.tag],
+    ...(docs.deprecated && { deprecated: true }),
     responses: commonResponses(entry),
     security: entry.auth === 'public' ? [] : [{ sessionCookie: [] }],
     ...(parameters.length > 0 && { parameters }),

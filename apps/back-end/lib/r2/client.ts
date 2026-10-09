@@ -378,13 +378,20 @@ export async function getPresignedUrl(params: {
   key: string;
   bucketType: BucketType;
   expiresIn?: number;
+  /** Signing at a fixed past instant makes the URL repeat until it changes. */
+  signingDate?: Date;
   responseContentDisposition?: string;
+  responseContentType?: string;
+  responseCacheControl?: string;
 }): Promise<string> {
   const {
     key,
     bucketType,
     expiresIn = DEFAULT_PRESIGNED_URL_EXPIRY,
+    signingDate,
     responseContentDisposition,
+    responseContentType,
+    responseCacheControl,
   } = params;
 
   assertR2Configured();
@@ -411,10 +418,13 @@ export async function getPresignedUrl(params: {
     Bucket: bucket,
     Key: key,
     ResponseContentDisposition: responseContentDisposition,
+    ResponseContentType: responseContentType,
+    ResponseCacheControl: responseCacheControl,
   });
 
   const url = await getSignedUrl(r2Client, command, {
     expiresIn: validExpiry,
+    ...(signingDate && { signingDate }),
   });
 
   return url;

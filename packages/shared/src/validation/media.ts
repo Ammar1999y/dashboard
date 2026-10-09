@@ -165,3 +165,58 @@ export const deleteFilesSchema = z.object({ ids: idsSchema }).strict();
 export const moveFilesSchema = z
   .object({ ids: idsSchema, folderId: idSchema })
   .strict();
+
+const selectedIds = z
+  .array(idSchema)
+  .max(IDS_ARRAY_MAX, mediaValidationMsg.selectionTooMany)
+  .optional();
+
+const SELECTION_DESCRIPTION = `Files and folders together: at least one id and at most ${IDS_ARRAY_MAX} across both lists.`;
+
+interface Selection {
+  fileIds?: readonly string[];
+  folderIds?: readonly string[];
+}
+
+const selectionSize = (body: Selection) =>
+  (body.fileIds?.length ?? 0) + (body.folderIds?.length ?? 0);
+const hasSelection = (body: Selection) => selectionSize(body) > 0;
+const withinSelectionMax = (body: Selection) =>
+  selectionSize(body) <= IDS_ARRAY_MAX;
+
+/**
+ * `recursive` reaches inside selected folders; without it a selected folder
+ * must hold nothing but abandoned uploads.
+ */
+export const mediaDeleteSelectionSchema = z
+  .object({
+    fileIds: selectedIds,
+    folderIds: selectedIds,
+    recursive: z.boolean().optional(),
+  })
+  .strict()
+  .refine(hasSelection, mediaValidationMsg.selectionRequired)
+  .refine(withinSelectionMax, mediaValidationMsg.selectionTooMany)
+  .meta({ description: SELECTION_DESCRIPTION });
+
+/**
+ * `to: null` is the root, which holds folders only: a file there would leave
+ * the library, and the way out of it is DELETE.
+ */
+export const mediaMoveSelectionSchema = z
+  .object({
+    fileIds: selectedIds,
+    folderIds: selectedIds,
+    // Required: `nullableIdSchema` reads a missing key as the root.
+    to: idSchema.nullable(),
+  })
+  .strict()
+  .refine(hasSelection, mediaValidationMsg.selectionRequired)
+  .refine(withinSelectionMax, mediaValidationMsg.selectionTooMany)
+  .refine(
+    (body) => body.to !== null || (body.fileIds?.length ?? 0) === 0,
+    mediaValidationMsg.filesToRoot
+  )
+  .meta({
+    description: `${SELECTION_DESCRIPTION} \`to: null\` is the root, which holds folders only.`,
+  });

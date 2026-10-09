@@ -7,8 +7,9 @@ import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { grantedActor } from '@/lib/media/actor';
-import { deleteFolder, updateFolder } from '@/lib/media/folders';
-import { deleteFolderTree } from '@/lib/media/lifecycle';
+import { folderNotFound } from '@/lib/media/errors';
+import { folderDetails, updateFolder } from '@/lib/media/folders';
+import { DELETE_LIMIT, deleteSelection } from '@/lib/media/selection';
 import { viewablePages } from '@/lib/media/usages';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
@@ -26,6 +27,30 @@ function requireRecursive(query: URLSearchParams): boolean {
   return true;
 }
 
+export const GET = withApiErrors(
+  'GET /api/dash/media/folders/:id',
+  mediaMsg.fetchError,
+  async (ctx) => {
+    const { userId } = await requirePermission(ctx, {
+      resource: 'media',
+      action: 'view',
+    });
+
+    await enforceRateLimit({
+      scope: 'media.folders.id.get',
+      identifier: userIdentifier(userId),
+      limit: 120,
+    });
+
+    const folderId = requireId(ctx.params.id, folderNotFound);
+
+    return apiSuccess({
+      message: mediaMsg.fetched,
+      data: await folderDetails(folderId),
+    });
+  }
+);
+
 export const PUT = withApiErrors(
   'PUT /api/dash/media/folders/:id',
   mediaMsg.updateError,
@@ -42,11 +67,7 @@ export const PUT = withApiErrors(
       failClosed: true,
     });
 
-    const folderId = requireId(
-      ctx.params.id,
-      mediaMsg.folderNotFound,
-      HTTP_STATUS.NOT_FOUND
-    );
+    const folderId = requireId(ctx.params.id, folderNotFound);
 
     const input = await readJsonBody(ctx, updateFolderSchema);
 
@@ -77,27 +98,21 @@ export const DELETE = withApiErrors(
     });
 
     await enforceRateLimit({
-      scope: 'media.folders.id.delete',
+      ...DELETE_LIMIT,
       identifier: userIdentifier(caller.userId),
-      limit: 30,
       failClosed: true,
     });
 
-    const folderId = requireId(
-      ctx.params.id,
-      mediaMsg.folderNotFound,
-      HTTP_STATUS.NOT_FOUND
-    );
+    const folderId = requireId(ctx.params.id, folderNotFound);
     const recursive = requireRecursive(ctx.query);
 
-    const actor = grantedActor(ctx, caller);
-    const outcome = recursive
-      ? await deleteFolderTree({
-          folderId,
-          actor,
-          viewable: viewablePages(caller.permissions),
-        })
-      : await deleteFolder({ folderId, actor });
+    const outcome = await deleteSelection({
+      fileIds: [],
+      folderIds: [folderId],
+      recursive,
+      actor: grantedActor(ctx, caller),
+      viewable: viewablePages(caller.permissions),
+    });
 
     return apiSuccess({ message: mediaMsg.deleted, data: outcome });
   }

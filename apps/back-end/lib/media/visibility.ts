@@ -9,8 +9,6 @@ import { and, eq, isNotNull, lt, ne, sql } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { files } from '@/db/schema';
 
-import { CustomError } from '@app/shared/error-class';
-import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
 
 import { serverFault } from '@/lib/http/response';
@@ -25,6 +23,13 @@ import { errorTypeOf, logSanitized } from '@/utils/log';
 
 import { auditAs, withinScope } from './actor';
 import {
+  fileBusy,
+  fileNotFound,
+  unpublishInUse,
+  visibilityDisabled,
+} from './errors';
+import {
+  ABANDONED_AFTER,
   downloadFilename,
   FILE_COLUMNS,
   governedIds,
@@ -34,14 +39,9 @@ import { objectHeaders } from './headers';
 import { removeObject, removeOrphanedObject } from './orphaned-objects';
 import { hasPublicUsage } from './usages';
 
-/**
- * Past this a set marker counts as abandoned and the sweep takes it over. Must
- * outlast a slow copy; too long keeps an abandoned file unpublishable.
- */
-const TRANSITION_STALE_AFTER = '10 minutes';
-
+/** Past this a set marker is abandoned and the sweep takes it over. */
 const staleTransition = () =>
-  lt(files.updatedAt, sql`now() - ${TRANSITION_STALE_AFTER}::interval`);
+  lt(files.updatedAt, sql`now() - ${ABANDONED_AFTER}::interval`);
 
 /**
  * Small on purpose: each round is another R2 delete on the request's clock, and
@@ -106,7 +106,7 @@ interface CleanupOutcome {
  *
  * R2 has no conditional delete, so only the transition token keeps that bucket
  * from becoming live mid-delete: one R2 delete (`R2_REQUEST_TIMEOUT_MS` ×
- * `maxAttempts`) must stay well inside `TRANSITION_STALE_AFTER`.
+ * `maxAttempts`) must stay well inside `ABANDONED_AFTER`.
  *
  * ⚠️ A copy landing during the delete bumps `cleanup_requests`, which refuses
  * the clear below and sends this round again.
@@ -184,11 +184,7 @@ export async function transitionFile(params: {
   authorizedByOwner?: boolean;
 }): Promise<MediaFileRow> {
   const { id, to, actor } = params;
-  if (!isVisibilityEnabled(to))
-    throw new CustomError(
-      mediaMsg.visibilityDisabled,
-      HTTP_STATUS.UNPROCESSABLE
-    );
+  if (!isVisibilityEnabled(to)) throw visibilityDisabled();
 
   const transitionToken = generateUuidV7();
   const ownedBy = (token: string) =>
@@ -209,12 +205,11 @@ export async function transitionFile(params: {
       !withinScope(actor, row.uploadedBy) ||
       (governed !== null && !governed.has(id))
     )
-      throw new CustomError(mediaMsg.fileNotFound, HTTP_STATUS.NOT_FOUND);
-    if (row.status !== 'active' || row.transition)
-      throw new CustomError(mediaMsg.fileBusy, HTTP_STATUS.CONFLICT);
+      throw fileNotFound();
+    if (row.status !== 'active' || row.transition) throw fileBusy([id]);
     if (row.bucketType === to) return { row, done: true as const };
     if (to === 'private' && (await hasPublicUsage(id, tx)))
-      throw new CustomError(mediaMsg.unpublishInUse, HTTP_STATUS.CONFLICT);
+      throw unpublishInUse();
 
     await tx
       .update(files)
@@ -294,7 +289,7 @@ export async function transitionFile(params: {
   // that has since landed.
   if (!flipped) {
     await removeStaleCopy(id, row.r2Key, to, transitionToken);
-    throw new CustomError(mediaMsg.fileBusy, HTTP_STATUS.CONFLICT);
+    throw fileBusy([id]);
   }
 
   const cleaned = await removeStaleCopy(id, row.r2Key, from, transitionToken);

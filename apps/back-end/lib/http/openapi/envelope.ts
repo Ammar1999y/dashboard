@@ -5,13 +5,14 @@ import { componentRef } from './components';
 /** A response whose body is this API's error envelope. */
 export function errorResponse(
   description: string,
-  headers?: JsonSchema
+  headers?: JsonSchema,
+  envelope: 'ErrorEnvelope' | 'MediaRefusalEnvelope' = 'ErrorEnvelope'
 ): JsonSchema {
   return {
     description,
     ...(headers && { headers }),
     content: {
-      'application/json': { schema: componentRef('ErrorEnvelope') },
+      'application/json': { schema: componentRef(envelope) },
     },
   };
 }

@@ -502,7 +502,7 @@ export function presignerStub(): Record<string, unknown> {
   const getSignedUrl = async (
     _client: unknown,
     command: { input?: GetObjectCommandInput },
-    options?: { expiresIn?: number }
+    options?: { expiresIn?: number; signingDate?: Date }
   ) => {
     const input: Partial<GetObjectCommandInput> = command.input ?? {};
     const url = new URL(
@@ -511,10 +511,19 @@ export function presignerStub(): Record<string, unknown> {
         .map(encodeURIComponent)
         .join('/')}`
     );
+    // The real presigner signs at the current instant when none is given.
+    url.searchParams.set(
+      'X-Amz-Date',
+      (options?.signingDate ?? new Date()).toISOString()
+    );
     url.searchParams.set('X-Amz-Expires', String(options?.expiresIn ?? 300));
-    const disposition = input.ResponseContentDisposition;
-    if (typeof disposition === 'string')
-      url.searchParams.set('response-content-disposition', disposition);
+    const overrides = {
+      'response-content-disposition': input.ResponseContentDisposition,
+      'response-content-type': input.ResponseContentType,
+      'response-cache-control': input.ResponseCacheControl,
+    };
+    for (const [name, value] of Object.entries(overrides))
+      if (typeof value === 'string') url.searchParams.set(name, value);
     url.searchParams.set('sig', 'stub');
     return url.href;
   };

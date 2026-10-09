@@ -1,10 +1,10 @@
-import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
 
 import { requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { requestActor } from '@/lib/media/actor';
+import { fileNotFound } from '@/lib/media/errors';
 import { toMediaFile } from '@/lib/media/files';
 import { transitionFile } from '@/lib/media/visibility';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
@@ -28,17 +28,13 @@ export const POST = withApiErrors(
 
     // Two R2 calls and a HeadObject per file.
     await enforceRateLimit({
-      scope: 'media.files.visibility',
+      scope: 'media.files.publish',
       identifier: userIdentifier(caller.userId),
-      limit: 10,
+      limit: 60,
       failClosed: true,
     });
 
-    const id = requireId(
-      ctx.params.id,
-      mediaMsg.fileNotFound,
-      HTTP_STATUS.NOT_FOUND
-    );
+    const id = requireId(ctx.params.id, fileNotFound);
 
     const row = await transitionFile({
       id,

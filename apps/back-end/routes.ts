@@ -30,6 +30,7 @@ import * as authOtpSend from '@/app/api/auth/otp/send/handler';
 import * as authOtpVerify from '@/app/api/auth/otp/verify/handler';
 import * as authPasswordlessSend from '@/app/api/auth/passwordless/send/handler';
 import * as dashAuthReauth from '@/app/api/dash/auth/reauth/handler';
+import * as dashMediaDeletePreview from '@/app/api/dash/media/delete-preview/handler';
 import * as dashMediaFilesId from '@/app/api/dash/media/files/[id]/handler';
 import * as dashMediaFilesIdPublish from '@/app/api/dash/media/files/[id]/publish/handler';
 import * as dashMediaFilesIdUnpublish from '@/app/api/dash/media/files/[id]/unpublish/handler';
@@ -37,6 +38,7 @@ import * as dashMediaFiles from '@/app/api/dash/media/files/handler';
 import * as dashMediaFoldersId from '@/app/api/dash/media/folders/[id]/handler';
 import * as dashMediaFolders from '@/app/api/dash/media/folders/handler';
 import * as dashMedia from '@/app/api/dash/media/handler';
+import * as dashMediaStats from '@/app/api/dash/media/stats/handler';
 import * as dashPermissionsId from '@/app/api/dash/permissions/[id]/handler';
 import * as dashPermissions from '@/app/api/dash/permissions/handler';
 import * as dashRoles from '@/app/api/dash/roles/handler';
@@ -471,6 +473,45 @@ export const ROUTES: readonly RouteDefinition[] = [
       ...dataTableQuery(MEDIA_FILTER_COLUMNS),
     ],
   },
+  // Files and folders in one selection; the file-only routes under `/files`
+  // stay until the dashboard has moved to these.
+  {
+    method: 'PUT',
+    path: '/api/dash/media',
+    handler: dashMedia.PUT,
+    ...PERMISSION_ROUTE,
+    reauth: false,
+    checksPassword: false,
+    body: 'json',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/dash/media',
+    handler: dashMedia.DELETE,
+    ...PERMISSION_ROUTE,
+    reauth: false,
+    checksPassword: false,
+    body: 'json',
+    timeoutSeconds: MEDIA_ROUTE_TIMEOUT_SECONDS,
+  },
+  {
+    method: 'POST',
+    path: '/api/dash/media/delete-preview',
+    handler: dashMediaDeletePreview.POST,
+    ...PERMISSION_ROUTE,
+    reauth: false,
+    checksPassword: false,
+    body: 'json',
+  },
+  {
+    method: 'GET',
+    path: '/api/dash/media/stats',
+    handler: dashMediaStats.GET,
+    ...PERMISSION_ROUTE,
+    reauth: false,
+    checksPassword: false,
+    body: 'none',
+  },
   {
     method: 'POST',
     path: '/api/dash/media/files',
@@ -559,6 +600,15 @@ export const ROUTES: readonly RouteDefinition[] = [
     body: 'json',
   },
   {
+    method: 'GET',
+    path: '/api/dash/media/folders/:id',
+    handler: dashMediaFoldersId.GET,
+    ...PERMISSION_ROUTE,
+    reauth: false,
+    checksPassword: false,
+    body: 'none',
+  },
+  {
     method: 'PUT',
     path: '/api/dash/media/folders/:id',
     handler: dashMediaFoldersId.PUT,
@@ -580,7 +630,7 @@ export const ROUTES: readonly RouteDefinition[] = [
       {
         name: 'recursive',
         required: false,
-        description: `Delete the folder with everything under it, up to ${FOLDER_RECURSIVE_DELETE_MAX} descendants — subfolders plus their files, not counting the folder itself. Omitted, only an empty folder is deleted.`,
+        description: `Delete the folder with everything under it, up to ${FOLDER_RECURSIVE_DELETE_MAX} items — subfolders and files at any depth, not counting the folder itself. Omitted, only a folder holding nothing but abandoned uploads is deleted.`,
         enum: ['true', 'false'],
       },
     ],

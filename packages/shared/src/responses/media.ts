@@ -4,6 +4,7 @@ import { DASHBOARD_PAGE_NAMES } from '../permissions/constants';
 import {
   FOLDER_NAME_MAX,
   MEDIA_DISPLAY_NAME_MAX,
+  MEDIA_USAGE_LIST_MAX,
 } from '../validation/constants';
 import {
   BUCKET_TYPES,
@@ -13,6 +14,8 @@ import {
 import { KNOWN_MIME_TYPES } from '../validation/media-types';
 import { dateTime, idSet, uri, uuid } from './common';
 
+const nonNegativeInt = () => z.number().meta({ type: 'integer', minimum: 0 });
+
 // `url` is a plain string here because a listing must not fail on it; the
 // upload answer adds the non-empty check.
 export const mediaFileSchema = z.object({
@@ -20,7 +23,7 @@ export const mediaFileSchema = z.object({
   kind: z.enum(FILE_KINDS),
   displayName: z.string().meta({ maxLength: MEDIA_DISPLAY_NAME_MAX }),
   mimeType: z.string().meta({ enum: KNOWN_MIME_TYPES }),
-  sizeBytes: z.number().meta({ type: 'integer', minimum: 0 }),
+  sizeBytes: nonNegativeInt(),
   bucketType: z.enum(BUCKET_TYPES),
   transition: z.enum(FILE_TRANSITIONS).nullable(),
   width: z.number().meta({ type: 'integer', minimum: 1 }).nullable(),
@@ -28,11 +31,25 @@ export const mediaFileSchema = z.object({
   blurhash: z.string().nullable(),
   folderId: uuid().nullable(),
   uploadedBy: uuid().nullable(),
+  uploadedByName: z.string().nullable(),
   unfiledAt: dateTime().nullable(),
+  inUse: z.boolean(),
   url: uri(),
   createdAt: dateTime(),
   updatedAt: dateTime(),
 });
+
+/**
+ * The `data` of a media refusal that names what blocked it. Every id comes from
+ * the request or from the caller's visible library; a not-found never carries
+ * one.
+ */
+export const mediaRefusalDataSchema = z.object({
+  fileIds: idSet().optional(),
+  folderIds: idSet().optional(),
+});
+
+export type MediaRefusalData = z.output<typeof mediaRefusalDataSchema>;
 
 export const uploadedFilesSchema = z
   .array(mediaFileSchema.extend({ url: uri().min(1) }))
@@ -42,12 +59,15 @@ export const mediaUsageSchema = z.object({
   label: z.string(),
   resource: z.enum(DASHBOARD_PAGE_NAMES),
   recordId: z.string(),
+  name: z.string().nullable(),
 });
 
 export const mediaFileDetailsSchema = mediaFileSchema.extend({
   downloadUrl: uri(),
-  usedBy: z.array(mediaUsageSchema),
-  hiddenUsages: z.number().meta({ type: 'integer', minimum: 0 }),
+  previewUrl: uri().nullable(),
+  usedBy: z.array(mediaUsageSchema).meta({ maxItems: MEDIA_USAGE_LIST_MAX }),
+  visibleUsages: nonNegativeInt(),
+  hiddenUsages: nonNegativeInt(),
 });
 
 export const deletedFilesSchema = z.object({
@@ -77,6 +97,9 @@ export const mediaFolderSchema = z.object({
   name: folderName(),
   parentId: uuid().nullable(),
   createdBy: uuid().nullable(),
+  createdByName: z.string().nullable(),
+  subfolderCount: nonNegativeInt(),
+  fileCount: nonNegativeInt(),
   createdAt: dateTime(),
   updatedAt: dateTime(),
 });
@@ -88,11 +111,30 @@ export const updatedFolderSchema = z.object({
   updatedAt: dateTime(),
 });
 
-/** One shape for both delete modes, empty folder or subtree. */
+/** One shape for every delete that can remove a folder, whatever was selected. */
 export const deletedFolderSchema = z.object({
-  folders: z.number().meta({ type: 'integer', minimum: 0 }),
+  folders: nonNegativeInt(),
+  folderIds: idSet(),
   deleted: idSet(),
   pending: idSet(),
+});
+
+export const deletePreviewSchema = z.object({
+  folders: nonNegativeInt(),
+  files: nonNegativeInt(),
+  limit: nonNegativeInt(),
+  exceedsLimit: z.boolean(),
+  nonEmptyFolderIds: idSet().nullable(),
+  busyFileIds: idSet().nullable(),
+  inUseFileIds: idSet().nullable(),
+  unfinishedFolderIds: idSet().nullable(),
+});
+
+export const movedSelectionSchema = z.object({
+  fileIds: idSet(),
+  folderIds: idSet(),
+  unfiledAt: z.null(),
+  updatedAt: dateTime(),
 });
 
 const breadcrumbSchema = z.object({ id: uuid(), name: z.string() });
@@ -100,6 +142,20 @@ const breadcrumbSchema = z.object({ id: uuid(), name: z.string() });
 export const mediaFolderHitSchema = mediaFolderSchema.extend({
   breadcrumbs: z.array(breadcrumbSchema),
 });
+
+const totals = () =>
+  z.object({
+    folders: nonNegativeInt(),
+    files: nonNegativeInt(),
+    bytes: nonNegativeInt(),
+  });
+
+export const mediaFolderDetailsSchema = mediaFolderSchema.extend({
+  breadcrumbs: z.array(breadcrumbSchema),
+  totals: totals(),
+});
+
+export const mediaStatsSchema = totals();
 
 const listingFields = {
   visibilities: z.array(z.enum(BUCKET_TYPES)).meta({ uniqueItems: true }),

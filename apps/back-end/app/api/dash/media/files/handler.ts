@@ -10,10 +10,15 @@ import { readJsonBody, requireId } from '@/lib/http/input';
 import { apiSuccess, withApiErrors } from '@/lib/http/response';
 import { requirePermission } from '@/lib/http/session';
 import { grantedActor, requestActor } from '@/lib/media/actor';
-import { moveFiles, toMediaFile } from '@/lib/media/files';
+import { toMediaFile } from '@/lib/media/files';
 import { requireFolder } from '@/lib/media/folders';
-import { deleteFiles } from '@/lib/media/lifecycle';
 import { DEFAULT_UPLOAD_PURPOSE } from '@/lib/media/policy';
+import {
+  DELETE_LIMIT,
+  deleteFiles,
+  MOVE_LIMIT,
+  moveSelection,
+} from '@/lib/media/selection';
 import { acceptUpload } from '@/lib/media/upload';
 import { viewablePages } from '@/lib/media/usages';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
@@ -50,7 +55,10 @@ export const POST = withApiErrors(
       data: await toMediaFile(row),
       status: HTTP_STATUS.CREATED,
     });
-  }
+  },
+  // The folder is checked before the body is processed and the row inserted
+  // after; a delete in between fails the insert's foreign key.
+  handleFolderForeignKeyViolation
 );
 
 export const PUT = withApiErrors(
@@ -63,17 +71,17 @@ export const PUT = withApiErrors(
     });
 
     await enforceRateLimit({
-      scope: 'media.files.put',
+      ...MOVE_LIMIT,
       identifier: userIdentifier(caller.userId),
-      limit: 30,
       failClosed: true,
     });
 
     const input = await readJsonBody(ctx, moveFilesSchema);
 
-    const updatedAt = await moveFiles({
-      ids: input.ids,
-      folderId: input.folderId,
+    const { updatedAt } = await moveSelection({
+      fileIds: input.ids,
+      folderIds: [],
+      to: input.folderId,
       actor: grantedActor(ctx, caller),
     });
 
@@ -95,9 +103,8 @@ export const DELETE = withApiErrors(
     });
 
     await enforceRateLimit({
-      scope: 'media.files.delete',
+      ...DELETE_LIMIT,
       identifier: userIdentifier(caller.userId),
-      limit: 30,
       failClosed: true,
     });
 

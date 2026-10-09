@@ -49,17 +49,18 @@ export async function readJsonBody<S extends z.ZodType>(
   return parseOrThrow(schema, requireJsonBody(await ctx.readJson()), refusal);
 }
 
+const malformedId = () =>
+  new CustomError(idRequired, HTTP_STATUS.UNPROCESSABLE);
+
 /**
- * A canonical id or a refusal. The media and two-factor routes answer a
- * malformed id with their not-found 404, so it reads like an id that matched
- * nothing.
+ * A canonical id or a refusal. The media and two-factor routes pass their
+ * not-found, so a malformed id reads like an id that matched nothing.
  */
 export function requireId(
   value: unknown,
-  message: string = idRequired,
-  status: number = HTTP_STATUS.UNPROCESSABLE
+  refusal: () => CustomError = malformedId
 ): EntityID {
   const id = validID(value);
-  if (!id) throw new CustomError(message, status);
+  if (!id) throw refusal();
   return id;
 }

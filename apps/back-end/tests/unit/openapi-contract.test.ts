@@ -56,7 +56,11 @@ import {
   resolveOpenApiDocument,
 } from '@/lib/http/openapi/route';
 import { operationKey } from '@/lib/http/openapi/route-operations';
-import { SPENT_INPUT_REMEDIES } from '@/lib/http/openapi/route-tables';
+import {
+  MEDIA_REFUSAL_CODES,
+  MEDIA_REFUSALS_WITHOUT_IDS,
+  SPENT_INPUT_REMEDIES,
+} from '@/lib/http/openapi/route-tables';
 import { convertContract } from '@/lib/http/openapi/success-schemas';
 import { isSafeMethod } from '@/lib/http/origin';
 import {
@@ -64,6 +68,7 @@ import {
   toPublishedManifest,
   toRegisteredRoutes,
 } from '@/lib/http/route-manifest';
+import { MEDIA_CODES_WITH_IDS } from '@/lib/media/errors';
 
 import { compareCodeUnits } from '@/utils/text';
 
@@ -1055,7 +1060,58 @@ describe('request and response contract fidelity', () => {
         const error = responseSchemaOf(document, pathName, method, status);
         const errorProperties = objectProperty(error, 'properties');
         expect(objectProperty(errorProperties, 'success').const).toBe(false);
-        expect(objectProperty(errorProperties, 'data').type).toBe('null');
+        const data = objectProperty(errorProperties, 'data');
+        // Only a media refusal that names its blockers widens `data`.
+        if (data.type !== 'null')
+          expect(data.oneOf).toEqual([
+            { $ref: '#/components/schemas/MediaRefusalData' },
+            { type: 'null' },
+          ]);
+      }
+    }
+  });
+
+  test('every media refusal status a route answers is published, under the envelope its codes need', () => {
+    // `consistency.ts` cannot infer which statuses a handler throws, so each
+    // route's row is the claim and the document is held to it here.
+    const expected: Record<string, Record<string, readonly string[]>> = {
+      'PUT /api/dash/media': {
+        '404': ['FOLDER_NOT_FOUND', 'FILE_NOT_FOUND'],
+        '409': ['FILE_BUSY', 'FOLDER_NAME_EXISTS'],
+        '422': ['FOLDER_CYCLE', 'FOLDER_TOO_DEEP', 'FOLDER_TOO_MANY_CHILDREN'],
+      },
+      'DELETE /api/dash/media': {
+        '404': ['FOLDER_NOT_FOUND', 'FILE_NOT_FOUND'],
+        '409': ['FILE_IN_USE', 'FILE_BUSY', 'FOLDER_NOT_EMPTY', 'FOLDER_BUSY'],
+        '422': ['SELECTION_TOO_LARGE'],
+      },
+      'POST /api/dash/media/delete-preview': {
+        '404': ['FOLDER_NOT_FOUND', 'FILE_NOT_FOUND'],
+      },
+      'GET /api/dash/media/folders/:id': { '404': ['FOLDER_NOT_FOUND'] },
+    };
+    for (const [key, statuses] of Object.entries(expected))
+      expect(MEDIA_REFUSAL_CODES[key]).toEqual(statuses);
+
+    for (const [key, statuses] of Object.entries(MEDIA_REFUSAL_CODES)) {
+      const [method = '', routePath = ''] = key.split(' ', 2);
+      const pathName = routePath.replaceAll(/:(\w+)/g, '{$1}');
+      const responses = operationOf(document, pathName, method.toLowerCase())
+        .responses as Record<string, Record<string, unknown>>;
+      for (const [status, codes] of Object.entries(statuses)) {
+        const response = responses[status];
+        expect(response, `${key} ${status}`).toBeDefined();
+        for (const code of codes)
+          expect(String(response?.description)).toContain(`\`${code}\``);
+        const content = response?.content as Record<string, unknown>;
+        const json = content['application/json'] as { schema: unknown };
+        expect(json.schema).toEqual({
+          $ref:
+            !MEDIA_REFUSALS_WITHOUT_IDS.has(key) &&
+            codes.some((code) => MEDIA_CODES_WITH_IDS.has(code))
+              ? '#/components/schemas/MediaRefusalEnvelope'
+              : '#/components/schemas/ErrorEnvelope',
+        });
       }
     }
   });
@@ -1143,6 +1199,8 @@ describe('request and response contract fidelity', () => {
         'MediaFileDetails',
         'MediaFolder',
         'MediaFolderHit',
+        'MediaRefusalData',
+        'MediaRefusalEnvelope',
         'MediaUsage',
         'PasskeyRequestOptions',
         'Session',

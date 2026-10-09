@@ -40,6 +40,11 @@ import type { SvgRejectionReason } from '@app/shared/images/config';
 import { JSDOM } from 'jsdom';
 
 import { CustomError } from '@app/shared/error-class';
+import {
+  FILE_CONTENT_REFUSED_CODE,
+  IMAGE_NOT_COMPRESSIBLE_CODE,
+  IMAGE_TOO_LARGE_CODE,
+} from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   ANIMATION_ELEMENTS,
@@ -2431,6 +2436,7 @@ describe('H4 - one side over what WebP can hold', () => {
     await expect(optimizeImage(tall)).rejects.toMatchObject({
       status: HTTP_STATUS.UNPROCESSABLE,
       message: uploadMsg.edgeTooLong(MAX_IMAGE_EDGE),
+      code: IMAGE_TOO_LARGE_CODE,
     });
   });
 
@@ -2472,6 +2478,7 @@ describe('H4 - one side over what WebP can hold', () => {
     ).rejects.toMatchObject({
       status: HTTP_STATUS.UNPROCESSABLE,
       message: uploadMsg.targetUnreachable,
+      code: IMAGE_NOT_COMPRESSIBLE_CODE,
     });
   }, 20_000);
 
@@ -2665,7 +2672,10 @@ describe('a declared type carrying parameters', () => {
         part(animatedWebp, 'image/webp; charset=utf-8', 'anim.webp'),
         IMAGE_TARGET
       )
-    ).rejects.toThrow(uploadMsg.animatedNotAllowed('anim'));
+    ).rejects.toMatchObject({
+      message: uploadMsg.animatedNotAllowed('anim'),
+      code: FILE_CONTENT_REFUSED_CODE,
+    });
   });
 
   test('does NOT skip SVG sanitisation', async () => {
@@ -2978,6 +2988,7 @@ describe('the upload budget is charged in megapixels', () => {
       message: uploadMsg.tooManyPixels(
         Math.floor(MAX_IMAGE_PIXELS / 1_000_000)
       ),
+      code: IMAGE_TOO_LARGE_CODE,
     });
   }, 60_000);
 });
@@ -3173,6 +3184,7 @@ describe('an inline data: raster is held to the upload policy', () => {
         expect(error).toMatchObject({
           status: HTTP_STATUS.UNPROCESSABLE,
           message,
+          code: IMAGE_TOO_LARGE_CODE,
         });
       } finally {
         logged.mockRestore();
@@ -3610,6 +3622,7 @@ describe('the ICC profile bound', () => {
     message: uploadMsg.iccProfileTooLarge(
       Math.floor(MAX_ICC_PROFILE_BYTES / 1024)
     ),
+    code: IMAGE_TOO_LARGE_CODE,
   };
 
   test('a deflated PNG profile that inflates past the bound is refused', async () => {

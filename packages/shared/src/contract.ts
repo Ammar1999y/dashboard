@@ -16,6 +16,8 @@ import { devSignUpSchema } from './validation/dev';
 import {
   createFolderSchema,
   deleteFilesSchema,
+  mediaDeleteSelectionSchema,
+  mediaMoveSelectionSchema,
   moveFilesSchema,
   updateFileSchema,
   updateFolderSchema,
@@ -85,6 +87,9 @@ export const REQUEST_BODIES = {
   'POST /api/dash/users/me/change-phone/verify': changePhoneVerifySchema,
   'PUT /api/dash/users/me/preferences': preferencesSchema,
   'DELETE /api/dash/users/:id/sessions': deleteSessionsSchema,
+  'PUT /api/dash/media': mediaMoveSelectionSchema,
+  'DELETE /api/dash/media': mediaDeleteSelectionSchema,
+  'POST /api/dash/media/delete-preview': mediaDeleteSelectionSchema,
   'DELETE /api/dash/media/files': deleteFilesSchema,
   'PUT /api/dash/media/files': moveFilesSchema,
   'PUT /api/dash/media/files/:id': updateFileSchema,

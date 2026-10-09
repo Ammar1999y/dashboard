@@ -42,6 +42,20 @@ import {
   rolePermissions,
 } from '@/db/schema';
 
+import {
+  FILE_BUSY_CODE,
+  FILE_IN_USE_CODE,
+  FILE_KIND_NOT_ALLOWED_CODE,
+  FILE_NOT_FOUND_CODE,
+  FOLDER_BUSY_CODE,
+  FOLDER_NOT_EMPTY_CODE,
+  FOLDER_NOT_FOUND_CODE,
+  LINK_NOT_ALLOWED_CODE,
+  LINK_VISIBILITY_MISMATCH_CODE,
+  SELECTION_TOO_LARGE_CODE,
+  UNPUBLISH_IN_USE_CODE,
+  VISIBILITY_DISABLED_CODE,
+} from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
 import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
@@ -95,7 +109,13 @@ const PUBLIC_URL = process.env.R2_PUBLIC_URL ?? '';
 
 interface Answer {
   status: number;
-  body: { success: boolean; message: string; data: unknown; meta?: unknown };
+  body: {
+    success: boolean;
+    message: string;
+    code?: string;
+    data: unknown;
+    meta?: unknown;
+  };
 }
 
 interface MediaFile {
@@ -563,6 +583,7 @@ describe('upload into a folder', () => {
       );
       expect(answer.status).toBe(HTTP_STATUS.UNPROCESSABLE);
       expect(answer.body.message).toBe(mediaMsg.visibilityDisabled);
+      expect(answer.body.code).toBe(VISIBILITY_DISABLED_CODE);
       expect(storeOps()).toEqual([]);
     } finally {
       enabled.mockRestore();
@@ -698,6 +719,7 @@ describe('listing, renaming, moving', () => {
     );
     expect(badFolder.status).toBe(HTTP_STATUS.NOT_FOUND);
     expect(badFolder.body.message).toBe(mediaMsg.folderNotFound);
+    expect(badFolder.body.code).toBe(FOLDER_NOT_FOUND_CODE);
   });
 
   test('a type disabled after files of it were stored keeps its download extension', async () => {
@@ -963,7 +985,10 @@ describe('publish and unpublish', () => {
       expect(storeHas(PRIVATE_BUCKET, key)).toBe(false);
 
       gate.resolve();
-      await expect(stalled).rejects.toThrow(mediaMsg.fileBusy);
+      await expect(stalled).rejects.toMatchObject({
+        message: mediaMsg.fileBusy,
+        code: FILE_BUSY_CODE,
+      });
     } finally {
       gate.resolve();
       spy.mockRestore();
@@ -1039,7 +1064,10 @@ describe('publish and unpublish', () => {
         .where(eq(files.id, file.id));
 
       const swept = retryTransitions();
-      await expect(stalled).rejects.toThrow(mediaMsg.fileBusy);
+      await expect(stalled).rejects.toMatchObject({
+        message: mediaMsg.fileBusy,
+        code: FILE_BUSY_CODE,
+      });
       expect(await swept).toMatchObject({ reverted: 1, finished: 0 });
     } finally {
       copied.resolve();
@@ -1206,10 +1234,16 @@ describe('publish and unpublish', () => {
       // below commits the public bucket and the delete above removes its object.
       await expect(
         transitionFile({ id: file.id, to: 'public', actor: actorOf(admin()) })
-      ).rejects.toThrow(mediaMsg.fileBusy);
+      ).rejects.toMatchObject({
+        message: mediaMsg.fileBusy,
+        code: FILE_BUSY_CODE,
+      });
 
       release.resolve();
-      await expect(stalled).rejects.toThrow(mediaMsg.fileBusy);
+      await expect(stalled).rejects.toMatchObject({
+        message: mediaMsg.fileBusy,
+        code: FILE_BUSY_CODE,
+      });
     } finally {
       copied.resolve();
       swept.resolve();
@@ -1513,7 +1547,10 @@ describe('publish and unpublish', () => {
 
       beforeCleanup();
       rowRemoved.resolve();
-      await expect(stalled).rejects.toThrow(mediaMsg.fileBusy);
+      await expect(stalled).rejects.toMatchObject({
+        message: mediaMsg.fileBusy,
+        code: FILE_BUSY_CODE,
+      });
     } finally {
       copying.resolve();
       publicSwept.resolve();
@@ -1753,6 +1790,7 @@ describe('publish and unpublish', () => {
     );
     expect(again.status).toBe(HTTP_STATUS.CONFLICT);
     expect(again.body.message).toBe(mediaMsg.fileBusy);
+    expect(again.body.code).toBe(FILE_BUSY_CODE);
 
     clearObjectStoreFailures();
     await db
@@ -1843,6 +1881,7 @@ describe('deletion and the composite foreign key', () => {
     });
     expect(refused.status).toBe(HTTP_STATUS.CONFLICT);
     expect(refused.body.message).toBe(mediaMsg.fileInUse);
+    expect(refused.body.code).toBe(FILE_IN_USE_CODE);
     expect(await rowOf(file.id)).toMatchObject({ status: 'active' });
     expect(storeHas(PRIVATE_BUCKET, key)).toBe(true);
     expect(storeOps()).toEqual([]);
@@ -1924,6 +1963,7 @@ describe('deletion and the composite foreign key', () => {
     });
     expect(again.status).toBe(HTTP_STATUS.CONFLICT);
     expect(again.body.message).toBe(mediaMsg.fileBusy);
+    expect(again.body.code).toBe(FILE_BUSY_CODE);
 
     clearObjectStoreFailures();
     const swept = await sweepFiles();
@@ -2088,7 +2128,10 @@ describe('entity uploads: claiming, governance, unfiled', () => {
       withTransaction((tx) =>
         claimFiles(tx, { ids: [file.id], actor: actorOf(viewer()) })
       )
-    ).rejects.toThrow(mediaMsg.fileNotFound);
+    ).rejects.toMatchObject({
+      message: mediaMsg.fileNotFound,
+      code: FILE_NOT_FOUND_CODE,
+    });
     expect(await rowOf(file.id)).toMatchObject({ status: 'pending' });
 
     const claimed = await withTransaction((tx) =>
@@ -2114,7 +2157,10 @@ describe('entity uploads: claiming, governance, unfiled', () => {
       withTransaction((tx) =>
         claimFiles(tx, { ids: [file.id], actor: actorOf(admin()) })
       )
-    ).rejects.toThrow(mediaMsg.fileNotFound);
+    ).rejects.toMatchObject({
+      message: mediaMsg.fileNotFound,
+      code: FILE_NOT_FOUND_CODE,
+    });
   });
 
   test('a file a record holds is not the library’s; once the record lets go it is unfiled, listed, and adoptable', async () => {
@@ -2273,7 +2319,10 @@ describe('entity uploads: claiming, governance, unfiled', () => {
           ...linkerOf(admin()),
           write: async () => {},
         })
-      ).rejects.toThrow(mediaMsg.linkNotAllowed);
+      ).rejects.toMatchObject({
+        message: mediaMsg.linkNotAllowed,
+        code: LINK_NOT_ALLOWED_CODE,
+      });
       expect(await rowOf(held.id)).toMatchObject({
         bucketType: 'private',
         transition: null,
@@ -2295,7 +2344,10 @@ describe('entity uploads: claiming, governance, unfiled', () => {
           ...linkerOf(admin()),
           write: async () => {},
         })
-      ).rejects.toThrow(mediaMsg.linkNotAllowed);
+      ).rejects.toMatchObject({
+        message: mediaMsg.linkNotAllowed,
+        code: LINK_NOT_ALLOWED_CODE,
+      });
       expect(await rowOf(orphan.id)).toMatchObject({ bucketType: 'private' });
       expect(storeHas(PUBLIC_BUCKET, await keyOf(orphan.id))).toBe(false);
 
@@ -2311,7 +2363,10 @@ describe('entity uploads: claiming, governance, unfiled', () => {
           ...linkerOf(admin()),
           write: async () => {},
         })
-      ).rejects.toThrow(mediaMsg.kindNotAllowedHere);
+      ).rejects.toMatchObject({
+        message: mediaMsg.kindNotAllowedHere,
+        code: FILE_KIND_NOT_ALLOWED_CODE,
+      });
       expect(await rowOf(document.id)).toMatchObject({
         bucketType: 'private',
         transition: null,
@@ -2351,6 +2406,7 @@ describe('entity uploads: claiming, governance, unfiled', () => {
       );
       expect(unpublish.status).toBe(HTTP_STATUS.CONFLICT);
       expect(unpublish.body.message).toBe(mediaMsg.unpublishInUse);
+      expect(unpublish.body.code).toBe(UNPUBLISH_IN_USE_CODE);
 
       // The race: promoted, then unpublished by someone else before the owner's
       // transaction — the attach sees a private file and refuses, so no public
@@ -2376,7 +2432,10 @@ describe('entity uploads: claiming, governance, unfiled', () => {
           });
           await refer(raced.id, tx);
         })
-      ).rejects.toThrow(mediaMsg.linkVisibilityMismatch);
+      ).rejects.toMatchObject({
+        message: mediaMsg.linkVisibilityMismatch,
+        code: LINK_VISIBILITY_MISMATCH_CODE,
+      });
       expect(await referrerCount(raced.id)).toBe(0);
 
       // A pending upload made for a private purpose cannot be attached to a
@@ -2391,7 +2450,10 @@ describe('entity uploads: claiming, governance, unfiled', () => {
             actor: actorOf(admin()),
           })
         )
-      ).rejects.toThrow(mediaMsg.linkVisibilityMismatch);
+      ).rejects.toMatchObject({
+        message: mediaMsg.linkVisibilityMismatch,
+        code: LINK_VISIBILITY_MISMATCH_CODE,
+      });
       expect(await rowOf(pendingPrivate.id)).toMatchObject({
         status: 'pending',
       });
@@ -2709,6 +2771,7 @@ describe('moving a batch of files', () => {
     });
     expect(gone.status).toBe(HTTP_STATUS.NOT_FOUND);
     expect(gone.body.message).toBe(mediaMsg.folderNotFound);
+    expect(gone.body.code).toBe(FOLDER_NOT_FOUND_CODE);
     expect(await rowOf(mine.id)).toMatchObject({ folderId: from });
 
     // `editOwn` narrows the batch the same way it narrows one file: someone
@@ -2810,6 +2873,7 @@ describe('recursive folder delete', () => {
     );
     expect(answer.status).toBe(HTTP_STATUS.CONFLICT);
     expect(answer.body.message).toBe(mediaMsg.folderBusy);
+    expect(answer.body.code).toBe(FOLDER_BUSY_CODE);
     expect(await rowOf(settled.id)).toMatchObject({ status: 'active' });
   });
 
@@ -2840,6 +2904,7 @@ describe('recursive folder delete', () => {
     );
     expect(tooBig.status).toBe(HTTP_STATUS.UNPROCESSABLE);
     expect(tooBig.body.message).toBe(mediaMsg.folderTooLarge);
+    expect(tooBig.body.code).toBe(SELECTION_TOO_LARGE_CODE);
     expect(await filesInFolder(parent)).toBe(FOLDER_RECURSIVE_DELETE_MAX + 1);
 
     // Anything but `true` is a refusal rather than a quieter delete.
@@ -2859,6 +2924,7 @@ describe('recursive folder delete', () => {
     );
     expect(notEmpty.status).toBe(HTTP_STATUS.CONFLICT);
     expect(notEmpty.body.message).toBe(mediaMsg.folderNotEmpty);
+    expect(notEmpty.body.code).toBe(FOLDER_NOT_EMPTY_CODE);
 
     // The partner assertion: a tree of exactly the cap is inside it and goes.
     const atCap = await createFolder(admin(), 'Tree at the cap');

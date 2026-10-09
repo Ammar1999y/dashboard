@@ -1,5 +1,6 @@
 import type { DashboardPage } from '@app/shared/permissions/constants';
 import type { BucketType } from '@app/shared/validation/enums';
+import type { SQL } from 'drizzle-orm';
 
 /**
  * ⚠️ No runtime `@/` import: `scripts/migrate.ts` imports this by relative path
@@ -10,8 +11,8 @@ import type { BucketType } from '@app/shared/validation/enums';
  * answers "used by", the delete 409, and whether a public usage blocks
  * `unpublish`.
  *
- * `table`/`column`/`idColumn` come from THIS file, never a request, which is
- * what makes `sql.identifier` on them safe.
+ * Every field comes from THIS file, never a request, which is what makes
+ * `sql.identifier` on the names and the raw `recordName` expression safe.
  */
 export interface UsageSource {
   /** The referencing table, e.g. `project_images`. */
@@ -26,6 +27,16 @@ export interface UsageSource {
   visibility: BucketType;
   /** Shown to the caller in "used by" and in the delete refusal. */
   label: string;
+  /**
+   * The owner's table when it is not `table` itself, joined on
+   * `owner.id = <table>.<idColumn>`.
+   */
+  ownerTable?: string;
+  /**
+   * The owner record's display name as SQL over the alias `owner`, e.g.
+   * `owner.translations->'ar'->>'title'`. Without it a usage has no name.
+   */
+  recordName?: SQL;
 }
 
 /**
