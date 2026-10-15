@@ -7,8 +7,7 @@
  * `POST /api/auth/forgot-password/send`, `.../reset`,
  * `POST /api/auth/passwordless/send`.
  *
- * Closes F16 of `reports/claude-opus-audit.md`: none of these was referenced
- * anywhere under `tests/` before this file. They are the endpoints where a
+ * None of these was referenced anywhere under `tests/` before this file. They are the endpoints where a
  * regression is a credential-boundary failure rather than a broken feature, and
  * three accepted risks are recorded against exactly this code —
  * `reports/should-ignore.md` #54 (the re-auth / mutation TOCTOU) and Known

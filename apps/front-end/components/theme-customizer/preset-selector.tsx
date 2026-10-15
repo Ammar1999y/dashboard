@@ -1,6 +1,6 @@
-import type { ThemeStyles } from './types';
-
 import { memo, useCallback } from 'react';
+
+import { DEFAULT_PREFERENCES } from '@app/shared/validation/preferences';
 
 import { colorFormatter } from '@/utils/color-converter';
 
@@ -15,11 +15,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import { DEFAULT_THEME_STYLES } from './config';
+import { applyPreset, getPresetThemeStyles } from './apply-preset';
 import { themePresets } from './presets';
 import { useEditorStore } from './store';
 
-const DEFAULT_PRESET = 'default';
+const DEFAULT_PRESET = DEFAULT_PREFERENCES.preset;
 
 const PRIORITY_PRESETS = [
   'blue',
@@ -35,20 +35,6 @@ const PRIORITY_PRESETS = [
 ];
 
 const SWATCH_KEYS = ['primary', 'secondary', 'accent', 'muted'] as const;
-
-function getPresetThemeStyles(name: string): ThemeStyles {
-  const preset = themePresets[name];
-  if (!preset) return DEFAULT_THEME_STYLES;
-
-  return {
-    light: { ...DEFAULT_THEME_STYLES.light, ...preset.styles.light },
-    dark: {
-      ...DEFAULT_THEME_STYLES.dark,
-      ...preset.styles.light,
-      ...preset.styles.dark,
-    },
-  };
-}
 
 const PRESET_OPTIONS = [
   DEFAULT_PRESET,
@@ -70,11 +56,6 @@ const PRESET_OPTIONS = [
   };
 });
 
-const applyPreset = (name: string) =>
-  useEditorStore
-    .getState()
-    .setThemeState({ preset: name, styles: getPresetThemeStyles(name) });
-
 const PresetSelector = memo(() => {
   const preset = useEditorStore((s) => s.themeState.preset);
 
@@ -95,7 +76,7 @@ const PresetSelector = memo(() => {
           variant='outline'
           size='none'
           onClick={handleRandomPreset}
-          className='cursor-pointer px-3 py-1'
+          className='cursor-pointer px-3 py-1 text-sm'
         >
           <Icon icon='lucide:dices' className='size-4' />
           <span>عشوائي</span>

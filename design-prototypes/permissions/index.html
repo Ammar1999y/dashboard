@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Permission Form Prototypes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #f7f7f8; --card: #fff; --fg: #111316; --muted: #5f6672; --line: #e4e6ea; --accent: #0d9488; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0e0f11; --card: #17191c; --fg: #eceef1; --muted: #9aa1ad; --line: #2a2d33; --accent: #2dd4bf; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 Inter, system-ui, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  h2 { font-size: 19px; margin: 40px 0 12px; }
+  p.lead { color: var(--muted); margin: 0 0 28px; }
+  .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .card { display: block; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px;
+    color: inherit; text-decoration: none; transition: border-color .15s, transform .15s; }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card b { display: block; font-size: 17px; margin-bottom: 2px; }
+  .card .tag { color: var(--accent); font-size: 13px; font-weight: 600; }
+  .card p { color: var(--muted); margin: 8px 0 0; font-size: 14px; }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 8px 24px; }
+  li { margin: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Permission matrix prototype</h1>
+  <p class="lead">The matrix component shared by the permission form and the user form's “مخصص” role. It is self-contained and runs against an in-memory mock of the real role rules. A dev bar switches between create and edit, sets the current user's grants, shows the request payload, and runs the save flow.</p>
+
+  <div class="cards">
+    <a class="card" href="b-grid.html"><span class="tag">Vanilla JS · dashboard tokens</span><b>شبكة ذكية</b>
+      <p>Pages × verbs (not 9 raw columns) with scope chips, a progress bar per page, tri-state row and column controls, dependency highlighting, a plain-language line per page and full keyboard control.</p></a>
+  </div>
+
+  <h2>Problems in today's matrix that it fixes</h2>
+  <div class="box"><ul>
+    <li><b>A sparse 9-column grid.</b> 13 of 36 cells are blank, and long labels force sideways scrolling.</li>
+    <li><b>Duplicated actions.</b> “All” and “own” are separate checkboxes, so both can be ticked even though “all” already covers “own”. Each verb is now one choice: none / own / all.</li>
+    <li><b>Toggle buttons that mislead.</b> Every row and column button says “اختيار الكل”, even when clicking it will clear.</li>
+    <li><b>Silent changes.</b> Unticking view quietly removes edit, delete and publish. Now every automatic change is announced and can be undone.</li>
+    <li><b>New roles start with full access.</b> They now start empty, with templates to choose from.</li>
+    <li><b>Ungrantable options look available.</b> The server refuses anything you don't hold yourself, but today's form shows those options as normal. Now they are locked with the reason shown.</li>
+    <li><b>Grant errors only in a toast.</b> A refused grant is now marked on the cell that caused it.</li>
+  </ul></div>
+</main>
+</body>
+</html>

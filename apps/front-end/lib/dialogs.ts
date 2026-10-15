@@ -1,5 +1,14 @@
+import type { NextRouter } from 'next/router';
+
 import { create } from 'zustand';
-import { isSamePageEntry, trackPageEntry, writeUrl } from '@/lib/history';
+import {
+  callOffRouteChange,
+  flushPageUrl,
+  isSamePageEntry,
+  pageUrl,
+  trackPageEntry,
+  writeUrl,
+} from '@/lib/history';
 
 // The values appear in shared links; renaming one breaks them.
 export const DIALOG_URL_IDS = {
@@ -64,8 +73,14 @@ export const isDialogEntry = (state: unknown) =>
 /** Pops that `close` started, which the popstate they fire must not undo. */
 let pendingBacks = 0;
 
+/** Dialog entries `shouldRoutePop` skipped on the way to the pop it let Next route. */
+let skippedPops = 0;
+
+/** Runs once the pop `pendingBacks` counts lands. */
+let afterBack: (() => void) | null = null;
+
 function openDialogsUrl() {
-  const url = new URL(location.href);
+  const url = pageUrl();
   url.searchParams.delete(URL_PARAM);
   for (const { urlId } of openDialogs) {
     if (urlId) url.searchParams.append(URL_PARAM, urlId);
@@ -77,6 +92,8 @@ function pushDialogEntry() {
   // Hydration's own `replace` fires no route event, so the page is recorded
   // here too, from the entry about to be copied.
   trackPageEntry();
+  // The entry left below keeps the page's state, which closing returns to.
+  flushPageUrl();
   const state: unknown = history.state;
   const base = typeof state === 'object' && state !== null ? state : {};
   writeUrl('pushState', openDialogsUrl(), { ...base, [ENTRY_FLAG]: true });
@@ -137,6 +154,9 @@ export function syncDialogsWithUrl(): void {
   if (pendingBacks > 0) {
     pendingBacks -= 1;
     replaceDialogEntry();
+    const run = afterBack;
+    afterBack = null;
+    run?.();
     return;
   }
   if (!isSamePageEntry(history.state)) return;
@@ -157,14 +177,87 @@ export function syncDialogsWithUrl(): void {
 export function shouldRoutePop(state: unknown): boolean {
   if (isSamePageEntry(state)) return false;
   if (!isDialogEntry(state)) return true;
+  skippedPops += 1;
   history.back();
   return false;
+}
+
+/**
+ * How far forward the page on screen is from the entry being routed to: a
+ * route change called off has to go back there in one step, since passing
+ * a skipped entry again would skip back over it once more.
+ */
+export function distanceToPage(): number {
+  const distance = skippedPops + 1;
+  skippedPops = 0;
+  return distance;
 }
 
 /** For a page change, which owns the URL: nothing is written to history. */
 export function closeAllDialogs(): void {
   pendingBacks = 0;
+  skippedPops = 0;
+  afterBack = null;
   while (openDialogs.length > 0) openDialogs[0].hide();
+}
+
+/**
+ * For Next's `routeChangeComplete`. A link to the page on screen adds no
+ * entry: Next replaces this one with the link's bare URL, while the page,
+ * still mounted, keeps its state, so the page's params are written back.
+ */
+export function completeRouteChange(): void {
+  const samePage = isSamePageEntry(history.state);
+  closeAllDialogs();
+  trackPageEntry();
+  if (samePage) writeUrl('replaceState', pageUrl());
+  restoreDialogsFromUrl();
+}
+
+/**
+ * Takes a link to the page on screen that names only dialogs, or one followed
+ * from inside a dialog, as no navigation. Next would push an entry of this
+ * page (a URL with `?module=`) or turn the dialog's entry into one (its own
+ * URL), and the next Back would then show nothing. Instead the open dialogs
+ * close and the ones it names open, as on the page itself.
+ */
+function openLinkOnPage(as: string): boolean {
+  // On a pop the entry is already another one.
+  if (!isSamePageEntry(history.state)) return false;
+  const target = new URL(as, location.origin);
+  if (target.pathname !== location.pathname) return false;
+  const ids = [
+    ...new Set(target.searchParams.getAll(URL_PARAM).filter(isUrlId)),
+  ];
+  target.searchParams.delete(URL_PARAM);
+  if (target.search) return false;
+  // Every open dialog in the URL owns one entry above the page's.
+  const above = openDialogs.filter(({ urlId }) => urlId).length;
+  // A bare link with nothing open: Next's replace keeps one entry.
+  if (above === 0 && ids.length === 0) return false;
+  const openNamed = () => {
+    for (const id of ids) restorers.get(id)?.();
+  };
+  closeAllDialogs();
+  if (above === 0) {
+    openNamed();
+  } else {
+    pendingBacks += 1;
+    afterBack = openNamed;
+    history.go(-above);
+  }
+  return true;
+}
+
+/** For Next's `routeChangeStart`, before any other listener. */
+export function startRouteChange(
+  events: NextRouter['events'],
+  as: string
+): void {
+  // Before Next writes the new entry: the page being left keeps the state it
+  // was last in, which Back then returns to.
+  flushPageUrl();
+  if (openLinkOnPage(as)) callOffRouteChange(events, as);
 }
 
 // The optional `never` keeps `open` from being handed straight to `onClick`,

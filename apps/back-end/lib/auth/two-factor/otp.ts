@@ -172,7 +172,6 @@ export const twoFactorOtp = () =>
             });
 
             return ctx.json({
-              success: true,
               message: twoFactorMsg.codeSent,
               data: { nextAllowedIn },
             });
@@ -283,7 +282,6 @@ async function verifyForSignIn(
   if (!completed) throw challengeMissingError();
 
   return ctx.json({
-    success: true,
     message: otpMsg.loginSuccess,
     data: { loggedIn: true },
   });
@@ -332,7 +330,6 @@ async function verifyForEnrolment(
   }
 
   return ctx.json({
-    success: true,
     message: twoFactorMsg.enabled,
     data: { method: 'otp', channel: target.channel },
   });

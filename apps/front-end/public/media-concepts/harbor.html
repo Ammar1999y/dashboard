@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#2c5ce6" />
+    <title>Harbor — Media manager concept</title>
+    <link rel="stylesheet" href="shared.css" />
+    <link rel="stylesheet" href="harbor.css" />
+    <script defer src="shared.js"></script>
+  </head>
+  <body data-design="harbor">
+    <svg
+      class="icon-definitions"
+      aria-hidden="true"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <symbol id="icon-grid" viewBox="0 0 24 24">
+        <rect x="4" y="4" width="6" height="6" rx="1.5" />
+        <rect x="14" y="4" width="6" height="6" rx="1.5" />
+        <rect x="4" y="14" width="6" height="6" rx="1.5" />
+        <rect x="14" y="14" width="6" height="6" rx="1.5" />
+      </symbol>
+      <symbol id="icon-files" viewBox="0 0 24 24">
+        <path d="M8 3h8l4 4v13H8zM16 3v5h4M4 7v14h11" />
+      </symbol>
+      <symbol id="icon-folder" viewBox="0 0 24 24">
+        <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3z" />
+      </symbol>
+      <symbol id="icon-loose" viewBox="0 0 24 24">
+        <path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" />
+        <rect x="9" y="9" width="6" height="6" rx="1.5" />
+      </symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="icon-upload" viewBox="0 0 24 24">
+        <path d="M12 16V4M7 9l5-5 5 5M4 15v5h16v-5" />
+      </symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24">
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="m16 16 5 5" />
+      </symbol>
+      <symbol id="icon-help" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M9.5 9a2.5 2.5 0 1 1 4.5 1.5c-1.5 1-2 1.5-2 3M12 17h.01" />
+      </symbol>
+      <symbol id="icon-language" viewBox="0 0 24 24">
+        <path
+          d="M3 5h11M8 3v2M5 5c0 5 3 8 7 10M12 5c0 5-3 8-7 10M14 20l4-10 4 10M15.5 17h5"
+        />
+      </symbol>
+      <symbol id="icon-reset" viewBox="0 0 24 24">
+        <path d="M4 10a8 8 0 1 1 1 7M4 4v6h6" />
+      </symbol>
+      <symbol id="icon-arrow" viewBox="0 0 24 24">
+        <path d="m10 5-7 7 7 7M3 12h18" />
+      </symbol>
+      <symbol id="icon-info" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 11v6M12 7h.01" />
+      </symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24">
+        <path d="m6 6 12 12M6 18 18 6" />
+      </symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24">
+        <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
+      </symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24">
+        <path d="m5 12 4 4L19 6" />
+      </symbol>
+    </svg>
+
+    <div class="harbor-shell">
+      <aside class="navigation-panel" aria-label="التنقل">
+        <a class="harbor-brand" href="index.html" aria-label="Harbor concepts">
+          <span class="brand-mark" aria-hidden="true"
+            ><span></span><span></span><span></span
+          ></span>
+          <span>harbor<span class="brand-period">.</span></span>
+        </a>
+        <div class="prototype-tag">
+          <span class="live-dot"></span
+          ><span data-i18n="prototype">نموذج تفاعلي</span
+          ><span class="concept-number">01</span>
+        </div>
+
+        <button class="sidebar-upload" type="button" data-action="upload">
+          <svg class="icon"><use href="#icon-plus" /></svg
+          ><span data-i18n="upload">رفع ملفات</span>
+        </button>
+
+        <nav class="primary-nav">
+          <button class="nav-item active" type="button" data-scope="folder">
+            <svg class="icon"><use href="#icon-grid" /></svg
+            ><span data-i18n="library">مكتبة الوسائط</span>
+          </button>
+          <button class="nav-item" type="button" data-scope="all">
+            <svg class="icon"><use href="#icon-files" /></svg
+            ><span data-i18n="allFiles">كل الملفات</span>
+          </button>
+          <button class="nav-item" type="button" data-scope="unfiled">
+            <svg class="icon"><use href="#icon-loose" /></svg
+            ><span data-i18n="unfiled">بدون مجلد</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-section-label">
+          <span data-i18n="folders">المجلدات</span
+          ><button
+            class="quiet-icon"
+            type="button"
+            data-action="new-folder"
+            aria-label="New folder"
+          >
+            <svg class="icon"><use href="#icon-plus" /></svg>
+          </button>
+        </div>
+        <nav id="folder-tree" class="folder-shortcuts">
+          <button
+            class="folder-shortcut"
+            type="button"
+            data-open-folder="brand"
+          >
+            <span class="folder-dot violet"></span><span>الهوية البصرية</span>
+          </button>
+          <button
+            class="folder-shortcut"
+            type="button"
+            data-open-folder="projects"
+          >
+            <span class="folder-dot blue"></span><span>المشاريع</span>
+          </button>
+          <button
+            class="folder-shortcut"
+            type="button"
+            data-open-folder="documents"
+          >
+            <span class="folder-dot amber"></span><span>المستندات</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="sidebar-note">
+            <svg class="icon"><use href="#icon-info" /></svg>
+            <p data-i18n="selectHint">
+              انقر للتحديد. استخدم Ctrl أو Shift لتحديد عدة ملفات.
+            </p>
+          </div>
+          <button class="nav-item" type="button" data-action="help">
+            <svg class="icon"><use href="#icon-help" /></svg
+            ><span data-i18n="help">قدرات النظام</span>
+          </button>
+          <div class="sidebar-utilities">
+            <button class="utility-button" type="button" data-action="locale">
+              <svg class="icon"><use href="#icon-language" /></svg
+              ><span>EN / ع</span>
+            </button>
+            <button class="utility-button" type="button" data-action="reset">
+              <svg class="icon"><use href="#icon-reset" /></svg
+              ><span data-i18n="reset">إعادة ضبط</span>
+            </button>
+          </div>
+          <a class="back-link" href="index.html"
+            ><svg class="icon"><use href="#icon-arrow" /></svg
+            ><span data-i18n="backConcepts">مقارنة التصاميم</span></a
+          >
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div class="breadcrumb" id="breadcrumb"></div>
+          <div class="header-tools">
+            <nav class="concept-switcher" aria-label="Concepts">
+              <a class="current" href="harbor.html">01<span>Harbor</span></a
+              ><a href="studio.html">02<span>Studio</span></a
+              ><a href="vault.html">03<span>Vault</span></a>
+            </nav>
+            <div class="mobile-utilities">
+              <button
+                class="quiet-icon"
+                type="button"
+                data-action="locale"
+                aria-label="Change language"
+              >
+                <svg class="icon"><use href="#icon-language" /></svg></button
+              ><button
+                class="quiet-icon"
+                type="button"
+                data-action="help"
+                aria-label="Capabilities"
+              >
+                <svg class="icon"><use href="#icon-help" /></svg></button
+              ><button
+                class="quiet-icon"
+                type="button"
+                data-action="reset"
+                aria-label="Reset prototype"
+              >
+                <svg class="icon"><use href="#icon-reset" /></svg>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <nav class="mobile-scope-nav" aria-label="Library views">
+          <button
+            class="active"
+            type="button"
+            data-scope="folder"
+            data-i18n="library"
+          >
+            مكتبة الوسائط</button
+          ><button type="button" data-scope="all" data-i18n="allFiles">
+            كل الملفات</button
+          ><button type="button" data-scope="unfiled" data-i18n="unfiled">
+            بدون مجلد
+          </button>
+        </nav>
+
+        <div class="workspace-heading">
+          <div>
+            <h1 id="location-title" data-i18n="library">مكتبة الوسائط</h1>
+            <p class="workspace-subtitle" data-i18n="subtitle">
+              مساحة منظمة لكل ملفاتك، جاهزة للعمل.
+            </p>
+          </div>
+          <button
+            class="new-folder-button"
+            type="button"
+            data-action="new-folder"
+          >
+            <svg class="icon"><use href="#icon-plus" /></svg
+            ><span data-i18n="newFolder">مجلد جديد</span>
+          </button>
+        </div>
+
+        <div class="search-filter-row">
+          <label class="search-box"
+            ><svg class="icon"><use href="#icon-search" /></svg
+            ><input
+              id="search"
+              type="search"
+              placeholder="ابحث في الملفات والمجلدات"
+              data-i18n="search"
+              aria-label="Search files"
+          /></label>
+          <div class="filters">
+            <select id="type-filter" aria-label="File type">
+              <option value="all" data-i18n="allTypes">كل الأنواع</option>
+              <option value="image" data-i18n="images">الصور</option>
+              <option value="document" data-i18n="documents">المستندات</option>
+            </select>
+            <select id="visibility-filter" aria-label="Visibility">
+              <option value="all" data-i18n="allVisibility">
+                كل حالات النشر
+              </option>
+              <option value="private" data-i18n="private">خاص</option>
+              <option value="public" data-i18n="public">عام</option>
+            </select>
+          </div>
+        </div>
+
+        <section class="folder-section" aria-labelledby="folders-heading">
+          <div class="section-heading">
+            <h2 id="folders-heading" data-i18n="folders">المجلدات</h2>
+            <span class="section-line"></span>
+          </div>
+          <div id="folder-grid" class="folder-grid"></div>
+        </section>
+
+        <section class="files-section" aria-labelledby="files-heading">
+          <div class="section-heading file-heading">
+            <div class="heading-count">
+              <h2 id="files-heading" data-i18n="files">الملفات</h2>
+              <span id="status-count" class="status-count"></span>
+            </div>
+            <select id="sort" aria-label="Sort files">
+              <option value="newest" data-i18n="newest">الأحدث أولاً</option>
+              <option value="name" data-i18n="name">الاسم</option>
+              <option value="size" data-i18n="size">الحجم</option>
+            </select>
+          </div>
+          <div id="selection-bar" class="selection-bar" hidden>
+            <span class="selection-badge"
+              ><svg class="icon"><use href="#icon-check" /></svg
+              ><strong id="selection-count"></strong
+            ></span>
+            <div class="selection-actions">
+              <button type="button" data-action="move">
+                <svg class="icon"><use href="#icon-folder" /></svg
+                ><span data-i18n="move">نقل</span></button
+              ><button type="button" data-action="delete">
+                <svg class="icon"><use href="#icon-trash" /></svg
+                ><span data-i18n="delete">حذف</span></button
+              ><button
+                type="button"
+                data-action="select-all"
+                data-i18n="selectAll"
+              >
+                تحديد الكل</button
+              ><button
+                class="clear-selection"
+                type="button"
+                data-action="clear-selection"
+              >
+                <svg class="icon"><use href="#icon-close" /></svg
+                ><span data-i18n="clearSelection">إلغاء التحديد</span>
+              </button>
+            </div>
+          </div>
+          <div id="file-grid" class="file-grid"></div>
+        </section>
+
+        <button class="upload-dropzone" type="button" data-action="upload">
+          <span class="drop-icon"
+            ><svg class="icon"><use href="#icon-upload" /></svg></span
+          ><span data-i18n="dropHint">اسحب ملفاتك إلى هنا، أو انقر لرفعها</span
+          ><svg class="icon drop-plus"><use href="#icon-plus" /></svg>
+        </button>
+      </main>
+
+      <aside
+        id="inspector"
+        class="inspector"
+        aria-label="تفاصيل الملف"
+        hidden
+      ></aside>
+    </div>
+  </body>
+</html>

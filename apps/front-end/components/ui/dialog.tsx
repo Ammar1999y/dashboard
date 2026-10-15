@@ -38,9 +38,11 @@ function DialogContent({
   side = 'center',
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
-  side?: 'top' | 'right' | 'bottom' | 'left' | 'center';
+  /** `full` covers the viewport, for a viewer that is the whole screen. */
+  side?: 'top' | 'right' | 'bottom' | 'left' | 'center' | 'full';
   overlayClassName?: string;
 }) {
+  const isFull = side === 'full';
   const isRight = side === 'right';
   const isLeft = side === 'left';
   const isTop = side === 'top';
@@ -63,6 +65,8 @@ function DialogContent({
             'inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
           isBottom &&
             'inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
+          isFull &&
+            'inset-0 h-full w-full data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
           isCenter &&
             'top-[50%] max-h-[--dialog-max-height] w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] -translate-x-1/2 -translate-y-1/2 overflow-x-hidden rounded-lg border duration-200 data-[state=closed]:duration-200 data-[state=open]:duration-200 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] ltr:left-[50%] rtl:left-[50%]',
           className

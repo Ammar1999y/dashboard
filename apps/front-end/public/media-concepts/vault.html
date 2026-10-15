@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#171d20" />
+    <title>Vault — Media manager concept</title>
+    <link rel="stylesheet" href="shared.css" />
+    <link rel="stylesheet" href="vault.css" />
+    <script defer src="shared.js"></script>
+  </head>
+  <body data-design="vault">
+    <svg class="visually-hidden" aria-hidden="true">
+      <defs>
+        <symbol id="v-grid" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="7" height="7" rx="1" />
+          <rect x="14" y="3" width="7" height="7" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+          <rect x="14" y="14" width="7" height="7" rx="1" />
+        </symbol>
+        <symbol id="v-folder" viewBox="0 0 24 24">
+          <path d="M3 6h7l2 2h9v12H3Z" />
+        </symbol>
+        <symbol id="v-search" viewBox="0 0 24 24">
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="m16 16 5 5" />
+        </symbol>
+        <symbol id="v-upload" viewBox="0 0 24 24">
+          <path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6" />
+        </symbol>
+        <symbol id="v-plus" viewBox="0 0 24 24">
+          <path d="M12 5v14M5 12h14" />
+        </symbol>
+      </defs>
+    </svg>
+    <div class="vault-shell">
+      <header class="vault-topbar">
+        <a
+          class="vault-brand"
+          href="index.html"
+          aria-label="Vault, compare concepts"
+          ><span class="vault-mark"><i></i><i></i><i></i></span
+          ><b>vault<span> / </span></b><small>MEDIA WORKSPACE</small></a
+        >
+        <div class="vault-toplinks">
+          <span class="system-dot"></span
+          ><span data-i18n="prototype">نموذج تفاعلي · بيانات تجريبية</span>
+        </div>
+        <div class="top-actions">
+          <button data-action="locale" class="language-button">EN</button
+          ><button data-action="help" data-i18n="help">الإمكانات</button
+          ><button data-action="reset" data-i18n="reset">إعادة التجربة</button
+          ><a href="index.html" data-i18n="backConcepts">كل التصاميم</a
+          ><span class="avatar" title="Demo user">S</span>
+        </div>
+      </header>
+      <div class="vault-body">
+        <aside class="vault-navigation" aria-label="Library navigation">
+          <div class="nav-label">
+            01 <span data-i18n="library">مكتبتي</span>
+          </div>
+          <nav class="scope-navigation">
+            <button data-scope="folder">
+              <svg><use href="#v-folder" /></svg
+              ><span data-i18n="library">مكتبتي</span>
+            </button>
+            <button data-scope="all">
+              <svg><use href="#v-grid" /></svg
+              ><span data-i18n="allFiles">كل الملفات</span>
+            </button>
+            <button data-scope="unfiled">
+              <span class="unfiled-symbol">◌</span
+              ><span data-i18n="unfiled">غير مصنّفة</span>
+            </button>
+          </nav>
+          <div class="vault-nav-foot">
+            <span class="demo-tag">LOCAL / DEMO</span>
+            <p data-i18n="demoOnly">
+              بيانات تجريبية فقط. لا تُرسل أي تغييرات إلى الخادم.
+            </p>
+            <button data-action="reset">
+              <span>↻</span><span data-i18n="reset">إعادة التجربة</span>
+            </button>
+          </div>
+        </aside>
+        <aside class="vault-folderpane" aria-label="Folder navigator">
+          <div class="directory-label">
+            <span class="label-dot"></span
+            ><span data-i18n="tree">متصفح المجلدات</span><small>01</small>
+          </div>
+          <div id="folder-tree"></div>
+          <div class="directory-note">
+            <span>STRUCTURE /</span>
+            <p data-i18n="rootHint">
+              الملفات تُحفظ داخل مجلدات. افتح مجلداً لرفع الملفات.
+            </p>
+          </div>
+        </aside>
+        <main class="vault-workspace">
+          <section class="workspace-heading">
+            <div>
+              <div id="breadcrumb" aria-label="Breadcrumb"></div>
+              <h1 id="location-title">Brand studio</h1>
+              <p data-i18n="subtitle">مساحة منظّمة. أفكار بلا حدود.</p>
+            </div>
+            <div class="workspace-actions">
+              <button class="secondary-button" data-action="new-folder">
+                <svg><use href="#v-plus" /></svg
+                ><span data-i18n="newFolder">مجلد جديد</span></button
+              ><button class="primary-button" data-action="upload">
+                <svg><use href="#v-upload" /></svg
+                ><span data-i18n="upload">رفع ملفات</span>
+              </button>
+            </div>
+          </section>
+          <div class="workspace-filters">
+            <label class="search-box"
+              ><svg><use href="#v-search" /></svg
+              ><input
+                id="search"
+                type="search"
+                placeholder="ابحث في هذا العرض…"
+                autocomplete="off"
+              /><kbd>⌘ K</kbd></label
+            >
+            <div class="filter-selects">
+              <select id="type-filter">
+                <option value="all" data-i18n="allTypes">كل الأنواع</option>
+                <option value="image" data-i18n="images">الصور</option>
+                <option value="document" data-i18n="documents">
+                  المستندات
+                </option></select
+              ><select id="visibility-filter">
+                <option value="all" data-i18n="allVisibility">
+                  كل مستويات الوصول
+                </option>
+                <option value="private" data-i18n="private">خاص</option>
+                <option value="public" data-i18n="public">عام</option>
+              </select>
+            </div>
+          </div>
+          <div class="pane-label">
+            <h2>
+              <span class="label-dot"></span
+              ><span data-i18n="folders">المجلدات</span>
+            </h2>
+            <button
+              class="icon-button"
+              data-action="new-folder"
+              aria-label="New folder"
+            >
+              ＋
+            </button>
+          </div>
+          <div id="folder-grid"></div>
+          <div class="pane-label files-label">
+            <h2>
+              <span class="label-dot"></span
+              ><span data-i18n="files">الملفات</span
+              ><small id="status-count"></small>
+            </h2>
+            <select id="sort">
+              <option value="name" data-i18n="name">الاسم</option>
+              <option value="newest" data-i18n="newest">آخر تحديث</option>
+              <option value="size" data-i18n="size">حجم الملف</option>
+            </select>
+          </div>
+          <div id="selection-bar" hidden>
+            <strong id="selection-count"></strong>
+            <div>
+              <button data-action="move" data-i18n="move">نقل</button
+              ><button data-action="delete" data-i18n="delete">حذف</button
+              ><button data-action="select-all" data-i18n="selectAll">
+                تحديد الكل</button
+              ><button data-action="clear-selection" data-i18n="clearSelection">
+                إلغاء التحديد
+              </button>
+            </div>
+          </div>
+          <div id="file-grid"></div>
+          <div class="workspace-footer">
+            <span data-i18n="selectHint"
+              >انقر للتحديد · Ctrl/⌘ لتحديد متعدد · Shift لتحديد نطاق · انقر
+              مرتين للفتح</span
+            ><span class="workspace-index">03 / VAULT</span>
+          </div>
+        </main>
+        <aside id="inspector" hidden aria-label="File details"></aside>
+      </div>
+    </div>
+  </body>
+</html>

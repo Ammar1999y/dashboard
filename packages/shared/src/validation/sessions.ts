@@ -1,5 +1,6 @@
 import * as z from 'zod';
 
+import { userMsg } from '../messages/users';
 import {
   idRequired,
   MSG_SESSION_IDS_REQUIRED,
@@ -8,7 +9,7 @@ import {
 } from '../messages/validation';
 import { UUID_V7_FRAGMENT } from '../utils';
 import { IDS_ARRAY_MAX } from './constants';
-import { idSchema } from './rules';
+import { digitStringSchema, idSchema } from './rules';
 
 export const SESSIONS_PAGE_SIZE = 50;
 export const SESSIONS_MAX_PAGE_SIZE = 100;
@@ -38,3 +39,22 @@ export const deleteSessionsSchema = z.union(
   // three messages are live client copy.
   { error: MSG_SESSIONS_DELETE_SHAPE }
 );
+
+/**
+ * `GET /api/dash/users/:id/sessions`. Syntax only, each refusal with the
+ * message the server's own parse gives: `parseLimit` still rejects a
+ * non-canonical or out-of-range count and `parseCursor` an impossible
+ * timestamp, so both keep their single meaning.
+ */
+export const sessionsQuerySchema = z.strictObject({
+  limit: digitStringSchema(
+    userMsg.invalidSessionsLimit(SESSIONS_MAX_PAGE_SIZE)
+  ).optional(),
+  cursor: z
+    .string()
+    .max(SESSION_CURSOR_MAX_LENGTH, userMsg.invalidSessionsCursor)
+    // Published, not enforced: the parse accepts the case and spacing `validID`
+    // tolerates, and refuses with this message what this pattern would.
+    .meta({ pattern: SESSION_CURSOR_PATTERN })
+    .optional(),
+});

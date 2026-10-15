@@ -27,10 +27,9 @@
 
 # Then the test suite — the largest thing in the back-end and served by nothing.
 #
-# `tsconfig.json` includes `**/*.ts`, so the `verify` stage's `tsc --noEmit` did
-# incidentally type-check these; that is not what that stage is FOR (it is the
-# route-table/schema consistency check named in the Dockerfile), and CI's
-# `bun run lint` type-checks the suite on every push regardless.
+# `tsconfig.json` includes `**/*.ts`, so the `verify` stage's `tsc --noEmit`
+# would type-check these too; the image needs only what it ships to check, and
+# CI's `bun run lint` type-checks the suite on every push regardless.
 #
 # `check-coverage.ts` has to go with it: it is the one non-test file that
 # imports a test helper (`../tests/helpers/coverage`), so excluding `tests/`

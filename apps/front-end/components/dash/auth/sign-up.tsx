@@ -6,6 +6,7 @@ import { useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
+import { createdIdSchema } from '@app/shared/responses/common';
 import { devSignUpSchema } from '@app/shared/validation/dev';
 import { mutate } from '@/lib/api/mutation';
 
@@ -15,6 +16,7 @@ import FormPassword from '@/components/form/form-password';
 import SubmitButton, { SubmitLabel } from '@/components/form/submit-button';
 
 import { AuthCard } from './auth-card';
+import { SIGN_IN_PATH } from './paths';
 
 const DEFAULT_VALUES: DevSignUpInput = { name: '', email: '', password: '' };
 
@@ -33,9 +35,10 @@ export default function DevSignUp() {
         href: '/api/dev/sign-up',
         method: 'POST',
         data,
+        schema: createdIdSchema,
       });
       toast.success(message);
-      void replace('/dash/sign-in');
+      void replace(SIGN_IN_PATH);
     },
     [replace]
   );

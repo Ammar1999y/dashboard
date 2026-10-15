@@ -1,0 +1,6 @@
+# `bun test` configuration. Bun resolves bunfig from the working directory and
+# does not inherit the root one.
+[test]
+# The deployment switches `@app/shared` reads once, when it first loads, which a
+# test file's own imports can beat to it.
+preload = ["./tests/preload-env.ts"]

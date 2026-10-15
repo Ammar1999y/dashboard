@@ -75,13 +75,6 @@ jobs:
         # dedupe check further down reports only the collapsible ones.
         working-directory: ${{ github.workspace }}
         run: bun run check:deps
-      - name: Build
-        # Generates the OpenAPI artefact from the production-filtered route
-        # table. It is here rather than only in the deploy because a route table
-        # inconsistent with its request schemas throws only under that filter —
-        # which made the endpoint 500 in production while every development
-        # check passed.
-        run: bun run build
       - name: Unit tests
         # The cheap tier: no database, no port. `bun run test` is
         # `bun tests/helpers/run.ts unit`, which runs `bun test --isolate
@@ -102,10 +95,11 @@ jobs:
         # so it enforces the OLD rule, exactly as a deployed database will.
         # Needs no service container: `drizzle-kit generate` never connects.
         run: bun run check:schema-drift
-      - name: Unreachable files, unregistered handlers, unused exports and types
-        # `scripts/find-unused-files.ts` checks handler registration, then Knip
+      - name: Unreachable files, unused exports and types
+        # `scripts/find-unused-files.ts` finds unreachable files, then Knip
         # covers files under `tests/`, which that scanner's import graph treats
-        # as entry points.
+        # as entry points. Binding registration is checked at runtime by
+        # `tests/unit/bindings.test.ts`.
         run: bun run find:unused-files
       - name: Collapsible duplicate dependencies
         # What Bun checks, and not more: duplicates whose ranges OVERLAP, so
@@ -133,12 +127,7 @@ jobs:
         # These are throwaway values shaped to pass validation only — no real
         # credential belongs in this file.
         run: bun run smoke
-      - name: OpenAPI build and boot smoke test (production posture)
-        # The image CMD's sequence: the artefact regenerated under the runtime
-        # configuration, then the server. The Build step above runs as
-        # `development`, so without the first half here that generation never
-        # ran in CI before a deploy.
-        #
+      - name: Boot smoke test (production posture)
         # The same boot, in the posture that is actually deployed — because the
         # job above runs as `development` and therefore evaluated a DIFFERENT
         # module graph from production's. Measured: `development` emits 11
@@ -176,10 +165,10 @@ jobs:
           R2_PUBLIC_BUCKET: ci-placeholder-public
           R2_PRIVATE_BUCKET: ci-placeholder-private
           R2_PUBLIC_URL: https://ci-placeholder.example.invalid
-          # Required by the production env validation the generation half
-          # loads; `smoke` hands the same value to the server it starts.
+          # Required by the production env validation; `smoke` hands the same
+          # value to the server it starts.
           SQLITE_MAINTENANCE_TOKEN: ci-maintenance-token-0123456789012
-        run: bun scripts/build-openapi.ts && bun run smoke
+        run: bun run smoke
 
   # The deployable artefact itself. Every other job runs from a full checkout,
   # so none of them notices a file the Dockerfile forgets to copy or a

@@ -2,57 +2,8 @@ import * as z from 'zod';
 
 export type JsonSchema = Record<string, unknown>;
 
-export const OPENAPI_VERSION = '3.1.1';
-
 export function isJsonSchema(value: unknown): value is JsonSchema {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-type Override = NonNullable<z.core.ToJSONSchemaParams['override']>;
-
-/**
- * A request schema → JSON Schema, or null when the converter throws.
- *
- * `unrepresentable: 'any'` because several schemas use `z.preprocess` and
- * refinements with no JSON Schema equivalent: a document missing one constraint
- * beats a route that 500s, and the catch keeps one schema that breaks the
- * converter from taking the whole contract down.
- *
- * `$schema` is dropped because the result is spliced in as a subschema, and
- * under 2020-12 that keyword belongs to a schema resource root.
- */
-export function toJsonSchema(schema: z.ZodType): JsonSchema | null;
-/**
- * A response schema, as the server writes it. It throws instead: the build and
- * the container start convert every response, so a schema the converter
- * cannot represent stops the deploy rather than publishing less than clients
- * parse.
- */
-export function toJsonSchema(
-  schema: z.ZodType,
-  output: { override: Override }
-): JsonSchema;
-export function toJsonSchema(
-  schema: z.ZodType,
-  output?: { override: Override }
-): JsonSchema | null {
-  if (output) {
-    const { $schema: _dialect, ...converted } = z.toJSONSchema(schema, {
-      io: 'output',
-      unrepresentable: 'throw',
-      override: output.override,
-    });
-    return converted;
-  }
-  try {
-    const { $schema: _dialect, ...converted } = z.toJSONSchema(schema, {
-      io: 'input',
-      unrepresentable: 'any',
-    });
-    return converted;
-  } catch {
-    return null;
-  }
 }
 
 /** Repair Better Auth's OpenAPI-3.0-era schema fragments for a 3.1 document. */
@@ -84,6 +35,30 @@ export function normalizeOpenApi31(value: unknown): unknown {
     normalized.default = {};
 
   return normalized;
+}
+
+/**
+ * Lets `null` through every node whose `type` admits it. The framework's
+ * generator folds a nullable union into `type: [t, 'null']`, and
+ * `normalizeOpenApi31` turns `nullable` into the same, both keeping an `enum`
+ * or `const` that is checked on its own and so still refuses `null`.
+ */
+export function withNullInEnums(value: JsonSchema): JsonSchema;
+export function withNullInEnums(value: unknown): unknown;
+export function withNullInEnums(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => withNullInEnums(item));
+  if (!isJsonSchema(value)) return value;
+  const node: JsonSchema = Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, withNullInEnums(child)])
+  );
+  if (!Array.isArray(node.type) || !node.type.includes('null')) return node;
+  if (Array.isArray(node.enum) && !node.enum.includes(null))
+    node.enum = [...node.enum, null];
+  if (Object.hasOwn(node, 'const') && node.const !== null) {
+    const { const: only, ...rest } = node;
+    return { ...rest, enum: [only, null] };
+  }
+  return node;
 }
 
 /** The key a converted union puts its branches under, or null if it is not one. */

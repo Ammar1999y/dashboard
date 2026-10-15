@@ -54,7 +54,7 @@ import { assertHarnessDatabase } from './database';
  * needs the value already has it and one that reads the constant is coupling to
  * the fixture's internals.
  */
-const TEST_PASSWORD = 'Harness!Passw0rd';
+export const TEST_PASSWORD = 'Harness!Passw0rd';
 
 /** Any address the limiter's `IP_SCHEMA` accepts; documentation range. */
 export const TEST_IP = '203.0.113.7';
@@ -114,7 +114,7 @@ export function uniquePhone(): string {
 }
 
 /** Unique per call, so two seeds in one file cannot collide on the email index. */
-function uniqueEmail(): string {
+export function uniqueEmail(): string {
   return `harness.${generateUuidV7().replaceAll('-', '').slice(0, 20)}@gmail.com`;
 }
 
@@ -259,8 +259,8 @@ export async function signIn(
 /**
  * Opens the administrator re-authentication window on an existing session.
  *
- * ⚠️ Needed by every test that performs an action in the `D12` class — the user
- * edit, the user delete, permission mutation, the two-factor reset. Those all
+ * ⚠️ Needed by every test that performs an action that asks for a fresh
+ * password proof — the user edit, the user delete, permission mutation, the two-factor reset. Those all
  * require a password proof that is FRESH, not merely a session, and it is bound
  * to the session so there is nothing to thread through the request: the same
  * cookie carries it afterwards.
@@ -287,7 +287,7 @@ async function openReauthWindow(
 
 /**
  * Sign in AND open the re-authentication window, for a fixture that is going to
- * perform an action in the `D12` class.
+ * perform an action that asks for a fresh password proof.
  */
 async function signInAsAdmin(user: SeededUser): Promise<SignedInSession> {
   const session = await signIn(user);
@@ -297,8 +297,8 @@ async function signInAsAdmin(user: SeededUser): Promise<SignedInSession> {
 
 /**
  * Seed, sign in, and open the re-authentication window — which is what most
- * `beforeAll` blocks want, because most of them go on to perform an action in
- * the `D12` class.
+ * `beforeAll` blocks want, because most of them go on to perform an action that
+ * asks for a fresh password proof.
  *
  * ⚠️ A test that asserts the re-authentication REFUSAL must not use this. Use
  * `seedUser` + `signIn` and leave the window closed.
@@ -328,7 +328,8 @@ export function authedRequest(
  * Only for the assertions that are about that path — §7.7b's account-row check,
  * and anything that has to prove a user created the way production creates one
  * can sign in. It needs `NODE_ENV=development`, which the database tiers run
- * under; under `bun test`'s default `NODE_ENV=test` the route answers 403.
+ * under; under `bun test`'s default `NODE_ENV=test` the route is not
+ * registered and answers 404.
  */
 export async function signUpThroughDevRoute(): Promise<{
   status: number;

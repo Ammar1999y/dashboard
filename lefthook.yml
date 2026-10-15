@@ -136,12 +136,10 @@ pre-push: &full_verify
             fail_text:
               'wrong package manager, an outdated Bun, a foreign lockfile, or a
               workspace whose packageManager pin disagrees with the root'
-          - name: routes
+          - name: unused-files
             root: 'apps/back-end/'
             run: bun run find:unused-files
-            fail_text:
-              'unreachable file, a handler no routes.ts entry routes (see the
-              comment in scripts/find-unused-files.ts), or a knip finding'
+            fail_text: 'an unreachable file, or a knip finding'
           - name: schema-drift
             root: 'apps/back-end/'
             run: bun run check:schema-drift

@@ -114,7 +114,7 @@ export const twoFactorTotpConfirmSchema = z.object({ code: otpCodeSchema });
  *
  * Required, and that is the whole point: without it the acknowledgement lands on
  * whichever set is current, which enables the method and revokes every other
- * session for ten codes the user never saw. The value comes back from `POST
+ * session for codes the user never saw. The value comes back from `POST
  * /two-factor/generate-backup-codes` beside the codes it names, so a client
  * always holds the one for the set it displayed.
  */
@@ -130,6 +130,19 @@ export const twoFactorBackupAcknowledgeSchema = z.object({
  */
 export const twoFactorBackupAcknowledgeBodySchema =
   twoFactorPasswordSchema.extend(twoFactorBackupAcknowledgeSchema.shape);
+
+/**
+ * The `superRefine` below as a document rule. `properties` names the
+ * field the outer schema defines, so a linter can resolve the `required`.
+ * `.extend()` drops metadata, so every extension declares it again.
+ */
+const OTP_NEEDS_CONTACT_KIND = [
+  {
+    if: { properties: { method: { const: 'otp' } }, required: ['method'] },
+    // eslint-disable-next-line unicorn/no-thenable -- JSON Schema 2020-12 keyword paired with `if`, not a promise
+    then: { properties: { contactKind: {} }, required: ['contactKind'] },
+  },
+];
 
 /**
  * Names ONE enrolment: `contactKind` distinguishes a user's two OTP rows.
@@ -150,11 +163,12 @@ export const twoFactorMethodOptionSchema = z
         path: ['contactKind'],
         message: MSG_TWO_FACTOR_CONTACT_REQUIRED,
       });
-  });
+  })
+  .meta({ allOf: OTP_NEEDS_CONTACT_KIND });
 
-export const twoFactorMethodDisableSchema = twoFactorMethodOptionSchema.extend({
-  password: reauthPasswordSchema,
-});
+export const twoFactorMethodDisableSchema = twoFactorMethodOptionSchema
+  .extend({ password: reauthPasswordSchema })
+  .meta({ allOf: OTP_NEEDS_CONTACT_KIND });
 
 export const twoFactorPasskeyVerifySchema = z.object({
   response: z.record(z.string(), z.unknown()),
@@ -174,10 +188,7 @@ export const passkeyGrantSchema = z
   .string()
   // Unpadded base64url.
   .length(Math.ceil((REAUTH_GRANT_BYTES * 4) / 3))
-  .regex(/^[\w-]+$/)
-  .describe(
-    `The token POST /two-factor/passkey/grant answered with. Single use, bound to this account, valid for ${REAUTH_GRANT_MAX_AGE_S / 60} minutes.`
-  );
+  .regex(/^[\w-]+$/);
 
 export const passkeyDeleteSchema = ownedRowSchema.extend({
   grant: passkeyGrantSchema,

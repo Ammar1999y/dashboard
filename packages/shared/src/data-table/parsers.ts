@@ -13,8 +13,8 @@ export const MAX_SORT_RAW_LENGTH = 4096;
 /** Filters carry values, so they get a larger raw budget than sorts. */
 export const MAX_FILTERS_RAW_LENGTH = MAX_SORT_RAW_LENGTH * 2;
 /**
- * Enforced as 422s and published by `routes.ts`, so the document and the runtime
- * agree on what a client may send.
+ * Enforced as 422s and published in the list routes' parameter prose, so the
+ * document and the runtime agree on what a client may send.
  */
 export const MAX_ID_LENGTH = 64;
 export const MAX_VALUE_LENGTH = 512;
@@ -401,23 +401,29 @@ function safeParam(value: string | string[] | undefined): string | null {
   return typeof value === 'string' ? value : null;
 }
 
+/** A list's query-string keys. Renaming one breaks every saved link to a filtered list. */
+export const DATA_TABLE_PARAMS = {
+  maxPerPage: 'maxPerPage',
+  page: 'page',
+  perPage: 'perPage',
+  sort: 'sort',
+  filters: 'filters',
+  joinOperator: 'joinOperator',
+  search: 'search',
+} as const;
+
 /**
  * Every top-level key this parser reads, so the caller that owns the URL can
  * refuse the rest: a misspelled `filtres` would otherwise be a broad 200 that
  * looks filtered.
  */
-export const DATA_TABLE_PARAM_KEYS = new Set([
-  'maxPerPage',
-  'page',
-  'perPage',
-  'sort',
-  'filters',
-  'joinOperator',
-]);
+export const DATA_TABLE_PARAM_KEYS: ReadonlySet<string> = new Set(
+  Object.values(DATA_TABLE_PARAMS).filter(
+    (key) => key !== DATA_TABLE_PARAMS.search
+  )
+);
 
-export interface ParseSearchParamsOptions<T> {
-  /** Applied when the request expresses no sort the allowlist accepts. */
-  defaultSort?: ExtendedColumnSort<T>;
+interface ParseTableParamsOptions {
   /**
    * The sortable column ids. Without them an unsortable id still counts as a
    * sort, so `defaultSort` is skipped and the caller's allowlist later leaves
@@ -431,13 +437,15 @@ export interface ParseSearchParamsOptions<T> {
   onFilterDropped?: () => void;
 }
 
-export function parseSearchParams<T = Record<string, unknown>>(
+export interface ParseSearchParamsOptions<T> extends ParseTableParamsOptions {
+  /** Applied when the request expresses no sort the allowlist accepts. */
+  defaultSort?: ExtendedColumnSort<T>;
+}
+
+/** The query as requested: no sort stays no sort, which the caller defaults. */
+export function parseTableParams<T = Record<string, unknown>>(
   params: Record<string, string | string[] | undefined>,
-  {
-    defaultSort,
-    sortableColumnIds,
-    onFilterDropped,
-  }: ParseSearchParamsOptions<T> = {}
+  { sortableColumnIds, onFilterDropped }: ParseTableParamsOptions = {}
 ): GetDataSchema<T> {
   // At most once per request, for a handler that counts or logs.
   let reported = false;
@@ -465,42 +473,48 @@ export function parseSearchParams<T = Record<string, unknown>>(
     return parsed || fallback;
   };
 
-  const maxPerPage = boundedInt(params.maxPerPage, MAX_PER_PAGE, MAX_PER_PAGE);
-  const page = boundedInt(params.page, MAX_PAGE, 1);
+  const maxPerPage = boundedInt(
+    params[DATA_TABLE_PARAMS.maxPerPage],
+    MAX_PER_PAGE,
+    MAX_PER_PAGE
+  );
+  const page = boundedInt(params[DATA_TABLE_PARAMS.page], MAX_PAGE, 1);
   const perPage = boundedInt(
-    params.perPage,
+    params[DATA_TABLE_PARAMS.perPage],
     maxPerPage,
     Math.min(DEFAULT_PER_PAGE, maxPerPage)
   );
 
   const sort = parseSortingState<T>(
-    safeParam(params.sort),
+    safeParam(params[DATA_TABLE_PARAMS.sort]),
     sortableColumnIds,
     reportOnce
   );
   const filters = parseFiltersState<T>(
-    safeParam(params.filters),
+    safeParam(params[DATA_TABLE_PARAMS.filters]),
     undefined,
     reportOnce
   );
 
   // Absent means `and`; an unknown value is reported, not read as `and`.
-  const joinOperatorRaw = safeParam(params.joinOperator);
+  const joinOperatorRaw = safeParam(params[DATA_TABLE_PARAMS.joinOperator]);
   if (joinOperatorRaw !== null && !VALID_JOIN_OPERATORS.has(joinOperatorRaw))
     reportOnce?.();
   const joinOperator: JoinOperator = joinOperatorRaw === 'or' ? 'or' : 'and';
 
+  return { page, perPage, sort, filters, joinOperator };
+}
+
+export function parseSearchParams<T = Record<string, unknown>>(
+  params: Record<string, string | string[] | undefined>,
+  { defaultSort, ...options }: ParseSearchParamsOptions<T> = {}
+): GetDataSchema<T> {
+  const query = parseTableParams<T>(params, options);
+  if (query.sort.length > 0) return query;
   return {
-    page,
-    perPage,
-    sort:
-      sort.length > 0
-        ? sort
-        : [
-            defaultSort ||
-              ({ id: 'createdAt', desc: true } as ExtendedColumnSort<T>),
-          ],
-    filters,
-    joinOperator,
+    ...query,
+    sort: [
+      defaultSort || ({ id: 'createdAt', desc: true } as ExtendedColumnSort<T>),
+    ],
   };
 }

@@ -1,6 +1,8 @@
 import type { EntityID } from '@app/shared/types';
 import type { PaginationMeta } from '@app/shared/types/api';
-import type { QueryClient } from '@tanstack/react-query';
+import type { Query, QueryClient, QueryKey } from '@tanstack/react-query';
+
+import { replaceEqualDeep } from '@tanstack/react-query';
 
 /**
  * Keys for one entity. Lists and details sit under separate segments so a list
@@ -21,7 +23,11 @@ interface Row {
   id: EntityID;
 }
 
-/** One page of a server-paged table, as `useServerDataTable` caches it. */
+/**
+ * One page of a server-paged table, as `useServerDataTable` caches it. A page
+ * may carry more than its rows (the media library's folders and breadcrumbs);
+ * every write here keeps what it does not touch.
+ */
 export interface ServerPage<T> {
   data: T[];
   meta: PaginationMeta;
@@ -29,13 +35,15 @@ export interface ServerPage<T> {
 
 type CachedList<T> = T[] | ServerPage<T>;
 
-const withTotal = <T>(
-  page: ServerPage<T>,
+/** `page` with `data` for its rows and `total` moved by `delta`. */
+export const withTotal = <T, P extends ServerPage<T>>(
+  page: P,
   data: T[],
   delta: number
-): ServerPage<T> => {
+): P => {
   const total = Math.max(0, page.meta.total + delta);
   return {
+    ...page,
     data,
     meta: {
       ...page.meta,
@@ -46,12 +54,85 @@ const withTotal = <T>(
 };
 
 const mapRows = <T>(
-  list: CachedList<T> | undefined,
+  list: CachedList<T>,
   map: (rows: T[]) => T[]
-): CachedList<T> | undefined => {
-  if (!list) return list;
-  return Array.isArray(list) ? map(list) : { ...list, data: map(list.data) };
-};
+): CachedList<T> =>
+  Array.isArray(list) ? map(list) : { ...list, data: map(list.data) };
+
+const isRow = (value: unknown): value is Row =>
+  typeof value === 'object' && value !== null && 'id' in value;
+
+const isCachedList = (value: unknown): value is CachedList<unknown> =>
+  Array.isArray(value) ||
+  (typeof value === 'object' &&
+    value !== null &&
+    'data' in value &&
+    Array.isArray(value.data) &&
+    'meta' in value);
+
+/**
+ * A patch is not a fetch: writing a query's data marks it fresh and clears its
+ * stale mark, so the value keeps its age and its mark, or an entry marked for a
+ * refetch would pass as current.
+ */
+export function writeKept(
+  queryClient: QueryClient,
+  query: Query,
+  data: unknown
+) {
+  const { dataUpdatedAt, isInvalidated } = query.state;
+  queryClient.setQueryData(query.queryKey, data, { updatedAt: dataUpdatedAt });
+  if (isInvalidated) query.invalidate();
+}
+
+/**
+ * Writes `update` to every cached query under `queryKey` whose data is a `T`
+ * and that it changes. `setQueryData` writes even identical data, which would
+ * make every entry the patch does not touch look freshly fetched, so an
+ * unchanged one is not written at all, and a changed one keeps its age and mark
+ * (`writeKept`). `exact` limits the match to the key itself.
+ */
+export function patchQueries<T>(
+  queryClient: QueryClient,
+  queryKey: QueryKey,
+  isData: (value: unknown) => value is T,
+  update: (data: T) => T,
+  { exact = false }: { exact?: boolean } = {}
+) {
+  const queries = queryClient.getQueryCache().findAll({ queryKey, exact });
+  for (const query of queries) {
+    const data = query.state.data;
+    if (!isData(data)) continue;
+    const next = replaceEqualDeep(data, update(data));
+    if (next !== data) writeKept(queryClient, query, next);
+  }
+}
+
+const patchLists = <T extends Row>(
+  queryClient: QueryClient,
+  keys: EntityKeys,
+  update: (list: CachedList<T>) => CachedList<T>
+) =>
+  patchQueries(
+    queryClient,
+    keys.list,
+    (value): value is CachedList<T> => isCachedList(value),
+    update
+  );
+
+const patchDetails = <T extends Row>(
+  queryClient: QueryClient,
+  queryKey: QueryKey,
+  update: (row: T) => T,
+  exact: boolean
+) =>
+  patchQueries(
+    queryClient,
+    queryKey,
+    (value): value is T => isRow(value),
+    update,
+    { exact }
+  );
 
 // A form leaves a disabled field `undefined` in its output (the slug on edit,
 // for one); spreading that over the cached row would erase the stored value.
@@ -112,8 +193,7 @@ export function cacheCreated<T extends Row>(
   row: T
 ) {
   queryClient.setQueryData(keys.detail(row.id), row);
-  queryClient.setQueriesData<CachedList<T>>({ queryKey: keys.list }, (list) => {
-    if (!list) return list;
+  patchLists<T>(queryClient, keys, (list) => {
     if (Array.isArray(list)) return [row, ...list];
     const data =
       list.meta.page === 1
@@ -130,11 +210,13 @@ export function cacheUpdated<T extends Row>(
   id: EntityID,
   patch: Partial<T>
 ) {
-  queryClient.setQueryData<T>(
+  patchDetails<T>(
+    queryClient,
     keys.detail(id),
-    (row) => row && merge(row, patch)
+    (row) => merge(row, patch),
+    true
   );
-  queryClient.setQueriesData<CachedList<T>>({ queryKey: keys.list }, (list) =>
+  patchLists<T>(queryClient, keys, (list) =>
     mapRows(list, (rows) =>
       rows.map((row) => (row.id === id ? merge(row, patch) : row))
     )
@@ -151,11 +233,8 @@ export function cacheUpdatedEach<T extends Row>(
   keys: EntityKeys,
   update: (row: T) => T
 ) {
-  queryClient.setQueriesData<T>(
-    { queryKey: keys.details },
-    (row) => row && update(row)
-  );
-  queryClient.setQueriesData<CachedList<T>>({ queryKey: keys.list }, (list) =>
+  patchDetails<T>(queryClient, keys.details, update, false);
+  patchLists<T>(queryClient, keys, (list) =>
     mapRows(list, (rows) => rows.map(update))
   );
 }
@@ -170,8 +249,7 @@ export function cacheRemoved<T extends Row>(
   id: EntityID
 ) {
   queryClient.removeQueries({ queryKey: keys.detail(id), exact: true });
-  queryClient.setQueriesData<CachedList<T>>({ queryKey: keys.list }, (list) => {
-    if (!list) return list;
+  patchLists<T>(queryClient, keys, (list) => {
     if (Array.isArray(list)) return list.filter((row) => row.id !== id);
     if (!list.data.some((row) => row.id === id)) return list;
     return withTotal(

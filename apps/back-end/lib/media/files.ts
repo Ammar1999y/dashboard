@@ -2,7 +2,6 @@ import type { Actor } from './actor';
 import type { SigningWindow } from './signing';
 import type { Executor, Tx } from '@/db';
 import type { File as FileRow } from '@/db/schema';
-import type { ServerValue } from '@/lib/http/contract';
 import type { ObjectHead } from '@/lib/r2/client';
 import type { mediaFileSchema } from '@app/shared/responses/media';
 import type { EntityID } from '@app/shared/types';
@@ -68,7 +67,8 @@ export type MediaFileRow = Pick<FileRow, keyof typeof FILE_COLUMNS>;
  * request) in `lib/r2/client.ts`, must stay well inside it; too long keeps an
  * abandoned file unpublishable and its folder undeletable.
  */
-export const ABANDONED_AFTER = '10 minutes';
+export const ABANDONED_UPLOAD_MINUTES = 10;
+export const ABANDONED_AFTER = `${ABANDONED_UPLOAD_MINUTES} minutes`;
 
 /**
  * A library file or one no registered owner holds; a record-held upload is
@@ -222,7 +222,7 @@ export async function libraryTotals(): Promise<{
 }
 
 /** What every route that returns a file sends. */
-export type MediaFile = ServerValue<z.output<typeof mediaFileSchema>>;
+export type MediaFile = z.input<typeof mediaFileSchema>;
 
 /**
  * The type table, not the allowlist: a type disabled after files of it were
@@ -328,11 +328,11 @@ function formatFile(row: MediaFileRow, extras: FileExtras): MediaFile {
     folderId: row.folderId,
     uploadedBy: row.uploadedBy,
     uploadedByName: extras.uploadedByName,
-    unfiledAt: row.unfiledAt,
+    unfiledAt: row.unfiledAt?.toISOString() ?? null,
     inUse: extras.inUse,
     url: extras.url,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 

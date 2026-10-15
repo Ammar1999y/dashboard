@@ -14,14 +14,16 @@ import {
   operatorAllowedForType,
 } from './column-specs';
 import {
-  DATA_TABLE_PARAM_KEYS,
+  DATA_TABLE_PARAMS,
   isTrigramIndexable,
   MIN_SEARCH_LENGTH,
   searchTermLength,
 } from './parsers';
 
-/** `search` is read beside the parser rather than by it, so it is added here. */
-const ACCEPTED_PARAM_KEYS = new Set([...DATA_TABLE_PARAM_KEYS, 'search']);
+/** What the parser reads, and `search`, which is read beside it. */
+const ACCEPTED_PARAM_KEYS: ReadonlySet<string> = new Set(
+  Object.values(DATA_TABLE_PARAMS)
+);
 
 /** Which edge of the `ILIKE` pattern this operator anchors — see `isTrigramIndexable`. */
 function searchAnchorOf(operator: FilterOperator): SearchAnchor {

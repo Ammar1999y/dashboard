@@ -41,12 +41,17 @@ import { db } from '@/db';
 
 import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_CREATED, MSG_NOT_FOUND } from '@app/shared/messages/common';
+import {
+  MSG_CREATED,
+  MSG_INVALID_INPUT,
+  MSG_NOT_FOUND,
+} from '@app/shared/messages/common';
 
 import { SQLITE_MAINTENANCE_TOKEN } from '@/lib/env.server';
 import { generateUuidV7 } from '@/lib/id';
 
 import { resetTables } from '../helpers/database';
+import { expectError } from '../helpers/expect-body';
 import {
   authedRequest,
   baseHeaders,
@@ -354,10 +359,10 @@ describe('`own` scope on a WRITE — PUT /api/dash/users/:id', () => {
 });
 
 /**
- * `PUT /api/dash/users/:id` reads one permission and then serves two
- * operations, so the `D12` window cannot be demanded by the gate: asked before
- * the branch, it answered 401 to a user renaming themselves — whose schema
- * admits `name` alone — and 401 before 403 to a caller with no grant at all.
+ * `PUT /api/dash/users/:id` needs the re-authentication window only for some
+ * changes, so
+ * the gate cannot demand it: asked up front, it answered 401 to a rename that
+ * changes nothing sensitive, and 401 before 403 to a caller with no grant.
  */
 describe('the re-authentication window on PUT /api/dash/users/:id', () => {
   const unproven: { self: SignedInSession | null; target: SeededUser | null } =
@@ -372,7 +377,7 @@ describe('the re-authentication window on PUT /api/dash/users/:id', () => {
     unproven.target = await seedUser({ permissions: {} });
   });
 
-  test('a self-rename needs no window', async () => {
+  test('naming their own id is refused 403, never a window prompt', async () => {
     const session = unproven.self;
     if (!session) throw new Error('fixture not seeded');
 
@@ -384,7 +389,7 @@ describe('the re-authentication window on PUT /api/dash/users/:id', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.OK);
+    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
   });
 
   test('a caller with no grant is refused with 403, not 401', async () => {
@@ -903,5 +908,38 @@ describe('the maintenance token — the accept path, and the compare that guards
     expect(body.checks?.postgres).toBe(true);
     expect(body.checks).not.toHaveProperty('quickCheck');
     expect(body.checks).not.toHaveProperty('writable');
+  });
+
+  const probe = (query: string, token: string | null) =>
+    app.handle(
+      new Request(`http://localhost/api/health/storage${query}`, {
+        headers: baseHeaders(
+          token === null ? {} : { 'x-maintenance-token': token }
+        ),
+      })
+    );
+
+  test.each(['?deep=1&deep=1', '?a=1&a=2'])(
+    'without the token, %s is the raw 401: the token precedes every query check',
+    async (query) => {
+      const response = await probe(query, null);
+      expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+      expect(await response.json()).toEqual({ status: 'unauthorized' });
+    }
+  );
+
+  test('with the token, a repeated key the probe does not know is ignored: the probe reads its top-level status', async () => {
+    const response = await probe('?a=1&a=2', configured);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    expect(body.status).toBe('ok');
+  });
+
+  test('with the token, a repeated `deep` is refused: one meaning or none', async () => {
+    await expectError(
+      await probe('?deep=1&deep=0', configured),
+      HTTP_STATUS.UNPROCESSABLE,
+      MSG_INVALID_INPUT
+    );
   });
 });

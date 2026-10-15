@@ -10,7 +10,7 @@ const PRE_AUTH_SURFACE_SEGMENTS = 2;
 const PRE_AUTH_SEGMENT_MAX = 40;
 
 /**
- * The limiter scope for a table route: two segments after `/api`
+ * The limiter scope for a binding: two segments after `/api`
  * (`/api/dash/users/<id>` → `preauth.dash.users`), so unrelated surfaces
  * behind one NAT do not throttle each other while dynamic ids cannot explode
  * the keyspace.

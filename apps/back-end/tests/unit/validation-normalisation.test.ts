@@ -29,6 +29,11 @@ import * as permissionSchemas from '@app/shared/validation/permissions';
 import * as ruleSchemas from '@app/shared/validation/rules';
 import * as twoFactorSchemas from '@app/shared/validation/two-factor';
 
+import { loadFieldDocs } from '@/lib/http/openapi/docs';
+
+// The prose lives in `*.docs.ts`, attached only when the document is built.
+await loadFieldDocs();
+
 const MODULES = {
   auth: authSchemas,
   media: mediaSchemas,

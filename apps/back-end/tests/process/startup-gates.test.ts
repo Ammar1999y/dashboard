@@ -175,6 +175,40 @@ function rejectionReason(output: string): string | null {
   return null;
 }
 
+/**
+ * Boots `baseEnv` plus `overrides` on `port` and kills it once it listens. A
+ * listening boot has passed every module-load gate; what it then serves is not
+ * asserted.
+ */
+async function bootUntilListening(
+  port: number,
+  overrides: Record<string, string>
+): Promise<{ listening: boolean; stderr: string }> {
+  const child = Bun.spawn(['bun', '--no-env-file', SERVER], {
+    cwd: REPO_ROOT,
+    env: { ...baseEnv(tempSqliteDir()), PORT: String(port), ...overrides },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  let listening = false;
+  try {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline && child.exitCode === null) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/api/health/storage`);
+        listening = true;
+        break;
+      } catch {
+        await Bun.sleep(200);
+      }
+    }
+  } finally {
+    child.kill();
+    await child.exited;
+  }
+  return { listening, stderr: await new Response(child.stderr).text() };
+}
+
 describe('the runtime gates refuse a bad configuration', () => {
   test.each([
     ['NODE_ENV absent', { NODE_ENV: undefined }, /NODE_ENV is not set/],
@@ -445,79 +479,34 @@ describe('the two-factor configuration is parsed strictly, in every environment'
     //
     // The warning is still required: it names the population that will be sent
     // to the administrative reset.
-    const dir = tempSqliteDir();
-    const child = Bun.spawn(['bun', '--no-env-file', SERVER], {
-      cwd: REPO_ROOT,
-      env: {
-        ...baseEnv(dir),
-        PORT: String(BOOT_PORT + 7),
-        NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email',
-        NEXT_PUBLIC_ENABLED_2FA_METHODS: 'otp',
-        NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS: 'email',
-      },
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const { listening, stderr } = await bootUntilListening(BOOT_PORT + 7, {
+      NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email',
+      NEXT_PUBLIC_ENABLED_2FA_METHODS: 'otp',
+      NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS: 'email',
     });
-    try {
-      const deadline = Date.now() + 30_000;
-      let listening = false;
-      while (Date.now() < deadline) {
-        if (child.exitCode !== null) break;
-        try {
-          await fetch(`http://127.0.0.1:${BOOT_PORT + 7}/api/health/storage`);
-          listening = true;
-          break;
-        } catch {
-          await Bun.sleep(200);
-        }
-      }
-      expect(listening).toBe(true);
-    } finally {
-      child.kill();
-      await child.exited;
-    }
-    const output = await new Response(child.stderr).text();
-    expect(output).toMatch(/twoFactor\.otpOverlapsRecovery/);
+    expect(listening).toBe(true);
+    expect(stderr).toMatch(/twoFactor\.otpOverlapsRecovery/);
   }, 60_000);
 
   test('the same overlap is ALLOWED when another method exists', async () => {
     // The narrowness partner. `totp` is a real second factor that recovery
     // cannot reach, so the overlap no longer collapses anything and refusing it
     // would block a reasonable deployment.
-    const dir = tempSqliteDir();
-    const child = Bun.spawn(['bun', '--no-env-file', SERVER], {
-      cwd: REPO_ROOT,
-      env: {
-        ...baseEnv(dir),
-        PORT: String(BOOT_PORT + 3),
-        NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email',
-        NEXT_PUBLIC_ENABLED_2FA_METHODS: 'totp,otp',
-        NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS: 'email',
-      },
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const { listening } = await bootUntilListening(BOOT_PORT + 3, {
+      NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email',
+      NEXT_PUBLIC_ENABLED_2FA_METHODS: 'totp,otp',
+      NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS: 'email',
     });
-    try {
-      // A boot that reaches the listening state has passed every module-load
-      // gate. It is killed rather than probed: this asserts the configuration
-      // is accepted, not what it then serves.
-      const deadline = Date.now() + 30_000;
-      let listening = false;
-      while (Date.now() < deadline) {
-        if (child.exitCode !== null) break;
-        try {
-          await fetch(`http://127.0.0.1:${BOOT_PORT + 3}/api/health/storage`);
-          listening = true;
-          break;
-        } catch {
-          await Bun.sleep(250);
-        }
-      }
-      expect(listening).toBe(true);
-    } finally {
-      child.kill();
-      await child.exited;
-    }
+    expect(listening).toBe(true);
+  }, 60_000);
+
+  test('no method at all boots, and says every enrolled account lost its second factor', async () => {
+    const { listening, stderr } = await bootUntilListening(BOOT_PORT + 8, {
+      NEXT_PUBLIC_ENABLED_2FA_METHODS: '',
+      NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS: '',
+    });
+    expect(listening).toBe(true);
+    expect(stderr).toContain('twoFactor.disabled no method configured');
   }, 60_000);
 });
 

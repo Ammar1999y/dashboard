@@ -1,6 +1,7 @@
 /**
  * The Better Auth corrections that are data alone, keyed by the path under the
- * prefix; `better-auth.ts` applies them to the library's generated document.
+ * prefix; `merge-better-auth.ts` applies them to the library's generated
+ * document.
  */
 import type { BetterAuthResponseRoute } from '@app/shared/response-contract';
 
@@ -47,9 +48,10 @@ export const BETTER_AUTH_STATUS_DESCRIPTIONS = {
   '404':
     'The Better Auth endpoint is unavailable in the current feature configuration.',
   '500': 'Better Auth, or one of its dependencies, failed.',
-  '400': 'Required request input was absent or invalid for this endpoint.',
+  '400':
+    'The body is not JSON of the shape the endpoint reads, or required request input was absent or invalid.',
   '401':
-    'Credentials refused, or the session this request would create is not allowed to exist (inactive user, inactive role).',
+    'Credentials refused — a password, a second-factor code, or the session or two-factor challenge the endpoint needs — or the session this request would create is not allowed to exist (inactive user, inactive role).',
   '403':
     'Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel.',
   '422':
@@ -63,7 +65,9 @@ export const BETTER_AUTH_STATUS_DESCRIPTIONS = {
  * `BETTER_AUTH_BODIES`. `/get-session` is a GET, so the origin check that
  * produces 403 does not apply and an absent session is a 200 carrying `null`;
  * the paths that create a session run the `session.create` hook in
- * `lib/auth/session/hooks.ts`, which is what can refuse 401 or 403.
+ * `lib/auth/session/hooks.ts`, which is what can refuse 401 or 403. Every POST
+ * path also answers 400, which the merge publishes: Better Call refuses a body
+ * it cannot parse before any middleware runs.
  */
 export const BETTER_AUTH_PATH_STATUSES: Record<
   string,
@@ -71,14 +75,14 @@ export const BETTER_AUTH_PATH_STATUSES: Record<
 > = {
   '/capabilities': [],
   '/reauth/methods': ['401'],
-  '/reauth/passkey/options': ['400', '401', '403'],
-  '/reauth/passkey/verify': ['400', '401', '403'],
-  '/oauth/google/start': ['400', '401', '403'],
+  '/reauth/passkey/options': ['401', '403'],
+  '/reauth/passkey/verify': ['401', '403'],
+  '/oauth/google/start': ['401', '403'],
   '/oauth/google/callback': ['400', '401'],
   '/oauth/result': ['401'],
-  '/sign-in/email': ['400', '401', '403', '422'],
-  '/sign-out': ['400', '403'],
-  '/passwordless/verify': ['400', '401', '403', '422'],
+  '/sign-in/email': ['401', '403', '422'],
+  '/sign-out': ['403'],
+  '/passwordless/verify': ['401', '403', '422'],
   // 403 on the POST paths is Better Auth's origin check (`validateOrigin`),
   // which refuses a cookie-bearing call with no `origin` before the handler
   // runs. GET paths skip that check.
@@ -86,14 +90,14 @@ export const BETTER_AUTH_PATH_STATUSES: Record<
   '/two-factor/get-totp-uri': ['401', '403', '422'],
   // 409 is the refusal to replace an authenticator that already works.
   '/two-factor/totp/start': ['401', '403', '404', '409', '422'],
-  '/two-factor/totp/confirm': ['400', '401', '403', '404', '409', '422'],
-  '/two-factor/verify-totp': ['400', '403', '422'],
+  '/two-factor/totp/confirm': ['401', '403', '404', '409', '422'],
+  '/two-factor/verify-totp': ['401', '403', '422'],
   '/two-factor/generate-backup-codes': ['401', '403', '404', '422'],
-  '/two-factor/verify-backup-code': ['400', '403', '422'],
-  '/two-factor/otp/send': ['400', '401', '403', '422'],
-  '/two-factor/otp/verify': ['400', '401', '403', '422'],
-  '/two-factor/passkey/options': ['400', '401', '403', '422'],
-  '/two-factor/passkey/verify': ['400', '401', '403', '422'],
+  '/two-factor/verify-backup-code': ['401', '403', '422'],
+  '/two-factor/otp/send': ['401', '403', '422'],
+  '/two-factor/otp/verify': ['401', '403', '422'],
+  '/two-factor/passkey/options': ['401', '403', '422'],
+  '/two-factor/passkey/verify': ['401', '403', '422'],
   '/two-factor/trust-device': ['401', '403', '422'],
   '/two-factor/trusted-devices': ['401'],
   '/two-factor/trusted-devices/revoke': ['401', '403', '422'],
@@ -107,11 +111,11 @@ export const BETTER_AUTH_PATH_STATUSES: Record<
   '/passkey/generate-register-options': ['401'],
   // 409 is a credential deleted between the library's write and the enrolment
   // hook, which leaves nothing to offer as a factor.
-  '/passkey/verify-registration': ['400', '401', '403', '409', '422'],
+  '/passkey/verify-registration': ['401', '403', '409', '422'],
   '/passkey/list-user-passkeys': ['401'],
   // 404 is a passkey that is not the caller's; 409 the last-method refusal.
-  '/passkey/delete-passkey': ['400', '401', '403', '404', '409', '422'],
-  '/passkey/update-passkey': ['400', '401', '403', '422'],
+  '/passkey/delete-passkey': ['401', '403', '404', '409', '422'],
+  '/passkey/update-passkey': ['401', '403', '422'],
 };
 
 /**
@@ -160,6 +164,14 @@ export const BETTER_AUTH_SPENT_INPUT_REMEDIES: Readonly<
 export const BETTER_AUTH_DATABASE_FAULT_PATHS = new Set([
   '/oauth/google/callback',
 ]);
+
+/**
+ * Paths whose second-factor credential the library locks after repeated
+ * failures (`assertTwoFactorNotLocked`), so a locked one answers 429 there in
+ * Better Auth's error shape.
+ */
+export const BETTER_AUTH_CREDENTIAL_LOCKOUT_PATHS: ReadonlySet<string> =
+  new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code']);
 
 /**
  * Paths that check the account password (`requireReauthPassword`, or the proof
@@ -231,9 +243,48 @@ export const BETTER_AUTH_RESPONSE_DESCRIPTIONS = {
 } as const satisfies Record<BetterAuthResponseRoute, string>;
 
 /**
- * The library's own paths whose generated 200 was read and found to match what
- * is served. An explicit attestation, so "unchecked" and "checked and correct"
- * differ.
+ * The two verifiers answer through the plugin's shared `valid()`
+ * (`verify-two-factor.mjs`), which returns `{ token, user }`, not what the
+ * plugin's metadata declares; the merge publishes that body under these words.
+ */
+export const LIBRARY_VERIFIER_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  '/two-factor/verify-totp':
+    'The authenticator code was accepted and the sign-in is complete.',
+  '/two-factor/verify-backup-code':
+    'The backup code was accepted, consumed, and the sign-in is complete.',
+};
+
+export const LIBRARY_VERIFIER_PATHS: ReadonlySet<string> = new Set(
+  Object.keys(LIBRARY_VERIFIER_DESCRIPTIONS)
+);
+
+/**
+ * Properties of a library 200 that its generator declares wrongly, replaced by
+ * what the handler sends.
+ */
+export const LIBRARY_SUCCESS_PROPERTIES: Readonly<
+  Record<string, Readonly<Record<string, Record<string, unknown>>>>
+> = {
+  // `redirect: !!callbackURL` and `url: callbackURL` (`sign-in.mjs`), where the
+  // generator declares `redirect` always `false` and `url` nullable.
+  '/sign-in/email': {
+    redirect: {
+      type: 'boolean',
+      description:
+        '`true` exactly when the request named a `callbackURL`, which `url` then repeats and `Location` carries.',
+    },
+    url: {
+      type: 'string',
+      description: 'The request’s `callbackURL`; absent when it named none.',
+    },
+  },
+};
+
+/**
+ * The library's own paths whose generated 200 the merge publishes, corrected
+ * by `LIBRARY_SUCCESS_PROPERTIES` and by the stored model fields. An explicit
+ * list, so a path with no source of its 200 fails; the integration tier holds
+ * each to what is served (`tests/helpers/document-check.ts`).
  */
 export const BETTER_AUTH_TRUSTED_RESPONSES: ReadonlySet<string> = new Set([
   '/get-session',

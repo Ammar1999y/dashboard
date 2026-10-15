@@ -188,7 +188,6 @@ export const passwordless = () =>
             }
 
             return ctx.json({
-              success: true,
               message: otpMsg.loginSuccess,
               data: { loggedIn: true },
             });

@@ -93,8 +93,8 @@ function eligible(
  * — no promotion ever demotes. After it, the bucket has to match exactly.
  *
  * ⚠️ Its refusals name the files in `data`: a route that links lists their
- * codes in `MEDIA_REFUSAL_CODES` (`lib/http/openapi/route-tables.ts`), or its
- * document publishes `data: null`.
+ * codes in its contract entry's `errors`, or its document publishes
+ * `data: null`.
  */
 function assertLinkable(
   rows: readonly LinkRow[],

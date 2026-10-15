@@ -10,6 +10,12 @@ import type { ComponentProps, KeyboardEvent } from 'react';
 import { memo, useCallback, useId, useMemo, useRef, useState } from 'react';
 
 import { dataTableConfig } from '@app/shared/data-table/config';
+import {
+  MSG_EDIT_FILTERS,
+  MSG_FIND_FIELD,
+  MSG_NO_FIELDS,
+  MSG_NO_FILTERS,
+} from '@/constants/messages';
 import { cn } from '@/lib/utils';
 
 import { generateId } from '@/utils/generate-id';
@@ -89,7 +95,7 @@ export function DataTableFilterList<TData>({
     [allColumns]
   );
 
-  const filters = useDataTableStore((s) => s.filters);
+  const filterCount = useDataTableStore((s) => s.filters.length);
 
   const [draftFilters, setDraftFilters] = useState<FilterItemSchema[]>([]);
   const [draftJoinOperator, setDraftJoinOperator] =
@@ -105,10 +111,9 @@ export function DataTableFilterList<TData>({
   }, []);
 
   const onApply = useCallback(() => {
-    const { setFilters, setJoinOperator } =
-      useDataTableStore.getState().actions;
-    setFilters(draftFilters.length > 0 ? draftFilters : null);
-    setJoinOperator(draftJoinOperator);
+    useDataTableStore
+      .getState()
+      .actions.applyFilters(draftFilters, draftJoinOperator);
     setOpen(false);
   }, [draftFilters, draftJoinOperator]);
 
@@ -159,7 +164,10 @@ export function DataTableFilterList<TData>({
     setDraftJoinOperator('and');
   }, []);
 
-  const toggleOpen = useCallback(() => setOpen((prev) => !prev), []);
+  const toggleOpen = useCallback(
+    () => handleOpenChange(!open),
+    [open, handleOpenChange]
+  );
   usePopoverShortcut(FILTER_SHORTCUT_KEY, toggleOpen);
 
   const onTriggerKeyDown = useCallback(
@@ -197,12 +205,12 @@ export function DataTableFilterList<TData>({
               className='size-4 text-muted-foreground'
             />
             <span>تصفية</span>
-            {filters.length > 0 && (
+            {filterCount > 0 && (
               <Badge
                 variant='secondary'
                 className='h-4 rounded-xs px-1 font-mono text-xs font-normal'
               >
-                {filters.length}
+                {filterCount}
               </Badge>
             )}
           </Button>
@@ -226,9 +234,7 @@ export function DataTableFilterList<TData>({
               draftFilters.length > 0 && 'sr-only'
             )}
           >
-            {draftFilters.length > 0
-              ? 'عدّل التصفيات لتحسين النتائج.'
-              : 'لاتوجد تصفيات، أضف تصفيات لتحسين النتائج.'}
+            {draftFilters.length > 0 ? MSG_EDIT_FILTERS : MSG_NO_FILTERS}
           </p>
           {draftFilters.length > 0 ? (
             <SortableContent asChild>
@@ -385,11 +391,6 @@ function DataTableFilterItemInner<TData>({
   const columnMeta = column?.columnDef.meta;
   const filterOperators = getFilterOperators(filter.variant);
 
-  const onJoinOperatorChange = useCallback(
-    (value: JoinOperator) => setJoinOperator(value),
-    [setJoinOperator]
-  );
-
   const onOperatorChange = useCallback(
     (value: FilterOperator) =>
       onFilterUpdate(filter.filterId, {
@@ -451,16 +452,14 @@ function DataTableFilterItemInner<TData>({
           {index === 0 ? (
             <span className='ps-3 text-sm text-muted-foreground'>حيث</span>
           ) : index === 1 ? (
-            <Select value={joinOperator} onValueChange={onJoinOperatorChange}>
+            <Select value={joinOperator} onValueChange={setJoinOperator}>
               <SelectTrigger
-                aria-label='Select join operator'
+                aria-label='طريقة الجمع بين التصفيات'
                 aria-controls={joinOperatorListboxId}
                 size='sm'
                 className='!h-8 w-full rounded lowercase'
               >
-                <SelectValue
-                  placeholder={joinOperatorLabels[joinOperator] ?? joinOperator}
-                />
+                <SelectValue placeholder={joinOperatorLabels[joinOperator]} />
               </SelectTrigger>
               <SelectContent
                 id={joinOperatorListboxId}
@@ -469,14 +468,14 @@ function DataTableFilterItemInner<TData>({
               >
                 {dataTableConfig.joinOperators.map((joinOperator) => (
                   <SelectItem key={joinOperator} value={joinOperator}>
-                    {joinOperatorLabels[joinOperator] ?? joinOperator}
+                    {joinOperatorLabels[joinOperator]}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           ) : (
             <span className='ps-3 text-sm text-muted-foreground'>
-              {joinOperatorLabels[joinOperator] ?? joinOperator}
+              {joinOperatorLabels[joinOperator]}
             </span>
           )}
         </div>
@@ -504,9 +503,9 @@ function DataTableFilterItemInner<TData>({
               className='w-40 p-0'
             >
               <Command>
-                <CommandInput placeholder='ابحث عن حقل...' />
+                <CommandInput placeholder={MSG_FIND_FIELD} />
                 <CommandList>
-                  <CommandEmpty>لا توجد حقول.</CommandEmpty>
+                  <CommandEmpty>{MSG_NO_FIELDS}</CommandEmpty>
                   <CommandGroup>
                     {columns.map((option) => (
                       <FilterFieldItem

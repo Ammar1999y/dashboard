@@ -25,13 +25,13 @@
  * - **A hand-copied production list.** `REAL_SCOPES` listed five of the six
  *   scopes the route table produces, under a comment claiming 14 routes where
  *   there are 22 — it was missing `preauth.upload.image`, added when the upload
- *   route gained `preAuth: 'ip-limit'`. The set is now derived from `ROUTES`
+ *   route gained `preAuth: 'ip-limit'`. The set is now derived from the bindings
  *   through the production `preAuthScope`, and the OTP scopes are read out of the
  *   real limiter table after the real quota functions have charged it.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 
-import { ROUTES } from '@/routes';
+import { BINDINGS } from '@/modules';
 
 import { preAuthScope } from '@/lib/http/pre-auth';
 import { describeStoreFailure } from '@/lib/rate-limit/fixed-window';
@@ -192,20 +192,17 @@ describe('the error class comes from the real driver', () => {
 });
 
 describe('every scope the application can produce', () => {
-  test('the pre-auth set is exactly what the route table yields', () => {
-    const derived = [
-      ...new Set(
-        ROUTES.filter((route) => route.preAuth === 'ip-limit').map((route) =>
-          preAuthScope(route.path)
-        )
-      ),
-    ].toSorted((a, b) => a.localeCompare(b));
+  test('the pre-auth set is exactly what the bindings yield', () => {
+    const limited = BINDINGS.filter(
+      ({ options }) => options.preAuthIpLimit !== false
+    ).map(({ entry }) => entry.path);
+    const derived = [...new Set(limited.map(preAuthScope))].toSorted((a, b) =>
+      a.localeCompare(b)
+    );
 
     // Not a hardcoded list of six strings: the assertion is that the mapping
     // COLLAPSES many routes onto few scopes and that no dynamic segment survives.
-    expect(derived.length).toBeLessThan(
-      ROUTES.filter((route) => route.preAuth === 'ip-limit').length
-    );
+    expect(derived.length).toBeLessThan(limited.length);
     for (const scope of derived) {
       expect(scope.startsWith('preauth.')).toBe(true);
       expect(scope).not.toContain(':');

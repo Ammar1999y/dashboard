@@ -3,6 +3,7 @@ import { memo } from 'react';
 import { ThemeCustomizer } from '@/components/theme-customizer';
 
 import ImageZoomDialog from './image-zoom';
+import ReauthDialog from './reauth';
 import DialogUrlSync from './url-sync';
 
 const GlobalDialogs = memo(() => {
@@ -11,6 +12,7 @@ const GlobalDialogs = memo(() => {
       <DialogUrlSync />
       <ThemeCustomizer />
       <ImageZoomDialog />
+      <ReauthDialog />
     </>
   );
 });

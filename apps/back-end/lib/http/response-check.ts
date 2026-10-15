@@ -1,15 +1,22 @@
 /**
- * Every success a keyed route answers, held to its published contract
- * (`responseIssues`) and to its status: 201 for the `CREATED_ROUTES`, 200
- * otherwise. The Better Auth prefix route holds this project's own plugin
- * endpoints to `BETTER_AUTH_RESPONSES` the same way, and a two-factor challenge
- * from any path to the challenge schema. Under the test runner a mismatch
+ * Every success a binding answers, held to its published contract
+ * (`responseIssues`); its status is the entry's by construction. Its refusals
+ * are held to the statuses and codes the entry publishes in `run.ts`. The Better
+ * Auth prefix route holds this project's own plugin endpoints to
+ * `BETTER_AUTH_RESPONSES` the same way, and a two-factor challenge from any
+ * path to the challenge schema. Under the test runner a mismatch
  * answers 500 and fails the test that caused it; in development it is only
  * logged, because the write behind the answer has already committed and a 500
  * would invite a duplicate retry. Production never runs it.
+ *
+ * At the Better Auth prefix the library's own answers and every refusal pass
+ * untouched; the database tiers hold those, with everything else, to the
+ * generated document (`tests/helpers/document-check.ts`).
  */
-import type { Handler, HandlerInput, HandlerOutput } from './contract';
-import type { ResponseIssue } from '@app/shared/response-contract';
+import type {
+  ResponseIssue,
+  ResponseRoute,
+} from '@app/shared/response-contract';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
@@ -23,7 +30,6 @@ import {
 import { logLine } from '@/utils/log';
 
 import { REDIRECTING_PLUGIN_PATHS } from './openapi/better-auth-tables';
-import { CREATED_ROUTES } from './openapi/route-tables';
 import { apiError, toWebResponse } from './response';
 import {
   challengeCoverageId,
@@ -50,13 +56,8 @@ export function responseCheckMode(
   );
 }
 
-/** What `Response.json` sends for `value`: a `Date` becomes its ISO string. */
-const onTheWire = (value: unknown): unknown =>
-  // eslint-disable-next-line unicorn/prefer-structured-clone -- not a clone: `structuredClone` keeps a `Date` a `Date`
-  JSON.parse(JSON.stringify(value));
-
 /** Paths and codes, never the values that failed. */
-const described = (issues: readonly ResponseIssue[]): string[] =>
+export const described = (issues: readonly ResponseIssue[]): string[] =>
   issues.map(
     ({ path, code }) => `${path.map(String).join('.') || 'body'}: ${code}`
   );
@@ -65,7 +66,7 @@ const described = (issues: readonly ResponseIssue[]): string[] =>
  * The answer when `problems` is not empty: logged in both modes, and under the
  * runner recorded and replaced by a 500.
  */
-function refused<T>(
+export function refused<T>(
   mode: ResponseCheckMode,
   route: string,
   problems: readonly string[],
@@ -84,36 +85,25 @@ const internalError = () =>
     status: HTTP_STATUS.INTERNAL_ERROR,
   });
 
-/** `handler` unchanged when it carries no key: only envelope routes are held to a contract. */
-export function withResponseCheck(
-  handler: Handler,
-  mode: ResponseCheckMode
-): Handler {
-  const key = handler.routeKey;
-  if (key === undefined) return handler;
-  const expectedStatus = CREATED_ROUTES.has(key)
-    ? HTTP_STATUS.CREATED
-    : HTTP_STATUS.OK;
-
-  const checked = async (ctx: HandlerInput): Promise<HandlerOutput> => {
-    const output = await handler(ctx);
-    const { body } = output;
-    if (!('success' in body) || !body.success) return output;
-
-    const wire = onTheWire(body);
-    const problems = [
-      ...(output.status === expectedStatus
-        ? []
-        : [`status ${output.status}, expected ${expectedStatus}`]),
-      ...described(responseIssues(key, wire)),
-    ];
-    if (problems.length === 0) {
-      recordResponseCoverage(responseCoverageId(key, wire));
-      return output;
-    }
-    return refused(mode, key, problems, output, internalError);
-  };
-  return Object.assign(checked, { routeKey: key });
+/**
+ * One success answer held to the contract of `key`: true when it may go out.
+ * A pass counts towards the coverage gate; a mismatch is logged and, under the
+ * runner, recorded and answered 500.
+ *
+ * `body` as the handler built it, never its JSON: the response schema Elysia
+ * compiles judges that same value, and the two must agree on a `Date`.
+ */
+export function checkSuccess(
+  mode: ResponseCheckMode,
+  key: ResponseRoute,
+  body: unknown
+): boolean {
+  const problems = described(responseIssues(key, body));
+  if (problems.length === 0) {
+    recordResponseCoverage(responseCoverageId(key, body));
+    return true;
+  }
+  return refused(mode, key, problems, true, () => false);
 }
 
 const REDIRECTING: ReadonlySet<string> = new Set(REDIRECTING_PLUGIN_PATHS);

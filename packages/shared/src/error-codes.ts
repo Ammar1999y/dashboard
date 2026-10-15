@@ -20,6 +20,12 @@ export const TWO_FACTOR_UNAVAILABLE_CODE = 'TWO_FACTOR_UNAVAILABLE' as const;
  * with the header, rather than treating it as a sign-in failure.
  */
 export const REAUTH_REQUIRED_CODE = 'REAUTH_REQUIRED' as const;
+/**
+ * A proof-row 429, as opposed to a limiter's. Only an existing account has a
+ * proof row, so a route that answers alike for an invented identifier collapses
+ * it; one reached with a session or a recovery grant answers it.
+ */
+export const OTP_PROOF_THROTTLE_CODE = 'otp_proof_throttle' as const;
 
 export const FILE_NOT_FOUND_CODE = 'FILE_NOT_FOUND' as const;
 export const FOLDER_NOT_FOUND_CODE = 'FOLDER_NOT_FOUND' as const;

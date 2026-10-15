@@ -1,15 +1,16 @@
 /**
  * The last thing that touches a response.
  *
- * Separate from the `onRequest` hook that also writes the security headers:
+ * Separate from the `request` hook that also writes the security headers:
  * that hook writes into the framework's mutable header bag, and on Elysia a
  * header on a native `Response` wins over the same key in `set.headers` — so a
  * route, or a dependency, setting its own `Content-Security-Policy` would
  * silently replace the global one. This OVERWRITES instead.
  *
- * The two placements cover different paths: the hook covers what never reaches
- * `mapResponse` (the CORS preflight short-circuit, the unmatched path), this
- * covers every native `Response` produced, thrown errors included.
+ * The two placements cover different paths: the hook covers the OPTIONS
+ * answers `app.ts` keeps outside `mapResponse` (the CORS preflight), this
+ * covers every other native `Response`, routing misses and thrown errors
+ * included.
  */
 import { SECURITY_HEADERS } from './security-headers';
 
@@ -29,6 +30,8 @@ interface ResponsePolicyOptions {
    * rather than reported as zero when unmeasured.
    */
   durationMs?: number;
+  /** Replaces the API's `Content-Security-Policy` on the one route that serves a page. */
+  contentSecurityPolicy?: string;
 }
 
 /** Rebuilds responses whose headers are immutable, such as redirects. */
@@ -50,9 +53,33 @@ export function applyResponsePolicy(
   }
 }
 
-function write(headers: Headers, options: ResponsePolicyOptions): void {
+/**
+ * The same policy written into a framework's mutable header bag, for an answer
+ * the framework serialises itself, so its response schema still applies.
+ */
+export function applyResponsePolicyToBag(
+  bag: Record<string, string | number | string[] | undefined>,
+  options: ResponsePolicyOptions = {}
+): void {
+  write(
+    {
+      has: (name) => Object.keys(bag).some((key) => key.toLowerCase() === name),
+      set: (name, value) => {
+        bag[name] = value;
+      },
+    },
+    options
+  );
+}
+
+function write(
+  headers: Pick<Headers, 'has' | 'set'>,
+  options: ResponsePolicyOptions
+): void {
   for (const [key, value] of Object.entries(SECURITY_HEADERS))
     headers.set(key, value);
+  if (options.contentSecurityPolicy !== undefined)
+    headers.set('content-security-policy', options.contentSecurityPolicy);
 
   if (!headers.has('cache-control'))
     headers.set('cache-control', DEFAULT_CACHE_CONTROL);

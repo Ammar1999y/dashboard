@@ -176,3 +176,34 @@ export function localiseReturnedAuthError(returned: unknown): void {
   }
   if (!ROUTING_CODES.has(errorCode)) logSanitized('error', returned);
 }
+
+/**
+ * A Better Auth error response with its message replaced by this deployment's
+ * Arabic one; anything else, and any body this cannot read, passes untouched.
+ */
+export async function localiseAuthError(response: Response): Promise<Response> {
+  if (response.ok) return response;
+
+  const cloned = response.clone();
+  let body: unknown;
+  try {
+    body = await cloned.json();
+  } catch {
+    return response;
+  }
+
+  const code =
+    typeof body === 'object' && body !== null && 'code' in body
+      ? body.code
+      : undefined;
+  const localised = localisedAuthBody(code);
+  if (localised === undefined) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set('content-type', 'application/json;charset=utf-8');
+  return Response.json(localised, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}

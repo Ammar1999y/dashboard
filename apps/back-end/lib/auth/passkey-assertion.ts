@@ -58,6 +58,9 @@ type LibraryOptions = PublicKeyCredentialRequestOptionsJSON;
  * changes the type fails here: every value the library builds parses, what
  * parses is the type the browser's ceremony takes (the browser package
  * declares the same interface), and neither names a key the other lacks.
+ * Exported only so the compiler keeps checking it; nothing imports it.
+ *
+ * @knipignore
  */
 export type PasskeyOptionsMirrorTheLibrary = Assert<
   [

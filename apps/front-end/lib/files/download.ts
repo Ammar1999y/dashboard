@@ -43,3 +43,16 @@ export function downloadUrl(url: string, filename: string) {
   link.rel = 'noopener';
   clickLink(link);
 }
+
+/**
+ * `downloadUrl` without a new tab, for a link the server serves as an
+ * attachment: several can start from one click, and none waits on a popup
+ * blocker after an awaited request.
+ */
+export function downloadInFrame(url: string) {
+  const frame = document.createElement('iframe');
+  frame.hidden = true;
+  frame.src = url;
+  document.body.append(frame);
+  setTimeout(() => frame.remove(), OBJECT_URL_LIFETIME_MS);
+}

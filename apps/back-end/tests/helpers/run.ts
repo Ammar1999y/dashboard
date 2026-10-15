@@ -76,6 +76,12 @@ interface Tier {
    */
   contractCoverage?: true;
   /**
+   * Hold every in-process answer to the served document
+   * (`./preload-document-check.ts`). The tiers that drive `app` in process;
+   * the process tier's servers are child processes it cannot see into.
+   */
+  documentCheck?: true;
+  /**
    * Run the tier once PER configuration, in one child each.
    *
    * The two-factor configuration is read at module load — the allow-list, and
@@ -85,7 +91,22 @@ interface Tier {
    * `/sign-in/email` while `/passwordless/verify` kept refusing, with every
    * suite green: the suite proved ONE deployment works.
    */
-  configurations?: readonly { name: string; env: Record<string, string> }[];
+  configurations?: readonly Configuration[];
+}
+
+interface Configuration {
+  name: string;
+  env: Record<string, string>;
+  /**
+   * The tier's files this row runs, by file name; absent, all of them. For a
+   * row whose configuration only some files have cases for.
+   */
+  files?: readonly string[];
+  /**
+   * Every other row of the tier leaves this row's `files` out: they assert
+   * only this configuration and would fail under the others.
+   */
+  exclusive?: true;
 }
 
 /**
@@ -140,6 +161,7 @@ const TIERS: Record<string, Tier> = {
     workers: 'auto',
     nodeEnv: 'development',
     contractCoverage: true,
+    documentCheck: true,
     /**
      * Two-factor configuration is read at MODULE LOAD — the allow-list, and
      * therefore which Better Auth paths exist at all, is derived from it — so it
@@ -157,6 +179,58 @@ const TIERS: Record<string, Tier> = {
       GOOGLE_CLIENT_ID: 'harness.apps.googleusercontent.com',
       GOOGLE_CLIENT_SECRET: 'harness-google-client-secret',
     },
+    // Contact changes by email alone, as CI deploys, so a developer's `.env`
+    // cannot decide which branch the suite asserts. The phone row reruns the
+    // files that hold cases only a phone channel reaches; the rest assert
+    // the email-only deployment and would fail there. Each later row is a
+    // deployment a load-time environment value decides: a row, never a child
+    // process, is how a test asks for one.
+    configurations: [
+      {
+        name: 'email-contact',
+        env: { NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email' },
+      },
+      {
+        name: 'phone-contact',
+        env: { NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email,sms' },
+        files: [
+          'binding-gate.test.ts',
+          'declared-refusals.test.ts',
+          'password-reauth-guard.test.ts',
+          'phone-change-success.test.ts',
+        ],
+      },
+      {
+        name: 'no-otp-channel',
+        env: {
+          NEXT_PUBLIC_ENABLED_OTP_CHANNELS: '',
+          NEXT_PUBLIC_ENABLED_2FA_METHODS: 'totp',
+          NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS: '',
+        },
+        files: ['otp-off.test.ts'],
+        exclusive: true,
+      },
+      {
+        name: 'two-factor-off',
+        env: {
+          NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email,sms',
+          NEXT_PUBLIC_ENABLED_2FA_METHODS: '',
+          NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS: '',
+        },
+        files: ['two-factor-off.test.ts'],
+        exclusive: true,
+      },
+      {
+        name: 'https-origin',
+        env: {
+          NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email',
+          PUBLIC_URL: 'https://localhost',
+          NEXT_PUBLIC_URL: 'https://localhost',
+        },
+        files: ['secure-cookie-cache.test.ts'],
+        exclusive: true,
+      },
+    ],
   },
   /**
    * Serial. Every test here owns a real socket, a real child process or a real
@@ -178,6 +252,7 @@ const TIERS: Record<string, Tier> = {
     flags: ['--no-isolate'],
     workers: 1,
     nodeEnv: 'development',
+    documentCheck: true,
     // The outbox, not stubbed providers: this is the tier that runs every OTP
     // channel, so it is where the delivered text per channel and purpose is
     // asserted. The integration tier keeps the provider stubs, because several
@@ -338,15 +413,46 @@ try {
     if (run.created.length > 1) flags.push(`--parallel=${run.created.length}`);
     flags.push('--preload', './tests/helpers/preload-database.ts');
   }
+  // After the database preload: it loads the application.
+  if (tier.documentCheck)
+    flags.push('--preload', './tests/helpers/preload-document-check.ts');
 
   // One child per configuration, or one child. A row is a whole `bun test`
   // process because the configuration is read at module load.
   const rows = tier.configurations ?? [{ name: '', env: {} }];
   exitCode = 0;
+  const exclusive = rows.flatMap((row) =>
+    row.exclusive
+      ? (row.files ?? []).map((file) => `tests/${tierName}/${file}`)
+      : []
+  );
   for (const row of rows) {
+    // A narrowed name keeps the files of the row it is a filter for.
+    const selections = row.files
+      ? row.files
+          .map((file) => `tests/${tierName}/${file}`)
+          .filter((file) => file.includes(selection))
+      : [selection];
+    if (selections.length === 0) continue;
+    const ignored = exclusive.filter((file) => !selections.includes(file));
+    // `bun test` fails a filter that matches only ignored files.
+    if (
+      !row.files &&
+      ignored.some((file) => file.includes(selection)) &&
+      forwardedNames[0]
+    )
+      continue;
     if (row.name) console.log(`\n── configuration: ${row.name} ──`);
     const child = Bun.spawn(
-      ['bun', 'test', '--no-env-file', ...flags, ...forwardedFlags, selection],
+      [
+        'bun',
+        'test',
+        '--no-env-file',
+        ...flags,
+        ...forwardedFlags,
+        ...ignored.map((file) => `--path-ignore-patterns=${file}`),
+        ...selections,
+      ],
       {
         cwd: REPO_ROOT,
         env: {

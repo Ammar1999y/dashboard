@@ -8,7 +8,6 @@ import type {
 } from '@tanstack/react-table';
 import type { Ref } from 'react';
 
-import dynamic from 'next/dynamic';
 import {
   useEffect,
   useId,
@@ -27,7 +26,10 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 
-import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
+import {
+  mirrorTableToUrl,
+  useDataTableStore,
+} from '@/components/ui/data-table/store/url-store';
 
 import { ACTIONS_COLUMN } from './column-presets';
 import { DataTableBody } from './components/body';
@@ -43,11 +45,6 @@ import { DataTableToolbar } from './toolbar';
 import { ToolbarSkeleton } from './toolbar-skeleton';
 import { columnIdsOf } from './utils/columns';
 import { genericMemo } from './utils/generic-memo';
-
-const UrlSync = dynamic(
-  () => import('./filters/url-sync').then((module) => module.UrlSync),
-  { ssr: false }
-);
 
 const MEASURING: MeasuringConfiguration = {
   droppable: { strategy: MeasuringStrategy.Always },
@@ -146,6 +143,11 @@ const TableFrameInner = <TData,>({
   const tableId = useId();
 
   useImperativeHandle(ref, () => ({ table, store }), [table, store]);
+  // Restarted for each table the store binds: a navigation within the route
+  // binds a new one, on a new history entry. Before the clamp below, whose
+  // correction has to reach the address.
+  const tableKey = useDataTableStore((s) => s.tableKey);
+  useEffect(() => mirrorTableToUrl(defaultSort), [defaultSort, tableKey]);
   useClampedPage(pageCount, isLoading);
 
   const activeLabel = useMemo(() => {
@@ -163,7 +165,6 @@ const TableFrameInner = <TData,>({
       collisionDetection={closestCenter}
       measuring={MEASURING}
     >
-      <UrlSync defaultSort={defaultSort} />
       <div
         className={cn(
           'relative transition-opacity duration-300 space-y-4',

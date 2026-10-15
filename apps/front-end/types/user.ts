@@ -1,22 +1,28 @@
-import type { PagePermission, RoleSummary } from './permission';
-import type { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
-import type { EntityID } from '@app/shared/types';
+import type {
+  sessionsPageSchema,
+  userDetailSchema,
+} from '@app/shared/responses/users';
+import type * as z from 'zod';
+
+export type SessionsPage = z.output<typeof sessionsPageSchema>;
+
+export type UserSession = SessionsPage['sessions'][number];
+
+export type UserDetail = z.output<typeof userDetailSchema>;
 
 /**
- * A user as `/api/dash/users` sends it. The verification flags, the phone and
- * the effective permissions come with the detail only.
+ * A user as the cache holds it: a list row and a detail share one entity's
+ * keys, so what only the detail carries is optional.
  */
-export interface UserClient {
-  id: EntityID;
-  name: string;
-  email: string;
-  emailVerified?: boolean;
-  phoneNumber?: string | null;
-  phoneNumberVerified?: boolean;
-  isActive: boolean;
-  roleId: EntityID | typeof CUSTOM_ROLE_VALUE | null;
-  role: RoleSummary | null;
-  createdAt: string;
-  updatedAt: string;
-  permissions?: PagePermission[];
-}
+export type UserClient = Pick<
+  UserDetail,
+  | 'id'
+  | 'name'
+  | 'email'
+  | 'isActive'
+  | 'roleId'
+  | 'role'
+  | 'createdAt'
+  | 'updatedAt'
+> &
+  Partial<UserDetail>;

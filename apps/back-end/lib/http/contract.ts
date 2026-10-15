@@ -1,11 +1,5 @@
 import type { HandlerCookieOptions } from './cookies';
-import type {
-  PaginatedRoute,
-  ResponseData,
-  ResponseRoute,
-} from '@app/shared/response-contract';
 import type { MediaRefusalData } from '@app/shared/responses/media';
-import type { PaginationMeta } from '@app/shared/types/api';
 
 /**
  * What a route is allowed to read from the request body — declared per route,
@@ -67,29 +61,10 @@ export interface HandlerCookie {
   options?: HandlerCookieOptions;
 }
 
-/**
- * What a handler may hand the serialiser where the wire carries `T`: a `Date`
- * wherever `T` is a plain `string`, because `Response.json` writes it as one.
- * Literal and enum strings keep their exact type.
- */
-export type ServerValue<T> = T extends string
-  ? string extends T
-    ? T | Date
-    : T
-  : T extends readonly (infer Element)[]
-    ? readonly ServerValue<Element>[]
-    : T extends object
-      ? { [K in keyof T]: ServerValue<T[K]> }
-      : T;
-
 interface SuccessBody<T> {
   success: true;
   message: string;
   data: T;
-}
-
-interface PaginatedBody<T> extends SuccessBody<T> {
-  meta: PaginationMeta;
 }
 
 interface ErrorBody {
@@ -101,10 +76,9 @@ interface ErrorBody {
 
 /**
  * For the few endpoints whose body shape an external consumer fixes and which
- * therefore cannot be the envelope: the Coolify health check and the scheduled
- * sweep. A separate output rather than `body: unknown`, so an ordinary handler
- * has to call `apiRaw` to return a shape the contract forbids, and a keyed one
- * cannot at all.
+ * therefore cannot be the envelope: the Coolify health check and the OpenAPI
+ * document. A separate output rather than `body: unknown`, so only a raw
+ * contract entry's answer can carry a shape the envelope forbids.
  */
 interface RawBody {
   raw: unknown;
@@ -135,8 +109,6 @@ export type HandlerOutput = HandlerSuccess | HandlerError | HandlerRaw;
 
 export type SuccessOutput<T> = HandlerSuccess<SuccessBody<T>>;
 
-export type PaginatedOutput<T> = HandlerSuccess<PaginatedBody<T>>;
-
 function isRawBody(body: HandlerOutput['body']): body is RawBody {
   return 'raw' in body;
 }
@@ -144,23 +116,4 @@ function isRawBody(body: HandlerOutput['body']): body is RawBody {
 /** The value an adapter should JSON-serialise for a given output. */
 export function responsePayload(body: HandlerOutput['body']): unknown {
   return isRawBody(body) ? body.raw : body;
-}
-
-type RouteBody<K extends ResponseRoute> = K extends PaginatedRoute
-  ? PaginatedBody<ServerValue<ResponseData<K>>>
-  : SuccessBody<ServerValue<ResponseData<K>>> & { meta?: never };
-
-/** What a handler keyed `K` may return: its success envelope, or a refusal. */
-export type RouteOutput<K extends ResponseRoute> =
-  HandlerSuccess<RouteBody<K>> | HandlerError;
-
-export interface Handler {
-  (ctx: HandlerInput): Promise<HandlerOutput>;
-  /** Stamped by the keyed wrappers; the document build holds it to the row. */
-  readonly routeKey?: ResponseRoute;
-}
-
-export interface RouteHandler<K extends ResponseRoute> {
-  (ctx: HandlerInput): Promise<RouteOutput<K>>;
-  readonly routeKey: K;
 }

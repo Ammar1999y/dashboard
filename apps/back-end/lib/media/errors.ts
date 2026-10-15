@@ -1,5 +1,7 @@
-import type { MediaErrorCode } from '@app/shared/error-codes';
-import type { MediaRefusalData } from '@app/shared/responses/media';
+import type {
+  MediaCodeWithIds,
+  MediaRefusalData,
+} from '@app/shared/responses/media';
 import type { EntityID } from '@app/shared/types';
 
 import { CustomError } from '@app/shared/error-class';
@@ -31,32 +33,11 @@ import { mediaMsg } from '@app/shared/messages/media';
 
 import { sortedIds } from './ids';
 
-/**
- * The codes whose refusal may name its blockers in `data`, and so publish
- * `MediaRefusalEnvelope` (`lib/http/openapi/route-operations.ts`). Attach ids
- * only through `named`, which takes no other code.
- */
-const CODES_WITH_IDS = [
-  FILE_BUSY_CODE,
-  FILE_IN_USE_CODE,
-  FILE_KIND_NOT_ALLOWED_CODE,
-  FOLDER_BUSY_CODE,
-  FOLDER_CYCLE_CODE,
-  FOLDER_NAME_EXISTS_CODE,
-  FOLDER_NOT_EMPTY_CODE,
-  FOLDER_TOO_DEEP_CODE,
-  LINK_NOT_ALLOWED_CODE,
-  LINK_VISIBILITY_MISMATCH_CODE,
-] as const;
-
-export const MEDIA_CODES_WITH_IDS: ReadonlySet<MediaErrorCode> = new Set(
-  CODES_WITH_IDS
-);
-
+/** Ids reach `data` only through `named`, which takes no other code. */
 const named = (
   message: string,
   status: number,
-  code: (typeof CODES_WITH_IDS)[number],
+  code: MediaCodeWithIds,
   data: MediaRefusalData | undefined
 ): CustomError => new CustomError(message, status, code, data);
 

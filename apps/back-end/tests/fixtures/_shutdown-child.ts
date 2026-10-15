@@ -5,7 +5,7 @@ import { closeDatabase } from '@/db';
 
 import { closeCacheStore } from '@/lib/cache';
 import { closeRateLimitStore } from '@/lib/rate-limit/store';
-import { stopServerGracefully } from '@/lib/shutdown';
+import { listenerStopDeps, stopServerGracefully } from '@/lib/shutdown';
 
 app.get('/_slow', async () => {
   await Bun.sleep(SLOW_REQUEST_MS);
@@ -66,8 +66,7 @@ if (mode === 'slow-request') {
 // in-flight request without a single test noticing.
 await stopServerGracefully({
   budgetMs: SLOW_REQUEST_BUDGET_MS,
-  stop: (closeActiveConnections) => app.stop(closeActiveConnections),
-  pendingRequests: () => app.server?.pendingRequests ?? 0,
+  ...listenerStopDeps(server),
   error: (line) => console.log(JSON.stringify(line)),
 });
 

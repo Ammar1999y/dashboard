@@ -15,6 +15,7 @@ import { DEFAULT_PERMISSION } from '@/utils/validation/permissions';
 
 import { Form } from '@/components/form/form';
 
+import { RequireGrant } from '../shared/access';
 import { FormHeader } from '../shared/form-header';
 import { useEntityMutations } from '../shared/use-entity-mutations';
 import { cacheRoleOption } from './cache';
@@ -22,6 +23,14 @@ import { permissionEntity, ROLE_OPTIONS_KEY } from './entity';
 import { PermissionFields } from './fields';
 
 export default function CreatePermission() {
+  return (
+    <RequireGrant resource='permissions' action='create'>
+      <CreatePermissionForm />
+    </RequireGrant>
+  );
+}
+
+function CreatePermissionForm() {
   const queryClient = useQueryClient();
   const methods = useForm<
     CreatePermissionInput,

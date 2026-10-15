@@ -22,12 +22,21 @@ import {
   cacheRoleUsersCount,
   resolveUserRole,
 } from '../permissions/cache';
+import { RequireGrant } from '../shared/access';
 import { FormHeader } from '../shared/form-header';
 import { useEntityMutations } from '../shared/use-entity-mutations';
 import { userEntity } from './entity';
 import { UserFields } from './fields';
 
 export default function CreateUser() {
+  return (
+    <RequireGrant resource='users' action='create'>
+      <CreateUserForm />
+    </RequireGrant>
+  );
+}
+
+function CreateUserForm() {
   const queryClient = useQueryClient();
   const methods = useForm<CreateUserInput, unknown, CreateUserOutput>({
     resolver: zodResolver(createUserSchema),

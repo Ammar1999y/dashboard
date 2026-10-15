@@ -1,5 +1,6 @@
 import type { EntityID } from '@app/shared/types';
 import type { ReactNode } from 'react';
+import type * as z from 'zod';
 
 import { memo, useCallback, useId, useMemo, useState } from 'react';
 
@@ -42,6 +43,8 @@ interface FormComboboxProps<T> {
   searchPlaceholder: string;
   queryKey: EntityID[];
   href: string;
+  /** The options' array schema, which the response is checked against. */
+  schema: z.ZodType<NoInfer<T>[]>;
   /** A module-level function: it is a memo dependency. */
   toOption: (item: T) => ComboboxOption;
   /** Offered after the server's options — a module constant. */
@@ -63,6 +66,7 @@ function FormCombobox<T>({
   searchPlaceholder,
   queryKey,
   href,
+  schema,
   toOption,
   extraOptions = NO_OPTIONS,
   footer,
@@ -74,9 +78,10 @@ function FormCombobox<T>({
   } = useController({ name });
   const [open, setOpen] = useState(false);
 
-  const { data, isFetching, error, refetch } = useQueryData<T[]>({
+  const { data, isFetching, error, refetch } = useQueryData({
     queryKey,
     href,
+    schema,
   });
   const options = useMemo(
     () => [...(data?.map(toOption) ?? []), ...extraOptions],

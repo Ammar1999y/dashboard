@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 
 import { ACCEPT_IMAGES } from '@/lib/files/accept';
 
+import { cardSurface } from '@/components/ui/card-surface';
 import { FileUpload } from '@/components/shared/file-upload';
 
 import FormSwitch from '../form-switch';
@@ -25,7 +26,7 @@ const ImageItemCard = ({
   statusAriaLabel,
   children,
 }: ImageItemCardProps) => (
-  <div className='rounded-lg border bg-card px-4 py-4 shadow-md'>
+  <div className={cardSurface}>
     <div className='flex flex-col-reverse gap-x-4 gap-y-5 md2:flex-row'>
       <div className='flex-1'>{children}</div>
       <div className='flex flex-[.7] flex-col gap-2'>

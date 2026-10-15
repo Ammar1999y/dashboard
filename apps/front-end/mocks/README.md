@@ -15,6 +15,8 @@ A build without the flag contains no mock code. A mock build needs no `.env`: it
 
 Any password signs in. A seeded email (`admin@gmail.com`, `user1@gmail.com` … `user22@gmail.com`) signs in as that user, refused as the server refuses it: a deactivated account, a deactivated role or no role answers 401. Any other email creates a full-access user on the spot. Each user gets what their role grants, as on the server: `user1@gmail.com` is an editor (no deletes, no roles page), and the members of the deactivated `مشاهد` role cannot sign in. A role or account deactivated while its user is signed in ends that session. The form's own rules still apply first (a Gmail/Outlook/Hotmail/Yahoo address, and a password with upper case, lower case, a digit and a symbol). To test a refused sign-in, run `mockApi.fail('/api/auth/sign-in/email', 401)`.
 
+Routes the server marks `reauth: true` (user and role create, delete and role edit, a two-factor reset; a user edit that changes a password, a contact, a role, a custom matrix or the active flag, but never a rename) answer 401 `REAUTH_REQUIRED` until the session has opened the window with `POST /api/dash/auth/reauth`, which any password that passes the schema does, as any signs in. The window lasts 15 minutes and belongs to one session, so signing in again starts without it. `GET /api/auth/reauth/methods` offers the password, and a passkey to an account that holds one (`user18@gmail.com`), whose `/api/auth/reauth/passkey/*` proof is trusted as the second-factor ceremony is. To test a refused proof, run `mockApi.fail('/api/dash/auth/reauth', 401)`.
+
 A mock build also changes two files outside `mocks/`, both keyed on the same flag:
 
 - `next.config.js`: `env` inlines the flag even when unset, so a normal build can drop the mock chunk. Its CSP has mock-build changes too (no `upgrade-insecure-requests`, and `https://challenges.cloudflare.com` in `connect-src`, under which the service worker re-fetches the Turnstile script), but no CSP is sent while `headers` is disabled there.
@@ -34,27 +36,74 @@ Settings has no back-end route yet. `handlers/content.ts` is its only implementa
 
 ## Layout
 
-| Path                      | What it holds                                                     |
-| ------------------------- | ----------------------------------------------------------------- |
-| `handlers/auth.ts`        | `get-session`, `sign-in/email`, `sign-out`, `/api/dev/sign-up`    |
-| `handlers/users.ts`       | users list (server-paged), detail, create, update, delete         |
-| `handlers/permissions.ts` | roles picker, permissions list (server-paged) and CRUD            |
-| `handlers/content.ts`     | settings (no back-end yet)                                        |
-| `handlers/media.ts`       | `POST /api/upload/file`, as the server admits files               |
-| `lib/data-table.ts`       | paging, sort, search and filters for `useServerDataTable` tables  |
-| `lib/http.ts`             | the envelope, body and id parsing, the error wrapper              |
-| `lib/messages.ts`         | refusals of the pending entities, which the server has no copy of |
-| `store.ts`, `seed.ts`     | the tables and their starting rows                                |
+| Path                            | What it holds                                                                                                                                                                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `handlers/auth.ts`              | `get-session`, `sign-in/email`, `sign-out`, `reauth`, `/api/dev/sign-up`                                                                                                                                                                               |
+| `handlers/users.ts`             | users list (server-paged), detail, create, update, delete                                                                                                                                                                                              |
+| `handlers/account.ts`           | the signed-in user's email, phone and password changes, with their code steps                                                                                                                                                                          |
+| `handlers/sign-in-challenge.ts` | the second half of a sign-in: TOTP, backup-code, code and passkey verifiers for the challenge                                                                                                                                                          |
+| `handlers/otp-flows.ts`         | passwordless sign-in, forgot-password and contact verification: everything that runs on a code to a contact                                                                                                                                            |
+| `handlers/oauth.ts`             | `capabilities` and Google sign-in, without Google                                                                                                                                                                                                      |
+| `lib/sign-in.ts`                | the session, the first-factor gates, issuing and spending a sign-in challenge, device trust                                                                                                                                                            |
+| `lib/otp.ts`                    | anonymous sends and verifications, contact lookup, recovery grants                                                                                                                                                                                     |
+| `handlers/two-factor.ts`        | two-factor management (`/api/auth/two-factor/*`) and the passkey routes, in the plugins' error shape                                                                                                                                                   |
+| `lib/two-factor-model.ts`       | pure second-factor rules: offered methods, TOTP, backup codes, strands checks (the sign-in challenge reads these)                                                                                                                                      |
+| `lib/two-factor.ts`             | the store-bound half: session user, proof check, short-lived proofs, code send/verify, revocations                                                                                                                                                     |
+| `handlers/sessions.ts`          | a user's sessions (cursor-paged list, revoke) and the administrator's two-factor reset                                                                                                                                                                 |
+| `handlers/preferences.ts`       | the signed-in user's saved appearance                                                                                                                                                                                                                  |
+| `handlers/permissions.ts`       | roles picker, permissions list (server-paged) and CRUD                                                                                                                                                                                                 |
+| `handlers/content.ts`           | settings (no back-end yet)                                                                                                                                                                                                                             |
+| `handlers/media.ts`             | `POST /api/upload/file`, as the server admits files                                                                                                                                                                                                    |
+| `handlers/media-library.ts`     | the media library: listing, the mixed move and delete with their preview, folder details, totals, files, folders, upload, publish. Refusals carry the server's codes and the ids that blocked them; uploads in flight and rate limits are not modelled |
+| `lib/data-table.ts`             | paging, sort, search and filters for `useServerDataTable` tables                                                                                                                                                                                       |
+| `lib/http.ts`                   | the envelope, body and id parsing, the error wrapper                                                                                                                                                                                                   |
+| `lib/upload.ts`, `lib/media.ts` | the upload checks both upload routes share; placeholder images, settle timing                                                                                                                                                                          |
+| `lib/messages.ts`               | refusals of the pending entities, which the server has no copy of                                                                                                                                                                                      |
+| `lib/reauth.ts`                 | the re-authentication window: open it, require it, `requirePermission`'s `reauth` option                                                                                                                                                               |
+| `lib/captcha.ts`                | the captcha's single use: a token seen before is refused 403 on the routes the mocks gate on one; a request with no token passes                                                                                                                       |
+| `lib/user-sessions.ts`          | a user's sessions: keyset paging, the cursor and limit checks, revocation                                                                                                                                                                              |
+| `store.ts`, `seed.ts`           | the tables and their starting rows                                                                                                                                                                                                                     |
 
 To mock a new endpoint, add a handler next to its neighbours.
 
 `tests/mocks-*.test.ts` run the real handlers under `msw/node` (`tests/mocks-harness.ts`); `bun test tests/mocks-users.test.ts` runs one.
+
+## Second factor
+
+`store.ts` holds one `MockTwoFactor` row per user that has any state (its `id` is the user's): the enrolled `methods` (intent), the `totp` secret, `backupCodes`, `passkeys` and `trustedDevices` (capability), and `proofs` for what the server keeps in `verifications` (a pending enrolment, a code, a passkey grant, a device-trust proof). `offeredMethods(enrolmentState(row, user))` in `lib/two-factor-model.ts` is what a sign-in challenge offers. Three seeded users hold a factor, none of them an account other tests sign in with: `user7@gmail.com` an authenticator app (secret `SEEDED_TOTP_SECRET`, which a real app can be enrolled with) and acknowledged backup codes (`SEEDED_BACKUP_CODES`) and two trusted devices, `user9@gmail.com` a code to the email, `user18@gmail.com` a passkey and a code to the phone.
+
+Every send "delivers" `MOCK_OTP_CODE` (`123456`). A TOTP code is checked for real, within a period either side, one use per step; starting an enrolment logs the code the secret shows now. A passkey registration trusts what the browser's ceremony sends. Routes are served only as the deployment switches allow (`NEXT_PUBLIC_ENABLED_2FA_METHODS`, `NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS`), so without them the account page offers no two-factor tab and these answer 404; `tests/preload-env.ts` turns them all on for the tests. The enrolment half of `/two-factor/otp/send` and `/verify` answers only with a session and otherwise returns nothing, leaving the request to the sign-in challenge. Not modelled: rate limits beyond the resend ladder, passkey renaming and `get-totp-uri`, `OTP_AUTO_VERIFY`, the compromised-password check, and the server's several sessions (a commit that revokes every session ends the one the mocks hold; one that revokes the others changes nothing).
+
+## Sign-in flows
+
+A sign-in is judged in the server's order: the credentials, the account's admission (a refused account or role is 401, then `EMAIL_NOT_VERIFIED` / `PHONE_NOT_VERIFIED` where `config.ts` requires a verified contact), then `issueChallenge` decides between a session, a challenge and `TWO_FACTOR_UNAVAILABLE` (403). A challenge is one `challenge` singleton (the browser's cookie): it expires after ten minutes, five failed attempts shared by every method end it, and a sixth answers `tooManyAttempts` and drops it. A device saved with `/two-factor/trust-device` skips the second factor for the user agent it was saved with, which stands in for the cookie. Not modelled: the account-level lockout after ten failed codes, the captcha (beyond the reuse check below), rate limits and the breach check on a new password; `remember me` is carried in the challenge but sessions have one lifetime.
+
+Every code a mock send "delivers" is `123456` (`MOCK_OTP_CODE`). Anonymous sends (passwordless, forgot-password, contact verification) answer one body whether the account exists or not, and every wrong, unsent or expired code answers one text. A reset for an account with a second factor answers a grant (`recoveryGrants`) instead of writing the password; `/forgot-password/complete` writes it against one of the grant's factors. Google signs in `admin@gmail.com`: starting it takes the browser straight to the completion page with the session cookie set and the outcome held for one read of `/oauth/result`; make admin hold a second factor to see the challenge. The `?oauth=expired` redirect is not produced.
+
+A second factor is served only where the build's switches say so: set `NEXT_PUBLIC_ENABLED_2FA_METHODS` (and `NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS` for `otp`) in `.env` before `build:mock` or `dev:mock`.
+
+## The media library
+
+`handlers/media-library.ts` answers every `/api/dash/media` route with the server's checks in its order, over the `folders` and `mediaFiles` tables. `user1@gmail.com` holds the own-scope grants (`view`, `create`, `editOwn`, `deleteOwn`) and `admin@gmail.com` everything, so each is a way to see the gating. Where the mock departs from the server:
+
+- The seed holds files the server would not list yet: two unfiled ones, one held by a record (it cannot be deleted, nor unpublished), one mid-change (`to_public`) and one finishing a publish (`cleanup`). This deployment has no record type holding files, so the real `unfiled` scope answers empty.
+- Publishing and unpublishing answer the settled file (`transition: null`), as the server does once the stale copy is removed; the `cleanup` state, which the server answers only when that removal fails, exists only in the seed.
+- A visibility change in flight settles by itself: `cleanup` after 90 seconds, `to_*` after 10 minutes, where the server's nightly sweep does it. Until then the file answers 409 busy to every write, as on the server.
+- Rate limits are not modelled. `mockApi.fail('/api/dash/media/files', 429, 'رسالة', 5)` answers 429 with `Retry-After: 5`, which the upload dialog waits out.
+- A stored image shows its own bytes only up to 64 KiB, and a card with its extension otherwise: every row is saved in `localStorage`. Dimensions and blurhash are not computed. The download link is the file's own URL.
+
+## User sessions and preferences
+
+`handlers/sessions.ts` answers a user's sessions as the server does: keyset pages by `cursor` and `limit`, the signed-in session listed as the current one on its owner's list, and `revokeAll` also clearing the user's trusted devices. The seed gives `user1@gmail.com` 120 sessions, so the list pages three times; `admin@gmail.com` has three besides the current one. The mocks sign in one session, so ending a user's sessions removes their listed ones and, for the signed-in user's own reset, signs the mocks out. The two-factor reset clears the user's state in `lib/two-factor.ts`.
+
+`handlers/preferences.ts` keeps one document per user: a user who never saved reads the defaults with `updatedAt: null`.
 
 ## Testing UI states from the browser console
 
 ```js
 mockApi.fail('/api/dash/users', 500); // every method on that path returns 500
 mockApi.fail('/api/dash/users/:id', 422, 'رسالة'); // custom status and message
+mockApi.fail('/api/dash/media/files', 429, 'رسالة', 5); // a 429 with Retry-After: 5
 mockApi.offline('/api/dash/settings'); // network error
 mockApi.latency(3000); // slow every request
 mockApi.restore(); // undo the overrides above

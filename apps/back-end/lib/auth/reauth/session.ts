@@ -20,14 +20,22 @@ export async function requireReauthSession(ctx: AuthContext) {
   return session;
 }
 
-/** Per user, not per IP: the budget that matters is guesses per account. */
+/**
+ * Per user, not per IP: the budget that matters is guesses per account. One
+ * budget for every re-authentication proof, `POST /api/dash/auth/reauth`'s
+ * included.
+ */
+export const REAUTH_ATTEMPT_LIMIT = {
+  scope: 'dash.reauth',
+  limit: 10,
+  failClosed: true,
+} as const;
+
 export async function enforceReauthAttemptLimit(
   userId: EntityID
 ): Promise<void> {
   await enforceRateLimit({
-    scope: 'dash.reauth',
+    ...REAUTH_ATTEMPT_LIMIT,
     identifier: userIdentifier(userId),
-    limit: 10,
-    failClosed: true,
   });
 }

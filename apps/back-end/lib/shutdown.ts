@@ -8,7 +8,7 @@ import { errorClassOf } from '@/utils/log';
 export const SHUTDOWN_POLICY = {
   /** Added on top of the longest request ceiling; the orchestrator's grace must exceed the total. */
   headroomSeconds: 15,
-  /** How long `app.stop()` may wait on half-sent connections before `app.stop(true)`. */
+  /** How long `server.stop()` may wait on half-sent connections before `server.stop(true)`. */
   gracefulStopMs: 5000,
 } as const;
 
@@ -24,7 +24,7 @@ export function shutdownTimeoutMs(input: {
 }
 
 interface GracefulStopDeps {
-  /** Elysia's `app.stop`; `true` closes active connections. */
+  /** `Bun.Server.stop`; `true` closes active connections. */
   stop: (closeActiveConnections?: boolean) => Promise<unknown>;
   /** Bun's in-flight request count — `Server.pendingRequests`. */
   pendingRequests: () => number;
@@ -37,10 +37,26 @@ interface GracefulStopDeps {
 }
 
 /**
+ * The listener half of `GracefulStopDeps`, taken from Bun's server and not from
+ * `app.stop`/`app.server`: Elysia 2 clears `app.server` as soon as a stop
+ * begins, so the in-flight count would read 0 and no request would buy more
+ * grace, and its own drain would race the escalation below.
+ */
+export function listenerStopDeps(server: {
+  stop: (closeActiveConnections?: boolean) => Promise<unknown>;
+  readonly pendingRequests: number;
+}): Pick<GracefulStopDeps, 'stop' | 'pendingRequests'> {
+  return {
+    stop: (closeActiveConnections) => server.stop(closeActiveConnections),
+    pendingRequests: () => server.pendingRequests,
+  };
+}
+
+/**
  * Stop the listener, waiting for real work and force-closing only what is not.
  *
- * `app.stop()` alone can hang forever on a HALF-SENT request (headers, no
- * body), so it escalates to `app.stop(true)`. A fixed grace cannot tell that
+ * `server.stop()` alone can hang forever on a HALF-SENT request (headers, no
+ * body), so it escalates to `server.stop(true)`. A fixed grace cannot tell that
  * connection from a slow upload, so `pendingRequests` decides: a request in
  * flight buys another grace interval, up to the caller's budget; nothing in
  * flight escalates at once.

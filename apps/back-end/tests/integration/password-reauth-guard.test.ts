@@ -34,6 +34,7 @@ import {
   twoFactorMsg,
 } from '@app/shared/messages/auth';
 import { userMsg } from '@app/shared/messages/users';
+import { PHONE_OTP_AVAILABLE } from '@app/shared/validation/otp';
 
 import {
   LOCK_DURATION_SECONDS,
@@ -48,6 +49,7 @@ import {
   baseHeaders,
   seedUser,
   signIn,
+  uniquePhone,
 } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -313,23 +315,44 @@ test('a change-email that would strand the only second factor is refused before 
   expect(row?.email).toBe(user.email);
 });
 
-test('the phone variant is refused before any SMS is sent', async () => {
-  const child = Bun.spawn(
-    ['bun', '--no-env-file', 'tests/fixtures/_contact-change-strand-child.ts'],
-    {
-      cwd: process.cwd(),
-      env: { ...process.env, NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email,sms' },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
-  const [output, error, status] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  expect(status, error).toBe(0);
-  expect(output).toContain(
-    'change-phone refused the stranding change before any SMS.'
-  );
-});
+// The integration tier's phone-contact row runs it.
+test.if(PHONE_OTP_AVAILABLE)(
+  'a change-phone that would strand the only second factor is refused before any code is sent',
+  async () => {
+    const user = await seedUser({
+      phoneNumber: uniquePhone(),
+      phoneNumberVerified: true,
+    });
+    // Before the factor exists, or sign-in would stop at the challenge.
+    const session = await signIn(user);
+    await db.insert(twoFactorMethods).values({
+      userId: user.userId,
+      method: 'otp',
+      channel: 'sms',
+      isDefault: true,
+    });
+    await db
+      .update(users)
+      .set({ twoFactorEnabled: true })
+      .where(eq(users.id, user.userId));
+
+    const response = await post(session, '/api/dash/users/me/change-phone', {
+      currentPassword: user.password,
+      newPhoneNumber: uniquePhone(),
+      channel: 'sms',
+    });
+
+    expect(response.status).toBe(HTTP_STATUS.CONFLICT);
+    expect(await response.json()).toEqual({
+      success: false,
+      message: twoFactorMsg.contactChangeStrands,
+      data: null,
+    });
+    expect(
+      await db
+        .select({ id: verificationSessions.id })
+        .from(verificationSessions)
+        .where(eq(verificationSessions.userId, user.userId))
+    ).toEqual([]);
+  }
+);

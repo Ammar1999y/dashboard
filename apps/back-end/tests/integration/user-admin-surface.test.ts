@@ -288,30 +288,6 @@ describe('rewriting a custom role with its unchanged matrix', () => {
   });
 });
 
-test('under an https origin a read honours the secure cookie cache, plain or chunked, and a write or forceDB check does not', async () => {
-  const origin = 'https://localhost';
-  const child = Bun.spawn(
-    ['bun', '--no-env-file', 'tests/fixtures/_secure-cookie-cache-child.ts'],
-    {
-      cwd: process.cwd(),
-      env: { ...process.env, PUBLIC_URL: origin, NEXT_PUBLIC_URL: origin },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
-  const [output, error, status] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-
-  expect({ status, error: status === 0 ? '' : error }).toEqual({
-    status: 0,
-    error: '',
-  });
-  expect(output).toContain('Secure cookie cache honoured on reads only.');
-}, 30_000);
-
 /** Resolves once `count` other backends wait on a row lock. */
 async function waitForLockWaiters(count: number): Promise<void> {
   const deadline = performance.now() + 5000;

@@ -23,6 +23,7 @@ import { app } from '@/app';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 
+import { PUBLIC_ORIGIN } from '@/lib/env';
 import {
   MAX_JSON_BODY_BYTES,
   MAX_REQUEST_BODY_BYTES,
@@ -96,6 +97,21 @@ describe('an oversized JSON body is refused before the mount that would read it'
 
     expect(response.status).toBe(HTTP_STATUS.CONTENT_TOO_LARGE);
   });
+
+  test.each(['/api/auth/get-session', '/api/dash/permissions'])(
+    'GET %s answers a declared over-size length 413 too, as its document says',
+    async (path) => {
+      const response = await app.handle(
+        new Request(`http://localhost${path}`, {
+          headers: baseHeaders({
+            'content-length': String(MAX_REQUEST_BODY_BYTES + 1),
+          }),
+        })
+      );
+
+      expect(response.status).toBe(HTTP_STATUS.CONTENT_TOO_LARGE);
+    }
+  );
 
   test('a body just under the ceiling is not refused', async () => {
     // The negative control. Without it every case above passes on a boundary
@@ -193,5 +209,58 @@ describe('an oversized JSON body is refused before the mount that would read it'
     const response = await app.handle(request);
 
     expect(response.status).toBe(HTTP_STATUS.CONTENT_TOO_LARGE);
+  });
+});
+
+describe('an answer the request hook gives before CORS runs', () => {
+  const early = {
+    'the declared-length 413': (origin: string) => {
+      const body = jsonBody(MAX_JSON_BODY_BYTES + 4096);
+      return new Request('http://localhost/api/dash/users', {
+        method: 'POST',
+        headers: baseHeaders({
+          origin,
+          'content-type': 'application/json',
+          'content-length': String(body.length),
+        }),
+        body,
+      });
+    },
+    // Too short a host to route.
+    'the unroutable-host 404': (origin: string) =>
+      new Request('http://abc/api/dash/users', {
+        headers: baseHeaders({ origin }),
+      }),
+  };
+  const cases = Object.entries(early);
+
+  test.each(cases)(
+    '%s carries the CORS headers an allowed origin gets everywhere else',
+    async (_, request) => {
+      const response = await app.handle(request(PUBLIC_ORIGIN));
+      const reference = await app.handle(
+        new Request('http://localhost/api/dash/users', {
+          headers: baseHeaders({ origin: PUBLIC_ORIGIN }),
+        })
+      );
+
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      for (const name of [
+        'access-control-allow-origin',
+        'access-control-allow-credentials',
+        'access-control-allow-methods',
+        'access-control-expose-headers',
+        'vary',
+      ]) {
+        expect(response.headers.get(name)).not.toBeNull();
+        expect(response.headers.get(name)).toBe(reference.headers.get(name));
+      }
+    }
+  );
+
+  test.each(cases)('%s admits no other origin', async (_, request) => {
+    const response = await app.handle(request('https://evil.example'));
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    expect(response.headers.get('vary')).toBe('Origin');
   });
 });

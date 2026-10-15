@@ -18,6 +18,7 @@ reports/junit-*.xml
 # it once), `git add -A` would commit source that fails everyone's lint gate.
 security-lint-probe-*.ts
 lib/floating-promise-probe-*.ts
+lib/import-boundary-probe-*.ts
 TODO*.md
 # next.js
 /.next/

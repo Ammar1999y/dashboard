@@ -82,6 +82,7 @@ const { tryAcquireWriterLock } = await import('./lib/sqlite/writer-lock');
 const { SQLITE_DIR } = await import('./lib/env.server');
 const {
   createShutdown,
+  listenerStopDeps,
   SHUTDOWN_POLICY,
   shutdownTimeoutMs,
   stopServerGracefully,
@@ -94,14 +95,6 @@ const SHUTDOWN_TIMEOUT_MS = shutdownTimeoutMs({
   idleTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
   maxRouteTimeoutSeconds: MAX_ROUTE_TIMEOUT_SECONDS,
 });
-
-const stopServer = (budgetMs: number) =>
-  stopServerGracefully({
-    budgetMs,
-    stop: (closeActiveConnections) => app.stop(closeActiveConnections),
-    pendingRequests: () => app.server?.pendingRequests ?? 0,
-    error: (line) => logLine('error', line),
-  });
 
 // Before listening: a broken SQLITE_DIR must fail the boot, not a bound port.
 const claimWriterLock = () => tryAcquireWriterLock(SQLITE_DIR);
@@ -127,6 +120,16 @@ app.listen({ port, idleTimeout: IDLE_TIMEOUT_SECONDS }, (server) => {
     gracefulStopMs: SHUTDOWN_POLICY.gracefulStopMs,
   });
 });
+
+const listener = app.server;
+if (!listener) fail('the listener did not start');
+
+const stopServer = (budgetMs: number) =>
+  stopServerGracefully({
+    budgetMs,
+    ...listenerStopDeps(listener),
+    error: (line) => logLine('error', line),
+  });
 
 const schedule = scheduleWhenOwner(writerLock, claimWriterLock);
 

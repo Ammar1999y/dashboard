@@ -32,7 +32,7 @@ import {
   PHONE_NUMBER_MAX,
 } from './constants';
 
-/** What `STRICT_TEXT_DESCRIPTION` tells the document; keep the two in step. */
+/** What `STRICT_TEXT_DESCRIPTION` (`rules.docs.ts`) tells the document; keep the two in step. */
 const STRIPPED_CHARACTERS =
   /[^\p{L}\p{M}\p{N}\p{Zs}\n\.,!?:/\\;\-+=\(\)\[\]''"؟،؛@#_&%]/gu;
 
@@ -52,44 +52,6 @@ export const sanitizeStrictSingleLine = (v: string) =>
   typeof v === 'string'
     ? v.replaceAll(STRIPPED_CHARACTERS, '').replaceAll(/\s+/g, ' ').trim()
     : v;
-
-/**
- * What the two sanitizers above do, for the OpenAPI document.
- *
- * `z.toJSONSchema` sees neither preprocess, so every `min`/`max` on a sanitized
- * leaf describes the string AFTER stripping and trimming while the document
- * presents it as a rule about the raw input. Both sanitizers only ever SHORTEN,
- * which decides what each published keyword is worth:
- *
- *  - `minLength` cannot refuse a valid request — a raw value shorter than the
- *    floor cannot grow past it — so it stays. It is merely lax: `"a "` against
- *    `minLength: 2` passes the document and is refused by the server, which
- *    keeps one character.
- *  - `maxLength` can, and so it goes. A hundred and fifty characters plus two
- *    spaces is trimmed to 150 and ACCEPTED, while a validator measures 152
- *    against `maxLength: 150` and refuses a request the server would have
- *    answered — and the amount a strippable character or a space can shrink a
- *    value by is unbounded, so no finite ceiling is true of raw input. The
- *    number travels as prose instead (`strictTextMaximum`); the request is still
- *    bounded, by the body ceiling in `app.ts`.
- *
- * The stripped class cannot become a `pattern` either — a JSON Schema pattern
- * has no `u` flag, so `\p{L}` is inexpressible. Where a leaf's rule CAN be
- * written against raw input it is, and then the bound rides in the pattern: see
- * `otpCodeSchema` and the media names.
- */
-export const STRICT_TEXT_DESCRIPTION =
-  'Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] \' " ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed';
-
-/** `sanitizeStrictSingleLine` additionally folds every whitespace run to one space. */
-export const STRICT_SINGLE_LINE_DESCRIPTION = `${STRICT_TEXT_DESCRIPTION}. Line breaks and repeated spaces are collapsed to a single space.`;
-
-/**
- * The ceiling, as prose, for a leaf whose `maxLength` cannot be published — and
- * the marker that the omission is a decision rather than an oversight.
- */
-export const strictTextMaximum = (max: number) =>
-  `After that it must be at most ${max} characters.`;
 
 /**
  * Does this message come from this project, or from Zod?
@@ -132,16 +94,38 @@ export function localizedIssueMessage(
 ): string {
   if (issue.code === 'unrecognized_keys')
     return unrecognizedKeysMessage(issue.keys);
-  return `${ISSUE_FALLBACKS[issue.code] ?? MSG_INVALID_INPUT}${reflectPath(issue.path ?? [])}`;
+  return issueCodeMessage(issue.code, issue.path ?? []);
 }
 
-/** First-issue message for a failed `safeParse`. A message the schema authored wins. */
-export function zodIssueMessage(error: z.ZodError): string {
-  const issue = error.issues[0];
+/**
+ * The message for an issue by its code and path alone, for one whose
+ * code-specific fields did not arrive intact (a framework that bounds what it
+ * echoes) — unknown keys then go unnamed.
+ */
+export function issueCodeMessage(
+  code: string,
+  path: readonly PropertyKey[]
+): string {
+  return `${ISSUE_FALLBACKS[code] ?? MSG_INVALID_INPUT}${reflectPath(path)}`;
+}
+
+/**
+ * First-issue message for a failed `safeParse`, or for the issues a framework
+ * hands over from one. A message the schema authored wins.
+ */
+export function zodIssueMessage(
+  error: z.ZodError | readonly z.core.$ZodIssue[]
+): string {
+  const issue = 'issues' in error ? error.issues[0] : error[0];
   if (!issue) return MSG_INVALID_INPUT;
-  if (issue.code !== 'unrecognized_keys' && ARABIC_LETTER.test(issue.message))
-    return issue.message;
-  return localizedIssueMessage(issue);
+  return authoredMessage(issue) ?? localizedIssueMessage(issue);
+}
+
+/** The message a schema node wrote for this issue; an unknown key never has one. */
+export function authoredMessage(issue: z.core.$ZodIssue): string | undefined {
+  return issue.code !== 'unrecognized_keys' && ARABIC_LETTER.test(issue.message)
+    ? issue.message
+    : undefined;
 }
 
 function unrecognizedKeysMessage(keys: readonly PropertyKey[]): string {
@@ -151,9 +135,6 @@ function unrecognizedKeysMessage(keys: readonly PropertyKey[]): string {
   const hidden = keys.length - named.length;
   return MSG_UNRECOGNIZED_KEYS(named, hidden);
 }
-
-export const ID_DESCRIPTION =
-  'Surrounding whitespace is trimmed and the value lowercased before the pattern applies, so it may be sent as received.';
 
 /**
  * The published rule for the RAW value, which is not `UUID_V7_PATTERN`: the
@@ -166,7 +147,7 @@ export const ID_INPUT_PATTERN = String.raw`^\s*${UUID_V7_FRAGMENT}\s*$`;
 export const idStringSchema = z
   .string(idRequired)
   .regex(UUID_V7_REGEX, idRequired)
-  .meta({ pattern: ID_INPUT_PATTERN, description: ID_DESCRIPTION });
+  .meta({ pattern: ID_INPUT_PATTERN });
 
 export const idSchema = z.preprocess(
   // The rejected sentinel has to be of the id's own type, or a malformed id of
@@ -174,6 +155,14 @@ export const idSchema = z.preprocess(
   (v: string) => validID(v) || '',
   idStringSchema
 );
+
+/**
+ * A number in a query string, kept a string: `z.coerce.number()` reads `''` as
+ * 0 and `0x10` as 16. A factory, so each parameter can carry its own prose
+ * and refusal message.
+ */
+export const digitStringSchema = (message?: string) =>
+  z.string().regex(/^\d+$/, message);
 
 /** `null` means "none"; where a key may be omitted, a missing one means "unchanged". */
 export const nullableIdSchema = z.preprocess(
@@ -189,7 +178,7 @@ export const nullableIdSchema = z.preprocess(
  * deliberate interim policy: custom and business domains stay refused until the
  * domain policy is decided.
  */
-const EMAIL_PROVIDER_DOMAINS = [
+export const EMAIL_PROVIDER_DOMAINS = [
   'gmail.com',
   'outlook.com',
   'hotmail.com',
@@ -265,10 +254,6 @@ export const emailSchema = z.preprocess(
       maxLength: undefined,
       allOf: undefined,
       pattern: EMAIL_INPUT_PATTERN,
-      description:
-        `Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most ${EMAIL_MAX} characters. Only these providers are accepted: ` +
-        EMAIL_PROVIDER_DOMAINS.join(', ') +
-        '.',
     })
 );
 
@@ -283,14 +268,6 @@ export const emailSchema = z.preprocess(
  */
 export const normalizePasswordInput = (v: string) =>
   typeof v === 'string' ? v.normalize('NFKC') : v;
-
-/**
- * The whole rule as prose, because the normalisation below leaves no published
- * keyword true of raw input — and in the runtime's own terms rather than a
- * paraphrase. Rounding any clause to "a letter" or "a character" describes a
- * schema that refuses passwords this one accepts.
- */
-const PASSWORD_DESCRIPTION = `Unicode-normalised (NFKC) before validation, so it may be sent as typed and every rule below measures the normalised form: ${PASSWORD_MIN} to ${PASSWORD_MAX} characters counted as Unicode code points, containing at least one ASCII lowercase letter (a-z), one ASCII uppercase letter (A-Z), one ASCII digit (0-9), and at least one character outside those three ranges. A character that NFKC folds into one of those ranges counts as it. The line terminators U+000A, U+000D, U+2028 and U+2029 are rejected anywhere in the value.`;
 
 /** Every rule `passwordSchema` applies, in the order a client lists them. */
 export const PASSWORD_RULES = [
@@ -375,17 +352,10 @@ export const passwordSchema = z.preprocess(
       minLength: undefined,
       maxLength: undefined,
       pattern: undefined,
-      description: PASSWORD_DESCRIPTION,
     })
 );
 
-// Carries `PASSWORD_DESCRIPTION` forward: the converter emits only the wrapper's
-// description, so the window note alone would drop every password rule.
-export const reauthPasswordSchema = passwordSchema
-  .optional()
-  .describe(
-    `${PASSWORD_DESCRIPTION} May be omitted while this session has an open password/passkey reauthentication window. Otherwise omission returns 401 REAUTH_REQUIRED.`
-  );
+export const reauthPasswordSchema = passwordSchema.optional();
 
 // Saudi phone: strips non-digits, accepts 966XXXXXXXXX / 05XXXXXXXX / 5XXXXXXXX
 const phoneCleanupRegex = /[^\d]/g;
@@ -420,8 +390,6 @@ export const phoneSchema = z.preprocess(
       maxLength: undefined,
       pattern: undefined,
       anyOf: [{ type: 'string', minLength: 1 }, { type: 'number' }],
-      description:
-        'Saudi mobile number. Strings may contain separators or Arabic digits; numbers are also accepted. Normalized output is 9665XXXXXXXX.',
     })
 );
 
@@ -439,8 +407,6 @@ export const optionalPhoneSchema = z
   // first and maps `''` to `null`, which is how a caller clears the number.
   .meta({
     anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }],
-    description:
-      'Saudi mobile number, as accepted by the required form. `null` or an empty string clears it; omitting the key on an update leaves it unchanged.',
   });
 
 /**
@@ -481,7 +447,7 @@ export const getColorSchema = (
 };
 
 /** Named because the document carries it as prose. */
-const SLUG_MAX = 150;
+export const SLUG_MAX = 150;
 
 /**
  * Passes a non-string through rather than coercing it to `''`, which would
@@ -503,10 +469,7 @@ export const slugSchema = z.preprocess(
   z
     .string()
     .max(SLUG_MAX, MSG_SLUG_TOO_LONG)
-    .meta({
-      maxLength: undefined,
-      description: `Lowercased, trimmed, and whitespace and repeated hyphens collapsed to single hyphens before validation, so it may be sent as typed. ${strictTextMaximum(SLUG_MAX)}`,
-    })
+    .meta({ maxLength: undefined })
     .refine(
       (v) => v === '' || /^[a-z0-9-]+$/.test(v),
       MSG_SLUG_INVALID_CHARACTERS

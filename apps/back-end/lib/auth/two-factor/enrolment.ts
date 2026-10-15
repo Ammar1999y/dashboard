@@ -176,7 +176,6 @@ export const twoFactorEnrolment = () =>
           });
 
           return ctx.json({
-            success: true,
             data: {
               totpURI: createOTP(secret).url(TOTP_ISSUER, user.email),
             },
@@ -279,7 +278,6 @@ export const twoFactorEnrolment = () =>
           await markTwoFactorProven(ctx, session.sessionId);
 
           return ctx.json({
-            success: true,
             message: twoFactorMsg.enabled,
             data: { method: 'totp' },
           });
@@ -345,7 +343,6 @@ export const twoFactorEnrolment = () =>
           });
 
           return ctx.json({
-            success: true,
             data: { backupCodes: codes, setId },
           });
         }
@@ -399,7 +396,7 @@ export const twoFactorEnrolment = () =>
           if (acknowledged === 'stale')
             throw authError(HTTP_STATUS.CONFLICT, twoFactorMsg.staleBackupSet);
           if (!acknowledged) throw methodNotFound();
-          return ctx.json({ success: true, message: twoFactorMsg.enabled });
+          return ctx.json({ message: twoFactorMsg.enabled });
         }
       ),
 
@@ -410,7 +407,6 @@ export const twoFactorEnrolment = () =>
           const userId = validID(ctx.context.session?.user.id);
           if (!userId) throw challengeMissingError();
           return ctx.json({
-            success: true,
             data: { methods: await listEnrolledMethods(userId) },
           });
         }
@@ -469,7 +465,6 @@ export const twoFactorEnrolment = () =>
           });
 
           return ctx.json({
-            success: true,
             message: twoFactorMsg.disabled,
             data: { removedMethod: removed },
           });
@@ -513,7 +508,7 @@ export const twoFactorEnrolment = () =>
             return chosen;
           });
 
-          return ctx.json({ success: true, data: { defaultMethod } });
+          return ctx.json({ data: { defaultMethod } });
         }
       ),
 
@@ -579,7 +574,7 @@ export const twoFactorEnrolment = () =>
             });
           });
 
-          return ctx.json({ success: true, data: { deleted: true } });
+          return ctx.json({ data: { deleted: true } });
         }
       ),
 
@@ -607,7 +602,7 @@ export const twoFactorEnrolment = () =>
             });
           });
 
-          return ctx.json({ success: true, message: twoFactorMsg.disabled });
+          return ctx.json({ message: twoFactorMsg.disabled });
         }
       ),
 
@@ -620,7 +615,6 @@ export const twoFactorEnrolment = () =>
           const { userId } = await requireSession(ctx, 'passkey');
           await requireReauthPassword(ctx, userId);
           return ctx.json({
-            success: true,
             data: {
               grant: await mintReauthGrant(ctx, {
                 userId,

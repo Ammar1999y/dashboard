@@ -1,18 +1,14 @@
 /**
- * The shared success contract and the keyed wrappers held to it.
+ * The shared success contract. What a binding's handler may return is
+ * `contract-types.test.ts`'s.
  *
  * `responseIssues` leans on `z.fromJSONSchema`, which zod marks
  * semi-experimental, so every case it is relied on for is pinned here: a zod
  * upgrade that changes one fails this file first.
  */
 import { describe, expect, test } from 'bun:test';
-import type { ServerValue } from '@/lib/http/contract';
-import type { ResponseData } from '@app/shared/response-contract';
 
-import { MSG_FETCHED } from '@app/shared/messages/common';
 import { responseIssues } from '@app/shared/response-contract';
-
-import { apiRaw, apiSuccess, withApiErrors } from '@/lib/http/response';
 
 import { compareCodeUnits } from '@/utils/text';
 
@@ -223,137 +219,5 @@ describe('responseIssues refuses', () => {
         'code',
         'path',
       ]);
-  });
-});
-
-describe('a keyed handler, at compile time', () => {
-  // Each `@ts-expect-error` is the assertion: `bun run lint` fails once the
-  // handler under it compiles. Built here, never called.
-  const unmapped = (): undefined => {};
-
-  const typedFile: ServerValue<ResponseData<'POST /api/dash/media/files'>> = {
-    ...file,
-    kind: 'image',
-    bucketType: 'private',
-    // A `Date` stands in for a plain string: the serialiser writes it as one.
-    createdAt: new Date(),
-  };
-
-  test('refuses a wrong field and a wrong literal', () => {
-    const misspelt = withApiErrors(
-      'POST /api/auth/otp/verify',
-      MSG_FETCHED,
-      // @ts-expect-error -- the field is `verified`
-      async () => {
-        return apiSuccess({ message: MSG_FETCHED, data: { verifed: true } });
-      },
-      unmapped
-    );
-    const wrongLiteral = withApiErrors(
-      'POST /api/auth/otp/verify',
-      MSG_FETCHED,
-      // @ts-expect-error -- `verified` is the literal `true`
-      async () => {
-        return apiSuccess({ message: MSG_FETCHED, data: { verified: false } });
-      },
-      unmapped
-    );
-    expect([misspelt.routeKey, wrongLiteral.routeKey]).toEqual([
-      'POST /api/auth/otp/verify',
-      'POST /api/auth/otp/verify',
-    ]);
-  });
-
-  test('refuses a wrong discriminator', () => {
-    const handler = withApiErrors(
-      'POST /api/auth/forgot-password/reset',
-      MSG_FETCHED,
-      // @ts-expect-error -- `reset: false` is the branch that carries a grant
-      async () => {
-        return apiSuccess({ message: MSG_FETCHED, data: { reset: false } });
-      },
-      unmapped
-    );
-    expect(handler.routeKey).toBe('POST /api/auth/forgot-password/reset');
-  });
-
-  test('refuses a wrong enum value, and a Date in an enum field', () => {
-    const wrongValue = withApiErrors(
-      'POST /api/dash/media/files',
-      MSG_FETCHED,
-      // @ts-expect-error -- `kind` is `image` or `document`
-      async () => {
-        return apiSuccess({
-          message: MSG_FETCHED,
-          data: { ...typedFile, kind: 'video' },
-        });
-      },
-      unmapped
-    );
-    const date = withApiErrors(
-      'POST /api/dash/media/files',
-      MSG_FETCHED,
-      // @ts-expect-error -- a `Date` fits only where the wire is a plain string
-      async () => {
-        return apiSuccess({
-          message: MSG_FETCHED,
-          data: { ...typedFile, bucketType: new Date() },
-        });
-      },
-      unmapped
-    );
-    expect([wrongValue.routeKey, date.routeKey]).toEqual([
-      'POST /api/dash/media/files',
-      'POST /api/dash/media/files',
-    ]);
-  });
-
-  test('refuses a paginated answer without meta', () => {
-    const handler = withApiErrors(
-      'GET /api/dash/permissions',
-      MSG_FETCHED,
-      // @ts-expect-error -- a paginated route requires `meta`
-      async () => {
-        return apiSuccess({ message: MSG_FETCHED, data: [] });
-      },
-      unmapped
-    );
-    expect(handler.routeKey).toBe('GET /api/dash/permissions');
-  });
-
-  test('refuses a raw body from an envelope route', () => {
-    const handler = withApiErrors(
-      'POST /api/auth/otp/verify',
-      MSG_FETCHED,
-      // @ts-expect-error -- only the health check and the document answer raw
-      async () => {
-        return apiRaw({ body: { verified: true } });
-      },
-      unmapped
-    );
-    expect(handler.routeKey).toBe('POST /api/auth/otp/verify');
-  });
-
-  test('accepts the literal, the Date, and meta where they belong', () => {
-    const handler = withApiErrors(
-      'POST /api/dash/media/files',
-      MSG_FETCHED,
-      async () => {
-        return apiSuccess({ message: MSG_FETCHED, data: typedFile });
-      },
-      unmapped
-    );
-    const paginated = withApiErrors(
-      'GET /api/dash/permissions',
-      MSG_FETCHED,
-      async () => {
-        return apiSuccess({ message: MSG_FETCHED, data: [], meta: PAGE_META });
-      },
-      unmapped
-    );
-    expect([handler.routeKey, paginated.routeKey]).toEqual([
-      'POST /api/dash/media/files',
-      'GET /api/dash/permissions',
-    ]);
   });
 });

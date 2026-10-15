@@ -27,6 +27,8 @@ import {
   verificationCodes,
   verificationSessions,
 } from '@/db/schema';
+import { REGISTERED_BINDINGS } from '@/modules';
+import { generateDocument } from '@/server/elysia/openapi';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { otpSubjectFor, otpTextFor } from '@app/shared/messages/otp';
@@ -36,20 +38,43 @@ import {
   TWO_FACTOR_OTP_CHANNELS,
 } from '@app/shared/validation/two-factor';
 
+import { BETTER_AUTH_ROUTE_PREFIX } from '@/lib/auth/allowed-paths';
 import { PUBLIC_ORIGIN } from '@/lib/env';
+import { servedDocument } from '@/lib/http/openapi/serve';
 import { hashOtpCode } from '@/lib/otp/hash';
 import { clearOutbox, readOutbox } from '@/lib/otp/outbox';
 
 import { resetTables } from '../helpers/database';
+import { askEveryOperation } from '../helpers/document-check';
 import { scriptEgress } from '../helpers/egress';
 import { settleDelivery } from '../helpers/mailbox';
+import {
+  redoclyProblems,
+  validateWithSwaggerParser,
+} from '../helpers/openapi-validity';
 import { flooredBudget } from '../helpers/otp';
-import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
+import {
+  baseHeaders,
+  seedUser,
+  signedInUser,
+  uniquePhone,
+} from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
 const TURNSTILE_HOST = 'challenges.cloudflare.com';
 const ROW = process.env.TWO_FACTOR_MATRIX ?? 'unnamed';
 const RIGHT_CODE = '606060';
+
+/** One path per method, and whether this row serves it. */
+const METHOD_PATHS: Readonly<Record<string, boolean>> = {
+  '/api/auth/two-factor/totp/start':
+    ENABLED_TWO_FACTOR_METHODS.includes('totp'),
+  '/api/auth/two-factor/generate-backup-codes':
+    ENABLED_TWO_FACTOR_METHODS.includes('backup_code'),
+  '/api/auth/two-factor/passkey/grant':
+    ENABLED_TWO_FACTOR_METHODS.includes('passkey'),
+  '/api/auth/two-factor/otp/send': ENABLED_TWO_FACTOR_METHODS.includes('otp'),
+};
 
 /**
  * Replaces whatever the send path stored with a code this file knows.
@@ -143,18 +168,7 @@ describe(`the ${ROW} configuration`, () => {
   test('the served surface matches the configured methods', async () => {
     // The allow-list is derived from the method list, and a disabled method's
     // paths answer 404 rather than being merely hidden.
-    const expectations: Record<string, boolean> = {
-      '/api/auth/two-factor/totp/start':
-        ENABLED_TWO_FACTOR_METHODS.includes('totp'),
-      '/api/auth/two-factor/generate-backup-codes':
-        ENABLED_TWO_FACTOR_METHODS.includes('backup_code'),
-      '/api/auth/two-factor/passkey/grant':
-        ENABLED_TWO_FACTOR_METHODS.includes('passkey'),
-      '/api/auth/two-factor/otp/send':
-        ENABLED_TWO_FACTOR_METHODS.includes('otp'),
-    };
-
-    for (const [path, served] of Object.entries(expectations)) {
+    for (const [path, served] of Object.entries(METHOD_PATHS)) {
       const response = await call('POST', path, {});
       // Unauthenticated either way; what differs is whether the path EXISTS.
       expect([path, response.status === HTTP_STATUS.NOT_FOUND]).toEqual([
@@ -164,6 +178,39 @@ describe(`the ${ROW} configuration`, () => {
     }
   });
 
+  test('the document generates, validates, and publishes exactly the served methods', async () => {
+    // The Better Auth half is built from this row's plugins, so a document
+    // valid under one configuration says nothing about another.
+    const document = await generateDocument(app, REGISTERED_BINDINGS);
+    await validateWithSwaggerParser(document);
+    expect(await redoclyProblems(document)).toEqual([]);
+
+    const published = new Set(Object.keys(document.paths));
+    for (const [path, served] of Object.entries(METHOD_PATHS))
+      expect([path, published.has(path)]).toEqual([path, served]);
+    expect(published.has('/api/auth/two-factor/enable')).toBe(false);
+  }, 30_000);
+
+  test('every Better Auth operation answers within this row’s document', async () => {
+    // `tests/integration/better-auth-document.test.ts` asks the full
+    // configuration; the status set differs per row.
+    resetSqliteStores();
+    const document = await servedDocument();
+    const { cookie } = await signedInUser();
+    for (const headers of [
+      baseHeaders({ origin: PUBLIC_ORIGIN }),
+      baseHeaders({ origin: PUBLIC_ORIGIN, cookie }),
+    ])
+      expect(
+        await askEveryOperation(
+          document,
+          BETTER_AUTH_ROUTE_PREFIX.prefix,
+          (request) => app.handle(request),
+          headers
+        )
+      ).toEqual([]);
+  }, 60_000);
+
   test('/two-factor/enable is never served, in any configuration', async () => {
     // It can only produce TOTP here, and it writes the flag and the credential
     // outside the transaction that has to carry the intent row with them.
@@ -172,7 +219,7 @@ describe(`the ${ROW} configuration`, () => {
   });
 
   test('the administrative reset is reachable whatever the method list says', async () => {
-    // ⚠️ `D2`'s liveness half. Under an empty method list this is the ONLY exit
+    // ⚠️ Under an empty method list this is the ONLY exit
     // for an account still holding stored state, so gating it on the same list
     // removed the exit at exactly the moment it became the only one. A 404 here
     // would mean the route does not exist; 403/200 mean it does.
@@ -183,7 +230,7 @@ describe(`the ${ROW} configuration`, () => {
       password: actor.password,
     });
     const cookie = cookieHeader(signedIn.headers.getSetCookie());
-    // The reset is in the `D12` re-authentication class, so the window has to be
+    // The reset asks for a fresh password proof, so the window has to be
     // open before the action — in every configuration, including the one where
     // no 2FA method is served at all.
     const reauth = await call(

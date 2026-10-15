@@ -128,7 +128,9 @@ export const permissionsHandlers = [
   }),
 
   http.post(api('/api/dash/permissions'), async ({ request }) => {
-    const { userId, permissions } = requirePermission('permissions', 'create');
+    const { userId, permissions } = requirePermission('permissions', 'create', {
+      reauth: true,
+    });
     const input = await readJsonBody(
       request,
       REQUEST_BODIES['POST /api/dash/permissions']
@@ -162,7 +164,7 @@ export const permissionsHandlers = [
         roleId: actorRoleId,
         scope: editScope,
         permissions,
-      } = requirePermission('permissions', 'edit');
+      } = requirePermission('permissions', 'edit', { reauth: true });
       const roleId = requireId(params.id);
       const input = await readJsonBody(
         request,
@@ -211,7 +213,8 @@ export const permissionsHandlers = [
     ({ params }) => {
       const { userId, scope, permissions } = requirePermission(
         'permissions',
-        'delete'
+        'delete',
+        { reauth: true }
       );
       const role = ownedStandardRole(requireId(params.id), scope, userId);
       assertRoleWithinScope(permissions, role.permissions, 'reachability');

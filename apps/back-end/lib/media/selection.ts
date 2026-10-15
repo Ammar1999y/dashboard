@@ -11,7 +11,6 @@
 import type { Actor } from './actor';
 import type { DoomedRow } from './lifecycle';
 import type { Executor, Tx } from '@/db';
-import type { ServerValue } from '@/lib/http/contract';
 import type { DashboardPage } from '@app/shared/permissions/constants';
 import type {
   deletePreviewSchema,
@@ -72,8 +71,8 @@ interface DeleteOutcome {
   deleted: EntityID[];
   pending: EntityID[];
 }
-type DeletePreview = ServerValue<z.output<typeof deletePreviewSchema>>;
-type MovedSelection = ServerValue<z.output<typeof movedSelectionSchema>>;
+type DeletePreview = z.input<typeof deletePreviewSchema>;
+type MovedSelection = z.input<typeof movedSelectionSchema>;
 
 interface Selection {
   fileIds: readonly EntityID[];
@@ -209,7 +208,7 @@ export async function moveSelection(
         fileIds: sortedIds(ids(movingFiles)),
         folderIds: sortedIds(moved.folderIds),
         unfiledAt: null,
-        updatedAt: written.updatedAt,
+        updatedAt: written.updatedAt.toISOString(),
       };
     });
   } catch (error) {

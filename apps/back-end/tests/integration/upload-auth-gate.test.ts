@@ -14,7 +14,7 @@
  *    cookie here comes from the real sign-in endpoint, and the two rejection
  *    cases are built by MUTATING it — a deleted session row under a still-valid
  *    signature, and a stripped or corrupted signature over a still-live row.
- * 3. **The ordering claim is observed, not inferred.** `routes.ts` says the
+ * 3. **The ordering claim is observed, not inferred.** `modules/media/upload.ts` says the
  *    permission check on `resource` must run before the multipart body is
  *    parsed. A status code cannot show that: every rejection is a 400 or a 401
  *    whether the body was buffered first or not. So each request instance gets
@@ -40,6 +40,7 @@ import {
 } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
+import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
 import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
 import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 
@@ -479,26 +480,24 @@ describe('the gate refuses everyone else', () => {
     expect(result.body).toEqual(failure(MSG_INSUFFICIENT_PERMISSIONS));
   });
 
-  test('a repeated resource parameter is decided by the FIRST value', async () => {
-    // `URLSearchParams.get` returns the first, so a second copy cannot smuggle
-    // an authorised resource past a check made on an unauthorised one. Both
-    // directions, because only the pair distinguishes "first wins" from "any
-    // value passes".
-    const smuggled = await attempt({
-      session: actor('create'),
-      query: '?resource=permissions&resource=users',
-      body: imageForm(),
-    });
-    expect(smuggled.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(smuggled.reads).toEqual([]);
-
-    const admitted = await attempt({
-      session: actor('create'),
-      query: '?resource=users&resource=permissions',
-      body: new FormData(),
-    });
-    expect(admitted.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(admitted.body).toEqual(failure(uploadMsg.noFiles));
+  test('a repeated resource parameter is refused, whichever copy comes first', async () => {
+    // A second copy must not smuggle an authorised resource past a check made
+    // on an unauthorised one. The framework keeps the LAST copy where the
+    // legacy parser kept the first, so the pair is refused outright: both
+    // orders, because only the pair shows no copy is read.
+    for (const query of [
+      '?resource=permissions&resource=users',
+      '?resource=users&resource=permissions',
+    ]) {
+      const result = await attempt({
+        session: actor('create'),
+        query,
+        body: imageForm(),
+      });
+      expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
+      expect(result.body).toEqual(failure(MSG_INVALID_INPUT));
+      expect(result.reads).toEqual([]);
+    }
   });
 
   test('an unknown purpose is refused after the permission check, body untouched', async () => {
@@ -599,7 +598,7 @@ describe('cookies that must not authenticate', () => {
 });
 
 describe('the resource parameter is checked before the body is parsed', () => {
-  // The ordering is the security property `routes.ts` documents: `resource` is
+  // The ordering is the security property `modules/media/upload.ts` documents: `resource` is
   // read from the query rather than from a form field precisely so the
   // permission check on it can run before `readFormData()`. `reads` toEqual([])
   // is that claim; the granted case above, whose `reads` is `['formData']`, is

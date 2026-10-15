@@ -5,9 +5,11 @@ import type { FieldPath } from 'react-hook-form';
 import { memo } from 'react';
 
 import { useController } from 'react-hook-form';
+import { cn } from '@/lib/utils';
 
 import { generateEntityId } from '@/utils/generate-id';
 
+import { cardSurface } from '@/components/ui/card-surface';
 import { Switch } from '@/components/ui/switch';
 import SortableFieldArray from '@/components/form/field-array';
 import FieldArrayItemActions from '@/components/form/field-array/item-actions';
@@ -39,7 +41,7 @@ NavLinksSection.displayName = 'NavLinksSection';
 export { NavLinksSection };
 
 const NavLinkItem = memo((props: FieldArrayItemProps) => (
-  <div className='flex flex-col gap-4 rounded-lg border bg-card px-4 py-4 shadow-md'>
+  <div className={cn('flex flex-col gap-4', cardSurface)}>
     <FieldArrayItemActions {...props}>
       <PlacementSwitch
         name={`navLinks.${props.index}.showInHeader`}

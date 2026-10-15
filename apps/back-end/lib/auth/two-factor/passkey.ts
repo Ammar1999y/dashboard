@@ -78,7 +78,7 @@ export const twoFactorPasskey = () =>
             )
           );
 
-          return ctx.json({ success: true, data: options });
+          return ctx.json({ data: options });
         }
       ),
 
@@ -169,7 +169,6 @@ export const twoFactorPasskey = () =>
             if (!completed) throw challengeMissingError();
 
             return ctx.json({
-              success: true,
               message: twoFactorMsg.verifySuccess,
               data: { loggedIn: true },
             });

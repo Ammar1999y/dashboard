@@ -8,7 +8,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import path from 'node:path';
 import type { Gate } from '@/tests/helpers/route-gates';
 
-import { ROUTES } from '@/routes';
+import { BINDINGS } from '@/modules';
 import {
   createRouteGateAnalyzer,
   globFiles,
@@ -16,11 +16,12 @@ import {
 } from '@/tests/helpers/route-gates';
 
 import { PASSWORD_PROOF_PATHS } from '@/lib/auth/path-policy';
+import { gateAsksReauth } from '@/lib/http/admit';
 import { BETTER_AUTH_PASSWORD_LOCKOUT_PATHS } from '@/lib/http/openapi/better-auth-tables';
 
 import { compareCodeUnits } from '@/utils/text';
 
-const handlerFiles = globFiles('app/api/**/handler.ts');
+const bindingFiles = globFiles('modules/**/*.ts');
 const authFiles = globFiles('lib/auth/**/*.ts');
 const FIXTURE = 'tests/fixtures/_route-gates-handler.ts';
 
@@ -36,20 +37,21 @@ interface MethodGates {
 
 /**
  * Filled once: the checker resolves lazily, so whichever case ran first used
- * to pay for every file its handler reaches, and timed out under load.
+ * to pay for every file its handler reaches, and timed out under load. Per
+ * binding: its handler's reach, plus what its gate asks for.
  */
-const byFile = new Map<string, MethodGates[]>();
+const byBindingFile = new Map<string, MethodGates[]>();
 const endpoints: { path: string; gates: ReadonlySet<Gate> }[] = [];
 const fixture = new Map<string, ReadonlySet<Gate> | Error>();
 
 beforeAll(async () => {
   const analyzer = createRouteGateAnalyzer([
-    ...handlerFiles,
+    ...bindingFiles,
     ...authFiles,
     FIXTURE,
   ]);
-  for (const file of handlerFiles) {
-    // eslint-disable-next-line no-unsanitized/method -- a handler the glob above found in this repository
+  for (const file of bindingFiles) {
+    // eslint-disable-next-line no-unsanitized/method -- a module the glob above found in this repository
     const module: Record<string, unknown> = await import(
       path.join(REPO_ROOT, file)
     );
@@ -57,20 +59,22 @@ beforeAll(async () => {
       .initializers(file)
       .entries()
       .flatMap(([name, initializer]) => {
-        const route = ROUTES.find((entry) => entry.handler === module[name]);
-        return route
-          ? [
-              {
-                label: `${route.method} ${route.path}`,
-                reauth: route.reauth,
-                checksPassword: route.checksPassword,
-                gates: analyzer.reach(initializer),
-              },
-            ]
-          : [];
+        const binding = BINDINGS.find((entry) => entry === module[name]);
+        if (!binding) return [];
+        const gates = new Set(analyzer.reach(initializer));
+        // The gate asks for the window itself on a plain permission route.
+        if (gateAsksReauth(binding)) gates.add('window');
+        return [
+          {
+            label: binding.key,
+            reauth: binding.entry.policy.reauth,
+            checksPassword: binding.entry.policy.checksPassword,
+            gates,
+          },
+        ];
       })
       .toArray();
-    byFile.set(file, methods);
+    byBindingFile.set(file, methods);
   }
   for (const file of authFiles)
     for (const endpoint of analyzer.authEndpoints(file))
@@ -91,8 +95,8 @@ beforeAll(async () => {
 }, 120_000);
 
 describe('every route declares the gates its handler reaches', () => {
-  test.each(handlerFiles)('%s', (file) => {
-    const methods = byFile.get(file) ?? [];
+  test.each(bindingFiles)('%s', (file) => {
+    const methods = byBindingFile.get(file) ?? [];
     for (const method of methods) {
       expect(method.reauth, method.label).toBe(method.gates.has('window'));
       expect(method.checksPassword, method.label).toBe(
@@ -101,18 +105,15 @@ describe('every route declares the gates its handler reaches', () => {
     }
   });
 
-  test('no route was left out', () => {
+  test('no binding was left out', () => {
     const checked = new Set(
-      byFile
+      byBindingFile
         .values()
         .flatMap((methods) => methods.map((method) => method.label))
     );
-    // The document route's handler is built in `routes.ts`, not `app/api`.
     expect(
-      ROUTES.map((route) => `${route.method} ${route.path}`).filter(
-        (label) => !checked.has(label)
-      )
-    ).toEqual(['GET /openapi.json']);
+      BINDINGS.map((binding) => binding.key).filter((key) => !checked.has(key))
+    ).toEqual([]);
   });
 
   test('the Better Auth lockout list is every endpoint that checks the password, and every one that can ask for it', () => {

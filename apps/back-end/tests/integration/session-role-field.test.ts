@@ -108,8 +108,8 @@ describe('every site that reads it', () => {
   });
 
   test('a user can view their OWN profile', async () => {
-    // `app/api/dash/users/[id]/handler.ts` — `if (isSelf && !session.user.roleId)`
-    // refused a user their own record. The zero-grant actor is what makes this the
+    // The self guard of `getUserBinding` (`modules/users/item.ts`), which reads
+    // the cookie-cached role id, refused a user their own record. The zero-grant actor is what makes this the
     // self-service branch rather than the view grant.
     const response = await app.handle(
       authedRequest(noGrants(), `/api/dash/users/${noGrants().user.userId}`)
@@ -118,7 +118,8 @@ describe('every site that reads it', () => {
   });
 
   test('the sessions subresource allows the same self-access', async () => {
-    // The sibling branch in `.../sessions/handler.ts`, which had the same guard.
+    // The sibling guard in `sessionTarget` (`modules/users/sessions.ts`), which
+    // had the same check.
     // Page one arrived through the parent route while page two was refused by the
     // child, so the two have to be asserted together.
     const response = await app.handle(
@@ -130,9 +131,9 @@ describe('every site that reads it', () => {
     expect(response.status).toBe(200);
   });
 
-  test('hasRole admits the authenticated user through self-edit', async () => {
+  test('hasRole admits the authenticated user through self-rename', async () => {
     const response = await app.handle(
-      authedRequest(granted(), `/api/dash/users/${granted().user.userId}`, {
+      authedRequest(granted(), '/api/dash/users/me', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Renamed By Harness' }),

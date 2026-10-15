@@ -1,4 +1,3 @@
-import type { StoredRow } from '@/types/api';
 import type { SettingsClient } from '@/types/settings';
 import type {
   SettingsInput,
@@ -7,18 +6,18 @@ import type {
 
 import { memo, useCallback, useMemo } from 'react';
 
+import { storedRowSchema } from '@/types/api';
+import { settingsRecordSchema } from '@/types/settings';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { BUSINESS_TIMEZONE } from '@app/shared/config';
-import { safeDate } from '@app/shared/time';
 import { mutate } from '@/lib/api/mutation';
 import { useQueryData } from '@/lib/api/query';
 
 import { settingsSchema, toSettingsForm } from '@/utils/validation/settings';
 
-import { DEFAULT_DATE_LOCALE } from '@/components/ui/date/constants';
+import { formatDateTime } from '@/components/ui/date/utils';
 import { ErrorState } from '@/components/ui/error-state';
 import { LoadingState } from '@/components/ui/loading-state';
 import { Form } from '@/components/form/form';
@@ -30,26 +29,12 @@ import { SETTINGS_TABS } from './tabs';
 const SETTINGS_KEY = ['settings'];
 const SETTINGS_HREF = '/api/dash/settings';
 
-const updatedAtFormat = new Intl.DateTimeFormat(DEFAULT_DATE_LOCALE, {
-  year: 'numeric',
-  month: 'long',
-  day: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  timeZone: BUSINESS_TIMEZONE,
-});
-
-const formatUpdatedAt = (value: string | undefined) => {
-  const date = safeDate(value);
-  return date ? updatedAtFormat.format(date) : null;
-};
-
 export default function SiteSettings() {
-  const { data, isPending, error, refetch } =
-    useQueryData<SettingsClient | null>({
-      queryKey: SETTINGS_KEY,
-      href: SETTINGS_HREF,
-    });
+  const { data, isPending, error, refetch } = useQueryData({
+    queryKey: SETTINGS_KEY,
+    href: SETTINGS_HREF,
+    schema: settingsRecordSchema,
+  });
 
   if (isPending) return <LoadingState />;
   // `null` is a site with no settings row yet; only `undefined` is "no answer",
@@ -69,16 +54,17 @@ const SettingsForm = memo(({ record }: { record: SettingsClient | null }) => {
   });
 
   const lastUpdated = useMemo(
-    () => formatUpdatedAt(record?.updatedAt),
+    () => formatDateTime(record?.updatedAt),
     [record?.updatedAt]
   );
 
   const onSubmit = useCallback(
     async (data: SettingsOutput) => {
-      const result = await mutate<StoredRow, SettingsOutput>({
+      const result = await mutate({
         href: SETTINGS_HREF,
         method: 'POST',
         data,
+        schema: storedRowSchema,
         onSuccess: (saved) => {
           queryClient.setQueryData<SettingsClient>(SETTINGS_KEY, {
             ...data,

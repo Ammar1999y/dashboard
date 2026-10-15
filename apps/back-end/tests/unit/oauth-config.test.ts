@@ -11,7 +11,6 @@ test('OAuth is disabled by default, including direct Better Auth entrypoints', a
     new Request(`${PUBLIC_ORIGIN}/api/auth/capabilities`)
   );
   expect(await capabilities.json()).toEqual({
-    success: true,
     data: { oauthProviders: [] },
   });
   for (const path of [

@@ -1,15 +1,9 @@
 import type {
-  HandlerCookie,
   HandlerError,
-  HandlerInput,
   HandlerOutput,
   HandlerRaw,
-  PaginatedOutput,
-  RouteHandler,
-  RouteOutput,
   SuccessOutput,
 } from './contract';
-import type { ResponseRoute } from '@app/shared/response-contract';
 import type { MediaRefusalData } from '@app/shared/responses/media';
 import type { PaginationMeta } from '@app/shared/types/api';
 
@@ -23,7 +17,6 @@ import {
   MSG_INTERNAL_ERROR,
   MSG_INVALID_INPUT,
   MSG_NOT_FOUND,
-  MSG_PAGE_NOT_FOUND,
   MSG_SERVICE_UNAVAILABLE,
 } from '@app/shared/messages/common';
 
@@ -37,13 +30,6 @@ import { responsePayload } from './contract';
 import { serializeSetCookie } from './cookies';
 import { DEFAULT_CACHE_CONTROL } from './response-policy';
 
-interface ApiSuccessOptions {
-  message: string;
-  status?: number;
-  headers?: Record<string, string>;
-  cookies?: HandlerCookie[];
-}
-
 interface ApiErrorOptions {
   message: string;
   code?: string;
@@ -52,44 +38,34 @@ interface ApiErrorOptions {
   headers?: Record<string, string>;
 }
 
-export function apiSuccess<const T>(
-  options: ApiSuccessOptions & { data: T; meta: PaginationMeta }
-): PaginatedOutput<T>;
-export function apiSuccess<const T>(
-  options: ApiSuccessOptions & { data: T; meta?: undefined }
-): SuccessOutput<T>;
-export function apiSuccess(
-  options: ApiSuccessOptions & { data?: undefined; meta?: undefined }
-): SuccessOutput<null>;
-export function apiSuccess({
-  message,
-  data,
-  meta,
-  status = HTTP_STATUS.OK,
-  headers,
-  cookies,
-}: ApiSuccessOptions & {
-  data?: unknown;
-  meta?: PaginationMeta;
-}): SuccessOutput<unknown> {
+/** Every success envelope: the one place the wire format changes when it does. */
+export function successBody<T, M = PaginationMeta>(
+  message: string,
+  data: T,
+  meta?: M
+): SuccessOutput<T>['body'] & { meta?: M } {
   return {
-    status,
-    body: {
-      success: true,
-      message,
-      data: data ?? null,
-      ...(meta && { meta }),
-    },
-    ...(headers && { headers }),
-    ...(cookies && { cookies }),
+    success: true,
+    message,
+    data,
+    ...(meta !== undefined && { meta }),
   };
+}
+
+/** Every error envelope; key order is part of the frozen wire format. */
+function errorBody(
+  message: string,
+  code?: string,
+  data?: MediaRefusalData
+): HandlerError['body'] {
+  return { success: false, message, data: data ?? null, ...(code && { code }) };
 }
 
 /**
  * Response whose body is NOT the standard envelope, for a shape fixed outside
  * this codebase: the Coolify health check reads top-level fields, and an
- * OpenAPI document's shape is the spec's. Everything else uses
- * `apiSuccess`/`apiError`.
+ * OpenAPI document's shape is the spec's. Everything else goes through
+ * `successBody`/`apiError`.
  */
 export function apiRaw({
   body,
@@ -116,12 +92,7 @@ export function apiError({
 }: ApiErrorOptions): HandlerError {
   return {
     status,
-    body: {
-      success: false,
-      message,
-      data: data ?? null,
-      ...(code && { code }),
-    },
+    body: errorBody(message, code, data),
     ...(headers && { headers }),
   };
 }
@@ -193,28 +164,6 @@ export function handleApiError(
   });
 }
 
-/**
- * A handler whose throws become the error envelope. `key` names its
- * `RESPONSE_DATA` route, which types every success the handler returns.
- * `mapError` claims the errors the route answers specially and returns
- * `undefined` for the rest.
- */
-export function withApiErrors<K extends ResponseRoute>(
-  key: K,
-  fallbackMessage: string,
-  handler: (ctx: HandlerInput) => Promise<RouteOutput<K>>,
-  mapError?: (error: unknown) => HandlerError | undefined
-): RouteHandler<K> {
-  const guarded = async (ctx: HandlerInput): Promise<RouteOutput<K>> => {
-    try {
-      return await handler(ctx);
-    } catch (error) {
-      return mapError?.(error) ?? handleApiError(error, fallbackMessage);
-    }
-  };
-  return Object.assign(guarded, { routeKey: key });
-}
-
 /** A 500 carrying the fault as `cause`, which `handleApiError` logs with it. */
 export function serverFault(message: string, cause: unknown): CustomError {
   const failure = new CustomError(message, HTTP_STATUS.INTERNAL_ERROR);
@@ -224,11 +173,6 @@ export function serverFault(message: string, cause: unknown): CustomError {
 
 export function notFoundError(): CustomError {
   return new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-}
-
-export function requireFeature(enabled: boolean): void {
-  if (!enabled)
-    throw new CustomError(MSG_PAGE_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 }
 
 export function toWebResponse(output: HandlerOutput): Response {
@@ -246,6 +190,25 @@ export function toWebResponse(output: HandlerOutput): Response {
 
   return Response.json(responsePayload(output.body), {
     status: output.status,
+    headers,
+  });
+}
+
+/**
+ * A GET's answer reshaped for HEAD: same status and headers, no body, and the
+ * GET's length. Set explicitly: a runtime sending a body-less response declares
+ * `Content-Length: 0`, which RFC 9110 §8.6 forbids for a HEAD unless the GET
+ * would have sent nothing.
+ */
+export async function toHeadResponse(response: Response): Promise<Response> {
+  const headers = new Headers(response.headers);
+  if (response.body !== null) {
+    const body = await response.arrayBuffer();
+    headers.set('content-length', String(body.byteLength));
+  }
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
     headers,
   });
 }

@@ -1,7 +1,9 @@
+import type { EndpointDefinition } from './api/endpoint';
 import type { Assert, UnknownFieldsOf } from './contract';
 
 import * as z from 'zod';
 
+import { codesWithIds } from './api/endpoint';
 import {
   anonymousOtpSentSchema,
   ladderOtpSentSchema,
@@ -50,6 +52,7 @@ import {
   mediaFileSchema,
   mediaFolderDetailsSchema,
   mediaListingSchema,
+  mediaRefusalDataSchema,
   mediaStatsSchema,
   movedFilesSchema,
   movedSelectionSchema,
@@ -93,6 +96,7 @@ export const RESPONSE_DATA = {
   'PUT /api/dash/permissions/:id': updatedAtSchema,
   'DELETE /api/dash/permissions/:id': noDataSchema,
   'GET /api/dash/roles': roleSummariesSchema,
+  'PUT /api/dash/users/me': updatedAtSchema,
   'POST /api/dash/users/me/change-email': contactChangeStartedSchema,
   'POST /api/dash/users/me/change-email/verify': verifiedSchema,
   'POST /api/dash/users/:id/two-factor/reset': noDataSchema,
@@ -152,13 +156,46 @@ const PAGINATED: ReadonlySet<string> = new Set(PAGINATED_ROUTES);
 
 export const isPaginatedRoute = (key: string): boolean => PAGINATED.has(key);
 
-export function responseEnvelope(key: ResponseRoute): z.ZodType {
+/** The success envelope around `data`, and `meta` on a list. */
+export function successEnvelope(
+  data: z.ZodType,
+  meta?: z.ZodType
+): z.ZodObject {
   return z.object({
     success: z.literal(true),
     message: z.string(),
-    data: RESPONSE_DATA[key],
-    ...(isPaginatedRoute(key) && { meta: paginationMetaSchema }),
+    data,
+    ...(meta && { meta }),
   });
+}
+
+/** The envelope every refusal carries; `data` names what blocked a media refusal. */
+export const errorEnvelopeSchema = z.object({
+  success: z.literal(false),
+  message: z.string(),
+  data: mediaRefusalDataSchema.nullable(),
+  code: z.string().optional(),
+});
+
+/** The envelope of a refusal whose codes never name ids. */
+export const plainErrorEnvelopeSchema = errorEnvelopeSchema.extend({
+  data: z.null(),
+});
+
+/** The envelope an endpoint's refusal at `status` registers and publishes. */
+export const refusalEnvelopeOf = (
+  entry: Pick<EndpointDefinition, 'errors'>,
+  status: number
+): z.ZodObject =>
+  codesWithIds(entry, status).length > 0
+    ? errorEnvelopeSchema
+    : plainErrorEnvelopeSchema;
+
+export function responseEnvelope(key: ResponseRoute): z.ZodType {
+  return successEnvelope(
+    RESPONSE_DATA[key],
+    isPaginatedRoute(key) ? paginationMetaSchema : undefined
+  );
 }
 
 /** Where a body breaks the contract: paths and codes, never values. */

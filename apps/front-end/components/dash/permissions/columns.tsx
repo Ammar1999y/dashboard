@@ -46,6 +46,7 @@ export const columns: ColumnDef<PermissionClient>[] = [
   rowActionsColumn(
     permissionEntity,
     (permission) => permission.roleName,
-    removeRoleOption
+    removeRoleOption,
+    { ownRole: true }
   ),
 ];

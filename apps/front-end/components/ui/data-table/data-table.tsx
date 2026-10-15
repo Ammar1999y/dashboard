@@ -6,6 +6,7 @@ import type {
   ColumnPinningState,
   ColumnSort,
 } from '@tanstack/react-table';
+import type * as z from 'zod';
 
 import { useMemo } from 'react';
 
@@ -27,20 +28,24 @@ interface SourceProps<TData> {
   storageKey: string;
   defaultSort: ColumnSort[];
   defaultPinning?: ColumnPinningState;
+  /** The rows' array schema, which the response is checked against. */
+  schema: z.ZodType<NoInfer<TData>[]>;
 }
 
 /** The API pages, sorts and filters; one page is fetched per state. */
 const ServerTableInner = <TData,>({
   queryKey,
   href,
+  schema,
   defaultSort,
   ...view
 }: SourceProps<TData>) => {
   const state = useTableUrlState(defaultSort);
-  const { data, meta, isLoading, error, refetch } = useServerDataTable<TData>({
+  const { data, meta, isLoading, error, refetch } = useServerDataTable({
     queryKey,
     href,
     state,
+    schema,
   });
 
   return (
@@ -62,14 +67,16 @@ const ServerTable = genericMemo(ServerTableInner, 'ServerDataTable');
 const ClientTableInner = <TData extends object>({
   queryKey,
   href,
+  schema,
   defaultSort,
   ...view
 }: SourceProps<TData>) => {
   const { page, perPage, sort, filters, joinOperator, search } =
     useTableUrlState(defaultSort);
-  const { data, isLoading, error, refetch } = useQueryData<TData[]>({
+  const { data, isLoading, error, refetch } = useQueryData({
     queryKey,
     href,
+    schema,
   });
 
   const searchableColumns = useMemo(

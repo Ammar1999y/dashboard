@@ -5,10 +5,18 @@ import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
 import { latency } from '../controls';
 import { api, fail, withApiErrors } from '../lib/http';
 import { session } from '../store';
+import { accountHandlers } from './account';
 import { authHandlers } from './auth';
 import { contentHandlers } from './content';
 import { mediaHandlers } from './media';
+import { mediaLibraryHandlers } from './media-library';
+import { oauthHandlers } from './oauth';
+import { otpFlowHandlers } from './otp-flows';
 import { permissionsHandlers } from './permissions';
+import { preferencesHandlers } from './preferences';
+import { sessionsHandlers } from './sessions';
+import { signInChallengeHandlers } from './sign-in-challenge';
+import { twoFactorHandlers } from './two-factor';
 import { usersHandlers } from './users';
 
 export const handlers = [
@@ -23,7 +31,17 @@ export const handlers = [
   ),
   ...authHandlers,
   ...usersHandlers,
+  ...sessionsHandlers,
+  ...preferencesHandlers,
+  ...accountHandlers,
+  ...twoFactorHandlers,
+  // After the account's: where a path is shared, theirs answers an enrolment
+  // and passes on a request that has no session, which a sign-in challenge answers.
+  ...signInChallengeHandlers,
+  ...otpFlowHandlers,
+  ...oauthHandlers,
   ...permissionsHandlers,
   ...contentHandlers,
   ...mediaHandlers,
+  ...mediaLibraryHandlers,
 ].map(withApiErrors);

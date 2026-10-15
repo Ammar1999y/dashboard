@@ -801,7 +801,7 @@ export function createScenarioGroups(
         },
         {
           title: 'clear filters',
-          run: () => actions().setFilters(null),
+          run: () => actions().setFilters([]),
         },
         {
           title: 'search "User 0" — same call the search box commits',

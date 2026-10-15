@@ -1,4 +1,4 @@
-import type { RoutePrefix, RoutePrefixPath } from '@/lib/http/route-manifest';
+import type { RoutePrefix, RoutePrefixPath } from '@/lib/http/routing';
 
 import { PASSWORDLESS_ENABLED } from '@app/shared/config';
 import { OTP_ENABLED } from '@app/shared/validation/otp';
@@ -331,7 +331,7 @@ const ENDPOINT_GROUPS: readonly EndpointGroup[] = [
 ];
 
 /**
- * Kept free of Better Auth imports: `path-policy.ts`, `routes.ts`, `app.ts` and
+ * Kept free of Better Auth imports: `path-policy.ts`, `app.ts` and
  * `lib/http/openapi/` all read it. Methods must match the library's own
  * endpoint definitions.
  *
@@ -371,7 +371,7 @@ const SERVED_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   ])
 );
 
-// `HEAD` from the `GET` entry, as `createRouteLookup` does for table routes.
+// `HEAD` from the `GET` entry, as the route lookup does for bindings.
 export function betterAuthServes(path: string, method: string): boolean {
   const served = SERVED_METHODS.get(path);
   if (!served) return false;

@@ -1,12 +1,18 @@
 import * as z from 'zod';
 
+import { dataTableQuerySchema } from '../data-table/query';
+import { mediaMsg, uploadMsg } from '../messages/media';
 import { mediaValidationMsg } from '../messages/validation';
+import { DASHBOARD_PAGE_NAMES } from '../permissions/constants';
 import {
   FOLDER_NAME_MAX,
   IDS_ARRAY_MAX,
+  MAX_DOCUMENT_SIZE_MB,
   MEDIA_DISPLAY_NAME_MAX,
+  MIB,
 } from './constants';
-import { idSchema, nullableIdSchema, strictTextMaximum } from './rules';
+import { ALLOWED_MIME_TYPES } from './media-types';
+import { ID_INPUT_PATTERN, idSchema, nullableIdSchema } from './rules';
 
 /**
  * `folder`: one folder's view. `all`: every library file, plus folders by name.
@@ -77,8 +83,6 @@ const NAME_CHARACTER_CLASS = String.raw`[^\s\u0000-\u001F\u007F/\\]`;
 const NAMED = String.raw`\s*${NAME_CHARACTER_CLASS}(?:${NAME_CHARACTER_CLASS}|\s)*`;
 const NAME_PATTERN = `^${NAMED}$`;
 const FOLDER_NAME_PATTERN = String.raw`^(?!\s*\.{1,2}\s*$)${NAMED}$`;
-const NAME_DESCRIPTION =
-  'Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected';
 
 export const folderNameSchema = z.preprocess(
   normalizeName,
@@ -95,7 +99,6 @@ export const folderNameSchema = z.preprocess(
       minLength: undefined,
       maxLength: undefined,
       pattern: FOLDER_NAME_PATTERN,
-      description: `${NAME_DESCRIPTION}, as are the names \`.\` and \`..\`. ${strictTextMaximum(FOLDER_NAME_MAX)}`,
     })
 );
 
@@ -113,7 +116,6 @@ export const displayNameSchema = z.preprocess(
       minLength: undefined,
       maxLength: undefined,
       pattern: NAME_PATTERN,
-      description: `${NAME_DESCRIPTION}. ${strictTextMaximum(MEDIA_DISPLAY_NAME_MAX)}`,
     })
 );
 
@@ -137,7 +139,8 @@ export const updateFolderSchema = z
   .refine(
     (body) => body.name !== undefined || body.parentId !== undefined,
     mediaValidationMsg.nothingToUpdate
-  );
+  )
+  .meta({ anyOf: [{ required: ['name'] }, { required: ['parentId'] }] });
 
 export const updateFileSchema = z
   .object({
@@ -148,7 +151,8 @@ export const updateFileSchema = z
   .refine(
     (body) => body.displayName !== undefined || body.folderId !== undefined,
     mediaValidationMsg.nothingToUpdate
-  );
+  )
+  .meta({ anyOf: [{ required: ['displayName'] }, { required: ['folderId'] }] });
 
 const idsSchema = z
   .array(idSchema)
@@ -170,8 +174,6 @@ const selectedIds = z
   .array(idSchema)
   .max(IDS_ARRAY_MAX, mediaValidationMsg.selectionTooMany)
   .optional();
-
-const SELECTION_DESCRIPTION = `Files and folders together: at least one id and at most ${IDS_ARRAY_MAX} across both lists.`;
 
 interface Selection {
   fileIds?: readonly string[];
@@ -196,8 +198,7 @@ export const mediaDeleteSelectionSchema = z
   })
   .strict()
   .refine(hasSelection, mediaValidationMsg.selectionRequired)
-  .refine(withinSelectionMax, mediaValidationMsg.selectionTooMany)
-  .meta({ description: SELECTION_DESCRIPTION });
+  .refine(withinSelectionMax, mediaValidationMsg.selectionTooMany);
 
 /**
  * `to: null` is the root, which holds folders only: a file there would leave
@@ -216,7 +217,63 @@ export const mediaMoveSelectionSchema = z
   .refine(
     (body) => body.to !== null || (body.fileIds?.length ?? 0) === 0,
     mediaValidationMsg.filesToRoot
-  )
-  .meta({
-    description: `${SELECTION_DESCRIPTION} \`to: null\` is the root, which holds folders only.`,
-  });
+  );
+
+/**
+ * `GET /api/dash/media`: the view, the folder, then the data-table keys, in the
+ * order their refusals are checked. An empty `folder` is the root.
+ */
+export const mediaListQuerySchema = z.strictObject({
+  scope: z.enum(MEDIA_SCOPES, mediaMsg.invalidScope).optional(),
+  folder: z
+    .preprocess(
+      (value: string) => (value === '' ? undefined : value),
+      idSchema.optional()
+    )
+    .optional()
+    .meta({
+      pattern: undefined,
+      anyOf: [{ type: 'string', pattern: ID_INPUT_PATTERN }, { const: '' }],
+    }),
+  ...dataTableQuerySchema.shape,
+});
+
+/** In the query rather than the form: the folder is checked before the body is read. */
+export const libraryUploadQuerySchema = z.strictObject({
+  folder: idSchema.clone(),
+});
+
+/** Only `true` deletes the subtree; any other value is a refusal, never a narrower delete. */
+export const folderDeleteQuerySchema = z.strictObject({
+  recursive: z
+    .enum(['true', 'false', ''], mediaMsg.invalidRecursive)
+    .optional(),
+});
+
+/**
+ * In the query, so the permission check on `resource` runs before the form is
+ * read. `purpose` publishes its syntax and checks none of it here: the handler
+ * resolves it after the permission check, so a caller without the grant is
+ * refused 403 whatever it names.
+ */
+export const recordUploadQuerySchema = z.strictObject({
+  resource: z.enum(DASHBOARD_PAGE_NAMES, uploadMsg.invalidResource),
+  purpose: z
+    .string()
+    .optional()
+    .meta({ maxLength: PURPOSE_NAME_MAX, pattern: PURPOSE_NAME_PATTERN }),
+});
+
+/**
+ * One file. Typed and published only: `lib/media/upload.ts` admits the part
+ * by its bytes, so nothing parses the form against this.
+ */
+const uploadedFile = () =>
+  z
+    .file()
+    .max(MAX_DOCUMENT_SIZE_MB * MIB)
+    .meta({ 'x-allowed-content-types': [...ALLOWED_MIME_TYPES] });
+
+export const libraryUploadFormSchema = z.strictObject({ file: uploadedFile() });
+
+export const recordUploadFormSchema = z.strictObject({ files: uploadedFile() });

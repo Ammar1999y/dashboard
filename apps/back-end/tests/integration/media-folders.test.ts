@@ -203,6 +203,8 @@ describe('creating folders', () => {
     expect(duplicate.status).toBe(HTTP_STATUS.CONFLICT);
     expect(duplicate.body.message).toBe(mediaMsg.folderNameExists);
     expect(duplicate.body.code).toBe(FOLDER_NAME_EXISTS_CODE);
+    // A create has no folder to name, so its contract declares no ids.
+    expect(duplicate.body.data).toBeNull();
 
     // The same name under a DIFFERENT parent is fine.
     const elsewhere = await call(admin(), 'POST', '/api/dash/media/folders', {
@@ -288,6 +290,7 @@ describe('creating folders', () => {
     expect(tooDeep.status).toBe(HTTP_STATUS.UNPROCESSABLE);
     expect(tooDeep.body.message).toBe(mediaMsg.folderTooDeep);
     expect(tooDeep.body.code).toBe(FOLDER_TOO_DEEP_CODE);
+    expect(tooDeep.body.data).toBeNull();
   });
 
   test('a view-only session cannot create', async () => {

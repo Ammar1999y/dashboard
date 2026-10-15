@@ -2,7 +2,7 @@
 
 The list table behind every dashboard list page: server-paged (`users`, `permissions`), or loaded whole and paged in the browser.
 
-Read this before changing anything here, or anything it depends on outside this folder: the column files of each feature, `store/url-store.ts`, `lib/api/query.ts`, `lib/data-table/query.ts`, `mocks/lib/data-table.ts`, `styles/table.css` and `@app/shared/data-table/*`. Most rules below exist because breaking them once made the header or rows stop updating, or made the table slow at 100 rows.
+Read this before changing anything here, or anything it depends on outside this folder: the column files of each feature, `store/url-store.ts`, `lib/api/query.ts`, `lib/data-table/query.ts`, `lib/data-table/url.ts`, `lib/history.ts`, `mocks/lib/data-table.ts`, `styles/table.css` and `@app/shared/data-table/*`. Most rules below exist because breaking them once made the header or rows stop updating, or made the table slow at 100 rows.
 
 ## Using it
 
@@ -26,17 +26,19 @@ Build columns from the presets in `index.ts` (`textColumn`, `statusColumn`, `dat
 
 There are two stores, and they own different things:
 
-| State                                    | Owner                                                                                   | Lifetime                                                |
-| ---------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| page, page size, sort, filters, search   | `useDataTableStore` (`store/url-store.ts`), synced to the URL by `filters/url-sync.tsx` | one module singleton, bound to the route by `initTable` |
-| column order, visibility, pinning, sizes | the column store (`store/column-store.ts`), saved to `localStorage` under `storageKey`  | one per mounted `DataTableView`                         |
+| State                                    | Owner                                                                                  | Lifetime                                                               |
+| ---------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| page, page size, sort, filters, search   | `useDataTableStore` (`store/url-store.ts`), mirrored to the URL by `mirrorTableToUrl`  | one module singleton, bound to the route and navigation by `initTable` |
+| column order, visibility, pinning, sizes | the column store (`store/column-store.ts`), saved to `localStorage` under `storageKey` | one per mounted `DataTableView`                                        |
 
 - `DataTable` picks the data source: the server one, or `queryRows` over the whole list (`lib/data-table/query.ts`, which the mocks use too). It then renders `DataTableView`.
 - `DataTableView` creates the column store and renders the frame.
 - `hooks/use-table-instance.ts` is the only place `useReactTable` is called. TanStack does no paging, sorting or filtering here (`manual*`): rows arrive ready, and TanStack only lays out columns.
 - Column changes go through the store actions (`useColumnActions()`): `setVisible`, `pin`, `move`, `drop`, `resetSize`, `reset`. TanStack's resize handler writes through `onColumnSizingChange`, which is the same store.
 
-The URL store is keyed by route, so a route holds **one** `DataTable`.
+The URL store is bound to one visit (the route, the history entry the table mounted on, and Next's `asPath`), so a route holds **one** `DataTable`, and every visit, Back to an earlier one included, starts from its own URL.
+
+The URL holds the query in the keys `@app/shared` names (`DATA_TABLE_PARAMS`); `lib/data-table/url.ts` reads it with the server's parser (`parseTableParams`) and writes it, for the address and for the request alike. The address is written through `lib/history.ts` (see `components/dialogs/README.md`, rules 13 to 15), which also keeps it on the entry for Back. The search box applies its term through `filters/search-draft.ts`.
 
 ## Layout
 
@@ -52,7 +54,7 @@ The URL store is keyed by route, so a route holds **one** `DataTable`.
 | `components/table-elements.tsx`                             | `TableRow`, `TableCell`, `cellAttributes`                                    |
 | `store/`                                                    | column store, its React context, `localStorage` load and save                |
 | `view-options.tsx`                                          | the "العرض" popover: show/hide, reorder, reset                               |
-| `filters/`                                                  | search, filter and sort lists, column filter popover, URL sync               |
+| `filters/`                                                  | search box and its draft, filter and sort lists, column filter popover       |
 | `column-presets.tsx`, `column-header.tsx`, `column-meta.ts` | column helpers, default header, `ColumnMeta` augmentation                    |
 
 ## Rules that keep the UI in sync

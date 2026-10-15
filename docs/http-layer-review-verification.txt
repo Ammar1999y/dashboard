@@ -1,0 +1,98 @@
+Review date: 2026-10-14 (Europe/Minsk)
+Baseline: acd17d4, "Checkpoint back-end and shared work before the HTTP layer rewrite"
+Compared against: current working tree, including untracked files.
+
+Inventory: http-layer-review-files.tsv contains 230 backend/shared paths:
+92 modified, 50 deleted, 88 new untracked files.
+Each pre-existing path has its baseline version extracted under:
+C:\Users\Administrator\AppData\Local\Temp\http-layer-review-acd17d4
+The same directory contains baseline.tar and full verification logs.
+
+No application implementation or frontend files were edited for this review.
+Review outputs in the repository: the Markdown review, file inventory, coverage ledger and this verification record.
+
+Commands run from apps/back-end unless stated otherwise:
+
+bun run test
+2775 passed, 0 failed, 18857 assertions, 58 files.
+Log: unit-tests.log
+
+bun run test:integration
+1363 passed, 1 skipped, 2 failed setup hooks (5-second timeouts).
+Both failed setups were rerun separately:
+- bun tests/helpers/run.ts integration id-canonicalization-guards --timeout=30000
+  3 passed, 0 failed.
+- bun tests/helpers/run.ts integration upload-auth-gate --timeout=30000
+  31 passed, 0 failed.
+The original full tier returned nonzero; no second full-tier run is claimed.
+Response-contract coverage: 82/84, with the two documented allowed autoVerified gaps.
+Logs: integration-tests.log, id-guards-rerun.log
+
+bun run test:process
+116 passed, 2 skipped, 1 failed (OAuth migration's 60-second timeout).
+bun tests/helpers/run.ts process oauth-migration --timeout=120000
+1 passed, 0 failed; completed in about 8 seconds.
+The original full tier returned nonzero; no second full-tier run is claimed.
+Logs: process-tests.log, migration-rerun.log
+
+bun run test:matrix
+All six configuration runs passed.
+Log: matrix-tests.log
+
+bun run lint (apps/back-end)
+TypeScript stage passed. ESLint returned nonzero only for pre-existing ignored probe files:
+- security-lint-probe-12332.ts
+- lib/floating-promise-probe-12332.ts
+- lib/floating-promise-probe-14080.ts
+Those files were preserved.
+bunx eslint . --max-warnings 0 --ignore-pattern security-lint-probe-12332.ts --ignore-pattern lib/floating-promise-probe-12332.ts --ignore-pattern lib/floating-promise-probe-14080.ts
+Passed. This is not a claim that the unchanged default lint command passes.
+Logs: backend-lint.log, backend-eslint-clean.log
+
+bun run lint (packages/shared)
+Passed.
+Log: shared-lint.log
+
+bun run check:deps (repository root)
+Passed.
+Log: dependency-parity.log
+
+Additional focused checks:
+- unit openapi: 245 passed.
+- integration user-bindings: 26 passed.
+- integration auth-bindings: 87 passed.
+- integration media-bindings: 28 passed.
+- Data-table acceptance comparison: 133 key/value combinations.
+- Media error declaration sweep: 17 bindings, 68 reachable code/status pairs.
+- Reference-page method/slash probes through app.handle and a real Elysia listener.
+- Reference-page browser verification with synthetic document data.
+- Minified browser-targeted shared-schema bundle inspection.
+- Real application OTP throttle/missing-proof probes against uniquely provisioned harness databases.
+
+The OTP reproduction source and output are retained outside the repository:
+blocked-recovery-probe.ts
+blocked-recovery-review.log
+All harness databases from that probe were dropped. Its SQLite stores were closed and scratch directories removed.
+Reference-page temporary source files, browser tab and listeners were removed/stopped.
+The browser bundle probe wrote no files.
+
+Not run: a complete frontend Next.js build, Docker image build, production-posture reproduction of the new OTP declaration defect.
+The finding identifies the enforcement as enabled outside production from the implementation and reproduces it in development.
+
+Follow-up file coverage audit (2026-10-14):
+The initial domain review did not maintain a complete per-file review ledger. It should not have been presented as independently demonstrated inspection of every changed file.
+An explicit follow-up pass inspected all 230 inventoried backend/shared files and 5 related root files.
+Coverage: http-layer-review-coverage.tsv, 235 unique rows, all reviewed, no missing evidence.
+Each row records the reviewer, path-specific inspection/trace, current SHA256 and baseline SHA256 where the file existed before the rewrite.
+Modified files were reviewed through their full diffs and relevant current code/callers; new files through their full source; deleted files through baseline source and replacement/reference mapping.
+The record documents source review coverage. It does not claim exhaustive execution-path testing or prove the absence of defects.
+
+The follow-up pass added three findings to the issue-only report:
+- OTP_AUTO_VERIFY contact-change credential bypass: isolated real application/database probe, enabled flag via existing module-mocking technique; no fresh window/proof row; rejected incorrect-password initiation versus committed direct verification on both contacts.
+  Evidence: auto-verify-contact-proof-probe.ts, auto-verify-contact-proof-review.log
+- HEAD raw-refusal validation/stripping disparity: disposable synthetic binding, both app.handle and a real Bun listener; GET25bytes versus HEAD51bytes; invalid refusal GET500 versus HEAD401.
+  Evidence: head-refusal-probe.ts, head-refusal-probe.log
+- Published query input mismatches: actual application document generation and JSON Schema read-back versus blank-folder/normalized-cursor acceptance; retained in-area documentation defects.
+
+The probe databases were uniquely provisioned and dropped. The auto-verification SQLite scratch DB was closed and removed. The HEAD listener was stopped. Probe sources/logs remain outside the repository for inspection.
+No further broad suite rerun was performed, because implementation files were not changed. The earlier suite results and limitations remain as recorded above.

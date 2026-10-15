@@ -1,4 +1,4 @@
-import type { PermissionClient } from '@/types/permission';
+import type { PermissionClient, PermissionDetail } from '@/types/permission';
 import type {
   UpdatePermissionInput,
   UpdatePermissionOutput,
@@ -10,6 +10,7 @@ import { memo, useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
+import { permissionDetailSchema } from '@app/shared/responses/permissions';
 import { adminUpdatePermissionBodySchema } from '@app/shared/validation/permissions';
 
 import { toPermissionForm } from '@/utils/validation/permissions';
@@ -17,6 +18,7 @@ import { toPermissionForm } from '@/utils/validation/permissions';
 import { Form } from '@/components/form/form';
 
 import { samePermissions } from '../permission-matrix/matrix';
+import { RequireGrant, useResourceAccess } from '../shared/access';
 import { EditRecord } from '../shared/edit-record';
 import { FormHeader } from '../shared/form-header';
 import { useEntityMutations } from '../shared/use-entity-mutations';
@@ -27,11 +29,22 @@ import { PermissionFields } from './fields';
 type Payload = RequestBody<'PUT /api/dash/permissions/:id'>;
 
 export default function EditPermission() {
-  return <EditRecord entity={permissionEntity} Form={PermissionEditForm} />;
+  return (
+    <RequireGrant resource='permissions' action='edit'>
+      <EditRecord
+        entity={permissionEntity}
+        schema={permissionDetailSchema}
+        Form={PermissionEditForm}
+      />
+    </RequireGrant>
+  );
 }
 
-const PermissionEditForm = memo(({ record }: { record: PermissionClient }) => {
+const PermissionEditForm = memo(({ record }: { record: PermissionDetail }) => {
   const queryClient = useQueryClient();
+  // The server refuses any write to the role the signed-in user holds.
+  const { roleId } = useResourceAccess(permissionEntity.resource);
+  const ownRole = roleId === record.id;
   const methods = useForm<
     UpdatePermissionInput,
     unknown,
@@ -39,6 +52,7 @@ const PermissionEditForm = memo(({ record }: { record: PermissionClient }) => {
   >({
     resolver: zodResolver(adminUpdatePermissionBodySchema),
     defaultValues: toPermissionForm(record),
+    disabled: ownRole,
   });
   const { update } = useEntityMutations<PermissionClient>(permissionEntity);
 
@@ -71,8 +85,12 @@ const PermissionEditForm = memo(({ record }: { record: PermissionClient }) => {
 
   return (
     <Form methods={methods} onSubmit={onSubmit}>
-      <FormHeader title='تعديل الصلاحية' cancelHref={permissionEntity.route} />
-      <PermissionFields />
+      <FormHeader
+        title={ownRole ? 'عرض الصلاحية' : 'تعديل الصلاحية'}
+        cancelHref={permissionEntity.route}
+        readOnly={ownRole}
+      />
+      <PermissionFields ownRole={ownRole} />
     </Form>
   );
 });

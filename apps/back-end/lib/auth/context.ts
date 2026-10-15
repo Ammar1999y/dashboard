@@ -42,7 +42,6 @@ export function authAuditMeta(
   );
 }
 
-/** `readJsonBody`'s counterpart for a Better Auth endpoint. */
 export function parseAuthBody<S extends z.ZodType>(
   ctx: { body?: unknown },
   schema: S,

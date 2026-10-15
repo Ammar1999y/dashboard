@@ -16,7 +16,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
-import { ROUTES } from '@/routes';
+import { BINDINGS } from '@/modules';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
@@ -184,19 +184,19 @@ describe('a sub-path outside the allowlist', () => {
   /**
    * The project's OWN routes under `/api/auth`, which are not Better Auth paths.
    *
-   * Read from the table rather than listed, so a sixth one is covered the day it
+   * Read from the bindings rather than listed, so a sixth one is covered the day it
    * is added.
    */
   const PROJECT_AUTH_ROUTES = [
     ...new Set(
-      ROUTES.filter((route) => route.path.startsWith('/api/auth/')).map(
-        (route) => route.path.slice('/api/auth'.length)
-      )
+      BINDINGS.map(({ entry }) => entry.path)
+        .filter((path) => path.startsWith('/api/auth/'))
+        .map((path) => path.slice('/api/auth'.length))
     ),
   ];
 
   test('a project route under the prefix answers 405 on ANY wrong method', async () => {
-    // Five real `ROUTES` entries sit under this prefix and are not Better Auth
+    // Several bindings sit under this prefix and are not Better Auth
     // paths, so a `GET` on one falls through the `GET /api/auth/*` wildcard and
     // was answered as UNKNOWN — 404 with no `Allow` — while a `PUT` on the same
     // path, which the wildcard is not mounted for, reached `onError` and got a

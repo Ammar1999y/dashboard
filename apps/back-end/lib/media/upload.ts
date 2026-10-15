@@ -512,37 +512,25 @@ async function storeUpload(params: {
   });
 }
 
-/**
- * Per user per minute, charged BEFORE the body is read: the kind budgets need
- * the bytes to know the kind, so this bounds the parsing an account over one
- * of them can still cause.
- */
-const UPLOAD_ADMISSION_LIMIT = 20;
-
-/** Shared by both upload routes, so the allowance is per user, not per route. */
-const UPLOAD_ADMISSION_SCOPE = 'upload.admission';
+const unmetered = (): never => {
+  throw new Error('An upload route must pass its admission limiter.');
+};
 
 /**
  * Every upload route's path from its own permission check to the stored row.
  * The publish grant a public target needs comes first, so a caller without it
- * is refused before the admission limit charges it; the charges come before
- * `readFormData()`, which buffers the whole body.
+ * is refused before `admit`, the route's admission limiter, charges it; the
+ * charges come before `readFormData()`, which buffers the whole body.
  */
 export async function acceptUpload(
-  ctx: HandlerInput,
+  ctx: Pick<HandlerInput, 'headers' | 'readFormData'>,
   actor: AuditActor,
-  target: UploadTarget & { field: string }
+  target: UploadTarget & { field: string },
+  admit: () => Promise<void> = unmetered
 ): Promise<MediaFileRow> {
   if (target.visibility === 'public') await requirePublishGrant(ctx.headers);
   if (!isVisibilityEnabled(target.visibility)) throw visibilityDisabled();
-  // Per USER: an IP bucket lets one account spend its NAT neighbours' budget.
-  // The coarse per-IP bound runs earlier, in the adapter.
-  await enforceRateLimit({
-    scope: UPLOAD_ADMISSION_SCOPE,
-    identifier: userIdentifier(actor.userId),
-    limit: UPLOAD_ADMISSION_LIMIT,
-    failClosed: true,
-  });
+  await admit();
   await chargeUploadBodyBudget(actor.userId, ctx.headers);
 
   const entry = takeSingleFile(await ctx.readFormData(), target.field);

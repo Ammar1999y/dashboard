@@ -30,6 +30,7 @@ import {
   resolveActionScope,
   validatePermissionScope,
 } from '@app/shared/permissions/scope';
+import { SESSIONS_PAGE_SIZE } from '@app/shared/validation/sessions';
 
 import { generateEntityId } from '@/utils/generate-id';
 
@@ -52,17 +53,20 @@ import {
   insufficientPermissions,
   requirePermission,
 } from '../lib/permissions';
+import { requireReauthWindow } from '../lib/reauth';
+import { removeMethodIntent, rotateCredentials } from '../lib/two-factor';
+import { readSessionsPage, revokeUserSessions } from '../lib/user-sessions';
 import { CUSTOM_ROLE_NAME } from '../seed';
 import { roleOf, roleRef, session, toUserClient, users } from '../store';
 
-const [adminUpdateBody, selfUpdateBody] =
-  REQUEST_BODIES['PUT /api/dash/users/:id'];
+const adminUpdateBody = REQUEST_BODIES['PUT /api/dash/users/:id'];
+const selfUpdateBody = REQUEST_BODIES['PUT /api/dash/users/me'];
 
 /**
  * The server's `assertTargetUserVisible`: a user with no role, another
  * system-role account, or one outside an `'own'` scope answers 404.
  */
-function assertVisible(
+export function assertVisible(
   user: MockUser,
   actorUserId: EntityID,
   scope: AccessScope | null
@@ -76,7 +80,7 @@ function assertVisible(
 }
 
 /** The target's role matrix, or 404 as the server's join on `roles` answers. */
-function targetRoleMatrix(user: MockUser) {
+export function targetRoleMatrix(user: MockUser) {
   const role = roleOf(user);
   if (!role) throw notFoundError();
   return role.permissions;
@@ -110,14 +114,70 @@ const toListRow = (user: MockUser) => {
   return { id, name, email, isActive, roleId, role, createdAt, updatedAt };
 };
 
-const detail = (user: MockUser) => ({
+/**
+ * The server shows a user's sessions with the detail to their owner, and to
+ * an actor who may edit them and whose grants cover their role: the same
+ * authority the sessions routes ask for.
+ */
+function mayReadSessions(
+  user: MockUser,
+  actorUserId: EntityID,
+  actorPermissions: ActorPermissions
+): boolean {
+  if (user.id === actorUserId) return true;
+  if (
+    !holdsActionOn(
+      actorPermissions,
+      'users',
+      'edit',
+      user.createdBy,
+      actorUserId
+    )
+  )
+    return false;
+  try {
+    assertRoleWithinScope(
+      actorPermissions,
+      targetRoleMatrix(user),
+      'reachability'
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof CustomError) return false;
+    throw error;
+  }
+}
+
+/** The first page of the user's sessions, with where the rest begins. */
+const sessionsOf = (user: MockUser) => {
+  const { sessions, hasMore, nextCursor } = readSessionsPage({
+    userId: user.id,
+    limit: SESSIONS_PAGE_SIZE,
+    cursor: null,
+  });
+  return {
+    sessions,
+    sessionsHasMore: hasMore,
+    sessionsNextCursor: nextCursor,
+  };
+};
+
+const detail = (
+  user: MockUser,
+  actorUserId: EntityID,
+  actorPermissions: ActorPermissions
+) => ({
   ...toUserClient(user),
   permissions: roleOf(user)?.permissions ?? [],
+  ...(mayReadSessions(user, actorUserId, actorPermissions) && sessionsOf(user)),
 });
 
 /**
  * The server's `editUserAsAdmin`, its checks in its order, without the
- * re-authentication, the password checks and the session rotation.
+ * password checks. It asks for the re-authentication
+ * window as the server does: up front for a new password, and otherwise only
+ * for a change that lowers the target's security posture (contact, role,
+ * custom matrix, active flag), so a rename alone never prompts.
  */
 function editUserAsAdmin({
   actorUserId,
@@ -132,6 +192,7 @@ function editUserAsAdmin({
   targetId: EntityID;
   input: z.output<typeof adminUpdateBody>;
 }) {
+  if (input.password) requireReauthWindow();
   const target = users.find(targetId);
   if (!target) throw notFoundError();
   const currentRole = assertVisible(target, actorUserId, editScope);
@@ -205,7 +266,25 @@ function editUserAsAdmin({
     input.phoneNumber !== undefined &&
     (target.phoneNumber ?? null) !== newPhoneNumber;
 
+  // A custom role is re-minted only when its matrix changes.
+  const roleChanged = isCustomRole
+    ? !isCurrentlyCustom || customPermsChanged
+    : input.roleId !== target.roleId;
+  if (
+    emailChanged ||
+    phoneChanged ||
+    roleChanged ||
+    target.isActive !== input.isActive
+  )
+    requireReauthWindow();
+
   assertUnique(input.email, phoneChanged ? newPhoneNumber : null, target.id);
+
+  const endsSessions =
+    !!input.password ||
+    emailChanged ||
+    phoneChanged ||
+    (target.isActive && !input.isActive);
 
   const updatedAt = now();
   users.update(target.id, {
@@ -225,6 +304,14 @@ function editUserAsAdmin({
     ...(input.password && { password: input.password }),
     updatedAt,
   });
+
+  // An address or number the account no longer holds is no factor to offer.
+  if (emailChanged) removeMethodIntent(target.id, 'otp', 'email');
+  if (phoneChanged) removeMethodIntent(target.id, 'otp', 'phone');
+  if (endsSessions) {
+    rotateCredentials(target.id, 'revoke');
+    revokeUserSessions(target.id, 'all');
+  }
   return { updatedAt };
 }
 
@@ -253,7 +340,11 @@ export const usersHandlers = [
   }),
 
   http.get<{ id: string }>(api('/api/dash/users/:id'), ({ params }) => {
-    const { userId, scope: viewScope } = requirePermission('users', 'view', {
+    const {
+      userId,
+      scope: viewScope,
+      permissions,
+    } = requirePermission('users', 'view', {
       throwError: false,
     });
     const targetId = requireId(params.id);
@@ -262,11 +353,13 @@ export const usersHandlers = [
     const user = users.find(targetId);
     if (!user) throw notFoundError();
     assertVisible(user, userId, viewScope);
-    return ok(detail(user));
+    return ok(detail(user, userId, permissions));
   }),
 
   http.post(api('/api/dash/users'), async ({ request }) => {
-    const { userId, permissions } = requirePermission('users', 'create');
+    const { userId, permissions } = requirePermission('users', 'create', {
+      reauth: true,
+    });
     const input = await readJsonBody(
       request,
       REQUEST_BODIES['POST /api/dash/users']
@@ -309,6 +402,18 @@ export const usersHandlers = [
     return created(user.id);
   }),
 
+  http.put(api('/api/dash/users/me'), async ({ request }) => {
+    const { userId } = requirePermission('users', 'edit', {
+      throwError: false,
+    });
+    const { name } = await readJsonBody(request, selfUpdateBody);
+    const updatedAt = now();
+    users.update(userId, { name, updatedAt });
+    const current = session.get();
+    if (current) session.set({ ...current, user: { ...current.user, name } });
+    return ok({ updatedAt }, MSG_UPDATED);
+  }),
+
   http.put<{ id: string }>(
     api('/api/dash/users/:id'),
     async ({ params, request }) => {
@@ -322,18 +427,7 @@ export const usersHandlers = [
       const body = await readJson(request);
       const targetId = requireId(params.id);
 
-      // Editing your own row is the self-edit branch: its contract is the name.
-      if (userId === targetId) {
-        const { name } = parseOrThrow(selfUpdateBody, body);
-        const updatedAt = now();
-        users.update(userId, { name, updatedAt });
-        const current = session.get();
-        if (current)
-          session.set({ ...current, user: { ...current.user, name } });
-        return ok({ updatedAt }, MSG_UPDATED);
-      }
-
-      if (!editScope) throw insufficientPermissions();
+      if (!editScope || userId === targetId) throw insufficientPermissions();
       const result = editUserAsAdmin({
         actorUserId: userId,
         actorPermissions: permissions,
@@ -346,7 +440,11 @@ export const usersHandlers = [
   ),
 
   http.delete<{ id: string }>(api('/api/dash/users/:id'), ({ params }) => {
-    const { userId, permissions, scope } = requirePermission('users', 'delete');
+    const { userId, permissions, scope } = requirePermission(
+      'users',
+      'delete',
+      { reauth: true }
+    );
     const targetId = requireId(params.id);
     if (userId === targetId)
       throw new CustomError(MSG_CANNOT_DELETE_SELF, HTTP_STATUS.BAD_REQUEST);

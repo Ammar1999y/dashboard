@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import { verificationSessions } from '@/db/schema';
 
 import { CustomError } from '@app/shared/error-class';
+import { OTP_PROOF_THROTTLE_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { otpMsg } from '@app/shared/messages/otp';
 import { OTP_BASE_RESEND_DELAY_S } from '@app/shared/validation/constants';
@@ -76,12 +77,6 @@ export async function blockSession(
     .set({ isBlocked: true, blockedUntil })
     .where(eq(verificationSessions.id, sessionId));
 }
-
-/**
- * A proof-row 429, as opposed to a limiter's: only an existing account has a
- * proof row, so on an anonymous endpoint it is an existence test.
- */
-const OTP_PROOF_THROTTLE_CODE = 'otp_proof_throttle';
 
 export function blockedError(message: string, until: Date | null): CustomError {
   const error = new CustomError(

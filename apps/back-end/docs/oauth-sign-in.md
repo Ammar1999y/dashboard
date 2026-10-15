@@ -48,7 +48,7 @@ requests require the normal Origin/CSRF protections and the Turnstile token in
 claims.
 
 1. Fetch `GET /api/auth/capabilities`. Its body is
-   `{ "success": true, "data": { "oauthProviders": ["google"] } }` when enabled,
+   `{ "data": { "oauthProviders": ["google"] } }` when enabled,
    or an empty array when disabled. Render the Google button only when present.
 2. Submit `POST /api/auth/oauth/google/start` with
    `{ "mode": "sign_in", "rememberMe": true, "callbackURL": "/auth/complete" }`.
@@ -64,11 +64,11 @@ claims.
 5. On that page, fetch `GET /api/auth/oauth/result` once with cookies. The result
    expires after 60 seconds and is single-use. Interpret its body as follows:
 
-| Body                                                | Client behavior                                                                                                                                    |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `{ "success": true, "data": { "loggedIn": true } }` | Refresh the current session, then enter the application.                                                                                           |
-| Existing `twoFactorRedirect: true` challenge body   | Continue the existing [2FA flow](two-factor-flow.md), using its offered options and challenge cookie. No authenticated session has been delivered. |
-| HTTP 401 failure envelope                           | Show a generic sign-in failure and offer a new attempt or another available method.                                                                |
+| Body                                              | Client behavior                                                                                                                                    |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{ "data": { "loggedIn": true } }`                | Refresh the current session, then enter the application.                                                                                           |
+| Existing `twoFactorRedirect: true` challenge body | Continue the existing [2FA flow](two-factor-flow.md), using its offered options and challenge cookie. No authenticated session has been delivered. |
+| HTTP 401 failure envelope                         | Show a generic sign-in failure and offer a new attempt or another available method.                                                                |
 
 Without `callbackURL`, the callback returns its JSON outcome directly. An invalid
 or unbound callback receives a generic failure rather than an untrusted redirect.
@@ -93,7 +93,7 @@ approved password and passkey proofs for sensitive operations; clients must not
 offer a Google reauthentication button or ask users to sign out of Google.
 
 Fetch `GET /api/auth/reauth/methods` with an authenticated session. The response is
-`{ "success": true, "data": { "methods": ["password", "passkey"] } }`
+`{ "data": { "methods": ["password", "passkey"] } }`
 when both are usable. Offer every returned method and let the user choose.
 An unenrolled or disabled method is omitted. The endpoint does not authorize an
 action by itself.

@@ -133,6 +133,7 @@ export async function readSessionsPage(opts: {
   return {
     sessions: page.map((s) => ({
       ...s,
+      createdAt: s.createdAt.toISOString(),
       isCurrent: s.id === opts.currentSessionId,
     })),
     hasMore,

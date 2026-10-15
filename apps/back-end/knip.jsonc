@@ -5,8 +5,8 @@
     ".": {
       // Declaring `entry` REPLACES knip's defaults, including its built-in
       // `**/*.test.ts` root, so every root is spelled out. The runtime graph has
-      // one: `server.ts`, which dynamically imports `app.ts` -> `routes.ts` ->
-      // every handler.
+      // one: `server.ts`, which dynamically imports `app.ts` -> `modules/index.ts`
+      // -> every binding.
       "entry": [
         "server.ts",
         "scripts/**/*.ts",
@@ -18,13 +18,14 @@
         "tests/integration/**/*.test.ts",
         "tests/process/**/*.test.ts",
         "tests/matrix/**/*.test.ts",
-        // Roots with no import edge: fixtures are spawned by path, and the two
+        // Roots with no import edge: fixtures are spawned by path, and the
         // preloads are named by `tests/helpers/run.ts` on the command line and
         // by `bunfig.toml`. Entries rather than `ignore`, so THEIR imports stay
         // checked.
         "tests/fixtures/_*.ts",
         "tests/fixtures/_*.cjs",
         "tests/helpers/preload-database.ts",
+        "tests/helpers/preload-document-check.ts",
         "tests/helpers/preload-base.ts",
       ],
     },

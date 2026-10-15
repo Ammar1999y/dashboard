@@ -164,7 +164,7 @@ afterEach(async () => {
   }
   if (mismatches.length > 0)
     throw new Error(
-      `a response broke its published contract, so the check answered 500 (lib/http/response-check.ts):\n  ${mismatches.join('\n  ')}`
+      `a response broke its published contract (lib/http/response-check.ts answers such a response 500; tests/helpers/document-check.ts holds it to the served document):\n  ${mismatches.join('\n  ')}`
     );
 });
 

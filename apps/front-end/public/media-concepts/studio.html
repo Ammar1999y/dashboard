@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Studio — Media concept 02</title>
+    <link rel="stylesheet" href="shared.css" />
+    <link rel="stylesheet" href="studio.css" />
+    <script defer src="shared.js"></script>
+  </head>
+  <body data-design="studio">
+    <header class="studio-header">
+      <a
+        class="studio-wordmark"
+        href="index.html"
+        aria-label="Studio — all concepts"
+      >
+        <span class="studio-symbol" aria-hidden="true"
+          ><i></i><i></i><i></i><i></i
+        ></span>
+        <span>STUDIO<span class="wordmark-edition">02 / MEDIA</span></span>
+      </a>
+      <nav class="studio-topnav" aria-label="Media library">
+        <button
+          class="nav-link is-active"
+          data-scope="folder"
+          type="button"
+          data-i18n="library"
+        >
+          المكتبة
+        </button>
+        <button
+          class="nav-link"
+          data-scope="all"
+          type="button"
+          data-i18n="allFiles"
+        >
+          كل الملفات
+        </button>
+        <button
+          class="nav-link"
+          data-scope="unfiled"
+          type="button"
+          data-i18n="unfiled"
+        >
+          غير مصنفة
+        </button>
+      </nav>
+      <div class="studio-header-tools">
+        <span class="prototype-pill" data-i18n="prototype">نموذج تفاعلي</span>
+        <button
+          class="locale-button"
+          type="button"
+          data-action="locale"
+          aria-label="Change language"
+        >
+          EN / ع
+        </button>
+        <button
+          class="header-help"
+          type="button"
+          data-action="help"
+          data-i18n="help"
+        >
+          ما الذي يدعمه؟
+        </button>
+      </div>
+    </header>
+
+    <main class="studio-main">
+      <section class="studio-intro" aria-labelledby="location-title">
+        <div class="intro-copy">
+          <div class="intro-eyebrow">
+            <span class="orange-dot" aria-hidden="true"></span
+            ><span>YOUR CREATIVE SPACE</span>
+          </div>
+          <div id="breadcrumb" class="breadcrumb"></div>
+          <h1 id="location-title" data-i18n="library">مكتبة الوسائط</h1>
+          <p class="studio-subtitle" data-i18n="subtitle">
+            مساحة لكل ملفاتك. رتّب، اختر، وأنجز.
+          </p>
+        </div>
+        <div class="intro-actions">
+          <div class="intro-orbit" aria-hidden="true">
+            <span></span><i></i><b></b>
+          </div>
+          <div class="intro-action-row">
+            <button
+              class="studio-button button-ink"
+              type="button"
+              data-action="upload"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 16V4m-5 5 5-5 5 5M4 16v4h16v-4" />
+              </svg>
+              <span data-i18n="upload">رفع ملفات</span>
+            </button>
+            <button
+              class="studio-button button-orange"
+              type="button"
+              data-action="new-folder"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 7V5h7l2 3h9v12H3V7Zm9 5v5m-2.5-2.5h5" />
+              </svg>
+              <span data-i18n="newFolder">مجلد جديد</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="studio-folder-section" aria-labelledby="folder-heading">
+        <div class="section-heading">
+          <h2 id="folder-heading" data-i18n="folders">المجلدات</h2>
+          <span class="section-line" aria-hidden="true"></span>
+          <span class="section-index" aria-hidden="true">01</span>
+        </div>
+        <div id="folder-grid" class="folder-grid"></div>
+      </section>
+
+      <section class="studio-gallery-section" aria-labelledby="files-heading">
+        <div class="gallery-heading">
+          <div class="gallery-heading-label">
+            <h2 id="files-heading" data-i18n="files">الملفات</h2>
+            <span id="status-count" class="status-count"></span>
+          </div>
+          <label class="studio-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="10.5" cy="10.5" r="6.5" />
+              <path d="m16 16 5 5" />
+            </svg>
+            <input
+              id="search"
+              type="search"
+              data-i18n-placeholder="search"
+              placeholder="ابحث عن ملف أو مجلد"
+              aria-label="Search files and folders"
+            />
+          </label>
+        </div>
+        <div class="studio-filter-row">
+          <div class="filter-group">
+            <select id="type-filter" aria-label="File type">
+              <option value="all" data-i18n="allTypes">كل الأنواع</option>
+              <option value="image" data-i18n="images">الصور</option>
+              <option value="document" data-i18n="documents">المستندات</option>
+            </select>
+            <select id="visibility-filter" aria-label="Visibility">
+              <option value="all" data-i18n="allVisibility">كل الحالات</option>
+              <option value="private" data-i18n="private">خاص</option>
+              <option value="public" data-i18n="public">عام</option>
+            </select>
+          </div>
+          <div class="sort-group">
+            <span class="sort-icon" aria-hidden="true"
+              ><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h11M4 18h6" /></svg
+            ></span>
+            <select id="sort" aria-label="Sort files">
+              <option value="name" data-i18n="name">الاسم</option>
+              <option value="newest" data-i18n="newest">الأحدث</option>
+              <option value="size" data-i18n="size">الحجم</option>
+            </select>
+          </div>
+        </div>
+        <div id="file-grid" class="file-grid"></div>
+        <div class="studio-gallery-foot">
+          <p>
+            <span class="foot-dot" aria-hidden="true"></span
+            ><span data-i18n="dropHint">اسحب ملفاتك إلى هنا لرفعها</span>
+          </p>
+          <p data-i18n="selectHint">
+            Ctrl / ⌘ لتحديد متعدد · Shift لتحديد مجموعة · انقر مرتين للمعاينة
+          </p>
+        </div>
+      </section>
+
+      <div id="selection-bar" class="selection-bar" hidden>
+        <span class="selection-indicator" aria-hidden="true"></span>
+        <strong id="selection-count"></strong>
+        <span class="selection-divider" aria-hidden="true"></span>
+        <button type="button" data-action="move">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 7V5h7l2 3h9v12H3V7Zm5 7h8m-3-3 3 3-3 3" /></svg
+          ><span data-i18n="move">نقل</span>
+        </button>
+        <button type="button" data-action="delete">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5m4-5v5" /></svg
+          ><span data-i18n="delete">حذف</span>
+        </button>
+        <button type="button" data-action="select-all" data-i18n="selectAll">
+          تحديد الكل
+        </button>
+        <button
+          class="clear-selection"
+          type="button"
+          data-action="clear-selection"
+          data-i18n="clearSelection"
+        >
+          إلغاء التحديد
+        </button>
+      </div>
+    </main>
+
+    <aside
+      id="inspector"
+      class="inspector"
+      aria-label="File details"
+      hidden
+    ></aside>
+
+    <footer class="studio-footer">
+      <a href="index.html" data-i18n="backConcepts">العودة إلى التصاميم</a>
+      <div class="concept-switcher">
+        <a href="harbor.html">01 Harbor</a
+        ><span class="current-concept">02 Studio</span
+        ><a href="vault.html">03 Vault</a>
+      </div>
+      <button type="button" data-action="reset" data-i18n="reset">
+        إعادة ضبط النموذج
+      </button>
+    </footer>
+  </body>
+</html>

@@ -1,11 +1,11 @@
 /**
- * How long a signed link repeats, so a browser can reuse what it fetched. No
- * `@/db` import: `tests/fixtures/_presign-child.ts` runs this against the real
- * presigner without the server's secrets.
+ * Seconds a signed link repeats, so a browser can reuse what it fetched. No
+ * `@/db` import: `tests/fixtures/_presign-child.ts` runs this against the
+ * real presigner without the server's secrets.
  */
-const SIGNING_WINDOW_S = 10 * 60;
+export const SIGNING_WINDOW_S = 10 * 60;
 /** What a link signed at the very end of its window still has left. */
-const SIGNED_LINK_MIN_LIFETIME_S = 60 * 60;
+export const SIGNED_LINK_MIN_LIFETIME_S = 60 * 60;
 
 export interface SigningWindow {
   signingDate: Date;

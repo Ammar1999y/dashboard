@@ -1,5 +1,5 @@
 import type { Entity } from './entity';
-import type { CreatedResponse, StoredRow, UpdatedResponse } from '@/types/api';
+import type { StoredRow } from '@/types/api';
 import type { EntityID } from '@app/shared/types';
 
 import { useRouter } from 'next/router';
@@ -7,8 +7,8 @@ import { useCallback } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { hasErrorCode } from '@/lib/api/fetch';
-import { COMMITTED_CODE, mutate } from '@/lib/api/mutation';
+import { createdIdSchema, updatedAtSchema } from '@app/shared/responses/common';
+import { isCommitted, mutate } from '@/lib/api/mutation';
 import { cacheCreated, cacheUpdated } from '@/lib/api/query-cache';
 
 interface Row {
@@ -38,7 +38,7 @@ export function useEntityMutations<TRow extends Row>(entity: Entity) {
       try {
         return await write;
       } catch (error) {
-        if (hasErrorCode(error, COMMITTED_CODE)) void router.push(entity.route);
+        if (isCommitted(error)) void router.push(entity.route);
         throw error;
       }
     },
@@ -53,10 +53,11 @@ export function useEntityMutations<TRow extends Row>(entity: Entity) {
       afterUnreadCreate?: () => void
     ) => {
       const result = await leaveAfter(
-        mutate<CreatedResponse, TPayload>({
+        mutate({
           href: entity.href,
           method: 'POST',
           data: payload,
+          schema: createdIdSchema,
           onSuccess: ({ id }) => {
             const now = new Date().toISOString();
             const row = toRow({ id, createdAt: now, updatedAt: now });
@@ -91,10 +92,11 @@ export function useEntityMutations<TRow extends Row>(entity: Entity) {
       };
 
       const result = await leaveAfter(
-        mutate<UpdatedResponse, TPayload>({
+        mutate({
           href: entity.itemHref(id),
           method: 'PUT',
           data: payload,
+          schema: updatedAtSchema,
           onSuccess: ({ updatedAt }) => write(updatedAt),
           onUnreadAnswer: () => write(new Date().toISOString()),
         })

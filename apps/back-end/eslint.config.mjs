@@ -8,6 +8,51 @@ import { configs as tseslintConfigs } from 'typescript-eslint';
 
 const drizzleObjectName = ['db', 'tx'];
 
+const CORE_FILES = [
+  'lib/**/*.ts',
+  'modules/**/*.ts',
+  'db/**/*.ts',
+  'utils/**/*.ts',
+];
+
+// `group` is for `no-restricted-imports`, `source` the same set as an esquery
+// regex; a change to one changes the other. Exported for `packages/shared`.
+export const FRAMEWORK_BOUNDARY = {
+  group: ['elysia', 'elysia/*', '@elysia/*'],
+  source: String.raw`/^(?:elysia$|elysia\/|@elysia\/)/`,
+  message: 'Core is framework-free; Elysia code belongs in server/elysia/.',
+};
+export const DOCS_BOUNDARY = {
+  group: ['**/*.docs', '**/*.docs.ts'],
+  source: String.raw`/\.docs(?:\.ts)?$/`,
+  message:
+    'Field docs load only for the document, through lib/http/openapi/docs.ts.',
+};
+
+/**
+ * `no-restricted-imports` reads static imports only, so the same boundaries
+ * are held on `import()` and `import('…')` types by syntax, and a dynamic
+ * import must name its module literally for them to read it.
+ */
+export const importBoundaries = (boundaries) => ({
+  'no-restricted-imports': [
+    'error',
+    { patterns: boundaries.map(({ group, message }) => ({ group, message })) },
+  ],
+  'no-restricted-syntax': [
+    'error',
+    {
+      selector: "ImportExpression[source.type!='Literal']",
+      message:
+        'Name the module literally, so the import boundaries can read it.',
+    },
+    ...boundaries.map(({ source, message }) => ({
+      selector: `:matches(ImportExpression, TSImportType)[source.value=${source}]`,
+      message,
+    })),
+  ],
+});
+
 const compat = new FlatCompat({
   baseDirectory: import.meta.dirname,
 });
@@ -134,13 +179,13 @@ const eslintConfig = [
     // Catch ignored or misrouted promises in security and persistence paths.
     // `lib/**` must stay: `tests/unit/lint-security-gate.test.ts` probes it.
     files: [
-      'app/**/*.ts',
       'lib/**/*.ts',
+      'modules/**/*.ts',
+      'server/**/*.ts',
       'db/**/*.ts',
       'utils/**/*.ts',
       'tests/**/*.ts',
       'scripts/**/*.ts',
-      'routes.ts',
       'app.ts',
       'server.ts',
     ],
@@ -154,6 +199,19 @@ const eslintConfig = [
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-misused-promises': 'error',
     },
+  },
+  {
+    // Core never imports the framework: everything a request is checked
+    // against stays testable without it, and replacing Elysia touches only
+    // `server/elysia/`, `app.ts` and `server.ts`. The field prose of
+    // `*.docs.ts` reaches the server only through the document's loader.
+    files: CORE_FILES,
+    ignores: ['lib/http/openapi/docs.ts'],
+    rules: importBoundaries([FRAMEWORK_BOUNDARY, DOCS_BOUNDARY]),
+  },
+  {
+    files: ['lib/http/openapi/docs.ts'],
+    rules: importBoundaries([FRAMEWORK_BOUNDARY]),
   },
   {
     // Bun's built-in modules have no package on disk for the resolver to find.

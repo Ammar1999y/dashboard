@@ -1,5 +1,5 @@
 const TABLE_COMPONENT =
-  /DataTable|SortButton|HeaderOptions|MenuSections|Options$|Option$|ColumnItem|ShowAllItem|ColumnFilter|PageButton|^Lab|Skeleton|UrlSync|Faceted/;
+  /DataTable|SortButton|HeaderOptions|MenuSections|Options$|Option$|ColumnItem|ShowAllItem|ColumnFilter|PageButton|^Lab|Skeleton|Faceted/;
 
 export const isTableComponent = (name: string) => TABLE_COMPONENT.test(name);
 

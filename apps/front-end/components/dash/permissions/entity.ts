@@ -5,6 +5,7 @@ export const permissionEntity = defineEntity({
   api: '/api/dash/permissions',
   route: '/dash/permissions',
   noun: 'الصلاحية',
+  resource: 'permissions',
 });
 
 /** The user form's role picker: active roles only, scoped to the viewer. */

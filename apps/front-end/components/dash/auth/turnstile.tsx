@@ -1,4 +1,3 @@
-import type { LoginInput } from '@/utils/validation/auth';
 import type {
   TurnstileInstance,
   TurnstileProps,
@@ -8,9 +7,10 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Turnstile as _Turnstile } from '@marsidev/react-turnstile';
 import { useTheme } from 'next-themes';
-import { useFormContext } from 'react-hook-form';
+import { useFormContext, useFormState } from 'react-hook-form';
 import { toast } from 'sonner';
 import { MSG_BROWSER_UNSUPPORTED } from '@/constants/messages';
+import { takeSentCaptcha } from '@/lib/auth/captcha';
 
 import { useFormErrors } from '@/components/form/store';
 
@@ -31,14 +31,36 @@ const RELOAD_DELAY_MS = 500;
 const onUnsupported = () =>
   toast.error(MSG_BROWSER_UNSUPPORTED, { duration: 20_000 });
 
-interface TurnstileWidgetProps {
-  /** Set by the form after a failed sign-in; the widget clears it once reset. */
-  reset: boolean;
-  setReset: (value: boolean) => void;
+/**
+ * What the widget needs of its form: a `captcha` field, which the form's schema
+ * validates (`captchaField` in `@/utils/validation/auth`).
+ */
+type CaptchaFields = { captcha: string };
+
+/**
+ * A token is single-use: a submit that sent the one it carried spent it,
+ * whatever its outcome, so the form needs a new one as soon as that submit
+ * settles. A submit that stopped at validation sent nothing, and its token is
+ * still good.
+ */
+function useOnTokenSpent(onSpent: () => void) {
+  const { isSubmitting } = useFormState();
+  const { getValues } = useFormContext<CaptchaFields>();
+  const wasSubmitting = useRef(false);
+
+  useEffect(() => {
+    if (isSubmitting) {
+      wasSubmitting.current = true;
+      return;
+    }
+    if (!wasSubmitting.current) return;
+    wasSubmitting.current = false;
+    if (takeSentCaptcha(getValues('captcha'))) onSpent();
+  }, [isSubmitting, getValues, onSpent]);
 }
 
-/** Writes its token into the form's `captcha` field. */
-const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
+/** Writes its token into the surrounding form's `captcha` field. */
+const TurnstileWidget = memo(() => {
   const { resolvedTheme } = useTheme();
   const options = useMemo<TurnstileProps['options']>(
     () => ({
@@ -54,7 +76,7 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
   // Flipping it remounts the widget with a freshly fetched script.
   const [reloading, setReloading] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const { setValue } = useFormContext<LoginInput>();
+  const { setValue } = useFormContext<CaptchaFields>();
 
   useEffect(() => {
     if (!reloading && !errors.captcha) return;
@@ -69,12 +91,11 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
     return () => clearTimeout(timeout);
   }, [reloading, errors]);
 
-  // A token is single-use: every failed attempt needs a new one.
-  useEffect(() => {
-    if (!reset && Object.keys(errors).length === 0) return;
+  const renewToken = useCallback(() => {
+    setValue('captcha', '');
     ref.current?.reset();
-    setReset(false);
-  }, [reset, errors, setReset]);
+  }, [setValue]);
+  useOnTokenSpent(renewToken);
 
   useEffect(() => {
     if (loaded) return;
@@ -109,18 +130,23 @@ const TurnstileWidget = memo(({ reset, setReset }: TurnstileWidgetProps) => {
 
 TurnstileWidget.displayName = 'TurnstileWidget';
 
-// The mocks never check the token, and a mock run must work offline.
-const MOCK_CAPTCHA_TOKEN = 'mock-captcha';
+// A mock run must work offline, so no widget: a fresh token per submit, which
+// the mocks refuse to see twice, as the verifier does.
+const newMockToken = () => `mock-captcha-${crypto.randomUUID()}`;
 
 // A plain function, not `memo(...)` with a `displayName`: those are side
 // effects that keep it in the real bundle after the flag folds to false.
-function MockCaptcha({ reset, setReset }: TurnstileWidgetProps) {
-  const { setValue } = useFormContext<LoginInput>();
+function MockCaptcha() {
+  const { setValue } = useFormContext<CaptchaFields>();
+  const setToken = useCallback(
+    () => setValue('captcha', newMockToken()),
+    [setValue]
+  );
 
   useEffect(() => {
-    setValue('captcha', MOCK_CAPTCHA_TOKEN);
-    if (reset) setReset(false);
-  }, [reset, setValue, setReset]);
+    setToken();
+  }, [setToken]);
+  useOnTokenSpent(setToken);
 
   return null;
 }

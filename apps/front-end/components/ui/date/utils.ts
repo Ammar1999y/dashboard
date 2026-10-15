@@ -1,6 +1,7 @@
 import type { PresetName } from './constants';
 import type { DateRange } from './types';
 
+import { BUSINESS_TIMEZONE } from '@app/shared/config';
 import { calendarDayInZone, safeDate } from '@app/shared/time';
 
 import { DEFAULT_DATE_LOCALE } from './constants';
@@ -34,6 +35,21 @@ export const tableFormatDate = (date: string | null): string => {
   const parsed = safeDate(date);
   if (!parsed) return '-';
   return calendarDayInZone(parsed);
+};
+
+const dateTimeFormat = new Intl.DateTimeFormat(DEFAULT_DATE_LOCALE, {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  timeZone: BUSINESS_TIMEZONE,
+});
+
+/** A stored timestamp as a date and time in BUSINESS_TIMEZONE; `null` when it is no date. */
+export const formatDateTime = (value: string | null | undefined) => {
+  const date = safeDate(value);
+  return date ? dateTimeFormat.format(date) : null;
 };
 
 /**

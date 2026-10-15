@@ -326,7 +326,7 @@ describe('signing in with the OTP second factor', () => {
   });
 
   test('the challenge tells the client how long the OTP send is throttled for', async () => {
-    // `D9`: a client auto-routing to an `otp` default needs to know whether to
+    // A client auto-routing to an `otp` default needs to know whether to
     // send or to wait, without a round trip that answers 429. The hint is the
     // proof row's `next_allowed_at`, and only OTP options carry one. A fresh
     // user, so the first send is inside the destination budget and the hint it
@@ -414,7 +414,7 @@ describe('passwordless sign-in for a user with a second factor', () => {
   test(
     'a passwordless login with no second factor honours "do not remember"',
     async () => {
-      // `D10` names every first-factor path. This one read the field only to carry
+      // Every first-factor path honours it. This one read the field only to carry
       // it into a challenge; a user with no second factor got the 28-day row
       // whatever they asked for.
       const plain = await seedUser();

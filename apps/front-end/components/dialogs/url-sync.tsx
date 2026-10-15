@@ -2,20 +2,15 @@ import { useRouter } from 'next/router';
 import { memo, useEffect } from 'react';
 
 import {
-  closeAllDialogs,
+  completeRouteChange,
   restoreDialogsFromUrl,
+  startRouteChange,
   syncDialogsWithUrl,
 } from '@/lib/dialogs';
-import { trackPageEntry } from '@/lib/history';
+import { handleCalledOffRouteChanges, trackPageEntry } from '@/lib/history';
 
 // Lets the page settle after hydration before restored dialogs animate in.
 const RESTORE_DELAY_MS = 100;
-
-const onRouteChangeComplete = () => {
-  closeAllDialogs();
-  trackPageEntry();
-  restoreDialogsFromUrl();
-};
 
 const DialogUrlSync = memo(() => {
   const { isReady, events } = useRouter();
@@ -30,11 +25,16 @@ const DialogUrlSync = memo(() => {
   }, [isReady]);
 
   useEffect(() => {
+    const onRouteChangeStart = (as: string) => startRouteChange(events, as);
+    const stopHandling = handleCalledOffRouteChanges();
     addEventListener('popstate', syncDialogsWithUrl);
-    events.on('routeChangeComplete', onRouteChangeComplete);
+    events.on('routeChangeStart', onRouteChangeStart);
+    events.on('routeChangeComplete', completeRouteChange);
     return () => {
+      stopHandling();
       removeEventListener('popstate', syncDialogsWithUrl);
-      events.off('routeChangeComplete', onRouteChangeComplete);
+      events.off('routeChangeStart', onRouteChangeStart);
+      events.off('routeChangeComplete', completeRouteChange);
     };
   }, [events]);
 

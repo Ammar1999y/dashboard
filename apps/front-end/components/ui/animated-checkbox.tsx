@@ -41,6 +41,8 @@ function AnimatedCheckbox({
     caller: 'AnimatedCheckbox',
   });
 
+  const mark = (shown: boolean) => (shown ? 'checked' : 'unchecked');
+
   return (
     <CheckboxPrimitive.Root
       checked={checked}
@@ -52,7 +54,7 @@ function AnimatedCheckbox({
         data-slot='checkbox'
         type='button'
         className={cn(
-          'peer flex size-5 shrink-0 items-center justify-center rounded-sm border border-input shadow-xs outline-none transition-colors duration-300 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:bg-input/30 dark:data-[state=checked]:bg-primary',
+          'peer flex size-5 shrink-0 items-center justify-center rounded-sm border border-input shadow-xs outline-none transition-colors duration-300 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary data-[state=indeterminate]:border-primary/45 data-[state=checked]:bg-primary data-[state=indeterminate]:bg-primary/10 data-[state=checked]:text-primary-foreground data-[state=indeterminate]:text-primary dark:bg-input/30 dark:data-[state=checked]:bg-primary dark:data-[state=indeterminate]:bg-primary/10',
           className
         )}
         whileTap={WHILE_TAP}
@@ -67,14 +69,21 @@ function AnimatedCheckbox({
             strokeWidth='3.5'
             stroke='currentColor'
             className='size-4'
-            initial='unchecked'
-            animate={checked ? 'checked' : 'unchecked'}
           >
             <motion.path
               strokeLinecap='round'
               strokeLinejoin='round'
               d='M4.5 12.75l6 6 9-13.5'
               variants={checkPath}
+              initial='unchecked'
+              animate={mark(checked === true)}
+            />
+            <motion.path
+              strokeLinecap='round'
+              d='M6 12h12'
+              variants={checkPath}
+              initial='unchecked'
+              animate={mark(checked === 'indeterminate')}
             />
           </motion.svg>
         </CheckboxPrimitive.Indicator>

@@ -168,8 +168,8 @@ export async function editUserAsAdmin(opts: {
 
   const password = input.password;
   if (password) {
-    // Before the HIBP request and hash: the one `D12` change knowable from the
-    // request alone.
+    // Before the HIBP request and hash: the one change lowering another
+    // account's security posture knowable from the request alone.
     await requireAdminReauth(actor);
     await assertTargetEditable({
       targetId,

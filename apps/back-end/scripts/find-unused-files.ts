@@ -1,6 +1,7 @@
 /**
- * Import-graph gate for unreachable files and handlers absent from `routes.ts`.
- * Comments are stripped so dead imports cannot create false reachability.
+ * Import-graph gate for unreachable files. Comments are stripped so dead
+ * imports cannot create false reachability. A binding that is reachable but
+ * never registered is `tests/unit/bindings.test.ts`'s to catch, at runtime.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -26,13 +27,10 @@ const SKIP_DIRECTORIES = new Set([
 const CODE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.js', '.jsx', '.mjs', '.cjs'];
 const RESOLVE_EXTENSIONS = [...CODE_EXTENSIONS, '.json'];
 
-/** Tests are tool entry points; handlers must flow through `routes.ts`. */
+/** Tests are tool entry points; bindings must flow through the module index. */
 const ENTRY_DIRECTORIES = ['tests/'];
 const ENTRY_FILE_PATTERN =
-  /^(server|app|routes|drizzle\.config|eslint\.config|prettier\.config)\.[a-z]+$/;
-
-/** The route table. Every handler must be imported by this file. */
-const ROUTE_TABLE = 'routes.ts';
+  /^(server|app|drizzle\.config|eslint\.config|prettier\.config)\.[a-z]+$/;
 
 /** Keep exceptions explicit so a pattern cannot absorb future orphaned files. */
 const KNOWN_UNREACHABLE = new Set<string>();
@@ -157,159 +155,6 @@ const enqueueUnreached = (targets: readonly string[]) => {
 for (let current = queue.pop(); current !== undefined; current = queue.pop())
   enqueueUnreached(importsOf.get(current) ?? []);
 
-/**
- * Registration is checked separately: a handler module can be imported and
- * still export a method no `ROUTES` entry routes, which looks healthy to an
- * import graph. So the table is read as a table: every `import * as NS` is
- * mapped to its module, every `handler: NS.METHOD` inside `ROUTES` is
- * collected, and every HTTP method a handler exports must be accounted for.
- *
- * Deliberately static: importing `routes.ts` would load the application, its
- * environment validation and Better Auth, none of which a file scan configures.
- */
-const NAMESPACE_IMPORT = /import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g;
-const HANDLER_REFERENCE = /handler:\s*(\w+)\.(\w+)/g;
-const ROUTES_DECLARATION = /export\s+const\s+ROUTES\b[^=]*=\s*\[/;
-
-const HTTP_METHODS: ReadonlySet<string> = new Set([
-  'GET',
-  'POST',
-  'PUT',
-  'DELETE',
-]);
-/**
- * One flat pattern per declaration form: an optional `(?:async\s+)?` group can
- * split a run of whitespace two ways, the backtracking shape
- * `security/detect-unsafe-regex` flags.
- */
-const DECLARATION_PATTERNS: readonly RegExp[] = [
-  /export\s+const\s+(GET|POST|PUT|DELETE)\b/g,
-  /export\s+function\s+(GET|POST|PUT|DELETE)\b/g,
-  /export\s+async\s+function\s+(GET|POST|PUT|DELETE)\b/g,
-];
-
-/** The `{ … }` of an `export { … }` clause; its contents are split by hand. */
-const EXPORT_CLAUSE = /export\s*\{([^}]*)\}/g;
-const AS_SEPARATOR = /\s+as\s+/;
-
-/**
- * Every form a handler module can export an HTTP method by, so one exported
- * as `export function POST` or `export { handler as POST }` cannot escape.
- *
- * The `export { … }` clause is split by hand: one regex spanning the braces
- * needs nested quantifiers (a ReDoS shape), and the name that counts is the
- * EXPORTED one, so `{ GET as legacyGet }` is not a `GET` export while
- * `{ handler as GET }` is.
- */
-function exportedMethods(source: string): Set<string> {
-  const found = new Set<string>();
-
-  for (const pattern of DECLARATION_PATTERNS) {
-    const declarations = source.matchAll(pattern);
-    for (const [, method] of declarations)
-      if (method !== undefined) found.add(method);
-  }
-
-  const clauses = source.matchAll(EXPORT_CLAUSE);
-  for (const [, clause] of clauses) {
-    const specifiers = (clause ?? '').split(',');
-    for (const specifier of specifiers) {
-      const exported = specifier.trim().split(AS_SEPARATOR).at(-1)?.trim();
-      if (exported !== undefined && HTTP_METHODS.has(exported))
-        found.add(exported);
-    }
-  }
-
-  return found;
-}
-
-/**
- * The `[ … ]` of `export const ROUTES = [ … ]`, or null if it cannot be found.
- * Only references inside it count: `handler: NS.METHOD` elsewhere in the file
- * registers nothing.
- *
- * Bracket-counted, because the array nests literals. Comments are stripped by
- * the caller and no route path contains a bracket; if one ever does, this
- * returns a short slice and the check gets LOUDER, not quieter.
- */
-function routesArraySlice(table: string): string | null {
-  const match = ROUTES_DECLARATION.exec(table);
-  if (!match) return null;
-
-  let depth = 0;
-  for (
-    let index = match.index + match[0].length - 1;
-    index < table.length;
-    index++
-  ) {
-    const char = table[index];
-    if (char === '[' || char === '{') depth++;
-    else if (char === ']' || char === '}') {
-      depth--;
-      if (depth === 0) return table.slice(match.index, index + 1);
-    }
-  }
-  return null;
-}
-
-const registrationProblems = (() => {
-  if (!allFiles.has(ROUTE_TABLE))
-    return [`${ROUTE_TABLE} is missing — the route table cannot be checked.`];
-
-  const table = stripComments(
-    readFileSync(path.join(ROOT, ROUTE_TABLE), 'utf8')
-  );
-
-  const namespaceToModule = new Map<string, string>();
-  for (const [, alias, specifier] of table.matchAll(NAMESPACE_IMPORT)) {
-    if (!alias || !specifier) continue;
-    const target = resolveSpecifier(specifier, ROUTE_TABLE, allFiles);
-    if (target) namespaceToModule.set(alias, target);
-  }
-
-  const problems: string[] = [];
-
-  // Only references INSIDE the `ROUTES` array count as registration. The imports
-  // above are still read from the whole file — an import is a file-level
-  // statement and cannot be inside the array.
-  const routesArray = routesArraySlice(table);
-  if (routesArray === null)
-    problems.push(
-      `${ROUTE_TABLE}: could not locate the ROUTES array, so no handler could be ` +
-        'checked for registration. If the table moved or was renamed, update ' +
-        'ROUTES_DECLARATION rather than deleting this check.'
-    );
-
-  const routed = new Set<string>();
-  const references = (routesArray ?? '').matchAll(HANDLER_REFERENCE);
-  for (const [, alias, method] of references) {
-    const target = alias ? namespaceToModule.get(alias) : undefined;
-    if (target && method) routed.add(`${target}#${method}`);
-  }
-  const handlers = codeFiles.filter(
-    (key) => key.startsWith('app/api/') && key.endsWith('/handler.ts')
-  );
-
-  for (const key of handlers) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `key` is a repo-relative path produced by the walk above
-    const source = stripComments(readFileSync(path.join(ROOT, key), 'utf8'));
-    const exported = exportedMethods(source);
-
-    if (exported.size === 0) {
-      problems.push(`${key} exports no HTTP method`);
-      continue;
-    }
-
-    for (const method of exported)
-      if (!routed.has(`${key}#${method}`))
-        problems.push(
-          `${key} exports ${method} but no ${ROUTE_TABLE} entry routes it`
-        );
-  }
-
-  return problems;
-})();
-
 const unused = codeFiles
   .filter((key) => !reachable.has(key) && !KNOWN_UNREACHABLE.has(key))
   .toSorted(compareCodeUnits);
@@ -342,12 +187,5 @@ if (unused.length === 0) {
   );
 }
 
-if (registrationProblems.length > 0) {
-  console.log(`
-${registrationProblems.length} unregistered handler(s):
-`);
-  for (const problem of registrationProblems) console.log(`  ${problem}`);
-}
-
-// Non-zero on either failure, so this is a gate rather than advice.
-process.exitCode = unused.length > 0 || registrationProblems.length > 0 ? 1 : 0;
+// Non-zero on a finding, so this is a gate rather than advice.
+process.exitCode = unused.length > 0 ? 1 : 0;

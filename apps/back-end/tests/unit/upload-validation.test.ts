@@ -2416,7 +2416,7 @@ describe('validateMagicBytes fixtures are real images', () => {
   });
 });
 
-describe('H4 - one side over what WebP can hold', () => {
+describe('one side over what WebP can hold', () => {
   // 20 MP, so `MAX_IMAGE_PIXELS` (25 MP) admits it, and ~100 KiB, so the 1 MiB
   // per-file limit admits it too. WebP's ceiling is 16 383 per side, and the
   // encoder's `ERR_IMAGE_ENCODE_FAILED` reached the caller as a 500 — a server

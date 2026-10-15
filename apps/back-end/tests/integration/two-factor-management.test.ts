@@ -108,7 +108,8 @@ function call(
 /**
  * Signs in and opens the administrator re-authentication window.
  *
- * Every actor in this file goes on to perform an action in the `D12` class — the
+ * Every actor in this file goes on to perform an action that asks for a fresh
+ * password proof — the
  * administrative edit, the reset — and those require a FRESH password proof, not
  * merely a session. The window is bound to the session, so nothing has to be
  * threaded through the request afterwards.
@@ -272,7 +273,6 @@ describe('removing one method', () => {
     );
     expect(qualifiedDefault.status).toBe(HTTP_STATUS.OK);
     expect(await qualifiedDefault.json()).toEqual({
-      success: true,
       data: { defaultMethod: 'otp:phone' },
     });
     const defaults = await db
@@ -1144,7 +1144,7 @@ describe('the administrative reset', () => {
   });
 
   test('is refused without a FRESH password proof, self-target included', async () => {
-    // ⚠️ `D12`. A permission grant says the actor MAY disarm someone's second
+    // ⚠️ A permission grant says the actor MAY disarm someone's second
     // factor; it does not say the person at the keyboard is still that actor.
     // This endpoint ran `requirePermission`, a rate limit, the visibility gate
     // and the role-scope gate, and called `verifyLoginAttempt` nowhere — while

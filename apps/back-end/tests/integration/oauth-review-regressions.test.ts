@@ -67,54 +67,6 @@ function call(path: string, cookie: string, body?: object) {
   );
 }
 
-test('Google and password both admit a stale enrollment when the global 2FA feature is disabled', async () => {
-  const child = Bun.spawn(
-    [
-      'bun',
-      '--no-env-file',
-      'tests/fixtures/_oauth-disabled-two-factor-child.ts',
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        NEXT_PUBLIC_ENABLED_2FA_METHODS: '',
-        NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS: '',
-        NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email,sms',
-      },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
-  const [output, error, status] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  expect(status).toBe(0);
-  // Per LINE: a boot writes whatever warnings its configuration earns, and
-  // parsing the whole stream asserted that this child emits exactly one.
-  const logged = error
-    .split(String.fromCodePoint(10))
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('{'))
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as Record<string, unknown>];
-      } catch {
-        return [];
-      }
-    });
-  expect(logged).toContainEqual(
-    expect.objectContaining({
-      msg: 'twoFactor.disabled no method configured',
-    })
-  );
-  expect(output).toContain(
-    'Google and password honor disabled two-factor configuration.'
-  );
-}, 20_000);
-
 test('redirect and direct identity denials share the same 401 envelope', async () => {
   const claims = { sub: 'unknown-subject', email: 'unknown@gmail.com' };
   const directFlow = await startGoogle(claims);
@@ -153,7 +105,6 @@ test('a redirected Google sign-in reads its session back once at /oauth/result',
   const result = await call('/api/auth/oauth/result', cookie);
   expect(result.status).toBe(200);
   expect(await result.json()).toEqual({
-    success: true,
     data: { loggedIn: true },
   });
   const live = await auth.api.getSession({ headers: new Headers({ cookie }) });

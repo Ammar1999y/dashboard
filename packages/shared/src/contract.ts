@@ -51,17 +51,14 @@ import {
   twoFactorTotpConfirmSchema,
 } from './validation/two-factor';
 
-export type BodySchemas = z.ZodType | readonly z.ZodType[];
-
 /**
  * What each application route accepts, keyed `METHOD /path`, as the server
  * parses it.
  *
- * One registry for two readers. The back-end's OpenAPI builder publishes it and refuses
- * a route table where a `body: 'json'` route has no entry or an entry names no
- * route. A client types its requests with `RequestBody<'POST /api/dash/users'>`
- * instead of a hand-written copy that drifts. A route that accepts one of
- * several shapes lists them all.
+ * One registry for two readers. The back-end's bindings reuse each schema
+ * object, which a test asserts per key. A client types its requests with
+ * `RequestBody<'POST /api/dash/users'>` instead of a hand-written copy that
+ * drifts.
  */
 export const REQUEST_BODIES = {
   'POST /api/auth/forgot-password/reset': resetPasswordSchema,
@@ -76,10 +73,8 @@ export const REQUEST_BODIES = {
   'POST /api/dash/permissions': createPermissionSchema,
   'PUT /api/dash/permissions/:id': adminUpdatePermissionBodySchema,
   'POST /api/dash/users': createUserSchema,
-  'PUT /api/dash/users/:id': [
-    adminUpdateUserBodySchema,
-    selfUpdateUserBodySchema,
-  ],
+  'PUT /api/dash/users/:id': adminUpdateUserBodySchema,
+  'PUT /api/dash/users/me': selfUpdateUserBodySchema,
   'POST /api/dash/users/me/change-email': changeEmailSchema,
   'POST /api/dash/users/me/change-email/verify': changeEmailVerifySchema,
   'POST /api/dash/users/me/change-password': changePasswordSchema,
@@ -98,7 +93,7 @@ export const REQUEST_BODIES = {
   'POST /api/dev/sign-up': devSignUpSchema,
 } as const satisfies Record<
   `${'POST' | 'PUT' | 'DELETE'} /api/${string}`,
-  BodySchemas
+  z.ZodType
 >;
 
 /**
@@ -138,17 +133,14 @@ export const BETTER_AUTH_BODIES = {
 export type RequestRoute = keyof typeof REQUEST_BODIES;
 export type BetterAuthRoute = keyof typeof BETTER_AUTH_BODIES;
 
-type InputOf<S> = S extends z.ZodType ? z.input<S> : never;
-
 /**
  * The JSON body a client sends to `route`, before parsing — so a sanitised or
  * preprocessed field is typed as what the client may send, not as what the
- * server keeps. A union where the route accepts several shapes.
+ * server keeps.
  */
-export type RequestBody<K extends RequestRoute> =
-  (typeof REQUEST_BODIES)[K] extends readonly (infer S)[]
-    ? InputOf<S>
-    : InputOf<(typeof REQUEST_BODIES)[K]>;
+export type RequestBody<K extends RequestRoute> = z.input<
+  (typeof REQUEST_BODIES)[K]
+>;
 
 export type BetterAuthBody<K extends BetterAuthRoute> = z.input<
   (typeof BETTER_AUTH_BODIES)[K]

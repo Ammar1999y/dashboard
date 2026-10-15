@@ -1,4 +1,4 @@
-import type { HandlerCookie, HandlerOutput } from './contract';
+import type { HandlerCookie } from './contract';
 
 /**
  * Outgoing cookie options. `extraFlags` and `extra` carry attributes the
@@ -152,16 +152,20 @@ export function queueResponseCookies(
   queuedCookies.set(requestHeaders, queue);
 }
 
-/** The handler's own cookie wins a name clash: it was set after the read. */
-export function withQueuedCookies(
-  output: HandlerOutput,
-  requestHeaders: Headers
-): HandlerOutput {
+/**
+ * Takes the request's queue, once: what a later exit drains is empty. Names in
+ * `ownNames` are left out, because the response's own cookie was set after the
+ * read that queued its namesake.
+ */
+export function drainQueuedCookies(
+  requestHeaders: Headers,
+  ownNames: ReadonlySet<string> = new Set()
+): HandlerCookie[] {
   const queue = queuedCookies.get(requestHeaders);
   queuedCookies.delete(requestHeaders);
-  if (!queue) return output;
-
-  const own = output.cookies ?? [];
-  for (const cookie of own) queue.delete(cookie.name);
-  return { ...output, cookies: [...queue.values(), ...own] };
+  if (!queue) return [];
+  return queue
+    .values()
+    .filter((cookie) => !ownNames.has(cookie.name))
+    .toArray();
 }

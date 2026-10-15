@@ -123,7 +123,7 @@ function ColumnFilterPopoverInner<TData>({
       .getState()
       .filters.filter((f) => f.id !== columnId);
 
-    setFilters(filters.length > 0 ? filters : null);
+    setFilters(filters);
     setDraftOperator(getDefaultFilterOperator(variant));
     setDraftValue('');
     setDraftFilterId('');

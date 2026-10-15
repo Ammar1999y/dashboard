@@ -30,7 +30,7 @@ Content-Security-Policy: require-trusted-types-for 'script';
 */
 
 // TODO: activate the caches in production
-const headers = true
+const headers = isDev
   ? []
   : [
       {

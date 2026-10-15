@@ -1,5 +1,17 @@
 import * as z from 'zod';
 
+import {
+  FILE_BUSY_CODE,
+  FILE_IN_USE_CODE,
+  FILE_KIND_NOT_ALLOWED_CODE,
+  FOLDER_BUSY_CODE,
+  FOLDER_CYCLE_CODE,
+  FOLDER_NAME_EXISTS_CODE,
+  FOLDER_NOT_EMPTY_CODE,
+  FOLDER_TOO_DEEP_CODE,
+  LINK_NOT_ALLOWED_CODE,
+  LINK_VISIBILITY_MISMATCH_CODE,
+} from '../error-codes';
 import { DASHBOARD_PAGE_NAMES } from '../permissions/constants';
 import {
   FOLDER_NAME_MAX,
@@ -50,6 +62,33 @@ export const mediaRefusalDataSchema = z.object({
 });
 
 export type MediaRefusalData = z.output<typeof mediaRefusalDataSchema>;
+
+/**
+ * The codes whose refusal may carry `MediaRefusalData`; no other code does.
+ * Whether it does at a given status is the entry's `codesWithIds`.
+ */
+export type MediaCodeWithIds =
+  | typeof FILE_BUSY_CODE
+  | typeof FILE_IN_USE_CODE
+  | typeof FILE_KIND_NOT_ALLOWED_CODE
+  | typeof FOLDER_BUSY_CODE
+  | typeof FOLDER_CYCLE_CODE
+  | typeof FOLDER_NAME_EXISTS_CODE
+  | typeof FOLDER_NOT_EMPTY_CODE
+  | typeof FOLDER_TOO_DEEP_CODE
+  | typeof LINK_NOT_ALLOWED_CODE
+  | typeof LINK_VISIBILITY_MISMATCH_CODE;
+
+const IDS_OPTIONAL: ReadonlySet<string> = new Set<MediaCodeWithIds>([
+  FILE_IN_USE_CODE,
+]);
+
+/**
+ * Whether a refusal with `code` may come without ids even where the entry
+ * declares them: a referrer gone or unregistered by the time it is looked up
+ * leaves nothing to name.
+ */
+export const idsAreOptional = (code: string): boolean => IDS_OPTIONAL.has(code);
 
 export const uploadedFilesSchema = z
   .array(mediaFileSchema.extend({ url: uri().min(1) }))

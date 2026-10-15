@@ -1,20 +1,19 @@
 import type { FlatResendPurpose } from './throttle';
-import type { HandlerInput } from '@/lib/http/contract';
 import type { StartTimingFloor } from '@/lib/http/timing-floor';
 import type { OtpSendSurface } from '@/lib/rate-limit';
 import type { EntityID } from '@app/shared/types';
 import type { OtpChannel } from '@app/shared/validation/enums';
+import type { sendOtpSchema } from '@app/shared/validation/otp';
+import type * as z from 'zod';
 
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
-import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
+import { CONTACT_LABEL } from '@app/shared/messages/otp';
 import { OTP_BASE_RESEND_DELAY_S } from '@app/shared/validation/constants';
 import { contactKindOf } from '@app/shared/validation/enums';
-import { sendOtpSchema } from '@app/shared/validation/otp';
 
 import { enqueueAfterResponse } from '@/lib/http/after-response';
-import { readJsonBody } from '@/lib/http/input';
 import { enforceOtpSurfaceSendQuota } from '@/lib/rate-limit';
 import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
@@ -73,7 +72,8 @@ async function settlesBefore(
 
 // Settles identically for known and unknown identifiers; callers answer `ANONYMOUS_SEND_DATA`.
 export async function sendAnonymousOtp(
-  ctx: HandlerInput,
+  input: z.output<typeof sendOtpSchema>,
+  request: Request,
   {
     startFloor,
     surface,
@@ -88,14 +88,10 @@ export async function sendAnonymousOtp(
         purpose,
         sendTo: identifier,
         entityName: CONTACT_LABEL[contactKindOf(channel)],
-        deferDelivery: (task) => enqueueAfterResponse(ctx.rawRequest, task),
+        deferDelivery: (task) => enqueueAfterResponse(request, task),
       }),
   }: AnonymousSendOptions
 ): Promise<void> {
-  const input = await readJsonBody(ctx, sendOtpSchema, {
-    message: otpMsg.invalidInput,
-  });
-
   const { channel } = input;
   const identifier = contactIdentifier(input);
 
@@ -124,5 +120,5 @@ export async function sendAnonymousOtp(
   if (await settlesBefore(deadline, issuing)) return;
   // Locks and the pool only a real account waits on are unbounded; waiting
   // past the floor for them answers later than a fake identifier does.
-  enqueueAfterResponse(ctx.rawRequest, () => issuing);
+  enqueueAfterResponse(request, () => issuing);
 }

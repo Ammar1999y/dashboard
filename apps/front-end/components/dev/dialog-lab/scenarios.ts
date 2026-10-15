@@ -5,7 +5,9 @@ import {
   isDialogEntry,
   restoreDialogsFromUrl,
 } from '@/lib/dialogs';
-import { writeUrl } from '@/lib/history';
+import { mirrorPageParams, writeUrl } from '@/lib/history';
+
+import { guardRouteChanges } from '@/hooks/use-leave-guard';
 
 import { LAB_PATH, labInner, labLocal, labOuter, labRecord } from './dialogs';
 import { useLab } from './lab-store';
@@ -48,6 +50,50 @@ const nextRoute = () =>
   });
 
 const modules = () => new URLSearchParams(location.search).getAll('module');
+const onPath = (path: string) => location.pathname === path;
+
+const STATE_PARAM = 'lab-state';
+const pageState = () => new URLSearchParams(location.search).get(STATE_PARAM);
+const entryKey = (): unknown =>
+  typeof history.state === 'object' && history.state !== null
+    ? Reflect.get(history.state, 'key')
+    : undefined;
+const entryAs = (): unknown =>
+  typeof history.state === 'object' && history.state !== null
+    ? Reflect.get(history.state, 'as')
+    : undefined;
+
+/** A part of the lab page that keeps `value` in the URL, as a table or a folder does. */
+function mirrorLabState() {
+  let value = '';
+  let notify = () => {};
+  const stop = mirrorPageParams({
+    write: (params) => {
+      if (value) params.set(STATE_PARAM, value);
+      else params.delete(STATE_PARAM);
+    },
+    subscribe: (onChange) => {
+      notify = onChange;
+      return () => {};
+    },
+    delayMs: 0,
+  });
+  return {
+    set: async (next: string) => {
+      value = next;
+      notify();
+      await wait(RENDER_MS);
+    },
+    stop,
+  };
+}
+
+/** Guards the route as `useLeaveGuard` does, answering each prompt in turn. */
+function labGuard(answers: boolean[]) {
+  let asked = 0;
+  const stop = guardRouteChanges(Router.events, () => answers[asked++] ?? true);
+  return { asked: () => asked, stop };
+}
 const onDialogEntry = () => isDialogEntry(history.state);
 const isShown = (lab: string) =>
   document.querySelector(
@@ -105,10 +151,21 @@ const expectClean = (check: Check) => {
 
 async function reset() {
   closeAllDialogs();
-  for (let i = 0; i < MAX_RESET_STEPS && onDialogEntry(); i++) await back();
-  if (location.pathname === LAB_PATH) {
-    writeUrl('replaceState', new URL(LAB_PATH, location.origin));
+  if (location.pathname !== LAB_PATH) {
+    const arrived = nextRoute();
+    void Router.push(LAB_PATH);
+    await arrived;
   }
+  for (let i = 0; i < MAX_RESET_STEPS && onDialogEntry(); i++) await back();
+  // Next's `as` and `url` too: a routed Back onto this entry reads them.
+  const state: unknown = history.state;
+  writeUrl(
+    'replaceState',
+    new URL(LAB_PATH, location.origin),
+    typeof state === 'object' && state !== null
+      ? { ...state, as: LAB_PATH, url: LAB_PATH }
+      : state
+  );
   await wait(EXIT_MS);
 }
 
@@ -300,11 +357,15 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
-    title: 'A link to a URL naming dialogs opens them',
+    title:
+      'A link to this page naming dialogs opens them, adding no page entry',
     run: async (check) => {
-      const arrived = nextRoute();
-      void Router.push(`${LAB_PATH}?module=lab-outer&module=lab-inner`);
-      await arrived;
+      const page = entryKey();
+      // Called off: the dialogs open on this entry instead.
+      await Router.push(`${LAB_PATH}?module=lab-outer&module=lab-inner`).catch(
+        () => {}
+      );
+      await wait(RENDER_MS);
       check('outer and inner open', isShown('outer') && isShown('inner'));
       check(
         'URL lists both',
@@ -316,6 +377,23 @@ export const SCENARIOS: Scenario[] = [
       await back();
       check('second back closes outer', !isShown('outer'));
       check('still on the lab page', location.pathname === LAB_PATH);
+      check('on the entry the link was followed from', entryKey() === page);
+      expectClean(check);
+    },
+  },
+  {
+    title:
+      'A link to this page from inside a dialog closes it, adding no page entry',
+    run: async (check) => {
+      const page = entryKey();
+      labOuter.open();
+      await wait(RENDER_MS);
+      const popped = nextPop();
+      await Router.push(LAB_PATH).catch(() => {});
+      await popped;
+      await wait(RENDER_MS);
+      check('closed', !isShown('outer'));
+      check('on the entry the dialog opened from', entryKey() === page);
       expectClean(check);
     },
   },
@@ -337,6 +415,108 @@ export const SCENARIOS: Scenario[] = [
         location.pathname
       );
       check('dialog closed', !isShown('outer'));
+      expectClean(check);
+    },
+  },
+  {
+    title: 'Back from another page returns the URL state the page was left in',
+    run: async (check) => {
+      const state = mirrorLabState();
+      try {
+        await state.set('2');
+        check('in the URL', pageState() === '2', location.search);
+        check(
+          "in Next's as",
+          entryAs() === `${LAB_PATH}?${STATE_PARAM}=2`,
+          String(entryAs())
+        );
+        const left = nextRoute();
+        void Router.push('/dash');
+        await left;
+        const returned = nextRoute();
+        history.back();
+        await returned;
+        check('back on the lab page', location.pathname === LAB_PATH);
+        check('the state came back', pageState() === '2', location.search);
+      } finally {
+        state.stop();
+      }
+    },
+  },
+  {
+    title: 'A change while a dialog is open survives Back closing it',
+    run: async (check) => {
+      const state = mirrorLabState();
+      try {
+        labOuter.open();
+        await wait(RENDER_MS);
+        await state.set('3');
+        check(
+          "in Next's as, without the dialog's param",
+          entryAs() === `${LAB_PATH}?${STATE_PARAM}=3`,
+          String(entryAs())
+        );
+        await back();
+        check('closed', !isShown('outer'));
+        check('the change stayed', pageState() === '3', location.search);
+        expectClean(check);
+      } finally {
+        state.stop();
+      }
+    },
+  },
+  {
+    title: 'Leave guard: a link called off after the page wrote its URL stays',
+    run: async (check) => {
+      const state = mirrorLabState();
+      const left = nextRoute();
+      void Router.push('/dash');
+      await left;
+      const returned = nextRoute();
+      history.back();
+      await returned;
+      // A forward entry exists now, which the old guard went to.
+      await state.set('4');
+      const guard = labGuard([false]);
+      try {
+        await Router.push('/dash').catch(() => {});
+        await wait(RENDER_MS);
+        check('asked once', guard.asked() === 1, String(guard.asked()));
+        check('still on the lab page', location.pathname === LAB_PATH);
+        check('URL kept', pageState() === '4', location.search);
+      } finally {
+        guard.stop();
+        state.stop();
+      }
+    },
+  },
+  {
+    title: 'Leave guard: Back called off over a dialog entry asks once',
+    run: async (check) => {
+      labOuter.open();
+      await wait(RENDER_MS);
+      const left = nextRoute();
+      within('outer', '[data-lab-link]').click();
+      await left;
+      const guard = labGuard([false, false, false]);
+      try {
+        history.back();
+        await wait(EXIT_MS * 2);
+        check('asked once', guard.asked() === 1, String(guard.asked()));
+        check(
+          'still on /dash',
+          location.pathname === '/dash',
+          location.pathname
+        );
+      } finally {
+        guard.stop();
+      }
+      // Only from /dash: on a failure above, Back could leave the app.
+      if (!onPath('/dash')) return;
+      const returned = nextRoute();
+      history.back();
+      await returned;
+      check('back on the lab page', onPath(LAB_PATH));
       expectClean(check);
     },
   },

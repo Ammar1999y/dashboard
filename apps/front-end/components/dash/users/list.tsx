@@ -1,13 +1,25 @@
+import { useMemo } from 'react';
+
 import { DASHBOARD_PAGE_LABELS } from '@app/shared/messages/permissions';
+import { userRowsSchema } from '@app/shared/responses/users';
 
 import { DataTable } from '@/components/ui/data-table';
 
+import { useResourceAccess } from '../shared/access';
 import { columns } from './columns';
 import { userEntity } from './entity';
 
-const cta = { href: userEntity.newRoute, label: 'إضافة مستخدم جديد' };
-
 export default function UsersList() {
+  const { can } = useResourceAccess(userEntity.resource);
+  const canCreate = can('create');
+  const cta = useMemo(
+    () =>
+      canCreate
+        ? { href: userEntity.newRoute, label: 'إضافة مستخدم جديد' }
+        : undefined,
+    [canCreate]
+  );
+
   return (
     <DataTable
       title={DASHBOARD_PAGE_LABELS.users}
@@ -15,6 +27,7 @@ export default function UsersList() {
       columns={columns}
       queryKey={userEntity.keys.list}
       href={userEntity.href}
+      schema={userRowsSchema}
       storageKey='users-table'
       serverSide
     />

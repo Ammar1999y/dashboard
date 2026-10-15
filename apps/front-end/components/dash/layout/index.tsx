@@ -13,6 +13,7 @@ import {
   useThemeLayout,
 } from '@/components/theme-customizer/layout-store';
 
+import { SIGN_IN_PATH } from '../auth/paths';
 import { saveRedirectPath } from '../auth/redirect-path';
 import { Header } from './header';
 import { DashboardSidebar } from './sidebar';
@@ -22,8 +23,11 @@ const MOBILE_QUERY = down('md2');
 
 export default function DashboardLayout({
   children,
+  fullBleed = false,
 }: {
   children: React.ReactNode;
+  /** `Page.fullBleed`: the page takes the whole of `<main>`. */
+  fullBleed?: boolean;
 }) {
   const isMobile = useMediaQuery(MOBILE_QUERY);
   const themeLayout = useThemeLayout();
@@ -34,7 +38,7 @@ export default function DashboardLayout({
   useEffect(() => {
     if (isPending || userId || error) return;
     saveRedirectPath(asPath);
-    void replace('/dash/sign-in');
+    void replace(SIGN_IN_PATH);
   }, [isPending, userId, error, asPath, replace]);
 
   if (isPending) return null;
@@ -59,14 +63,21 @@ export default function DashboardLayout({
       {sidebar && <DashboardSidebar mini={mini} />}
       <div
         className={cn(
-          'relative flex min-h-screen w-full flex-col transition-[padding] duration-300 ease-in-out',
+          'relative flex w-full flex-col transition-[padding] duration-300 ease-in-out',
+          fullBleed ? 'overflow-hidden dh-100' : 'min-h-screen',
           sidebar &&
             (mini ? 'ps-[--layout-nav-width-mini]' : 'ps-[--layout-nav-width]')
         )}
       >
         <Header start={headerStart} />
         {horizontal && <DashboardTopNav />}
-        <main className='container-padding container rounded-lg pb-6 pt-8 transition-[max-width] duration-300 ease-in-out'>
+        <main
+          className={cn(
+            fullBleed
+              ? 'flex min-h-0 flex-1 flex-col'
+              : 'container-padding container rounded-lg pb-6 pt-8 transition-[max-width] duration-300 ease-in-out'
+          )}
+        >
           {children}
         </main>
       </div>

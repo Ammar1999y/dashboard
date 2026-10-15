@@ -51,6 +51,8 @@ export const ISSUE_FALLBACKS: Readonly<Record<string, string>> = {
   too_big: 'القيمة أكبر من الحد المسموح',
   too_small: 'القيمة أصغر من الحد المسموح',
   not_multiple_of: 'القيمة غير صحيحة',
+  // Only where the keys themselves did not arrive: `MSG_UNRECOGNIZED_KEYS` names them.
+  unrecognized_keys: 'حقول غير معروفة في الطلب',
 };
 
 /** `hidden` counts the offending keys left out of `keys`, which the caller bounds. */

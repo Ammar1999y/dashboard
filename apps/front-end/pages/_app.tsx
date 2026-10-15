@@ -76,7 +76,10 @@ const App = ({ Component, pageProps, router }: ComponentProps) => {
           <Toaster />
           <GlobalDialogs />
           <ProgressProvider dir='rtl'>
-            <Layout standalone={!!Component.standalone}>
+            <Layout
+              standalone={!!Component.standalone}
+              fullBleed={!!Component.fullBleed}
+            >
               <Component {...pageProps} />
             </Layout>
           </ProgressProvider>
@@ -91,8 +94,14 @@ export default withApiMocking(App);
 const Layout = ({
   children,
   standalone,
+  fullBleed,
 }: {
   children: React.ReactNode;
   standalone: boolean;
+  fullBleed: boolean;
 }) =>
-  standalone ? <>{children}</> : <DashboardLayout>{children}</DashboardLayout>;
+  standalone ? (
+    <>{children}</>
+  ) : (
+    <DashboardLayout fullBleed={fullBleed}>{children}</DashboardLayout>
+  );

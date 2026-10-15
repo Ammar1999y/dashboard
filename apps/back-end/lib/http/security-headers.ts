@@ -13,12 +13,28 @@
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-const CSP = [
-  "default-src 'none'",
+const DOCUMENT_DENIALS = [
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",
-].join('; ');
+];
+
+const CSP = ["default-src 'none'", ...DOCUMENT_DENIALS].join('; ');
+
+/**
+ * The one HTML page, development's API reference: its script from
+ * `scriptOrigin` alone, the styles it injects, the document from this origin,
+ * and nothing else.
+ */
+export const referencePageCsp = (scriptOrigin: string): string =>
+  [
+    "default-src 'none'",
+    `script-src ${scriptOrigin}`,
+    "style-src 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "connect-src 'self'",
+    ...DOCUMENT_DENIALS,
+  ].join('; ');
 
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze(
   {
@@ -43,12 +59,12 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze(
 
 /**
  * Writes the header set onto a framework's mutable header bag — key by key,
- * because on the `onError` path the CORS plugin has already written
+ * because on the `error` path the CORS plugin has already written
  * `Access-Control-Allow-Origin` and `Vary` there, and replacing the bag would
  * drop them.
  */
 export function applySecurityHeaders(
-  target: Record<string, string | number | undefined>
+  target: Record<string, string | number | string[] | undefined>
 ): void {
   for (const [key, value] of Object.entries(SECURITY_HEADERS))
     target[key] = value;

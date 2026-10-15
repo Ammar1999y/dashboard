@@ -1,0 +1,166 @@
+/*
+ * What the library's Tailwind classes cannot say well: values built from a
+ * per-item variable, the list's column template per width, and the motion
+ * shared by several parts. `data-width` on the root stands in for container
+ * queries, which this project's browsers do not all support.
+ */
+
+.hue {
+  background-image: linear-gradient(
+    135deg,
+    hsl(var(--h) 65% 52%),
+    hsl(calc(var(--h) + 45) 65% 38%)
+  );
+}
+
+.checker {
+  background-color: hsl(var(--muted));
+  background-image:
+    linear-gradient(45deg, hsl(var(--border)) 25%, transparent 25%),
+    linear-gradient(-45deg, hsl(var(--border)) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, hsl(var(--border)) 75%),
+    linear-gradient(-45deg, transparent 75%, hsl(var(--border)) 75%);
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+}
+
+.list {
+  --lg: minmax(220px, 1fr) 96px 96px 84px 64px 70px 28px;
+}
+
+.root[data-width='medium'] .list {
+  --lg: minmax(200px, 1fr) 96px 80px 60px 66px 26px;
+}
+
+.root[data-width='narrow'] .list {
+  --lg: minmax(160px, 1fr) 80px 60px 26px;
+}
+
+.root[data-width='compact'] .list {
+  --lg: minmax(140px, 1fr) 26px;
+}
+
+.listRow {
+  display: grid;
+  grid-template-columns: var(--lg);
+  align-items: center;
+}
+
+.indent {
+  width: calc(var(--depth, 0) * 18px);
+  flex: none;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr));
+  gap: 10px;
+}
+
+.root[data-width='compact'] .tiles {
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 6px;
+}
+
+.stacked {
+  transform: translateX(calc(var(--i) * -18px + 27px))
+    rotate(calc(var(--i) * 4deg - 6deg));
+  z-index: calc(10 - var(--i));
+}
+
+.tucked {
+  margin-inline-end: -8px;
+  z-index: calc(4 - var(--i));
+}
+
+.flash {
+  animation: flash 1.4s ease-out;
+}
+
+.sprung {
+  animation: flash 0.6s ease-out;
+}
+
+@keyframes flash {
+  0% {
+    box-shadow: 0 0 0 3px hsl(var(--primary));
+    background-color: hsl(var(--primary) / 0.15);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.pop {
+  animation: pop 0.14s ease-out;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* An upload in flight: `fetch` reports no progress, so the bar only moves. */
+.indeterminate {
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    hsl(var(--primary)),
+    transparent
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: indeterminate 1.2s infinite ease-in-out;
+}
+
+@keyframes indeterminate {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+
+.ghostMulti {
+  box-shadow:
+    4px 4px 0 -1px hsl(var(--primary) / 0.6),
+    8px 8px 0 -2px hsl(var(--primary) / 0.35);
+}
+
+.dropFrame::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  border: 2px dashed hsl(var(--primary));
+  border-radius: 16px;
+}
+
+.resizing,
+.resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.selecting,
+.selecting * {
+  user-select: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flash,
+  .sprung,
+  .pop,
+  .indeterminate {
+    animation: none;
+  }
+}

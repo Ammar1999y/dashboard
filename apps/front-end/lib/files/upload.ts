@@ -2,8 +2,7 @@ import type { PrepareOptions } from './prepare';
 import type { DashboardPage } from '@app/shared/permissions/constants';
 
 import * as z from 'zod';
-import { FILE_KINDS } from '@app/shared/validation/enums';
-import { invalidResponse } from '@/lib/api/fetch';
+import { mediaFileSchema } from '@app/shared/responses/media';
 import { mutate } from '@/lib/api/mutation';
 
 import { prepareFile } from './prepare';
@@ -13,19 +12,21 @@ export const UPLOAD_PATH = '/api/upload/file';
 /** The one multipart field the route reads; any other field is refused. */
 export const UPLOAD_FIELD = 'files';
 
-/** The fields of the server's `MediaFile` this client reads. */
-const mediaFileSchema = z.object({
-  id: z.string(),
-  kind: z.enum(FILE_KINDS),
-  displayName: z.string(),
-  mimeType: z.string(),
-  sizeBytes: z.number(),
-  url: z.string().min(1),
-});
+/** The fields of the server's `MediaFile` this client reads; an upload's `url` must be there. */
+const uploadedFileSchema = mediaFileSchema
+  .pick({
+    id: true,
+    kind: true,
+    displayName: true,
+    mimeType: true,
+    sizeBytes: true,
+    url: true,
+  })
+  .extend({ url: z.string().min(1) });
 
-export type MediaFile = z.output<typeof mediaFileSchema>;
+export type MediaFile = z.output<typeof uploadedFileSchema>;
 
-const uploadResponseSchema = z.tuple([mediaFileSchema]);
+const uploadResponseSchema = z.tuple([uploadedFileSchema]);
 
 interface UploadOptions extends PrepareOptions {
   /** The dashboard page the file is for: the caller needs create or edit on it. */
@@ -54,9 +55,8 @@ export async function uploadFile(
     method: 'POST',
     data: body,
     signal,
+    schema: uploadResponseSchema,
   });
 
-  const parsed = uploadResponseSchema.safeParse(data);
-  if (!parsed.success) throw invalidResponse();
-  return parsed.data[0];
+  return data[0];
 }

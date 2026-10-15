@@ -1,7 +1,7 @@
 /**
  * The 2xx bodies of this project's own Better Auth plugin endpoints. Each is
- * the WHOLE body: the plugin envelope sends `message` on some endpoints and not
- * others, and leaves `data` out on two, so no single envelope fits them.
+ * the WHOLE body: `message` comes on some endpoints and not others, and `data`
+ * is left out on two, so no single envelope fits them.
  */
 import * as z from 'zod';
 
@@ -16,16 +16,14 @@ import { REAUTH_METHODS } from '../validation/reauth';
 import { passkeyGrantSchema } from '../validation/two-factor';
 import { dateTime, uuid } from './common';
 
-/** `{ success: true, data }`, the plugin envelope without a message. */
-export const pluginBody = <D extends z.ZodType>(data: D) =>
-  z.object({ success: z.literal(true), data });
+/** `{ data }`, the plugin body without a message. */
+export const pluginBody = <D extends z.ZodType>(data: D) => z.object({ data });
 
 export const pluginBodyWithMessage = <D extends z.ZodType>(data: D) =>
-  z.object({ success: z.literal(true), message: z.string(), data });
+  z.object({ message: z.string(), data });
 
 /** What the endpoints that answer a message and no `data` key at all send. */
-export const pluginMessage = () =>
-  z.object({ success: z.literal(true), message: z.string() });
+export const pluginMessage = () => z.object({ message: z.string() });
 
 // The client accepts any string, so an option added between deploys parses;
 // the list is what the server can produce today.

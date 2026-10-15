@@ -47,7 +47,6 @@ export const reauthentication = () =>
         async (ctx) => {
           const { userId } = await requireReauthSession(ctx);
           return ctx.json({
-            success: true,
             data: { methods: await availableReauthMethods(userId) },
           });
         }
@@ -78,7 +77,7 @@ export const reauthentication = () =>
                   expiresAt: expiresIn(CEREMONY_MAX_AGE_S),
                 });
               });
-              return ctx.json({ success: true, data: options });
+              return ctx.json({ data: options });
             } catch (error) {
               throw asAuthError(error, MSG_INVALID_CREDENTIALS);
             }
@@ -166,7 +165,7 @@ export const reauthentication = () =>
                   startedAt: ceremony.startedAt,
                 });
               });
-              return ctx.json({ success: true, data: grant });
+              return ctx.json({ data: grant });
             } catch (error) {
               throw asAuthError(error, MSG_INVALID_CREDENTIALS);
             }

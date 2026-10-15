@@ -4,6 +4,8 @@ import { SQLITE_MAINTENANCE_TOKEN } from '@/lib/env.server';
 
 import { logLine } from '@/utils/log';
 
+export const MAINTENANCE_TOKEN_HEADER = 'x-maintenance-token';
+
 /**
  * The bearer check for `GET /api/health/storage`. An unset configured token
  * never matches: treating it as "no auth required" would open the probe on a

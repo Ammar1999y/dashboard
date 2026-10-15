@@ -5,4 +5,5 @@ export const userEntity = defineEntity({
   api: '/api/dash/users',
   route: '/dash/users',
   noun: 'المستخدم',
+  resource: 'users',
 });

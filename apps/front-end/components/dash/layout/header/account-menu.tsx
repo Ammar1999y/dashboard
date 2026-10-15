@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { memo } from 'react';
 
+import { MSG_ACCOUNT_PAGE } from '@/constants/messages';
 import { authClient, toAuthError } from '@/lib/auth/client';
 import { useSession } from '@/lib/auth/use-session';
 import { toastError } from '@/lib/toast-error';
@@ -14,6 +15,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/shared/user-avatar';
+
+import { ACCOUNT_PATH } from '../../auth/paths';
 
 // No redirect here: the dashboard layout sends a cleared session to sign-in.
 const signOut = () => {
@@ -61,7 +64,7 @@ export const AccountMenu = memo(() => {
         </div>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
-          <Link href='#'>الصفحة الشخصية</Link>
+          <Link href={ACCOUNT_PATH}>{MSG_ACCOUNT_PAGE}</Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem

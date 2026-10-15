@@ -1,6 +1,6 @@
 import type { Tx } from '@/db';
 import type { AuditMeta } from '@/lib/audit';
-import type { HandlerInput } from '@/lib/http/contract';
+import type { HandlerRequestMeta } from '@/lib/http/contract';
 import type { EntityID } from '@app/shared/types';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
@@ -16,6 +16,8 @@ export interface Actor {
 /** What an audit row needs about the caller; the scope is the route's business. */
 export type AuditActor = Pick<Actor, 'userId' | 'email' | 'meta'>;
 
+type RequestHead = Pick<HandlerRequestMeta, 'ip' | 'userAgent' | 'apiPath'>;
+
 interface AuthorisedCaller {
   userId: EntityID;
   session: { user: { email: string } };
@@ -23,16 +25,16 @@ interface AuthorisedCaller {
 
 /** The authorised caller of a media route; the route states its own scope. */
 export function requestActor(
-  ctx: HandlerInput,
+  ctx: RequestHead,
   caller: AuthorisedCaller
 ): AuditActor;
 export function requestActor(
-  ctx: HandlerInput,
+  ctx: RequestHead,
   caller: AuthorisedCaller,
   scope: Actor['scope']
 ): Actor;
 export function requestActor(
-  ctx: HandlerInput,
+  ctx: RequestHead,
   caller: AuthorisedCaller,
   scope?: Actor['scope']
 ): AuditActor | Actor {
@@ -46,7 +48,7 @@ export function requestActor(
 
 /** The actor of a route whose grant may be the `Own` variant. */
 export function grantedActor(
-  ctx: HandlerInput,
+  ctx: RequestHead,
   caller: AuthorisedCaller & { scope: Actor['scope'] | null }
 ): Actor {
   if (caller.scope === null)

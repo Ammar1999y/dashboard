@@ -14,13 +14,29 @@ import {
   ROLE_NAME_MAX,
   ROLE_NAME_MIN,
 } from './constants';
-import {
-  sanitizeStrict,
-  sanitizeStrictSingleLine,
-  STRICT_SINGLE_LINE_DESCRIPTION,
-  STRICT_TEXT_DESCRIPTION,
-  strictTextMaximum,
-} from './rules';
+import { sanitizeStrict, sanitizeStrictSingleLine } from './rules';
+
+/** "Any of `actions` granted" requires "any of `required` granted", in JSON Schema. */
+function dependencyRule(
+  actions: readonly PermissionAction[],
+  required: readonly PermissionAction[]
+) {
+  const anyTrue = (names: readonly PermissionAction[]) => {
+    const branches = names.map((action) => ({
+      properties: { [action]: { const: true } },
+      required: [action],
+    }));
+    return branches.length === 1 ? branches[0] : { anyOf: branches };
+  };
+  return {
+    if: {
+      properties: { permissions: anyTrue(actions) },
+      required: ['permissions'],
+    },
+    // eslint-disable-next-line unicorn/no-thenable -- `then` is a JSON Schema conditional keyword
+    then: { properties: { permissions: anyTrue(required) } },
+  };
+}
 
 // `.strict()`, so a misspelled `dleete` is a 422 rather than a grant silently
 // never written. Real but unavailable actions are handled by value in
@@ -51,7 +67,30 @@ const rawPagePermissionSchema = z
     // "no permissions" and "field forgotten", and the destructive reading wins.
     permissions: permissionSchema,
   })
-  .strict();
+  .strict()
+  // The refinements below, as the document states them. Runtime
+  // validation is the refinements'; this changes no parse.
+  .meta({
+    allOf: [
+      dependencyRule(['edit', 'delete', 'publish'], ['view']),
+      dependencyRule(['editOwn', 'deleteOwn'], ['view', 'viewOwn']),
+      {
+        if: { properties: { name: { const: 'home' } }, required: ['name'] },
+        // eslint-disable-next-line unicorn/no-thenable -- `then` is a JSON Schema conditional keyword
+        then: {
+          properties: {
+            permissions: {
+              properties: Object.fromEntries(
+                PERMISSION_ACTION_NAMES.filter(
+                  (action) => action !== 'view'
+                ).map((action) => [action, { const: false }])
+              ),
+            },
+          },
+        },
+      },
+    ],
+  });
 
 /**
  * An action the page does not offer: 422 when granted, dropped when not.
@@ -134,9 +173,20 @@ function noDuplicatePageNames(items: { name: string }[], ctx: z.RefinementCtx) {
 const pageMatrix = (array: z.ZodArray<typeof pagePermissionSchema>) =>
   array
     .max(PERMISSIONS_ARRAY_MAX, permissionValidationMsg.permissionsMaxLength)
-    .superRefine(noDuplicatePageNames);
+    .superRefine(noDuplicatePageNames)
+    .meta({ 'x-unique-by': 'name' });
 
 export const permissionsArraySchema = pageMatrix(z.array(pagePermissionSchema));
+
+export const roleDescriptionSchema = z.preprocess(
+  sanitizeStrict,
+  z
+    .string()
+    .max(ROLE_DESCRIPTION_MAX, permissionValidationMsg.descriptionMaxLength)
+    .meta({ maxLength: undefined })
+    .optional()
+    .nullish()
+);
 
 export const createPermissionSchema = z.object({
   roleName: z.preprocess(
@@ -145,26 +195,9 @@ export const createPermissionSchema = z.object({
       .string()
       .min(ROLE_NAME_MIN, permissionValidationMsg.roleNameRequired)
       .max(ROLE_NAME_MAX, permissionValidationMsg.roleNameMaxLength)
-      .meta({
-        maxLength: undefined,
-        description: `${STRICT_SINGLE_LINE_DESCRIPTION} ${strictTextMaximum(ROLE_NAME_MAX)}`,
-      })
+      .meta({ maxLength: undefined })
   ),
-  description: z
-    .preprocess(
-      sanitizeStrict,
-      z
-        .string()
-        .max(ROLE_DESCRIPTION_MAX, permissionValidationMsg.descriptionMaxLength)
-        .meta({
-          maxLength: undefined,
-          description: `${STRICT_TEXT_DESCRIPTION}. ${strictTextMaximum(ROLE_DESCRIPTION_MAX)}`,
-        })
-        .optional()
-        .nullish()
-    )
-    .optional()
-    .nullish(),
+  description: roleDescriptionSchema.optional().nullish(),
   permissions: pageMatrix(
     z
       .array(pagePermissionSchema)

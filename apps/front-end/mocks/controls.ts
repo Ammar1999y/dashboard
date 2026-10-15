@@ -14,9 +14,28 @@ export const latency = { get: () => latencyMs };
 /** Driven from the browser console as `mockApi.*`. */
 function createControls(worker: SetupWorker) {
   return {
-    /** Every method on `path` (`/api/dash/users`, `/api/dash/users/:id`) answers `status`. */
-    fail: (path: string, status = 500, message = MSG_INTERNAL_ERROR) => {
-      worker.use(http.all(api(path), () => fail(status, message)));
+    /**
+     * Every method on `path` (`/api/dash/users`, `/api/dash/users/:id`) answers
+     * `status`; `retryAfter` is the seconds a 429 or 503 asks to wait.
+     */
+    fail: (
+      path: string,
+      status = 500,
+      message = MSG_INTERNAL_ERROR,
+      retryAfter?: number
+    ) => {
+      worker.use(
+        http.all(api(path), () =>
+          fail(
+            status,
+            message,
+            undefined,
+            retryAfter === undefined
+              ? undefined
+              : { 'Retry-After': String(retryAfter) }
+          )
+        )
+      );
     },
     /** `path` fails the way a dropped connection does. */
     offline: (path: string) => {

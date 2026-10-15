@@ -4,6 +4,12 @@ import type { ComponentProps, KeyboardEvent } from 'react';
 import { memo, useCallback, useId, useMemo, useRef, useState } from 'react';
 
 import { dataTableConfig } from '@app/shared/data-table/config';
+import {
+  MSG_EDIT_SORT,
+  MSG_FIND_FIELD,
+  MSG_NO_FIELDS,
+  MSG_NO_SORT,
+} from '@/constants/messages';
 import { cn } from '@/lib/utils';
 
 import { Badge } from '@/components/ui/badge';
@@ -67,7 +73,7 @@ export function DataTableSortList<TData>({
   const [open, setOpen] = useState(false);
   const addButtonRef = useRef<HTMLButtonElement>(null);
 
-  const sorting = useDataTableStore((s) => s.sort);
+  const sortCount = useDataTableStore((s) => s.sort.length);
 
   const [draftSorting, setDraftSorting] = useState<ColumnSort[]>([]);
 
@@ -130,13 +136,16 @@ export function DataTableSortList<TData>({
     [defaultSort]
   );
 
-  const toggleOpen = useCallback(() => setOpen((prev) => !prev), []);
+  const toggleOpen = useCallback(
+    () => handleOpenChange(!open),
+    [open, handleOpenChange]
+  );
   usePopoverShortcut(SORT_SHORTCUT_KEY, toggleOpen);
 
   const onTriggerKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>) => {
       if (!(
-        REMOVE_ITEM_SHORTCUTS.has(event.key.toLowerCase()) && sorting.length > 0
+        REMOVE_ITEM_SHORTCUTS.has(event.key.toLowerCase()) && sortCount > 0
       )) {
         return;
       }
@@ -144,7 +153,7 @@ export function DataTableSortList<TData>({
       event.preventDefault();
       onSortingReset();
     },
-    [sorting.length, onSortingReset]
+    [sortCount, onSortingReset]
   );
 
   return (
@@ -167,12 +176,12 @@ export function DataTableSortList<TData>({
               className='size-4 text-muted-foreground'
             />
             <span>ترتيب</span>
-            {sorting.length > 0 && (
+            {sortCount > 0 && (
               <Badge
                 variant='secondary'
                 className='h-4 rounded-xs px-1 font-mono text-xs font-normal'
               >
-                {sorting.length}
+                {sortCount}
               </Badge>
             )}
           </Button>
@@ -196,9 +205,7 @@ export function DataTableSortList<TData>({
               draftSorting.length > 0 && 'sr-only'
             )}
           >
-            {draftSorting.length > 0
-              ? 'عدّل الترتيب لتنظيم الصفوف.'
-              : 'لا يوجد ترتيب، أضف ترتيب لتنظيم الصفوف.'}
+            {draftSorting.length > 0 ? MSG_EDIT_SORT : MSG_NO_SORT}
           </p>
           {draftSorting.length > 0 ? (
             <SortableContent asChild>
@@ -370,9 +377,9 @@ const DataTableSortItem = memo(
               className='w-[--radix-popover-trigger-width] p-0'
             >
               <Command>
-                <CommandInput placeholder='ابحث عن حقل...' />
+                <CommandInput placeholder={MSG_FIND_FIELD} />
                 <CommandList>
-                  <CommandEmpty>لا توجد حقول.</CommandEmpty>
+                  <CommandEmpty>{MSG_NO_FIELDS}</CommandEmpty>
                   <CommandGroup>
                     {columns.map((column) => (
                       <SortFieldItem

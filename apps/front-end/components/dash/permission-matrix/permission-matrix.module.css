@@ -1,0 +1,489 @@
+/*
+ * The matrix's grid, its chips and its two layouts. `data-stacked` on the root
+ * stands in for a container query, which this project's browsers do not all
+ * support; state that only CSS reads (level, lock, relation) is a data
+ * attribute on the element it styles, in place of `:has()`.
+ */
+
+.root {
+  --perm-ink: var(--primary-dark);
+  --perm-warn: var(--colors-palette-warning-dark);
+  --perm-line: hsl(var(--foreground) / 0.2);
+  --perm-radius: calc(var(--radius) - 2px);
+  display: grid;
+  gap: 0.75rem;
+}
+
+[data-theme='dark'] .root {
+  --perm-ink: var(--primary-light);
+  --perm-warn: var(--colors-palette-warning-default);
+}
+
+.grid {
+  --cols: minmax(220px, 1.3fr) repeat(4, minmax(128px, 1fr))
+    minmax(190px, 1.4fr);
+  display: grid;
+  gap: 2px;
+}
+
+.rows {
+  display: grid;
+  gap: 2px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: var(--cols);
+  border-radius: var(--radius);
+  transition: background-color 0.12s;
+}
+
+.head {
+  background-color: hsl(var(--accent) / 0.5);
+}
+
+.rows > .row:nth-child(even) {
+  background-color: hsl(var(--accent) / 0.5);
+}
+
+.rows > .row:hover {
+  background-color: hsl(var(--accent));
+}
+
+.cell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--perm-radius);
+}
+
+.rows .cell {
+  grid-row: 1;
+}
+
+.corner {
+  justify-content: flex-start;
+  padding-block: 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-line-height);
+}
+
+.rows .rowhead {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  justify-content: flex-start;
+}
+
+.pageName {
+  font-weight: 600;
+}
+
+.rows .summary {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  justify-content: flex-start;
+  padding: 0 12px 10px;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-line-height);
+}
+
+.root[data-summary='off'] .summary {
+  display: none;
+}
+
+.cellLabel,
+.stackedHint {
+  display: none;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-line-height);
+}
+
+/* Column header: tri-state, title and menu on one line. */
+.columnHead {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.columnTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-line-height);
+  font-weight: 600;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground));
+}
+
+.iconButton:hover {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+/* One bordered box: the chip, and for a scoped cell its menu chevron. */
+.chipbox {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
+  max-width: 136px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--perm-line);
+  border-radius: var(--perm-radius);
+  background-color: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.special .chipbox {
+  max-width: 100%;
+}
+
+.chipbox:hover {
+  border-color: hsl(var(--primary) / 0.45);
+  color: hsl(var(--foreground));
+}
+
+.chipbox[data-level='1'] {
+  border-color: hsl(var(--primary) / 0.45);
+  background-color: hsl(var(--primary) / 0.1);
+  color: hsl(var(--perm-ink));
+}
+
+.chipbox[data-level='2'] {
+  border-color: hsl(var(--primary));
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.chipbox[data-stuck='true'] {
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+.chipbox[data-stuck='true'][data-level='1'],
+.chipbox[data-stuck='true'][data-level='2'] {
+  opacity: 0.88;
+}
+
+.chipbox[data-stuck='true']:hover {
+  border-color: var(--perm-line);
+  color: hsl(var(--muted-foreground));
+}
+
+.chipbox[data-stuck='true'][data-level='2']:hover {
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.chipbox[data-self='true'] {
+  border-color: hsl(var(--perm-ink));
+}
+
+/*
+ * Fixed slots, indicator | text | status: an icon that comes or goes never
+ * moves the text, which starts at the inline-start of its slot.
+ */
+.chip {
+  display: grid;
+  min-width: 0;
+  min-height: 32px;
+  flex: 1;
+  grid-template-columns: 14px minmax(0, 1fr) 14px;
+  align-items: center;
+  column-gap: 8px;
+  padding: 3px 10px;
+  color: inherit;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  text-align: start;
+  user-select: none;
+  transition: transform 0.08s;
+}
+
+.chip:active {
+  transform: scale(0.97);
+}
+
+.chip:focus-visible,
+.more:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px hsl(var(--perm-ink));
+}
+
+.chipbox[data-stuck='true'] .chip {
+  cursor: not-allowed;
+}
+
+.chipbox[data-read-only='true'] .chip {
+  cursor: default;
+}
+
+.indicator {
+  display: inline-flex;
+  grid-area: 1 / 1;
+  justify-self: center;
+}
+
+.text {
+  grid-area: 1 / 2;
+  justify-self: start;
+  overflow-wrap: break-word;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.status {
+  display: inline-flex;
+  grid-area: 1 / 3;
+  justify-self: center;
+}
+
+.pips {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.pips > span {
+  width: 3px;
+  height: 11px;
+  border-radius: 2px;
+  background-color: currentColor;
+  opacity: 0.25;
+}
+
+.chipbox[data-level='1'] .pips > span:first-child,
+.chipbox[data-level='2'] .pips > span {
+  opacity: 1;
+}
+
+.lock,
+.warning {
+  color: hsl(var(--perm-warn));
+}
+
+.chipbox[data-level='2'] .lock {
+  color: hsl(var(--primary-foreground));
+}
+
+.more {
+  display: grid;
+  width: 22px;
+  flex: none;
+  place-items: center;
+  border-inline-start-width: 1px;
+  border-inline-start-style: solid;
+  border-inline-start-color: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chipbox[data-level='0'] .more:hover {
+  background-color: hsl(var(--accent));
+}
+
+.chipbox[data-level='1'] .more {
+  border-inline-start-color: hsl(var(--primary) / 0.45);
+}
+
+.notOffered {
+  padding: 6px 14px;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground));
+  cursor: help;
+  font-size: var(--text-base);
+  line-height: 1;
+  opacity: 0.6;
+  user-select: none;
+}
+
+.notOffered:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--perm-ink));
+}
+
+/* What an auto-adjusted cell flashes; inserted again for each change. */
+.pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--perm-radius);
+  pointer-events: none;
+  animation: perm-pulse 1.3s ease-out forwards;
+}
+
+@keyframes perm-pulse {
+  0% {
+    background-color: hsl(var(--primary) / 0.38);
+    box-shadow: 0 0 0 2px hsl(var(--primary));
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+/* The same mark, held still for the same time instead of fading. */
+@keyframes perm-hold {
+  0% {
+    background-color: hsl(var(--primary) / 0.3);
+    box-shadow: 0 0 0 2px hsl(var(--primary));
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: perm-hold 1.3s steps(1, end) forwards;
+  }
+
+  .chip:active {
+    transform: none;
+  }
+}
+
+.cell[data-relation='prerequisite'],
+.cell[data-relation='dependent'] {
+  background-color: hsl(var(--primary) / 0.1);
+}
+
+.cell[data-relation='prerequisite']::before,
+.cell[data-relation='dependent']::before {
+  position: absolute;
+  inset: 3px;
+  border: 1px dashed hsl(var(--primary) / 0.45);
+  border-radius: var(--perm-radius);
+  content: '';
+  pointer-events: none;
+}
+
+.cell[data-relation='dependent']::before {
+  border-style: dotted;
+}
+
+/* Straddles the cell's top edge, over its padding rather than the chip. */
+.tag {
+  position: absolute;
+  top: -6px;
+  inset-inline-end: 8px;
+  z-index: 1;
+  padding: 0 4px;
+  border-radius: 3px;
+  background-color: hsl(var(--background));
+  color: hsl(var(--perm-ink));
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-line-height);
+  pointer-events: none;
+}
+
+/* Narrow: one block per page, every cell labelled, nothing to scroll. */
+.root[data-stacked='true'] .grid {
+  gap: 8px;
+}
+
+.root[data-stacked='true'] .head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 6px 8px;
+}
+
+.root[data-stacked='true'] .head .cell {
+  padding: 2px 4px;
+}
+
+.root[data-stacked='true'] .corner {
+  display: none;
+}
+
+.root[data-stacked='true'] .stackedHint {
+  display: block;
+  width: 100%;
+  padding-inline-start: 4px;
+}
+
+.root[data-stacked='true'] .rows {
+  gap: 8px;
+}
+
+.root[data-stacked='true'] .rows > .row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--card));
+}
+
+.root[data-stacked='true'] .rows .cell,
+.root[data-stacked='true'] .rows .rowhead,
+.root[data-stacked='true'] .rows .summary {
+  grid-row: auto;
+}
+
+.root[data-stacked='true'] .rows .cell {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 5px;
+  padding: 8px;
+}
+
+.root[data-stacked='true'] .rows .rowhead,
+.root[data-stacked='true'] .rows .special {
+  grid-column: 1 / -1;
+}
+
+.root[data-stacked='true'] .rows .rowhead {
+  flex-direction: row;
+  align-items: center;
+}
+
+.root[data-stacked='true'] .cellLabel {
+  display: block;
+}
+
+.root[data-stacked='true'] .rows .na {
+  display: none;
+}
+
+.root[data-stacked='true'] .chipbox {
+  max-width: none;
+}
+
+.root[data-stacked='true'] .chip {
+  min-height: 40px;
+}
+
+.root[data-stacked='true'] .more {
+  width: 32px;
+}
+
+.root[data-stacked='true'] .rows .summary {
+  grid-column: 1 / -1;
+  padding: 6px 8px 4px;
+  border-top: 1px solid hsl(var(--border));
+  border-radius: 0;
+}

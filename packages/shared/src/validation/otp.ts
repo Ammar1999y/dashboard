@@ -23,7 +23,6 @@ import {
   passwordSchema,
   phoneSchema,
   sanitizeStrictSingleLine,
-  STRICT_SINGLE_LINE_DESCRIPTION,
 } from './rules';
 
 /**
@@ -89,7 +88,7 @@ export const otpCodeSchema = z.preprocess(
     .length(OTP_CODE_LENGTH, MSG_OTP_WRONG_LENGTH)
     .regex(/^[0-9]+$/, MSG_OTP_DIGITS_ONLY)
     // The one sanitized leaf whose rule a raw-input `pattern` can carry, so it
-    // does: `length()` publishes an exact 6 that refuses the pasted ` 123456 `
+    // does: `length()` publishes an exact length that refuses the pasted ` 123456 `
     // this schema trims and accepts — the common shape for a code copied out of
     // a message.
     //
@@ -105,7 +104,6 @@ export const otpCodeSchema = z.preprocess(
       minLength: undefined,
       maxLength: undefined,
       pattern: `^[^0-9]*(?:[0-9][^0-9]*){${OTP_CODE_LENGTH}}$`,
-      description: STRICT_SINGLE_LINE_DESCRIPTION,
     })
 );
 
@@ -181,7 +179,7 @@ export const recoverySecondFactorSendSchema = recoveryGrantSchema;
 
 export const recoveryCompleteSchema = recoveryGrantSchema.extend({
   code: otpCodeSchema.or(
-    // A backup code is not a six-digit OTP: `xxxxx-xxxxx` from the generated
+    // A backup code is not an OTP: `xxxxx-xxxxx` from the generated
     // set. Bounded rather than free text.
     z
       .string()

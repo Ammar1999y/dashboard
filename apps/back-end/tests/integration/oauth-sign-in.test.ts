@@ -14,7 +14,6 @@ import {
   users,
   verifications,
 } from '@/db/schema';
-import { ROUTES } from '@/routes';
 import * as z from 'zod';
 
 import { REQUIRE_EMAIL_VERIFICATION } from '@app/shared/config';
@@ -29,8 +28,7 @@ import {
 } from '@/lib/auth/session/rotation';
 import { totpEnrolmentKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
-import { openApiDocument } from '@/lib/http/openapi/document';
-import { toPublishedManifest } from '@/lib/http/route-manifest';
+import { servedDocument } from '@/lib/http/openapi/serve';
 import { generateUuidV7 } from '@/lib/id';
 
 import { errorClassOf } from '@/utils/log';
@@ -91,10 +89,9 @@ describe('Google sign-in through the routed OAuth exchange', () => {
       })
     );
     expect(await response.json()).toEqual({
-      success: true,
       data: { oauthProviders: ['google'] },
     });
-    const document = openApiDocument(toPublishedManifest(ROUTES, true));
+    const document = await servedDocument();
     expect(document).toMatchObject({
       paths: {
         '/api/auth/oauth/google/start': {

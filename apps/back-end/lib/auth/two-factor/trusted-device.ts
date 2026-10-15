@@ -244,7 +244,7 @@ export const trustedDevice = () =>
           if (!sessionId) throw sessionRequired();
 
           await grantDeviceTrust(ctx, userId, sessionId);
-          return ctx.json({ success: true, data: { trusted: true } });
+          return ctx.json({ data: { trusted: true } });
         }
       ),
 
@@ -254,7 +254,6 @@ export const trustedDevice = () =>
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
           return ctx.json({
-            success: true,
             data: { devices: await listTrustedDevices(userId) },
           });
         }
@@ -276,7 +275,7 @@ export const trustedDevice = () =>
           // Another user's device and a missing one answer identically.
           if (!removed) throw authError(HTTP_STATUS.NOT_FOUND, MSG_NOT_FOUND);
 
-          return ctx.json({ success: true, data: { revoked: true } });
+          return ctx.json({ data: { revoked: true } });
         }
       ),
     },

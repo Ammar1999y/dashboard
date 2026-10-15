@@ -1,35 +1,27 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- fixed repository paths derived from this module */
 /**
- * The lint gate itself: does a `security/*` warning, and a floating promise on a
- * type-aware path, actually FAIL the check a developer and CI run?
+ * The lint gate itself: do a `security/*` warning, a floating promise on a
+ * type-aware path and an import across a core boundary actually FAIL the
+ * check a developer and CI run?
  *
- * Two things here are deliberate and were not before.
+ * **ESLint is spawned directly, not `bun run lint`.** That script starts with
+ * an incremental `tsc`, and a probe written into the tree and removed again
+ * leaves `tsconfig.tsbuildinfo` naming a file that no longer exists, so the
+ * next `tsc` fails for a reason unrelated to the rule under test. The `lint`
+ * script is pinned separately below, by whole `&&` stage.
  *
- * **ESLint is spawned directly, not `bun run lint`.** That script is
- * `tsc --noEmit && eslint .`, and `tsc` is `incremental`, so writing a probe into
- * the tree poisoned the shared `tsconfig.tsbuildinfo` with a filename that no
- * longer existed on the next run: `error TS6053: File '.../lib/floating-promise-
- * probe-9816.ts' not found`, which made `expect(exitCode).not.toBe(0)` pass for
- * entirely the wrong reason while the message assertion failed. `tsc` proves
- * shapes line up and has nothing to do with either rule; what these tests are
- * about is `eslint --max-warnings 0`. The `lint` script is pinned separately
- * below — by whole `&&` stage, not by substring — so "the gate exists and is
- * wired" stays asserted without running it.
- *
- * **The probes must still be written INSIDE the repository**, and that is not
- * incidental either: `eslint.config.mjs` scopes the type-aware block by
- * `files: ['lib/**\/*.ts', …]` with `projectService`, so a probe in an OS temp
- * directory would be linted without a program and `no-floating-promises` would
- * not run at all. That scoping IS part of what this asserts. The cost is a file
- * in the tree for the duration of the run — `.gitignore` carries both name
- * patterns as a backstop, and `removeProbe` below verifies the removal rather
- * than hoping for it (`rmSync` ignores `maxRetries` for a file, and a Windows
- * handle held by a just-exited grandchild left a 355-byte probe behind after a
- * green run).
+ * **The probes are written INSIDE the repository**: `eslint.config.mjs` scopes
+ * the type-aware block and the core import boundaries by `files`, so a probe
+ * in an OS temp directory would meet neither. That scoping is part of what
+ * this asserts. `.gitignore` carries the probe names as a backstop, and
+ * `removeProbe` verifies the removal: `rmSync` ignores `maxRetries` for a
+ * file, and a Windows handle held by an exiting child can outlive it.
  */
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+
+import * as z from 'zod';
 
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 const FIXTURE = path.join(
@@ -50,8 +42,40 @@ const FLOATING_PROBE = path.join(
   'lib',
   `floating-promise-probe-${process.pid}.ts`
 );
+const BOUNDARY_PROBE = path.join(
+  REPO_ROOT,
+  'lib',
+  `import-boundary-probe-${process.pid}.ts`
+);
+/** The docs loader, the one core file the field-docs boundary exempts. */
+const DOCS_LOADER = 'lib/http/openapi/docs.ts';
 
-/** The flags the gate depends on, asserted against `package.json` below. */
+/** One per line: each crosses a core boundary where `no-restricted-imports` cannot see it. */
+const BOUNDARY_CROSSINGS = [
+  "export const framework = () => import('elysia');",
+  "export const subpath = () => import('elysia/adapter');",
+  "export const plugin = () => import('@elysia/openapi');",
+  "export const docs = () => import('@app/shared/validation/media.docs');",
+  "export const docsFile = () => import('./x.docs.ts');",
+  'export const template = () => import(`elysia`);',
+  "export type FrameworkType = import('elysia').Context;",
+  "export type DocsType = typeof import('./x.docs');",
+] as const;
+
+const eslintReport = z.array(
+  z.object({
+    filePath: z.string(),
+    messages: z.array(
+      z.object({ line: z.number(), ruleId: z.string().nullable() })
+    ),
+  })
+);
+
+// Each case runs type-aware ESLint. A timeout kills the case before `finally`
+// removes its probe, and the leftover probe then fails every later `lint` in
+// this repository.
+const LINT_RUN_TIMEOUT_MS = 600_000;
+
 /**
  * The exact commands `lint` must run, as `&&`-joined stages.
  *
@@ -89,17 +113,25 @@ function removeProbe(file: string): void {
   throw new Error(`probe could not be removed and is now untracked: ${file}`);
 }
 
-/** Runs the real ESLint gate with `file` present, and removes it after. */
+/** Runs the real ESLint gate over `targets` with `file` present, and removes it after. */
 async function lintWith(
   file: string,
-  source: string
-): Promise<{ exitCode: number | null; output: string }> {
+  source: string,
+  targets: readonly string[] = ['.']
+): Promise<{ exitCode: number | null; stdout: string; output: string }> {
   if (existsSync(file))
     throw new Error(`refusing to overwrite existing probe: ${file}`);
   writeFileSync(file, source, { flag: 'wx' });
   try {
     const child = Bun.spawn(
-      ['bunx', 'eslint', '.', '--max-warnings', '0', '--no-warn-ignored'],
+      [
+        'bunx',
+        'eslint',
+        ...targets,
+        '--max-warnings',
+        '0',
+        '--no-warn-ignored',
+      ],
       {
         cwd: REPO_ROOT,
         env: { ...process.env, FORCE_COLOR: '0' },
@@ -112,7 +144,7 @@ async function lintWith(
       new Response(child.stderr).text(),
       child.exited,
     ]);
-    return { exitCode, output: `${stdout}\n${stderr}` };
+    return { exitCode, stdout, output: `${stdout}\n${stderr}` };
   } finally {
     removeProbe(file);
   }
@@ -152,28 +184,69 @@ test('the lint script still runs ESLint over the tree with no warning budget', (
   for (const stage of REQUIRED_LINT_STAGES) expect(stages).toContain(stage);
 });
 
-test('a security/* warning fails the lint gate', async () => {
-  const { exitCode, output } = await lintWith(PROBE, fixtureSource());
+test(
+  'a security/* warning fails the lint gate',
+  async () => {
+    const { exitCode, output } = await lintWith(PROBE, fixtureSource());
 
-  expect(exitCode).not.toBe(0);
-  expect(output).toContain(path.basename(PROBE));
-  expect(output).toMatch(
-    /warning\s+Found non-literal argument to RegExp Constructor\s+security\/detect-non-literal-regexp/
-  );
-}, 300_000);
+    expect(exitCode).not.toBe(0);
+    expect(output).toContain(path.basename(PROBE));
+    expect(output).toMatch(
+      /warning\s+Found non-literal argument to RegExp Constructor\s+security\/detect-non-literal-regexp/
+    );
+  },
+  LINT_RUN_TIMEOUT_MS
+);
 
-test('a floating promise on a security check fails the lint gate', async () => {
-  // Inside `lib/`, because the type-aware block in `eslint.config.mjs` is scoped
-  // by `files` — a probe in the repository root would be parsed without a
-  // program and the rule would not run. That scoping IS part of what this
-  // asserts: it is the difference between the rule existing and the rule
-  // applying to the code that needs it.
-  const { exitCode, output } = await lintWith(
-    FLOATING_PROBE,
-    fixtureSource(FLOATING_FIXTURE)
-  );
+test(
+  'a floating promise on a security check fails the lint gate',
+  async () => {
+    const { exitCode, output } = await lintWith(
+      FLOATING_PROBE,
+      fixtureSource(FLOATING_FIXTURE)
+    );
 
-  expect(exitCode).not.toBe(0);
-  expect(output).toContain(path.basename(FLOATING_PROBE));
-  expect(output).toContain('no-floating-promises');
-}, 300_000);
+    expect(exitCode).not.toBe(0);
+    expect(output).toContain(path.basename(FLOATING_PROBE));
+    expect(output).toContain('no-floating-promises');
+  },
+  LINT_RUN_TIMEOUT_MS
+);
+
+test(
+  'a dynamic import or import type across a core boundary fails the lint gate, and the docs loader alone may load field docs',
+  async () => {
+    const { exitCode, stdout } = await lintWith(
+      BOUNDARY_PROBE,
+      BOUNDARY_CROSSINGS.join('\n'),
+      [
+        '--format',
+        'json',
+        path.relative(REPO_ROOT, BOUNDARY_PROBE),
+        DOCS_LOADER,
+      ]
+    );
+    const report = eslintReport.parse(JSON.parse(stdout));
+    const boundaryLines = (file: string) =>
+      report
+        .filter(
+          ({ filePath }) =>
+            path.relative(REPO_ROOT, filePath) ===
+            path.relative(REPO_ROOT, file)
+        )
+        .flatMap(({ messages }) => messages)
+        .filter(({ ruleId }) => ruleId?.startsWith('no-restricted-') === true)
+        .map(({ line }) => line);
+
+    expect(exitCode).not.toBe(0);
+    expect(boundaryLines(BOUNDARY_PROBE)).toEqual(
+      BOUNDARY_CROSSINGS.map((_line, index) => index + 1)
+    );
+    // Not vacuous: the loader does import field docs, dynamically.
+    expect(readFileSync(path.join(REPO_ROOT, DOCS_LOADER), 'utf8')).toMatch(
+      /import\('[^']+\.docs'\)/
+    );
+    expect(boundaryLines(path.join(REPO_ROOT, DOCS_LOADER))).toEqual([]);
+  },
+  LINT_RUN_TIMEOUT_MS
+);

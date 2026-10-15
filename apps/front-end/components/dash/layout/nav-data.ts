@@ -1,6 +1,9 @@
 import type { NavSection } from '@/components/dash/nav';
 
 import { DASHBOARD_PAGE_LABELS } from '@app/shared/messages/permissions';
+import { MSG_ACCOUNT_PAGE } from '@/constants/messages';
+
+import { ACCOUNT_PATH } from '../auth/paths';
 
 export const dashboardNav: readonly NavSection[] = [
   {
@@ -11,6 +14,12 @@ export const dashboardNav: readonly NavSection[] = [
         path: '/dash',
         icon: 'solar:home-2-bold-duotone',
       },
+
+      {
+        title: DASHBOARD_PAGE_LABELS.media,
+        path: '/dash/media',
+        icon: 'solar:folder-bold-duotone',
+      },
     ],
   },
   {
@@ -20,6 +29,11 @@ export const dashboardNav: readonly NavSection[] = [
         title: 'الاعدادات',
         path: '/dash/settings',
         icon: 'solar:settings-bold-duotone',
+      },
+      {
+        title: MSG_ACCOUNT_PAGE,
+        hidden: true,
+        path: ACCOUNT_PATH,
       },
     ],
   },

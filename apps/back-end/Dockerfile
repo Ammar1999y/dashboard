@@ -22,9 +22,10 @@ COPY apps/back-end/package.json apps/back-end/
 COPY apps/front-end/package.json apps/front-end/
 COPY packages/shared/package.json packages/shared/
 
-# Development dependencies too, so `bun run build` can type-check. A route
-# table inconsistent with its request schemas fails the image build here
-# instead of the first authorised request in production.
+# Development dependencies too, so `bun run build` (`tsc --noEmit`) can
+# type-check: Bun runs TypeScript without checking it, so a type error would
+# otherwise build into an image that starts. No application code runs here, so
+# the stage needs no environment.
 #
 # `--filter` runs the selected workspaces' lifecycle scripts and NOT the root's,
 # so the Bun guard reaches this build through `apps/back-end/package.json`'s
@@ -34,23 +35,7 @@ RUN bun install --frozen-lockfile --filter @app/back-end --filter @app/shared
 COPY packages/shared packages/shared
 COPY apps/back-end apps/back-end
 WORKDIR /app/apps/back-end
-# `bun run build` loads the application graph, and `lib/env.server.ts` refuses
-# to load without these. The same throwaway values the CI `verify` job uses:
-# shaped to pass validation, unreachable, and confined to this stage. Nothing
-# here is a credential, and nothing here reaches the runtime image.
-ENV NODE_ENV=development \
-  PUBLIC_URL=http://localhost:3000 \
-  NEXT_PUBLIC_ENABLED_OTP_CHANNELS=email \
-  NEXT_PUBLIC_TURNSTILE_SITE_KEY=1x00000000000000000000AA \
-  TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA \
-  DATABASE_URL=postgres://ci:ci@db.example.com/ci?sslmode=require \
-  BETTER_AUTH_SECRET=ci-placeholder-better-auth-secret-000000 \
-  SQLITE_DIR=/tmp/verify-sqlite \
-  PASSWORD_PEPPER_ACTIVE_ID=ci \
-  PASSWORD_PEPPER_KEYRING='{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}' \
-  OTP_HMAC_ACTIVE_ID=ci \
-  OTP_HMAC_KEYRING='{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
-RUN bun run build
+RUN bun run build && touch /verified
 
 FROM manifests AS runtime
 # Coolify's HTTP health check runs `curl -f` (with a `wget` fallback) INSIDE the
@@ -62,10 +47,9 @@ RUN apt-get update \
 RUN bun install --frozen-lockfile --production --filter @app/back-end --filter @app/shared
 COPY packages/shared packages/shared
 COPY apps/back-end apps/back-end
-# Copied only so this stage cannot be built without `verify` passing; the
-# served document is regenerated at start from the runtime configuration, which
-# is why the runtime user owns it.
-COPY --from=verify --chown=bun:bun /app/apps/back-end/build /app/apps/back-end/build
+# BuildKit skips a stage the target does not copy from, so this empty stamp is
+# what makes the runtime stage wait for `verify` to pass. Nothing reads it.
+COPY --from=verify /verified /verified
 # `SQLITE_DIR` as `reports/coolify-deployment.md` §4 sets it; the two must
 # agree. A new named volume inherits this owner and mode; one created while the
 # process ran as root needs the one-time `chown` described there.
@@ -77,19 +61,14 @@ EXPOSE 3000
 # above stays root-owned, so code run through an upload parser cannot rewrite
 # the application or its `node_modules`.
 USER bun
-# `exec`, and the server invoked directly rather than through `bun run start`.
-# Both halves are required for `SIGTERM` to reach the handlers in `server.ts`,
-# which every graceful-shutdown guarantee in `reports/coolify-deployment.md`
-# depends on — Docker signals PID 1 and nothing else:
-#
-#  - `bun run <script>` SPAWNS the script and does not forward signals on its
-#    single-script path (oven-sh/bun#41478; only `--filter`/`--parallel` do), so
-#    as PID 1 it would swallow every stop.
-#  - without `exec`, `sh` would wait on that child instead of being replaced.
-#    (Debian's `/bin/sh` is dash, which already execs the last command of an
-#    `&&` list, so this is belt and braces — but the image's shell is not this
-#    file's to assume.)
+# The exec form, and the server invoked directly rather than through
+# `bun run start`: both are required for `SIGTERM` to reach the handlers in
+# `server.ts`, which every graceful-shutdown guarantee in
+# `reports/coolify-deployment.md` depends on — Docker signals PID 1 and nothing
+# else. `bun run <script>` SPAWNS the script and does not forward signals on its
+# single-script path (oven-sh/bun#41478; only `--filter`/`--parallel` do), and
+# a shell form would make `sh` PID 1 unless it `exec`s.
 #
 # `NODE_ENV=production` is the `ENV` above, which is what `start` also sets; if
 # that script gains anything else, this line has to gain it too.
-CMD ["sh", "-c", "bun scripts/build-openapi.ts && exec bun --bun server.ts"]
+CMD ["bun", "--bun", "server.ts"]

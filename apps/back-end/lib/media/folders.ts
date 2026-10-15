@@ -1,6 +1,5 @@
 import type { Actor } from './actor';
 import type { Executor, Tx } from '@/db';
-import type { ServerValue } from '@/lib/http/contract';
 import type {
   mediaFolderDetailsSchema,
   mediaFolderHitSchema,
@@ -45,15 +44,9 @@ export interface FolderSummary {
   updatedAt: Date;
 }
 
-type MediaFolder = ServerValue<z.output<typeof mediaFolderSchema>>;
-type FolderHit = ServerValue<z.output<typeof mediaFolderHitSchema>>;
-type FolderDetails = ServerValue<z.output<typeof mediaFolderDetailsSchema>>;
-
-/**
- * Capped, not paged: a navigation aid beside the paginated file list. The cap
- * is reported (`truncated`) so a dropped folder is never silent.
- */
-const FOLDER_SEARCH_LIMIT = 20;
+type MediaFolder = z.input<typeof mediaFolderSchema>;
+type FolderHit = z.input<typeof mediaFolderHitSchema>;
+type FolderDetails = z.input<typeof mediaFolderDetailsSchema>;
 
 const FOLDER_COLUMNS = {
   id: folders.id,
@@ -230,16 +223,31 @@ export async function requireFolder(
   if (!folder) throw folderNotFound();
 }
 
-/** One name query for any number of folders. */
-async function withCreatorNames<T extends { createdBy: string | null }>(
+/** Folder rows as answered: one name query for any number of them. */
+async function toWireFolders<
+  T extends { createdBy: string | null; createdAt: Date; updatedAt: Date },
+>(
   rows: readonly T[],
   executor: Executor = db
-): Promise<Array<T & { createdByName: string | null }>> {
+): Promise<
+  Array<
+    Omit<T, 'createdAt' | 'updatedAt'> & {
+      createdAt: string;
+      updatedAt: string;
+      createdByName: string | null;
+    }
+  >
+> {
   const nameOf = await userNames(
     rows.map((row) => row.createdBy),
     executor
   );
-  return rows.map((row) => ({ ...row, createdByName: nameOf(row.createdBy) }));
+  return rows.map((row) => ({
+    ...row,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    createdByName: nameOf(row.createdBy),
+  }));
 }
 
 /** Direct children, by name. Bounded by the cap, which the root shares, so never paginated. */
@@ -252,11 +260,14 @@ export async function listSubfolders(
     .where(childrenOf(parentId))
     .orderBy(asc(sql`lower(${folders.name})`), asc(folders.id))
     .limit(FOLDER_MAX_CHILDREN);
-  return withCreatorNames(rows);
+  return toWireFolders(rows);
 }
 
+/** Folder hits one library search names; more are reported as truncated. */
+export const FOLDER_SEARCH_LIMIT = 20;
+
 /**
- * One statement, so twenty hits do not cost twenty recursive queries. `term`
+ * One statement, so the hits do not cost a recursive query each. `term`
  * arrives normalised by the data-table parser.
  */
 export async function searchFolders(
@@ -309,7 +320,7 @@ export async function searchFolders(
     };
   });
   return {
-    folders: await withCreatorNames(hits),
+    folders: await toWireFolders(hits),
     truncated: rows.length > FOLDER_SEARCH_LIMIT,
   };
 }
@@ -355,8 +366,8 @@ export async function folderDetails(
         .from(folders)
         .where(eq(folders.id, folderId));
       if (!row) throw folderNotFound();
-      const [named] = await withCreatorNames([row], tx);
-      if (!named) throw new Error('withCreatorNames dropped its only row');
+      const [named] = await toWireFolders([row], tx);
+      if (!named) throw new Error('toWireFolders dropped its only row');
       return {
         ...named,
         breadcrumbs: await breadcrumbs(folderId, tx),

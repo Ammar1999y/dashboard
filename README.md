@@ -113,8 +113,9 @@ identically for both.
 ## Layout of a change
 
 - Something both apps need → `packages/shared`.
-- A request body → its schema in `packages/shared/src/validation`, an entry in
-  `contract.ts`, and the route in `apps/back-end/routes.ts`. The OpenAPI build
-  refuses a `body: 'json'` route without an entry, and an entry without a route.
+- An endpoint → its contract entry in `packages/shared/src/api`, field prose in
+  the `*.docs.ts` beside its schema, and a `bind()` in
+  `apps/back-end/modules/<domain>`. The steps are in
+  `apps/back-end/docs/framework-migration.md`.
 - Server-only behaviour, database, auth internals → `apps/back-end`.
 - Engineering standards for each app are in its own `CLAUDE.md` / `AGENTS.md`.

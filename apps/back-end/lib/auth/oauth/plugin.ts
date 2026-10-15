@@ -312,7 +312,6 @@ export const oauth = () =>
         { method: 'GET' },
         (ctx) =>
           ctx.json({
-            success: true,
             data: { oauthProviders: ENABLED_OAUTH_PROVIDERS },
           })
       ),
@@ -359,7 +358,6 @@ export const oauth = () =>
             });
             url.searchParams.set('nonce', nonce);
             return ctx.json({
-              success: true,
               data: { url: url.href },
             });
           }
@@ -525,7 +523,7 @@ export const oauth = () =>
                 stage = 'result_delivery';
                 return await completeResponse(
                   ctx,
-                  { success: true, data: { loggedIn: true } },
+                  { data: { loggedIn: true } },
                   destination,
                   result.user.id
                 );

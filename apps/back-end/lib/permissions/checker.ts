@@ -356,6 +356,8 @@ export async function checkMultiplePermissions(params: {
   headers: Headers;
   checks: Array<{ resource: DashboardPage; action: PermissionAction }>;
   forceDB?: boolean;
+  /** The caller's session, already read for this request. */
+  signedIn?: { session: AuthSession; userId: EntityID };
 }): Promise<{
   permissions: Record<string, boolean>;
   session: AuthSession;
@@ -364,7 +366,8 @@ export async function checkMultiplePermissions(params: {
 }> {
   const { headers, checks, forceDB = false } = params;
 
-  const { session, userId } = await authenticatedSession(headers);
+  const { session, userId } =
+    params.signedIn ?? (await authenticatedSession(headers));
   const { sessionId, permissions: allPermissions } = await resolveGrants({
     headers,
     session,

@@ -228,6 +228,27 @@ const eslintConfig = [
     },
   },
   {
+    // Its own rule name, so the per-folder `no-restricted-imports` above stay
+    // in force. `tests/**` is ignored by this config already.
+    files: ['**/*.{ts,tsx}'],
+    ignores: ['mocks/**'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@app/shared/response-contract',
+              allowTypeImports: true,
+              message:
+                'Its registries pull every response schema into the bundle. Import the schema from `@app/shared/responses/<domain>`; only types may come from here.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['components/**/*.{ts,tsx}', 'pages/**/*.{ts,tsx}'],
     plugins: { tailwind: tailwindConventions },
     rules: {

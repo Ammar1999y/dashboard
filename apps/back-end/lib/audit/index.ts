@@ -1,6 +1,6 @@
 import type { Tx } from '@/db';
 import type { AuditAction } from '@/db/schema';
-import type { HandlerInput } from '@/lib/http/contract';
+import type { HandlerRequestMeta } from '@/lib/http/contract';
 import type { EntityID } from '@app/shared/types';
 
 import { auditLogs } from '@/db/schema';
@@ -34,7 +34,9 @@ export function boundedAuditMeta(
   };
 }
 
-export function getAuditMeta(ctx: HandlerInput): AuditMeta {
+export function getAuditMeta(
+  ctx: Pick<HandlerRequestMeta, 'ip' | 'userAgent' | 'apiPath'>
+): AuditMeta {
   return boundedAuditMeta(ctx.ip || null, ctx.userAgent, ctx.apiPath);
 }
 

@@ -36,7 +36,7 @@ const clearResults = () => useLab.setState({ results: [], pops: [] });
 
 const MANUAL_CHECKS = [
   `الرابط المشترك: افتح ${SHARED_LINK} في علامة تبويب جديدة، واضغط مرة واحدة في أي مكان، ثم اضغط زر الرجوع في المتصفح أو الهاتف. يُغلق مربع الحوار الداخلي، ثم الخارجي، ثم تغادر الصفحة. إذا لم تضغط داخل الصفحة أولًا، فسيتجاوز المتصفح إدخالات السجل التي أضافتها الصفحة ويغادر فورًا؛ فهذا سلوك أمني يمنع الصفحات من احتجاز زر الرجوع ولا يمكن للصفحة تجاوزه.`,
-  'الرابط: اضغط الرابط الموجود أسفل هذه القائمة. يُفتح مربعا الحوار، ثم يغلق زر الرجوع الداخلي أولًا فالخارجي، وتبقى في هذه الصفحة.',
+  'الرابط: اضغط الرابط الموجود أسفل هذه القائمة. يُفتح مربعا الحوار، ثم يغلق زر الرجوع الداخلي أولًا فالخارجي، وتبقى في هذه الصفحة. ضغطة رجوع أخرى تغادر الصفحة مباشرة، فلا تبقى نسخة ثانية منها في السجل.',
   'مربعا حوار متداخلان: افتح الخارجي، ثم افتح الداخلي من خلاله، واضغط زر الرجوع مرتين. يجب أن يُغلق الأحدث أولًا.',
   'اختبار الهاتف: افتح الإعدادات واضغط «اللوحة الجانبية». تُغلق الإعدادات وتبقى اللوحة الجانبية مفتوحة. يغلقها زر الرجوع وتبقى في هذه الصفحة.',
   'زر الإغلاق (X): افتح مربع الحوار الخارجي، واضغط إغلاق (X)، ثم اضغط زر الرجوع. يجب أن تنتقل مباشرة إلى الصفحة السابقة من أول ضغطة.',
@@ -164,12 +164,25 @@ const readHistory = () => ({
   dialogEntry: isDialogEntry(history.state),
 });
 
+type HistoryReadout = ReturnType<typeof readHistory>;
+
+// The poll keeps the last reading when nothing changed, so an idle page
+// does not re-render on every tick.
+const nextReadout = (prev: HistoryReadout): HistoryReadout => {
+  const next = readHistory();
+  return next.url === prev.url &&
+    next.length === prev.length &&
+    next.dialogEntry === prev.dialogEntry
+    ? prev
+    : next;
+};
+
 const Readout = memo(() => {
   const [state, setState] = useState(readHistory);
   const pops = useLab((s) => s.pops);
 
   useEffect(() => {
-    const interval = setInterval(() => setState(readHistory()), READOUT_MS);
+    const interval = setInterval(() => setState(nextReadout), READOUT_MS);
     return () => clearInterval(interval);
   }, []);
 

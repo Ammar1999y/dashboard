@@ -12,9 +12,11 @@ import { db } from '@/db';
 import { accounts, roles, users } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { permissionMsg } from '@app/shared/messages/permissions';
+import {
+  MSG_INSUFFICIENT_PERMISSIONS,
+  permissionMsg,
+} from '@app/shared/messages/permissions';
 import { userMsg } from '@app/shared/messages/users';
-import { MSG_UNRECOGNIZED_KEYS } from '@app/shared/messages/validation';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';
@@ -94,10 +96,11 @@ beforeAll(async () => {
 });
 
 describe('case-variant path ids keep identity guards closed', () => {
-  test('PUT dispatch treats an uppercase own id as self-edit', async () => {
+  test('PUT refuses an uppercase spelling of the actor own id, as the lowercase one', async () => {
     const actor = fx().selfEdit;
     const upperId = uppercaseOneHexLetter(actor.user.userId);
     const before = await accountState(actor.user.userId);
+    const beforeUser = await userState(actor.user.userId);
     const body = {
       name: 'Harness User',
       email: actor.user.email,
@@ -106,13 +109,10 @@ describe('case-variant path ids keep identity guards closed', () => {
       password: 'CaseVariant!Passw0rd2',
     };
     const expected = {
-      status: HTTP_STATUS.UNPROCESSABLE,
+      status: HTTP_STATUS.FORBIDDEN,
       body: {
         success: false,
-        message: MSG_UNRECOGNIZED_KEYS(
-          ['email', 'roleId', 'isActive', 'password'],
-          0
-        ),
+        message: MSG_INSUFFICIENT_PERMISSIONS,
         data: null,
       },
     };
@@ -139,6 +139,7 @@ describe('case-variant path ids keep identity guards closed', () => {
     expect(lowercase).toEqual(expected);
     expect(uppercase).toEqual(expected);
     expect(await accountState(actor.user.userId)).toEqual(before);
+    expect(await userState(actor.user.userId)).toEqual(beforeUser);
   });
 
   test('PUT rejects an uppercase spelling of the actor own role', async () => {

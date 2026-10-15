@@ -1,40 +1,36 @@
 import type { TableQuery } from '@/lib/data-table/query';
-import type {
-  ExtendedColumnFilter,
-  ExtendedColumnSort,
-  JoinOperator,
-} from '@app/shared/types/data-table';
+import type { JoinOperator } from '@app/shared/types/data-table';
 
 import { useRouter } from 'next/router';
-import { useLayoutEffect } from 'react';
+import { useLayoutEffect, useState } from 'react';
 
 import { create } from 'zustand';
 import { useShallow } from 'zustand/shallow';
 import {
-  DEFAULT_PER_PAGE,
-  MAX_PAGE,
-  MAX_PER_PAGE,
-  parseFiltersState,
-  parseSortingState,
-} from '@app/shared/data-table/parsers';
-import { positiveInt } from '@app/shared/utils';
+  readTableQuery,
+  sameSort,
+  writeTableQuery,
+} from '@/lib/data-table/url';
+import { entryPage, mirrorPageParams } from '@/lib/history';
 
-export const URL_KEYS = {
-  page: 'page',
-  perPage: 'perPage',
-  sort: 'sort',
-  filters: 'filters',
-  joinOperator: 'joinOperator',
-  search: 'search',
-} as const;
+type Sort = TableQuery['sort'];
+type Filters = TableQuery['filters'];
 
-/** A malformed or out-of-range count reads as its default, as the server does. */
-const countParam = (raw: string | null, max: number, fallback: number) => {
-  const value = positiveInt(raw, max);
-  return value > 0 ? value : fallback;
-};
+/** How long the table's changes must pause before the address is written. */
+export const TABLE_URL_DELAY_MS = 300;
 
-type Sort = ExtendedColumnSort<Record<string, unknown>>[];
+/**
+ * Keeps an empty list's reference: a new `[]` is a change to every
+ * subscriber of `filters`, and to every memo that depends on it.
+ */
+const emptied = (current: Filters): Filters =>
+  current.length === 0 ? current : [];
+
+/** Filters replace the quick search; clearing them leaves it. */
+const withFilters = (current: Filters, filters: Filters) =>
+  filters.length > 0
+    ? { filters, search: '', page: 1 }
+    : { filters: emptied(current), page: 1 };
 
 interface DataTableIdentity {
   /** Which table the current state belongs to (`null` before the first mount). */
@@ -55,15 +51,9 @@ interface DataTableActions {
   setPage: (page: number) => void;
   setPerPage: (perPage: number) => void;
   setSorting: (sort: Sort) => void;
-  setFilters: (
-    filters:
-      | ExtendedColumnFilter<Record<string, unknown>>[]
-      | null
-      | ((
-          prev: ExtendedColumnFilter<Record<string, unknown>>[]
-        ) => ExtendedColumnFilter<Record<string, unknown>>[])
-  ) => void;
-  setJoinOperator: (joinOperator: JoinOperator) => void;
+  setFilters: (filters: Filters) => void;
+  /** The filter panel's apply: its filters and how they combine, as one change. */
+  applyFilters: (filters: Filters, joinOperator: JoinOperator) => void;
   setSearch: (search: string) => void;
 }
 
@@ -71,70 +61,34 @@ export interface DataTableStore extends TableQuery, DataTableIdentity {
   actions: DataTableActions;
 }
 
-function parseUrlParams(defaultSort: Sort = []): TableQuery {
-  if (typeof window === 'undefined') {
-    return {
-      page: 1,
-      perPage: DEFAULT_PER_PAGE,
-      sort: defaultSort,
-      filters: [],
-      joinOperator: 'and',
-      search: '',
-    };
-  }
-
-  const params = new URLSearchParams(location.search);
-
-  const page = countParam(params.get(URL_KEYS.page), MAX_PAGE, 1);
-  const perPage = countParam(
-    params.get(URL_KEYS.perPage),
-    MAX_PER_PAGE,
-    DEFAULT_PER_PAGE
+const parseUrlParams = (defaultSort: Sort = []): TableQuery =>
+  readTableQuery(
+    new URLSearchParams(typeof window === 'undefined' ? '' : location.search),
+    defaultSort
   );
 
-  const parsedSort = parseSortingState(params.get(URL_KEYS.sort));
-  const sort = parsedSort.length > 0 ? parsedSort : defaultSort;
-  const filters = parseFiltersState(params.get(URL_KEYS.filters));
-  const joinOperatorRaw = params.get(URL_KEYS.joinOperator);
-  const joinOperator: JoinOperator = joinOperatorRaw === 'or' ? 'or' : 'and';
-
-  const searchRaw = params.get(URL_KEYS.search);
-  // If both filters and search exist in URL, prioritize filters and discard search
-  const search = filters.length > 0 ? '' : (searchRaw ?? '');
-
-  return { page, perPage, sort, filters, joinOperator, search };
-}
-
-export const useDataTableStore = create<DataTableStore>((set, get) => ({
+export const useDataTableStore = create<DataTableStore>((set) => ({
   ...parseUrlParams(),
   tableKey: null,
 
   actions: {
-    initTable: (tableKey, defaultSort) => {
-      if (get().tableKey === tableKey) return;
-      set({ ...parseUrlParams(defaultSort), tableKey });
-    },
+    initTable: (tableKey, defaultSort) =>
+      set((s) =>
+        s.tableKey === tableKey
+          ? s
+          : { ...parseUrlParams(defaultSort), tableKey }
+      ),
     setPage: (page) => set({ page }),
     // A new page size or order makes the current page number meaningless.
     setPerPage: (perPage) => set({ perPage, page: 1 }),
-    setSorting: (sort) => set({ sort, page: 1 }),
-    setFilters: (filtersOrUpdater) => {
-      if (filtersOrUpdater === null) {
-        set({ filters: [], page: 1 });
-        return;
-      }
-      const filters =
-        typeof filtersOrUpdater === 'function'
-          ? filtersOrUpdater(get().filters)
-          : filtersOrUpdater;
-      set({
-        filters,
-        search: filters.length > 0 ? '' : get().search,
-        page: 1,
-      });
-    },
-    setJoinOperator: (joinOperator) => set({ joinOperator }),
-    setSearch: (search) => set({ search, filters: [], page: 1 }),
+    // Applying the order already shown still returns to the first page.
+    setSorting: (sort) =>
+      set((s) => ({ sort: sameSort(s.sort, sort) ? s.sort : sort, page: 1 })),
+    setFilters: (filters) => set((s) => withFilters(s.filters, filters)),
+    applyFilters: (filters, joinOperator) =>
+      set((s) => ({ ...withFilters(s.filters, filters), joinOperator })),
+    setSearch: (search) =>
+      set((s) => ({ search, filters: emptied(s.filters), page: 1 })),
   },
 }));
 
@@ -143,9 +97,16 @@ export const useDataTableStore = create<DataTableStore>((set, get) => ({
  * the singleton still holds the previous table's state after a client-side
  * navigation, so the page's own URL is read instead: without that, the first
  * request of the new table carries the old table's filters.
+ *
+ * The identity is one visit: the route, the history entry the table mounted
+ * on, and Next's `asPath` for a navigation that keeps it mounted. Each visit
+ * starts from its own URL, Back to an earlier one included, rather than from
+ * the state of the visit before.
  */
 export function useTableUrlState(defaultSort?: Sort): TableQuery {
-  const { pathname } = useRouter();
+  const { pathname, asPath } = useRouter();
+  const [entry] = useState(entryPage);
+  const key = `${pathname} ${asPath} ${entry}`;
   const stored = useDataTableStore(
     useShallow((s) => ({
       page: s.page,
@@ -159,8 +120,27 @@ export function useTableUrlState(defaultSort?: Sort): TableQuery {
   );
 
   useLayoutEffect(() => {
-    useDataTableStore.getState().actions.initTable(pathname, defaultSort);
-  }, [pathname, defaultSort]);
+    useDataTableStore.getState().actions.initTable(key, defaultSort);
+  }, [key, defaultSort]);
 
-  return stored.tableKey === pathname ? stored : parseUrlParams(defaultSort);
+  return stored.tableKey === key ? stored : parseUrlParams(defaultSort);
+}
+
+/**
+ * Mirrors the bound table's state into the address until the returned stop.
+ * Runs after `initTable`, so it starts from this table's state.
+ */
+export function mirrorTableToUrl(defaultSort: Sort = []): () => void {
+  const { tableKey } = useDataTableStore.getState();
+  return mirrorPageParams({
+    write: (params) => {
+      const state = useDataTableStore.getState();
+      // The next table binds the store in a layout effect, before this
+      // mirror's passive cleanup stops it.
+      if (state.tableKey === tableKey)
+        writeTableQuery(params, state, defaultSort);
+    },
+    subscribe: useDataTableStore.subscribe,
+    delayMs: TABLE_URL_DELAY_MS,
+  });
 }

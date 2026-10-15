@@ -1,52 +1,57 @@
 /**
  * The runtime half of the response contract (`lib/http/response-check.ts`):
- * every success a keyed route answers, and every answer of our own Better Auth
- * plugin endpoints, is held to its published contract and to its status. Under
- * the runner a mismatch answers 500 and is recorded for the preload to fail the
- * test with; in development it is only logged; production never checks.
+ * every success a binding answers, its refusals' statuses and codes, and every
+ * answer of our own Better Auth plugin endpoints, is held to its published
+ * contract. Under the runner a mismatch answers 500 and is recorded for the
+ * preload to fail the test with; in development it is only logged; production
+ * never checks.
  */
-import { afterAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import type { Handler, HandlerOutput } from '@/lib/http/contract';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  spyOn,
+  test,
+} from 'bun:test';
+import type { createApp as CreateApp } from '@/app';
 import type { ResponseRoute } from '@app/shared/response-contract';
+import type { PaginationMeta } from '@app/shared/types/api';
 
-import { ROUTES } from '@/routes';
+import * as z from 'zod';
 
+import { endpoint } from '@app/shared/api/endpoint';
+import { CustomError } from '@app/shared/error-class';
+import { FILE_BUSY_CODE, FILE_IN_USE_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_FETCHED } from '@app/shared/messages/common';
+import {
+  MSG_FETCHED,
+  MSG_INTERNAL_ERROR,
+  MSG_INVALID_INPUT,
+} from '@app/shared/messages/common';
+import { createdIdSchema } from '@app/shared/responses/common';
 
-import { buildRequestMeta, withBodyPolicy } from '@/lib/http/request';
-import { apiSuccess } from '@/lib/http/response';
+import { bind } from '@/lib/http/binding';
+import { successBody } from '@/lib/http/response';
 import {
   checkBetterAuthResponse,
+  checkSuccess,
   responseCheckMode,
-  withResponseCheck,
 } from '@/lib/http/response-check';
 import {
   describeResponseCoverage,
   expectedResponseCoverage,
 } from '@/lib/http/response-coverage';
 import { takeResponseMismatches } from '@/lib/http/response-mismatches';
-import { toRegisteredRoutes } from '@/lib/http/route-manifest';
 import { generateUuidV7 } from '@/lib/id';
 
+import { expectError } from '../helpers/expect-body';
 import { mediaFileWire, PAGE_META } from '../helpers/response-fixtures';
 
-const ctx = withBodyPolicy(
-  buildRequestMeta(new Request('http://localhost/api/dash/media/files')),
-  'none'
-);
-
-/** A handler keyed `key` that answers `output` whatever it is asked. */
-const answering = (key: ResponseRoute, output: HandlerOutput): Handler =>
-  Object.assign(async () => output, { routeKey: key });
-
-const success = (
-  data: unknown,
-  status: number = HTTP_STATUS.OK
-): HandlerOutput => ({
-  status,
-  body: { success: true, message: MSG_FETCHED, data },
-});
+/** The body `run()` builds for a binding's success. */
+const success = (data: unknown, meta?: PaginationMeta) =>
+  successBody(MSG_FETCHED, data, meta);
 
 const logged = spyOn(console, 'error').mockImplementation(() => {});
 beforeEach(() => {
@@ -57,41 +62,49 @@ afterAll(() => {
 });
 
 describe('under the runner', () => {
-  test('an answer within its contract passes through untouched', async () => {
-    const output = success(mediaFileWire(), HTTP_STATUS.CREATED);
-    const checked = withResponseCheck(
-      answering('POST /api/dash/media/files', output),
-      'enforce'
-    );
-    expect(await checked(ctx)).toBe(output);
+  test('an answer within its contract passes', () => {
+    expect(
+      checkSuccess(
+        'enforce',
+        'POST /api/dash/media/files',
+        success(mediaFileWire())
+      )
+    ).toBe(true);
     expect(takeResponseMismatches()).toEqual([]);
     expect(logged).not.toHaveBeenCalled();
   });
 
   const id = generateUuidV7();
-  const cases: readonly [string, ResponseRoute, HandlerOutput, string][] = [
+  const cases: readonly [string, ResponseRoute, unknown, string][] = [
     [
       'a key the contract does not name',
       'POST /api/upload/file',
-      success([{ ...mediaFileWire(), r2Key: 'private/x' }], 201),
+      success([{ ...mediaFileWire(), r2Key: 'private/x' }]),
       'data.0: unrecognized_keys',
     ],
     [
       'a malformed id',
       'POST /api/dash/media/files',
-      success({ ...mediaFileWire(), id: crypto.randomUUID() }, 201),
+      success({ ...mediaFileWire(), id: crypto.randomUUID() }),
       'data.id: invalid_format',
     ],
     [
       'a malformed date',
       'POST /api/dash/media/files',
-      success({ ...mediaFileWire(), createdAt: 'yesterday' }, 201),
+      success({ ...mediaFileWire(), createdAt: 'yesterday' }),
       'data.createdAt: invalid_format',
+    ],
+    [
+      // The value is judged, not its JSON: Elysia's schema refuses it too.
+      'a date the handler left a `Date`',
+      'POST /api/dash/media/files',
+      success({ ...mediaFileWire(), createdAt: new Date() }),
+      'data.createdAt: invalid_type',
     ],
     [
       'an enum that exists only as metadata',
       'POST /api/dash/media/files',
-      success({ ...mediaFileWire(), mimeType: 'text/html' }, 201),
+      success({ ...mediaFileWire(), mimeType: 'text/html' }),
       'data.mimeType: invalid_value',
     ],
     [
@@ -118,23 +131,12 @@ describe('under the runner', () => {
       success([]),
       'meta: invalid_type',
     ],
-    [
-      'a wrong status',
-      'POST /api/dash/media/files',
-      success(mediaFileWire(), HTTP_STATUS.OK),
-      'status 200, expected 201',
-    ],
   ];
 
   test.each(cases)(
-    '%s answers 500 and is recorded',
-    async (_name, key, output, problem) => {
-      const answer = await withResponseCheck(
-        answering(key, output),
-        'enforce'
-      )(ctx);
-      expect(answer.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
-      expect(answer.body).toMatchObject({ success: false, data: null });
+    '%s is refused and recorded',
+    (_name, key, body, problem) => {
+      expect(checkSuccess('enforce', key, body)).toBe(false);
       const [recorded, ...rest] = takeResponseMismatches();
       expect(rest).toEqual([]);
       expect(recorded).toStartWith(`${key}: `);
@@ -142,15 +144,13 @@ describe('under the runner', () => {
     }
   );
 
-  test('the log names the route and each problem, never a value', async () => {
+  test('the log names the route and each problem, never a value', () => {
     const secret = 'not-an-id-but-a-secret';
-    await withResponseCheck(
-      answering(
-        'POST /api/dash/media/files',
-        success({ ...mediaFileWire(), id: secret }, HTTP_STATUS.CREATED)
-      ),
-      'enforce'
-    )(ctx);
+    checkSuccess(
+      'enforce',
+      'POST /api/dash/media/files',
+      success({ ...mediaFileWire(), id: secret })
+    );
     takeResponseMismatches();
     expect(logged).toHaveBeenCalledTimes(1);
     const line = String(logged.mock.calls[0]?.[0]);
@@ -159,44 +159,14 @@ describe('under the runner', () => {
     expect(line).not.toContain(secret);
   });
 
-  test('a refusal, and a handler without a key, are left alone', async () => {
-    const refusal: HandlerOutput = {
-      status: HTTP_STATUS.NOT_FOUND,
-      body: { success: false, message: 'gone', data: null },
-    };
+  test('meta on a paginated answer is held to its own schema', () => {
     expect(
-      await withResponseCheck(
-        answering('GET /api/dash/media/files/:id', refusal),
-        'enforce'
-      )(ctx)
-    ).toBe(refusal);
-
-    const unkeyed: Handler = async () => success({ anything: true });
-    expect(withResponseCheck(unkeyed, 'enforce')).toBe(unkeyed);
-    expect(takeResponseMismatches()).toEqual([]);
-  });
-
-  test('the checked handler keeps its key, which the document build reads', () => {
-    const route = ROUTES.find((entry) => entry.handler.routeKey !== undefined);
-    if (!route) throw new Error('no keyed route in the table');
-    expect(withResponseCheck(route.handler, 'enforce').routeKey).toBe(
-      route.handler.routeKey
-    );
-  });
-
-  test('meta on a paginated answer is held to its own schema', async () => {
-    const answer = await withResponseCheck(
-      answering(
+      checkSuccess(
+        'enforce',
         'GET /api/dash/permissions',
-        apiSuccess({
-          message: MSG_FETCHED,
-          data: [],
-          meta: { ...PAGE_META, page: 0 },
-        })
-      ),
-      'enforce'
-    )(ctx);
-    expect(answer.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
+        success([], { ...PAGE_META, page: 0 })
+      )
+    ).toBe(false);
     expect(takeResponseMismatches()).toEqual([
       'GET /api/dash/permissions: meta.page: too_small',
     ]);
@@ -204,16 +174,14 @@ describe('under the runner', () => {
 });
 
 describe('in development', () => {
-  test('a mismatch is logged and the answer goes out as it was', async () => {
-    const output = success(
-      { ...mediaFileWire(), id: 'x' },
-      HTTP_STATUS.CREATED
-    );
-    const answer = await withResponseCheck(
-      answering('POST /api/dash/media/files', output),
-      'log'
-    )(ctx);
-    expect(answer).toBe(output);
+  test('a mismatch is logged and the answer goes out as it was', () => {
+    expect(
+      checkSuccess(
+        'log',
+        'POST /api/dash/media/files',
+        success({ ...mediaFileWire(), id: 'x' })
+      )
+    ).toBe(true);
     expect(takeResponseMismatches()).toEqual([]);
     expect(logged).toHaveBeenCalledTimes(1);
   });
@@ -246,14 +214,6 @@ describe('in production', () => {
         RESPONSE_CONTRACT_CHECK: 'nonsense',
       })
     ).toBeNull();
-  });
-
-  test('no registered handler is wrapped', () => {
-    const registered = toRegisteredRoutes(ROUTES, false, null);
-    const tableHandlers = new Set(ROUTES.map((entry) => entry.handler));
-    expect(registered.length).toBeGreaterThan(0);
-    for (const route of registered)
-      expect(tableHandlers.has(route.handler)).toBe(true);
   });
 });
 
@@ -292,7 +252,7 @@ describe('at the Better Auth prefix route', () => {
     });
 
   test('an answer within its registry entry passes through untouched', async () => {
-    const response = json({ success: true, data: { trusted: true } });
+    const response = json({ data: { trusted: true } });
     expect(
       await checkBetterAuthResponse(
         'enforce',
@@ -318,13 +278,19 @@ describe('at the Better Auth prefix route', () => {
     [
       'a stray message',
       '/two-factor/trust-device',
-      () => json({ success: true, message: 'x', data: { trusted: true } }),
+      () => json({ message: 'x', data: { trusted: true } }),
+      'body: unrecognized_keys',
+    ],
+    [
+      'the retired success flag',
+      '/two-factor/trust-device',
+      () => json({ success: true, data: { trusted: true } }),
       'body: unrecognized_keys',
     ],
     [
       'data: null on a body without data',
       '/two-factor/disable',
-      () => json({ success: true, message: 'done', data: null }),
+      () => json({ message: 'done', data: null }),
       'body: unrecognized_keys',
     ],
     [
@@ -342,13 +308,13 @@ describe('at the Better Auth prefix route', () => {
     [
       'an OAuth URL with a javascript: scheme',
       '/oauth/google/start',
-      () => json({ success: true, data: { url: 'javascript:alert(1)' } }),
+      () => json({ data: { url: 'javascript:alert(1)' } }),
       'data.url: invalid_format',
     ],
     [
       'an extra key in the WebAuthn options',
       '/two-factor/passkey/options',
-      () => json({ success: true, data: { ...options, extra: 1 } }),
+      () => json({ data: { ...options, extra: 1 } }),
       'data: unrecognized_keys',
     ],
     [
@@ -356,7 +322,6 @@ describe('at the Better Auth prefix route', () => {
       '/reauth/passkey/options',
       () =>
         json({
-          success: true,
           data: { ...options, userVerification: 'preferred' },
         }),
       'data.userVerification: invalid_value',
@@ -370,7 +335,7 @@ describe('at the Better Auth prefix route', () => {
     [
       'a wrong status',
       '/two-factor/trust-device',
-      () => json({ success: true, data: { trusted: true } }, 201),
+      () => json({ data: { trusted: true } }, 201),
       'status 201, expected 200',
     ],
     [
@@ -432,7 +397,7 @@ describe('at the Better Auth prefix route', () => {
     expect(
       await checkBetterAuthResponse('enforce', '/capabilities', 'HEAD', head)
     ).toBe(head);
-    const broken = json({ success: true, message: 'x', data: null });
+    const broken = json({ message: 'x', data: null });
     expect(
       await checkBetterAuthResponse(null, '/two-factor/disable', 'POST', broken)
     ).toBe(broken);
@@ -440,7 +405,7 @@ describe('at the Better Auth prefix route', () => {
   });
 
   test('in development a mismatch is logged and the answer goes out as it was', async () => {
-    const broken = json({ success: true, data: { trusted: false } });
+    const broken = json({ data: { trusted: false } });
     expect(
       await checkBetterAuthResponse(
         'log',
@@ -469,4 +434,156 @@ describe('at the Better Auth prefix route', () => {
       describeResponseCoverage('Better Auth /two-factor/otp/verify #1')
     ).toBe('Better Auth /two-factor/otp/verify #1 {method, channel}');
   });
+});
+
+describe('a binding under the runner', () => {
+  const KEY = 'POST /api/dash/permissions';
+  const ID = generateUuidV7();
+  const entry = endpoint({
+    method: 'POST',
+    path: '/api/dash/permissions',
+    query: z.strictObject({}),
+    body: z.object({ name: z.string() }),
+    status: 201,
+    response: createdIdSchema,
+    errors: {
+      404: { codes: ['DECLARED'] },
+      409: {
+        codes: ['PLAIN'],
+        codesWithIds: [FILE_BUSY_CODE, FILE_IN_USE_CODE],
+      },
+    },
+    policy: {
+      auth: 'public',
+      captcha: false,
+      reauth: false,
+      rateLimited: false,
+      checksPassword: false,
+    },
+  });
+  const next: { answer: 'ok' | 'extra' | CustomError } = { answer: 'ok' };
+  const state: { app: ReturnType<typeof CreateApp> | null } = { app: null };
+
+  beforeAll(async () => {
+    const { createApp } = await import('@/app');
+    state.app = createApp({
+      bindings: [
+        bind(entry, {
+          failure: MSG_INTERNAL_ERROR,
+          preAuthIpLimit: false,
+          refusals: {
+            query: {
+              status: HTTP_STATUS.BAD_REQUEST,
+              message: MSG_INVALID_INPUT,
+            },
+          },
+          detail: { summary: 'synthetic', tags: ['Permissions'] },
+          handler: async () => {
+            const { answer } = next;
+            if (answer instanceof CustomError) throw answer;
+            const data = { id: generateUuidV7() };
+            // A key the contract does not name, which the framework's own
+            // schema would strip: only the contract check refuses it.
+            return {
+              message: 'ok',
+              data:
+                answer === 'ok'
+                  ? data
+                  : ({ ...data, secret: 'LEAK' } as typeof data),
+            };
+          },
+        }),
+      ],
+      prefixes: [],
+    });
+  });
+
+  const post = (
+    answer: typeof next.answer,
+    { query = '', body = '{"name":"a"}' } = {}
+  ) => {
+    if (!state.app) throw new Error('not built');
+    next.answer = answer;
+    return state.app.handle(
+      new Request(`http://localhost/api/dash/permissions${query}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      })
+    );
+  };
+
+  test('a success within its contract and the published refusals pass', async () => {
+    const created = await post('ok');
+    expect(created.status).toBe(HTTP_STATUS.CREATED);
+    const declared = await expectError(
+      await post(new CustomError('x', 404, 'DECLARED')),
+      404
+    );
+    expect(declared.code).toBe('DECLARED');
+    const named = await expectError(
+      await post(new CustomError('x', 409, FILE_BUSY_CODE, { fileIds: [ID] })),
+      409
+    );
+    expect(named.data).toEqual({ fileIds: [ID] });
+    // Its referrer can be gone by the time it is looked up.
+    await expectError(
+      await post(new CustomError('x', 409, FILE_IN_USE_CODE)),
+      409
+    );
+    await expectError(await post(new CustomError('x', 409, 'PLAIN')), 409);
+    // A 400 of the input, not the handler's: published without `errors[400]`.
+    await expectError(
+      await post('ok', { query: '?a=1' }),
+      400,
+      MSG_INVALID_INPUT
+    );
+    await expectError(await post('ok', { body: '{' }), 400);
+    expect(takeResponseMismatches()).toEqual([]);
+  });
+
+  test.each([
+    ['a success outside its contract', 'extra', 'data: unrecognized_keys'],
+    [
+      'an undeclared code',
+      new CustomError('x', 404, 'UNDECLARED'),
+      'code UNDECLARED is not declared at 404',
+    ],
+    [
+      'a status the entry does not publish',
+      new CustomError('x', 401),
+      'status 401 is not published',
+    ],
+    [
+      'ids under a code the entry declares without them',
+      new CustomError('x', 409, 'PLAIN', { fileIds: [ID] }),
+      'code PLAIN names ids at 409, which the entry does not declare',
+    ],
+    [
+      'ids at a status that declares none',
+      new CustomError('x', 404, 'DECLARED', { folderIds: [ID] }),
+      'code DECLARED names ids at 404, which the entry does not declare',
+    ],
+    [
+      'ids without a code',
+      new CustomError('x', 409, undefined, { fileIds: [ID] }),
+      'ids without a code at 409',
+    ],
+    [
+      'no ids under a code the entry declares with them',
+      new CustomError('x', 409, FILE_BUSY_CODE),
+      'code FILE_BUSY names no ids at 409',
+    ],
+    [
+      'a business 400 the entry does not declare',
+      new CustomError('x', 400),
+      'a business 400 is not declared',
+    ],
+  ] as const)(
+    '%s answers 500 and is recorded',
+    async (_name, answer, problem) => {
+      await expectError(await post(answer), 500, MSG_INTERNAL_ERROR);
+      expect(takeResponseMismatches()).toEqual([`${KEY}: ${problem}`]);
+    }
+  );
 });

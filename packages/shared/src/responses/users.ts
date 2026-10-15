@@ -66,14 +66,18 @@ export const userDetailBaseSchema = z.object({
 });
 
 /** The first page of sessions comes whole or not at all: only a viewer who may read them gets it. */
-export const userDetailSchema = userDetailBaseSchema.refine(
-  ({ sessions, sessionsHasMore, sessionsNextCursor }) => {
-    const present = [sessions, sessionsHasMore, sessionsNextCursor].filter(
-      (value) => value !== undefined
-    ).length;
-    return present === 0 || present === 3;
-  }
-);
+export const USER_DETAIL_SESSION_KEYS = [
+  'sessions',
+  'sessionsHasMore',
+  'sessionsNextCursor',
+] as const satisfies readonly (keyof typeof userDetailBaseSchema.shape)[];
+
+export const userDetailSchema = userDetailBaseSchema.refine((detail) => {
+  const present = USER_DETAIL_SESSION_KEYS.filter(
+    (key) => detail[key] !== undefined
+  ).length;
+  return present === 0 || present === USER_DETAIL_SESSION_KEYS.length;
+});
 
 export const sessionsPageSchema = z.object({
   sessions: z.array(sessionSchema),

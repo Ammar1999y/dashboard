@@ -1,65 +1,91 @@
+import type { TwoFactorChallenge } from './schemas';
 import type { LoginInput, LoginOutput } from '@/utils/validation/auth';
+import type { ContactKind } from '@app/shared/validation/enums';
 
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import * as z from 'zod';
-import { CustomError } from '@app/shared/error-class';
+import { HONOUR_REMEMBER_ME } from '@app/shared/config';
 import { MSG_LOGIN_SUCCESS } from '@app/shared/messages/common';
-import { CAPTCHA_HEADER, loginSchema } from '@app/shared/validation/auth';
-import { MSG_TWO_FACTOR_SIGN_IN_UNSUPPORTED } from '@/constants/messages';
+import { twoFactorChallengeSchema } from '@app/shared/responses/better-auth';
+import { loginSchema } from '@app/shared/validation/auth';
 import { invalidResponse } from '@/lib/api/fetch';
+import { withCaptcha } from '@/lib/auth/captcha';
 import { authClient, toAuthError } from '@/lib/auth/client';
-import { toastError } from '@/lib/toast-error';
+import { errorMessage, toastError } from '@/lib/toast-error';
 
 import { Form } from '@/components/form/form';
 import FormInput from '@/components/form/form-input';
 import FormPassword from '@/components/form/form-password';
 import SubmitButton, { SubmitLabel } from '@/components/form/submit-button';
 
+import { RememberMeOption } from './checkbox-option';
+import { canVerifyContact } from './features';
+import {
+  twoFactorUnavailableMessage,
+  unverifiedContactKind,
+} from './finish-sign-in';
+import { signedInSchema } from './schemas';
 import TurnstileWidget from './turnstile';
 
-/** A first factor that passed on a two-factor account: no session yet. */
-const twoFactorAnswerSchema = z.looseObject({
-  twoFactorRedirect: z.literal(true),
-});
+interface SignInFormProps {
+  /** Seeds the address, such as the one just verified. */
+  initialEmail: string;
+  rememberMe: boolean;
+  onRememberMeChange: (rememberMe: boolean) => void;
+  onChallenge: (challenge: TwoFactorChallenge) => void;
+  onUnavailable: (message: string) => void;
+  /** The account exists but this contact is unverified, and a code can verify it. */
+  onUnverified: (kind: ContactKind, email: string, message: string) => void;
+}
 
 /** Redirects nothing itself: the page leaves once the session appears. */
-const SignInForm = () => {
-  const [resetTurnstile, setResetTurnstile] = useState(false);
+const SignInForm = ({
+  initialEmail,
+  rememberMe,
+  onRememberMeChange,
+  onChallenge,
+  onUnavailable,
+  onUnverified,
+}: SignInFormProps) => {
   const methods = useForm<LoginInput, unknown, LoginOutput>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: '',
+      email: initialEmail,
       password: '',
     },
   });
 
-  const { setValue } = methods;
-
   const onSubmit = useCallback(
     async (data: LoginOutput) => {
       try {
-        const { data: resData, error } = await authClient.signIn.email({
-          email: data.email,
-          password: data.password,
-          fetchOptions: { headers: { [CAPTCHA_HEADER]: data.captcha } },
+        const { data: credentials, headers } = withCaptcha(data);
+        const { data: answer, error } = await authClient.signIn.email({
+          ...credentials,
+          ...(HONOUR_REMEMBER_ME && { rememberMe }),
+          fetchOptions: { headers },
         });
         if (error) throw toAuthError(error);
-        if (twoFactorAnswerSchema.safeParse(resData).success)
-          throw new CustomError(MSG_TWO_FACTOR_SIGN_IN_UNSUPPORTED);
-        if (!resData?.user?.id) throw invalidResponse();
+
+        const challenge = twoFactorChallengeSchema.safeParse(answer);
+        if (challenge.success) {
+          onChallenge(challenge.data);
+          return;
+        }
+        if (!signedInSchema.safeParse(answer).success) throw invalidResponse();
         toast.success(MSG_LOGIN_SUCCESS);
       } catch (error: unknown) {
-        // A token is single-use, whatever the failure.
-        setValue('captcha', '');
-        setResetTurnstile(true);
-        toastError(error, undefined, { duration: 8000 });
+        const unverified = unverifiedContactKind(error);
+        const unavailable = twoFactorUnavailableMessage(error);
+        if (unverified !== null && canVerifyContact(unverified))
+          onUnverified(unverified, data.email, errorMessage(error));
+        else if (typeof unavailable === 'string') onUnavailable(unavailable);
+        else toastError(error, undefined, { duration: 8000 });
       }
     },
-    [setValue]
+    [rememberMe, onChallenge, onUnavailable, onUnverified]
   );
 
   return (
@@ -75,7 +101,12 @@ const SignInForm = () => {
 
       <FormPassword name='password' label='كلمة المرور' required />
 
-      <TurnstileWidget reset={resetTurnstile} setReset={setResetTurnstile} />
+      <RememberMeOption
+        checked={rememberMe}
+        onCheckedChange={onRememberMeChange}
+      />
+
+      <TurnstileWidget />
 
       <SubmitButton className='w-full'>
         <SubmitLabel pending='جاري تسجيل الدخول...'>تسجيل الدخول</SubmitLabel>

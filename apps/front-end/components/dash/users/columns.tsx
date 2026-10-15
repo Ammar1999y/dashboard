@@ -10,6 +10,7 @@ import {
   textColumn,
 } from '@/components/ui/data-table';
 
+import { ACCOUNT_PATH } from '../auth/paths';
 import { cacheRoleUsersCount } from '../permissions/cache';
 import { rowActionsColumn } from '../shared/row-actions';
 import { userEntity } from './entity';
@@ -49,6 +50,7 @@ export const columns: ColumnDef<UserClient>[] = [
         queryClient,
         findCached<UserClient>(queryClient, userEntity.keys, id)?.roleId,
         -1
-      )
+      ),
+    { ownAccountHref: ACCOUNT_PATH }
   ),
 ];

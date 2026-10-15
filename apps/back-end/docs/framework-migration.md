@@ -1,213 +1,206 @@
-# Framework migration: Next.js → ElysiaJS
+# The HTTP layer
 
-Status: **done**. Elysia is the active framework. The Next.js layer has been
-DELETED — `reports/next-migration.md` replaces it with the adapter source, the
-route inventory and the behaviour deltas, in a form that cannot rot the way
-commented-out code did.
+The current map of the API's HTTP layer: which layer owns what, how a request
+moves through it, how to add an endpoint, and which files a move off Elysia
+would touch. The decisions behind it, their costs and the record of each phase
+are in `docs/http-layer-plan.md` at the repository root; the `Dn`, `Fn`, `Sn`
+and `Xn` ids below are that document's.
 
-This document is the map for two audiences: whoever needs to roll back to
-Next.js, and whoever migrates on to Hono.
+Framework: `elysia@2.0.0-beta.27` on Bun, pinned exactly together with
+`@elysia/cors@2.0.0-beta.1` and `@elysia/openapi@2.0.0-beta.4` (D2).
+elysiajs.com documents 1.4. For 2, the evidence is the installed package (its
+types and source) and its release notes, `docs/elysia-2.md`.
 
----
+## 1. Layers
 
-## 1. What the application actually was
+| Layer       | Where                                       | What it holds                                                                                                                                                                                                                |
+| ----------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contract    | `packages/shared/src/api/*.ts`              | One `endpoint()` entry per route: method, path, `params` / `query` / `body` schemas, body kind, success status, response, `errors`, and the policy flags that decide its refusals (D1). Plain zod, shared with the front end |
+| Field prose | `packages/shared/src/**/*.docs.ts`          | English OpenAPI descriptions of schema fields (`fieldDocs`, D19), loaded only when the document is first built                                                                                                               |
+| Modules     | `modules/<domain>/*.ts`, `modules/index.ts` | Bindings: `bind(entry, options)` pairs a contract entry with its server options and a framework-free handler                                                                                                                 |
+| Core        | `lib/http/`                                 | Admission, body reading, refusals, error mapping, the body builders, cookies, headers, routing, the after-response queue, the document finalizer and the Better Auth merge                                                   |
+| Elysia      | `app.ts`, `server.ts`, `server/elysia/*.ts` | Every call into the framework: wiring, not policy                                                                                                                                                                            |
 
-Next.js served no pages here. There is no `page.tsx`, no `layout.tsx`, no
-`public/`, no React. `app/` contained only `api/**`, and every `route.ts` was
-three lines of wiring:
+What the layout depends on:
 
-```ts
-export const GET = toNextHandler(handlers.GET, { preAuthIpLimit: true });
-```
+- **Core never imports `elysia` or `@elysia/*`.** ESLint refuses it in `lib/`,
+  `modules/`, `db/`, `utils/` and `packages/shared`, as a static import, an
+  `import()` or an `import('…')` type, and refuses an `import()` whose module
+  is not a literal. The same rules keep `*.docs` out of everything but
+  `lib/http/openapi/docs.ts`. Logic that does not need the framework lives in
+  core even when only Elysia calls it (the document finalizer works on a plain
+  object, F41).
+- **Elysia features are used where they improve the code** (native validation,
+  macros, response schemas, document generation), and their calls stay in the
+  Elysia layer.
+- **Handlers are framework-free.** They receive
+  `{ params, query, body, actor, meta }` and return
+  `{ message, data, meta?, headers?, cookies? }` (or `{ raw }` on a raw entry),
+  typed by `bind()` from the entry. The success status is the entry's.
+- **One wire format, built in one place per body kind.** `successBody` and the
+  module-private `errorBody` in `lib/http/response.ts` build every envelope;
+  `apiRaw` is the raw escape hatch (`GET /api/health/storage`,
+  `GET /openapi.json`). The format is frozen until the front end moves (D18,
+  Phase 4).
+- **`z.compile` runs only in `server/elysia/register.ts`,** on contract schemas,
+  at registration (D10). `packages/shared` and the front end never call it, and
+  no global `zod/compile` import is used: it would compile Better Auth's
+  schemas too.
+- **Refinements are pure, synchronous and cheap** (D21): a compiled schema runs
+  a refinement twice on invalid input, and `tests/unit/zod-compile.test.ts`
+  fails on an async one. Checks that need I/O run in handlers.
 
-The endpoint logic already lived in a framework-agnostic `Handler`
-(`lib/http/contract.ts`), so Next was doing exactly three jobs:
+`server.ts` and `app.ts` are separate files on purpose. `app.ts` builds the
+application without listening, so a route runs from a plain `Request`
+(`app.handle(...)`), which every integration test relies on. `server.ts`
+validates `NODE_ENV`, the port and the Bun and SQLite versions before it loads
+the application by dynamic import, then listens and owns shutdown
+(`lib/shutdown.ts`).
 
-1. mapping the file system to routes,
-2. building a request context and serialising a response,
-3. attaching security headers from `next.config.js`.
+## 2. Where each capability lives
 
-All three are now done explicitly, in `server.ts` and `lib/http/`.
+| Capability                                                                                                | Elysia side                                                       | Core side                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Instance options: `strictPath`, `abortSignal: false`, `precompile`, `reusePort: false`, the body cap (S1) | `app.ts` (`createBase`)                                           | `MAX_REQUEST_BODY_BYTES` in `lib/http/request.ts`                                                                                                             |
+| Listen, idle timeout, shutdown                                                                            | `server.ts`                                                       | `lib/shutdown.ts`, `lib/startup.ts`                                                                                                                           |
+| Request hook: start mark, security headers, host guard, declared-length ceiling, route-aware OPTIONS (S2) | `app.ts`                                                          | `lib/http/routing.ts` (404, 405 with `Allow`, 308, the per-path ceiling), `lib/http/request.ts`, `lib/http/security-headers.ts`                               |
+| CORS (S3)                                                                                                 | `app.ts` (`@elysia/cors`, `CORS_POLICY`)                          | none                                                                                                                                                          |
+| Registration: compiled schemas, response map, HEAD per GET, the boot hook assertion (S4)                  | `server/elysia/register.ts`                                       | `lib/http/binding.ts` (`bind`, options), `lib/http/refusals.ts` (refusals derived from policy)                                                                |
+| Gate (S5)                                                                                                 | `server/elysia/gate.ts` (macro: `parse` / `transform`)            | `lib/http/admit.ts`, with `origin.ts`, `pre-auth.ts`, `session.ts`; the counted reader `readJsonObject` in `request.ts`                                       |
+| Handler run, handler error mapping, success and declared-code checks, timing floor                        | called from `register.ts`                                         | `lib/http/run.ts`, `response-check.ts`, `timing-floor.ts`                                                                                                     |
+| Error mapping (S6)                                                                                        | `server/elysia/errors.ts` (one `.error()` per Elysia error class) | `bindingFailure`, `validationFailure`, `responseFailure` in `run.ts`; `apiError`, `handleApiError` in `response.ts`                                           |
+| Exit step and after-response (S7, S8)                                                                     | `server/elysia/respond.ts` (`mapResponse`, `afterResponse`)       | `lib/http/response-policy.ts`, `cookies.ts`, `after-response.ts`                                                                                              |
+| Better Auth prefix route (S9)                                                                             | `server/elysia/auth-mount.ts`                                     | `lib/auth/allowed-paths.ts`, `lib/auth/path-policy.ts`, `localiseAuthError` in `lib/auth/errors.ts`, `pre-auth.ts`, `response-check.ts`                       |
+| `/openapi.json` (S10)                                                                                     | `server/elysia/openapi.ts` (`generateDocument`, `serveDocument`)  | `lib/http/openapi/` (`finalize.ts`, `merge-better-auth.ts` + `better-auth-tables.ts`, `docs.ts`, `serve.ts`, `json-schema.ts`, `tags.ts`); `modules/openapi/` |
+| Scalar reference page, development only (X1)                                                              | `mountReferencePage` in `server/elysia/openapi.ts`                | `referencePageCsp` in `lib/http/security-headers.ts`                                                                                                          |
 
-## 2. The shape after the migration
+## 3. A request, end to end
 
-```
-server.ts                      entry point: validate the runtime, listen, handle signals
-app.ts                         the ONLY file that knows the framework; exports `app`
-routes.ts                      the route table AS DATA — framework-free
-lib/http/contract.ts           Handler / HandlerInput / HandlerOutput, cookie codec
-lib/http/route-manifest.ts     route types, manifest, the 405 lookup  — shared
-lib/http/request.ts            buildRequestMeta + withBodyPolicy(…)   — shared
-lib/http/response.ts           toWebResponse(output)                  — shared
-lib/http/response-policy.ts    the final response policy              — shared
-lib/http/pre-auth.ts           enforcePreAuthIpLimit(meta)            — shared
-lib/http/after-response.ts     the post-response seam                 — shared
-lib/http/security-headers.ts   the header set, as data                — shared
-lib/http/openapi/              the contract, from the manifest + Zod  — shared
-lib/http/adapters/elysia.ts    ~25 lines: glue only
-lib/http/adapters/hono.ts.disabled   the same shape, for later
-app/api/**/handler.ts          UNCHANGED except the upload's lazy multipart read.
-```
+1. **`request` hook** (`app.ts`). Marks the start, writes the security headers,
+   answers 404 for a host it cannot route, and 413 for a declared
+   `Content-Length` over the ceiling the path's bindings or prefix declare
+   (`lookupBodyCeiling`; the largest when two methods disagree), so a caller's
+   `Content-Type` cannot widen it. Both answers carry the CORS headers an
+   allowed origin gets everywhere else, since the plugin's own hook never runs.
+   An OPTIONS on an unknown path gets its 404 or 308 here. Answers from this
+   hook still pass the exit step and `afterResponse`; preflights skip both.
+2. **CORS** (`@elysia/cors`). Answers preflights and sets the CORS headers.
+3. **Routing.** A miss reaches `NotFound` in `errors.ts`, which answers the 308
+   to the slash-free path, or 404 / 405 with `Allow` from `lib/http/routing.ts`
+   (Elysia reports a wrong method and an unknown path alike).
+4. **Gate** (`gate.ts` → `admit()`). A JSON-body binding is gated in the
+   macro's `parse` hook, which runs before any body byte is read, and then reads
+   its body through the counted reader (binding ceiling, `application/json`
+   only, 413 / 400). Every other binding declares `parse: 'none'` and is gated
+   in `transform`; a multipart handler reads its form lazily through
+   `meta.readFormData`. `admit()` runs once per request: same-origin write →
+   pre-auth IP limit → the route's own credential (`credential`, answered as
+   its handler would) → session, permission and re-authentication window →
+   the own-id 403 (`notSelf`) → rate limit → the other-target 403 (`orSelf`) →
+   captcha.
+   It throws typed errors. `runBinding` reads the gate's `actor` back and throws
+   when the gate did not run, so a hook-order slip fails closed (D3).
+5. **Native validation.** Elysia validates `body`, `params` and `query` against
+   the compiled contract schemas. A failure becomes `validationFailure`: the
+   part's refusal override (D25), else 422 with the first issue's message.
+6. **Run** (`runBinding`). A key the query declares, named twice, is the
+   query's refusal; then the handler runs; its own throws, and only those,
+   pass the binding's `mapError`. Outside production the success is checked
+   against the contract (`checkSuccess`), and every refusal's status against
+   the statuses `refusalsOf` publishes and its `code` against the codes the
+   entry declares or its policy implies (`responseCheckMode`: logged in
+   development, recorded and answered 500 under the test runner).
+7. **Answer.** The declared success, and a raw refusal the entry declares, go
+   back as a plain value, so Elysia's response schema validates and strips it
+   (a failure is a logged 500 that keeps none of the answer's headers or
+   cookies). Every other answer is a native `Response` that core built. HEAD
+   runs the GET's own registration; a `wrap` in `respond.ts` drops the body of
+   every HEAD answer and keeps its length.
+8. **Exit step** (`mapResponse` in `respond.ts`). Queued cookies, then the
+   response policy: the security headers overwrite whatever a route or a
+   library set, `Cache-Control: no-store` unless the handler set its own, and
+   `Server-Timing` in development.
+9. **`afterResponse`.** One access-log line with the status actually sent, then
+   the after-response queue drains (audit writes, the anonymous OTP delivery).
 
-`server.ts` and `app.ts` are split for two reasons: a route has to be runnable
-from a plain `Request` with no socket (`app.handle(...)`), which is what makes
-an in-process conformance suite possible; and `NODE_ENV` has to be validated
-BEFORE the application modules that read it are imported, which a static import
-in the same file cannot do. `routes.ts` is separate again because it is the one
-artefact a move to Hono keeps unchanged.
+Every hook is registered before the first route (`createBase`), because Elysia
+copies the hooks a route can see when the route is registered.
+`assertEveryRouteHooked` fails the boot if a route missed the error, exit or
+after-response hook (F10).
 
-The adapters shrank on purpose. Under Next, `adapters/next.ts` held body
-parsing, IP extraction, the pre-auth limiter and cookie serialisation — so a
-second framework meant reimplementing four security-relevant behaviours. They
-now live in shared modules, and an adapter is glue: build the input, run the
-handler, serialise the output, catch.
+The Better Auth prefix route (`/api/auth/*`, only the methods its allowlisted
+paths serve, registered after every binding so explicit routes win) does not
+pass the gate. It enforces the
+allowlist and the pre-auth IP limit itself, bounds a chunked body by the same
+ceiling as the request hook, and hands the request to `auth.handler` unread
+(`parse: 'none'`).
 
-## 3. Decisions taken, and why
+## 4. Adding an endpoint
 
-**Runtime is Bun, and the SQLite driver moved with it.** `better-sqlite3` is
-built against the V8 C++ API and hard-panics under Bun (`NAPI FATAL ERROR`);
-`bun:sqlite` is unreachable from Node. The driver and the server framework were
-therefore one decision, not two. `lib/sqlite/driver.ts` is the only file that
-changed — no caller did.
+1. **Contract entry.** Add an `endpoint({ ... })` to
+   `packages/shared/src/api/<domain>.ts`, reusing the request schemas in
+   `validation/` and the response schemas in `responses/`. Until Phase 4 the
+   old registries stay (D29): give a JSON body its `REQUEST_BODIES` entry
+   (`packages/shared/src/contract.ts`) and an enveloped response its
+   `RESPONSE_DATA` entry (`response-contract.ts`), using the same schema
+   objects. `bind()` throws without the response entry, and
+   `tests/unit/bindings.test.ts` asserts the identity.
+2. **Field prose.** Describe new fields in the `*.docs.ts` beside the schema
+   file, through `fieldDocs` (a renamed field then fails to compile). A new
+   docs file is added to `FIELD_DOCS_MODULES` in `lib/http/openapi/docs.ts`;
+   `tests/unit/openapi-document.test.ts` holds that list to the files on disk.
+   Operation text goes in the binding's `detail`, with constants interpolated.
+3. **Binding.** In `modules/<domain>/<file>.ts`,
+   `export const xBinding = bind(entry, { ...options, handler })`. The options
+   follow the entry's policy (permission, rate limit, re-authentication,
+   captcha, refusal overrides, timeout, `detail`); the types and `bind()`'s boot
+   check refuse a mismatch. Contextual authorisation that a static permission
+   cannot express stays in the handler (D22).
+4. **Register.** List the binding in its domain's `*_BINDINGS` array
+   (`modules/<domain>/index.ts`); a new domain is spread into `BINDINGS` in
+   `modules/index.ts`, whose order is registration and document order.
+   `tests/unit/bindings.test.ts` fails on a binding left out. A feature flag
+   goes in `enabled`: a switched-off binding is neither served nor documented.
 
-**No Elysia `t` validation, and no OpenAPI plugin.** Zod already validates
-inside the handlers. Declaring the same schemas again in Elysia's `t` would
-couple the route table to Elysia and create two sources of truth for the same
-contract. The cost of that decision — no machine-readable contract — has since
-been paid down without reversing it: `lib/http/openapi/` generates the
-document from the route manifest and the same Zod schemas, using Zod 4's native
-`toJSONSchema`. No plugin, no second schema language.
+Registration, compiled validation, HEAD, the OpenAPI operation and its derived
+refusals follow from the entry; nothing else is edited by hand.
 
-**Routes are registered from a data table, with `parse: 'none'`.** Elysia parses
-the body into `ctx.body` by default, which drains the stream. The adapter reads
-the raw `Request` instead, so Better Auth still receives an unread body.
+## 5. Porting off Elysia (non-binding notes)
 
-Each route DECLARES its body policy (`none` / `json` / `multipart`) and its
-pre-auth policy as REQUIRED fields in `routes.ts`, rather than passing them as
-optional arguments at each registration. That is not style: an optional argument
-repeated 28 times is one omission away from a route silently losing its pre-auth
-limit, with no type error and no test failure. Omitting either field now fails
-to compile.
+No other framework's code lives in this repository (D26); these notes only say
+where a port would start. The plan's §3 has per-capability notes from probes run
+outside the repository.
 
-**Better Auth is a prefix route, not `.mount()`.** `.mount(auth.handler)` would
-have to be mounted at `/` — Better Auth owns the `/api/auth` prefix itself and
-refuses an empty `basePath` — which puts a catch-all at the root of the route
-table. A prefix route is the same behaviour, scoped — registered per method
-(`GET` and `POST` only, from `ROUTE_PREFIXES`) rather than with `.all(...)`,
-which would let unsupported methods into Better Auth to consume its own
-rate-limit budget before it rejects them. Elysia's router resolves static
-segments before wildcards, so the explicit routes still win; this is asserted
-from outside by `scripts/smoke.ts`.
+Files with Elysia-specific code:
 
-## 4. Behaviour that deliberately changed
+- `app.ts`: the instance and its options, the `request` hook, CORS, hook order,
+  `createApp`.
+- `server.ts`: `app.listen` and `app.server`.
+- `server/elysia/register.ts`, `gate.ts`, `errors.ts`, `respond.ts`,
+  `auth-mount.ts`, `openapi.ts`.
+- `package.json`: `elysia`, `@elysia/cors`, `@elysia/openapi`.
+- Tests that reach into the instance: `tests/unit/app-options.test.ts` and
+  `tests/integration/route-feature-gates.test.ts`. The integration suites drive
+  the app through `app.handle(Request)`, which any fetch-style framework can
+  serve.
 
-Everything else is byte-identical. These are not:
+Core that is framework-free but shaped by Elysia's behaviour, and needs a second
+look in a port:
 
-| What                                                                      | Before                                                                        | After                                                                                                                                                                                                                                                                                                                   | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSP                                                                       | Full front-end policy (`script-src` + inline hash, `style-src`, `img-src`, …) | `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`                                                                                                                                                                                                                                       | Those directives grant nothing on a JSON API. Denying every fetch directive says the one thing that matters.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Security headers in dev                                                   | Emitted **nothing** outside production                                        | Emitted always, except HSTS                                                                                                                                                                                                                                                                                             | A local request exercised a different response than the deployed one, so no header bug could surface before deploy. HSTS stays production-only: on `http://localhost` it pins the whole host for every project on every port.                                                                                                                                                                                                                                                                                                                                        |
-| CORS                                                                      | A static `Access-Control-Allow-Origin: PUBLIC_URL` header                     | `@elysia/cors` — real preflight, `Vary: Origin`, credentials, `Retry-After` / `X-RateLimit-*` exposed                                                                                                                                                                                                                   | A hand-written ACAO answers no preflight and carries no `Vary`. It was never a working CORS configuration.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| CORS origin                                                               | `PUBLIC_URL`                                                                  | `PUBLIC_ORIGIN` (new, in `lib/env.ts`)                                                                                                                                                                                                                                                                                  | The old `cleanEnvUrlToDomain` helper (since deleted) stripped the port, so `http://localhost:3000` became `http://localhost` and could never match a browser `Origin` header. `PUBLIC_ORIGIN` is also what Better Auth signs cookies against, and is `lib/env.ts`'s only export.                                                                                                                                                                                                                                                                                     |
-| Static asset headers                                                      | `Cache-Control` rules for `/pwa`, `/public`, `/_next/static`                  | Gone                                                                                                                                                                                                                                                                                                                    | There are no static files and no `public/`. The rules described routes that did not exist.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Multipart uploads (`POST /api/upload/file`, `POST /api/dash/media/files`) | Read `ctx.rawRequest.formData()`                                              | Calls `await ctx.readFormData()` — a lazy reader the adapter hands it, gated on the route's `body` policy                                                                                                                                                                                                               | A web `Request` body reads once. Elysia's parser drained it first, and the handler's `.catch` turned `Body has already been used` into a generic "no files" 400. The adapter briefly parsed it eagerly instead; both readers are now lazy, so admission checks inside a handler still run before a byte is parsed.                                                                                                                                                                                                                                                   |
-| `/api/dev/*`                                                              | Ad-hoc `{success, data}` / `{success, message}` bodies                        | The standard envelope                                                                                                                                                                                                                                                                                                   | It bypassed the contract only because it was written against `NextResponse`. Dev-only endpoint; no client depends on the shape.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `next build` in CI                                                        | `bun run build`                                                               | `bun run smoke`                                                                                                                                                                                                                                                                                                         | A Bun server has no build artefact, so nothing else forces the module graph to evaluate. `scripts/smoke.ts` boots the real server instead.                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Unmatched method                                                          | `405` with `Allow` (App Router)                                               | `405` with `Allow`, decided from the generated route manifest                                                                                                                                                                                                                                                           | Elysia reports a wrong method and an unknown path identically as `NOT_FOUND` (measured), so it returned `404` for both and a client could not tell them apart. `lib/http/route-manifest.ts` is what can tell them apart.                                                                                                                                                                                                                                                                                                                                             |
-| Trailing slash                                                            | `308` redirect to the canonical path                                          | `308` redirect to the canonical path                                                                                                                                                                                                                                                                                    | Elysia's default non-strict routing served `200` on BOTH forms (measured), splitting cache keys and security-rule matching. `strictPath: true` plus a manifest-checked redirect in `app.ts` restores the original behaviour.                                                                                                                                                                                                                                                                                                                                         |
-| `/api/dev/*` outside development                                          | `403`                                                                         | `404`                                                                                                                                                                                                                                                                                                                   | Deliberate, and recorded rather than left as an accident of the rewrite: `403` confirms the route exists. A development-only endpoint should be indistinguishable from an unrouted path in every other mode.                                                                                                                                                                                                                                                                                                                                                         |
-| Better Auth methods                                                       | `GET` and `POST` only (`toNextJsHandler` exported exactly those)              | `GET` and `POST` only                                                                                                                                                                                                                                                                                                   | The first Elysia version registered `.all('/api/auth/*')`, so unsupported methods entered Better Auth and consumed its rate-limit budget before it rejected them. Restored to the two methods, with the rest stopping at the 405 boundary.                                                                                                                                                                                                                                                                                                                           |
-| `Cache-Control`                                                           | Not set on API responses                                                      | `no-store` on every API, auth and error response, with a per-handler opt-out                                                                                                                                                                                                                                            | Not a Next behaviour that was lost — a gap in both. Every response here is per-user, credentialed, or an error; `no-store` is the only directive that says so to every intermediary including the back/forward cache.                                                                                                                                                                                                                                                                                                                                                |
-| `Server-Timing`                                                           | Absent                                                                        | `app;dur=<ms>` in development only, plus one structured access-log line per request                                                                                                                                                                                                                                     | Nothing measured request timing, so the timeout ceiling below was unmeasurable from inside the application. Implemented against the existing response and post-response seams; no plugin, no dependency. First emitted on every response; since restricted to development, because elsewhere it handed a timing probe a jitter-free measurement of the anonymous auth paths.                                                                                                                                                                                         |
-| CORS allowed headers                                                      | n/a (the static ACAO header answered no preflight)                            | `Content-Type, X-Captcha-Response`, `max-age=600`, `HEAD` advertised                                                                                                                                                                                                                                                    | `X-Captcha-Response` was missing, so every browser sign-in was blocked while a `curl` preflight still returned 204. The plugin's 5-second `maxAge` also re-fired a preflight for practically every cross-origin request. `Authorization` and `X-Maintenance-Token` were allowed at first and have since been dropped: browsers authenticate by cookie, and the maintenance token is sent only by server-side health checks.                                                                                                                                          |
-| Request body parsing                                                      | JSON only, on `application/json`; multipart read by the handler               | Declared per route as `none` / `json` / `multipart`, parsed only AFTER admission checks                                                                                                                                                                                                                                 | The Elysia adapter parsed the body BEFORE the pre-auth limiter, so JSON-only routes parsed attacker-supplied multipart data and the maintenance route parsed a body before checking its token. Media types now match on a normalised essence rather than by substring.                                                                                                                                                                                                                                                                                               |
-| Request body limit                                                        | Node default                                                                  | `maxRequestBodySize` `MAX_REQUEST_BODY_BYTES` (12 MiB) → `413`; `app.ts`'s `onRequest` then applies the ceiling the route table declares for the path — `MAX_REQUEST_BODY_BYTES` for a `body: 'multipart'` route, `MAX_JSON_BODY_BYTES` (1 MiB) for everything else, including `/api/auth/*` through `RoutePrefix.body` | Bun accepted up to its 128 MiB default before the per-file check could run, so a 100 MB POST was buffered in full before rejection. The JSON ceiling was later moved from the route's reader to the request boundary: as a property of the reader it bounded only routes that used it, leaving the library-served `/api/auth/*` endpoints — the captcha-holding ones — on the 12 MiB budget. Choosing it from the request's `Content-Type` rather than the route's policy then let a caller buy the upload allowance on a sign-in by claiming `multipart/form-data`. |
-| Per-request timeout                                                       | None                                                                          | 60 s server-wide; 120 s on the six media routes via `server.timeout()`                                                                                                                                                                                                                                                  | Elysia inherits Bun's `idleTimeout` and defaulted it to 30 s — measured dropping a 35 s request at 32.1 s with an empty reply and no error body. Neither replacement number is measured on the target host yet (`TODO.md` EM-1).                                                                                                                                                                                                                                                                                                                                     |
-| Port reuse                                                                | n/a                                                                           | `reusePort: false`                                                                                                                                                                                                                                                                                                      | Elysia's default is `true`, so two processes both bound the port and the kernel split traffic between them — each with its own SQLite files, halving the rate-limit counters with no error and no log.                                                                                                                                                                                                                                                                                                                                                               |
-| `NODE_ENV`                                                                | Set by the framework                                                          | Validated as exactly `development` / `test` / `production` before the app loads                                                                                                                                                                                                                                         | `bun server.ts` sets nothing. `NODE_ENV=prodution` with an empty Better Auth secret, an empty Turnstile secret and a relative SQLite directory still started and served requests. Reproduced.                                                                                                                                                                                                                                                                                                                                                                        |
-| Runtime version                                                           | Node major pinned by the image                                                | `Bun.version` and `sqlite_version()` asserted at startup                                                                                                                                                                                                                                                                | `bun:sqlite` is compiled into the Bun binary, so database semantics travel with the runtime. Manual log inspection is a procedure that gets skipped, not a guarantee.                                                                                                                                                                                                                                                                                                                                                                                                |
-| Outgoing fetch logging                                                    | `logging.fetches` with full URLs                                              | Removed, not replaced                                                                                                                                                                                                                                                                                                   | A deliberate omission rather than an oversight: full URLs leak query strings, and this application calls Turnstile, HIBP and R2. Recorded in `TODO.md` EM-6 together with the OpenTelemetry decision.                                                                                                                                                                                                                                                                                                                                                                |
-| Machine-readable contract                                                 | None                                                                          | `GET /openapi.json`, generated from the route manifest and the existing Zod schemas                                                                                                                                                                                                                                     | The migration declined Elysia's `t`/TypeBox for a sound reason and never paid the cost down. Zod 4 emits JSON Schema natively, so no second schema language and no plugin were needed.                                                                                                                                                                                                                                                                                                                                                                               |
-| Framework banner                                                          | `x-powered-by` unless disabled (`next.config.js` disabled it)                 | None emitted                                                                                                                                                                                                                                                                                                            | Verified by probe rather than assumed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Path normalisation                                                        | Framework-normalised before routing                                           | WHATWG `URL` collapses `.` and `..`; `//` and `%2F` do not match                                                                                                                                                                                                                                                        | Verified by probe: the router and `new URL(request.url).pathname` agree in every case tested, so a path-prefix guard cannot disagree with the router. `//api/health/storage` and `/api%2Fhealth%2Fstorage` both `404`.                                                                                                                                                                                                                                                                                                                                               |
-| Header block / URL length                                                 | Node defaults                                                                 | Bun's parser answers `431` above roughly 16–32 KB of headers, or ~200 headers                                                                                                                                                                                                                                           | Unchanged, and NOT reachable from application code: the `431` is emitted by Bun's HTTP parser before the request reaches Elysia, so it carries no security headers, no API envelope and no access-log line (measured).                                                                                                                                                                                                                                                                                                                                               |
+- `lib/http/run.ts` reads Elysia's validation issues, including the guards for
+  issue fields Elysia replaces past its 8 KiB echo budget.
+- `lib/http/openapi/finalize.ts` finishes the document `toOpenAPISchema`
+  generates (request bodies the `parse` hook reads, operation ids, refusal
+  wording); another generator's output would need its own finishing.
+- The gate's `parse` / `transform` split and the per-route hook capture are
+  Elysia's lifecycle; the order they enforce (gate before any body byte, then
+  validation, then the handler) is the invariant to keep.
 
-`/api/health/storage` keeps its **exact** body shape — a deployed health check
-parses it — and so does `/openapi.json`, whose shape the spec fixes. Both went
-onto the `Handler` contract via `apiRaw`, the escape hatch for a body that cannot
-be the envelope. The SQLite sweep no longer has a route at all: it runs in-process
-from `lib/maintenance/schedule.ts`, so nothing external parses its body.
+## 6. Verifying
 
-## 5. Rolling back to Next.js
-
-**Read `reports/next-migration.md` first.** The commented Next.js source this
-section used to describe is gone, and it was never a working rollback:
-`HandlerInput.formData` became required while the commented `buildContext` never
-set it, so uncommenting it failed type checking. That report carries the adapter
-source, the per-route method exports and the behaviour deltas, and states the
-one correction that matters — a returning port targets the CURRENT shared
-modules (`buildRequestMeta` / `withBodyPolicy`, `enforcePreAuthIpLimit`,
-`toWebResponse`), not the duplicated body-parsing and pre-auth logic that lived
-inside the deleted adapter.
-
-1. Recreate `app/api/**/route.ts`, `lib/http/adapters/next.ts` and
-   `next.config.js` from `reports/next-migration.md`.
-2. `bun add next@16.3.1 better-sqlite3@13.0.3` and
-   `bun add -d eslint-config-next@16.3.1 @types/better-sqlite3`.
-3. Restore `lib/sqlite/driver.ts` to `better-sqlite3` — **required**, not
-   optional. `bun:sqlite` cannot load under Node, and Next route handlers run
-   under Node. The file's header documents the differences in both directions.
-   Restore `better-sqlite3` to `ignoreScripts` in `package.json` and to
-   `serverExternalPackages` in `next.config.js`.
-4. `tsconfig.json`: restore the `next` plugin, and `next-env.d.ts` +
-   `.next/types/**/*.ts` in `include`. `next dev` regenerates `next-env.d.ts`.
-5. `eslint.config.mjs`: swap `typescript-eslint` back for
-   `eslint-config-next/core-web-vitals` + `eslint-config-next/typescript`, and
-   drop the `globals` block (that config supplied them). An earlier revision of
-   this step also said to drop a `unicorn/no-empty-file` override; there is no
-   such override in `eslint.config.mjs` and there never was one to drop.
-6. `package.json` scripts: `next dev` / `next build` / `next start`. Restore
-   `--config=p/nextjs` in `scan:sast` and in `lefthook.yml`.
-7. Delete `app.ts`, `server.ts`, `lib/http/adapters/elysia.ts`,
-   `scripts/smoke.ts`, and `elysia` + `@elysia/cors`. **`app.ts` is the one to
-   not forget**: it is the only importer of `elysia`, `@elysia/cors` and the
-   Elysia adapter, so removing the dependencies while leaving it breaks
-   `tsc --noEmit` on three unresolvable imports. See `reports/next-migration.md`
-   § 7 step 8 for what in it has to be rebuilt rather than simply deleted.
-
-What does **not** need reverting, because it is framework-independent:
-`routes.ts`, `lib/http/contract.ts`, `route-manifest.ts`, `request.ts`,
-`response.ts`, `response-policy.ts`, `pre-auth.ts`, `after-response.ts`,
-`security-headers.ts`, `openapi.ts`, every `handler.ts`, and the probe suite.
-
-What a Next port would NOT get back for free, because Next never provided it
-either — it is application code now and has to be ported with the rest: the 405
-boundary, the trailing-slash redirect, the response policy, the post-response
-seam, and the runtime assertions in `server.ts`.
-
-## 6. Migrating on to Hono
-
-Read `lib/http/adapters/hono.ts.disabled` — it is the whole adapter, plus the
-`server.ts` equivalent and a list of what to verify. The runtime stays Bun, so
-the SQLite driver does **not** change.
-
-The things that are not in the adapter, and are the usual way a migration loses
-something: the route table is `routes.ts`, and the security headers, CORS, the
-response policy, the 405 boundary and the trailing-slash 308 are all in
-`app.ts`. None of them is in `server.ts`, which validates the runtime and owns
-`listen`/shutdown only. Port the header **values** from
-`lib/http/security-headers.ts` rather than retyping them into
-`hono/secure-headers` options.
-
-## 7. Verifying a migration
-
-`bun run smoke` asserts, from outside the process: the server boots, readiness
-reports `ok` (so SQLite opened, migrated and matched its expected PRAGMAs), the
-security headers are attached, an unrouted path returns the API envelope rather
-than a framework default, Better Auth is mounted, and the maintenance surface
-fails closed without a token.
-
-`bun run test` covers the SQLite rate-limit and cache invariants against the
-real driver.
-
-Neither needs PostgreSQL or the network.
+`bun run smoke` boots the real server and asserts, from outside the process,
+storage readiness, the security headers, the API envelope on an unrouted path,
+the Better Auth mount, and that the upload, the readiness probe and the OpenAPI
+document refuse an anonymous caller. The integration,
+matrix and process tiers run against `app.handle`; the plan's §12 lists the
+acceptance set for any Elysia bump.

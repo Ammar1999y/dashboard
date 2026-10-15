@@ -6,6 +6,7 @@ import { MSG_BODY_TOO_LARGE } from '@app/shared/messages/common';
 import { normalizeMimeType } from '@app/shared/validation/media-types';
 
 import { getClientIp } from './client-ip';
+import { malformedBody, requireJsonBody } from './input';
 
 const JSON_TYPE = 'application/json';
 const MULTIPART_TYPE = 'multipart/form-data';
@@ -218,12 +219,53 @@ async function safeReadJson(
   request: Request,
   maxBytes: number
 ): Promise<unknown> {
-  const text = await readBoundedText(request, maxBytes);
+  return parsedOrNull(await readBoundedText(request, maxBytes));
+}
+
+function parsedOrNull(text: string): unknown {
   try {
     if (!text) return null;
     return JSON.parse(text);
   } catch {
     return null;
+  }
+}
+
+/**
+ * A binding's JSON body, read once its admission has passed: 400 for another
+ * media type or an empty, malformed or non-object body, as the lazy reader
+ * answers, and 413 the moment the count passes `maxBytes`.
+ *
+ * The media-type refusal is also the CSRF layer `app.ts` counts on: a body a
+ * cross-site form can send without a preflight never reaches a JSON handler.
+ */
+export async function readJsonObject(
+  request: Request,
+  maxBytes: number
+): Promise<Record<string, unknown>> {
+  try {
+    const essence = normalizeMimeType(
+      request.headers.get('content-type') ?? ''
+    );
+    if (essence !== JSON_TYPE) throw malformedBody();
+    return requireJsonBody(
+      parsedOrNull(await readBoundedText(request, maxBytes))
+    );
+  } catch (error) {
+    if (error instanceof CustomError) throw new UnreadableBody(error);
+    throw error;
+  }
+}
+
+/**
+ * `readJsonObject`'s refusal, typed apart from the admission refusals the same
+ * framework hook raises, so a binding can answer it its own way
+ * (`refusals.unreadableBody`); otherwise `refusal` is the answer.
+ */
+export class UnreadableBody extends Error {
+  constructor(readonly refusal: CustomError) {
+    super(refusal.message);
+    this.name = 'UnreadableBody';
   }
 }
 

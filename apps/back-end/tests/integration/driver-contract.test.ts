@@ -97,7 +97,7 @@ const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 
 /** The three `db.execute` call sites §7.4c names, and the lock §7.4d names. */
 const ROLE_DELETE = {
-  file: 'app/api/dash/permissions/[id]/handler.ts',
+  file: 'modules/permissions/item.ts',
   anchor: 'DELETE FROM roles r',
 } as const;
 const SELF_UPDATE_CTE = {

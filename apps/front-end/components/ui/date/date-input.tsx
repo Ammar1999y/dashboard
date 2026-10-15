@@ -302,7 +302,7 @@ const DateInput = memo<DateInputProps>(({ value, onChange, className }) => {
             onClick={onClick}
             onBlur={handleBlur(field)}
             className={cn(
-              'bidi-isolate border-none p-0 text-center caret-primary outline-none',
+              'bidi-isolate border-none p-0 text-center caret-primary outline-none placeholder:text-right',
               width
             )}
             placeholder={placeholder}

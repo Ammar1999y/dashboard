@@ -7,7 +7,7 @@
  * SQLite stores open on first use. Without this, the first production request
  * would discover a broken import, a missing variable or an unmounted volume.
  *
- * What it proves: the process starts, the route table builds, every SQLite
+ * What it proves: the process starts, the bindings register, every SQLite
  * readiness check passes (so the volume opened, migrated, and reported the
  * PRAGMAs this build expects), the security headers are attached, an unrouted
  * path produces the API envelope rather than a framework default, Better Auth is
@@ -164,7 +164,7 @@ async function runChecks(health: Response): Promise<Check[]> {
     method: 'POST',
     body: uploadForm,
   });
-  // The access boundary only; consistency is `tests/unit/openapi-contract.test.ts`.
+  // The access boundary only; the document itself is `tests/unit/openapi-document.test.ts`.
   // The document maps the whole attack surface.
   const contract = await probe('/openapi.json');
   const contractText = await contract.text();

@@ -1,26 +1,26 @@
 /**
- * Every mutating route, judged from the route table rather than from a list.
+ * Every mutating route, judged from the bindings rather than from a list.
  *
- * `routes.ts` declares each route's `auth` policy, and `lib/http/session.ts`'s
- * `requirePermission` runs FIRST in every permission-gated handler — before its
+ * Each binding's contract entry declares its `auth` policy, and the gate's
+ * permission check runs FIRST on every permission-gated route — before its
  * limiter, before its body is read. Two actors drive every non-public mutating
  * route: nobody at all, and a signed-in user whose role grants nothing (with the
  * re-authentication window open, so the re-auth gate cannot stand in for the
- * permission decision). A route added to the table is in this walk the moment it
+ * permission decision). A route added to the bindings is in this walk the moment it
  * exists; a route that declares itself public and mutates has to be named in
  * `PUBLIC_MUTATING` on purpose.
  *
  * The body flag is asserted too: `readJson`/`readFormData` consume the request,
  * so `bodyUsed` after a refusal says whether the refusal was an admission
- * decision or a late one. `PUT /api/dash/users/:id` is the one route that reads
- * first, deliberately — a user without `edit` may still edit THEMSELVES, and
- * only the body says which edit this is.
+ * decision or a late one. A binding whose target is always the caller
+ * (`PUT /api/dash/users/me`) has no one else to be refused for, so it sits out
+ * the permission walk.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { SignedInSession } from '../helpers/session';
 
 import { app } from '@/app';
-import { ROUTES } from '@/routes';
+import { BINDINGS } from '@/modules';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
@@ -31,9 +31,36 @@ import { generateUuidV7 } from '@/lib/id';
 import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
+import { expectError } from '../helpers/expect-body';
 import { authedRequest, baseHeaders, signedInUser } from '../helpers/session';
 
-const MUTATING = ROUTES.filter((route) => route.method !== 'GET');
+/**
+ * Session routes whose handler refuses a grant only the request can name
+ * (a contextual check the gate leaves to the handler). The policy cannot say so, so each is named here and walked as
+ * permission-gated; the walk below catches a session route that refuses for a
+ * grant without being named.
+ */
+const CONTEXTUAL_GRANT: ReadonlySet<string> = new Set([
+  'POST /api/upload/file',
+]);
+
+// `BINDINGS` includes what this process does not register (the
+// development-only sign-up outside development), so every public route stays a
+// named decision.
+const TABLE = BINDINGS.map(({ key, entry }) => ({
+  method: entry.method,
+  path: entry.path,
+  body: entry.bodyKind,
+  auth: CONTEXTUAL_GRANT.has(key) ? 'permission' : entry.policy.auth,
+  policyAuth: entry.policy.auth,
+}));
+const MUTATING = TABLE.filter((route) => route.method !== 'GET');
+
+const SELF_ONLY: ReadonlySet<string> = new Set(
+  BINDINGS.filter(({ options }) => options.permission?.orSelf === true).map(
+    ({ key }) => key
+  )
+);
 
 /**
  * The mutating routes that answer with no session at all. Each one carries its
@@ -52,20 +79,16 @@ const PUBLIC_MUTATING = [
   'POST /api/dev/sign-up',
 ];
 
-/** Routes whose refusal legitimately comes after the body is read, and why. */
-const READS_BODY_BEFORE_REFUSING = new Set([
-  // Self-edit needs no grant; only the body says whether this is one.
-  'PUT /api/dash/users/:id',
-]);
-
 const GUARDED = MUTATING.filter((route) => route.auth !== 'public');
-const PERMISSION_GATED = GUARDED.filter((route) => route.auth === 'permission');
+const PERMISSION_GATED = GUARDED.filter(
+  (route) => route.auth === 'permission' && !SELF_ONLY.has(label(route))
+);
+const SESSION_GATED = GUARDED.filter((route) => route.auth === 'session');
 
 function label(route: { method: string; path: string }): string {
   return `${route.method} ${route.path}`;
 }
 
-/** Locale-independent ordering, so the comparison is stable. */
 /**
  * Query strings a route needs before its permission check can even be named.
  * The upload route checks the grant on the page `?resource=` points at, so the
@@ -82,7 +105,7 @@ function targetUrl(route: { method: string; path: string }): string {
   return `${path}${QUERY_FOR[label(route)] ?? ''}`;
 }
 
-function bodyFor(route: (typeof ROUTES)[number]): {
+function bodyFor(route: (typeof TABLE)[number]): {
   body?: BodyInit;
   headers: Record<string, string>;
 } {
@@ -115,9 +138,21 @@ describe('the route table', () => {
     );
   });
 
-  test('the walk below is not empty', () => {
+  test('the walks below are not empty', () => {
     expect(GUARDED.length).toBeGreaterThan(5);
     expect(PERMISSION_GATED.length).toBeGreaterThan(3);
+    expect(SESSION_GATED.length).toBeGreaterThan(3);
+  });
+
+  test('every route named for a contextual grant is a mutating session route', () => {
+    expect(
+      [...CONTEXTUAL_GRANT].filter(
+        (key) =>
+          !MUTATING.some(
+            (route) => label(route) === key && route.policyAuth === 'session'
+          )
+      )
+    ).toEqual([]);
   });
 });
 
@@ -132,13 +167,11 @@ describe.each(GUARDED.map((route) => [label(route), route] as const))(
         body,
       });
 
-      const response = await app.handle(request);
-
-      expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-      expect(await response.json()).toMatchObject({
-        success: false,
-        message: MSG_LOGIN_REQUIRED,
-      });
+      await expectError(
+        await app.handle(request),
+        HTTP_STATUS.UNAUTHORIZED,
+        MSG_LOGIN_REQUIRED
+      );
       expect(request.bodyUsed).toBe(false);
     });
   }
@@ -146,7 +179,7 @@ describe.each(GUARDED.map((route) => [label(route), route] as const))(
 
 describe.each(PERMISSION_GATED.map((route) => [label(route), route] as const))(
   '%s',
-  (name, route) => {
+  (_name, route) => {
     test('with a session that holds no grant is refused 403', async () => {
       if (!state.nobody) throw new Error('fixture not seeded');
       const { body, headers } = bodyFor(route);
@@ -156,14 +189,33 @@ describe.each(PERMISSION_GATED.map((route) => [label(route), route] as const))(
         body,
       });
 
-      const response = await app.handle(request);
+      await expectError(
+        await app.handle(request),
+        HTTP_STATUS.FORBIDDEN,
+        MSG_INSUFFICIENT_PERMISSIONS
+      );
+      expect(request.bodyUsed).toBe(false);
+    });
+  }
+);
 
-      expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-      expect(await response.json()).toMatchObject({
-        success: false,
+describe.each(SESSION_GATED.map((route) => [label(route), route] as const))(
+  '%s',
+  (_name, route) => {
+    test('is not refused for a grant: a route that is belongs in CONTEXTUAL_GRANT', async () => {
+      if (!state.nobody) throw new Error('fixture not seeded');
+      const { body, headers } = bodyFor(route);
+      const response = await app.handle(
+        authedRequest(state.nobody, targetUrl(route), {
+          method: route.method,
+          headers,
+          body,
+        })
+      );
+      const answer: unknown = await response.json();
+      expect(answer).not.toMatchObject({
         message: MSG_INSUFFICIENT_PERMISSIONS,
       });
-      expect(request.bodyUsed).toBe(READS_BODY_BEFORE_REFUSING.has(name));
     });
   }
 );

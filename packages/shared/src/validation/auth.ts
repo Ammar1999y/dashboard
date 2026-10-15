@@ -26,8 +26,6 @@ import {
   phoneSchema,
   reauthPasswordSchema,
   sanitizeStrictSingleLine,
-  STRICT_SINGLE_LINE_DESCRIPTION,
-  strictTextMaximum,
 } from './rules';
 
 export const CAPTCHA_HEADER = 'x-captcha-response';
@@ -61,10 +59,7 @@ const userRoleSchema = z.object({
       .string()
       .min(2, MSG_NAME_REQUIRED)
       .max(NAME_MAX, MSG_NAME_TOO_LONG)
-      .meta({
-        maxLength: undefined,
-        description: `${STRICT_SINGLE_LINE_DESCRIPTION} ${strictTextMaximum(NAME_MAX)}`,
-      })
+      .meta({ maxLength: undefined })
   ),
   isActive: z.boolean().default(true),
   // A union failure carries neither branch's message, only Zod's own
@@ -155,6 +150,49 @@ function validateCustomRolePermissions(
   }
 }
 
+/**
+ * The custom-role and phone refinements, as the document states them.
+ * Runtime validation is the refinements'; this changes no parse.
+ */
+function userPayloadRules({ update }: { update: boolean }) {
+  const phoneRules = PHONE_ENABLED
+    ? PHONE_REQUIRED
+      ? [
+          {
+            properties: { phoneNumber: { not: { type: 'null' } } },
+            ...(!update && { required: ['phoneNumber'] }),
+          },
+        ]
+      : []
+    : [
+        {
+          properties: {
+            phoneNumber: {
+              anyOf: [
+                { type: 'null' },
+                { type: 'string', pattern: String.raw`^\s*$` },
+              ],
+            },
+          },
+        },
+      ];
+  return [
+    {
+      if: {
+        properties: { roleId: { const: CUSTOM_ROLE_VALUE } },
+        required: ['roleId'],
+      },
+      // eslint-disable-next-line unicorn/no-thenable -- `then` is a JSON Schema conditional keyword
+      then: {
+        properties: { permissions: { minItems: 1 } },
+        ...(!update && { required: ['permissions'] }),
+      },
+      else: { properties: { permissions: { maxItems: 0 } } },
+    },
+    ...phoneRules,
+  ];
+}
+
 function refineUserPayload(data: UserPayloadShape, ctx: z.RefinementCtx) {
   validateCustomRolePermissions(data, ctx);
   validatePhoneByMode(data, ctx);
@@ -175,7 +213,9 @@ function refineUserUpdatePayload(data: UserPayloadShape, ctx: z.RefinementCtx) {
  * "looks like it worked but didn't" failure mode, since every mutable field
  * except `phoneNumber` is required.
  */
-export const createUserSchema = userRoleSchema.superRefine(refineUserPayload);
+export const createUserSchema = userRoleSchema
+  .superRefine(refineUserPayload)
+  .meta({ allOf: userPayloadRules({ update: false }) });
 
 const updateUserObject = userRoleSchema.omit({ password: true }).extend({
   isActive: z.boolean(),
@@ -207,11 +247,11 @@ const adminUpdateUserBodyObject = updateUserObject
   .extend({ phoneNumber: optionalPhoneSchema.optional() })
   .strict();
 
-// No `id` in either: the target is the path parameter, validated on its own by
-// the handler, so a body `id` is an unknown key and refused.
-export const adminUpdateUserBodySchema = adminUpdateUserBodyObject.superRefine(
-  refineUserUpdatePayload
-);
+// No `id` in either: the target is the path parameter, validated on its own,
+// so a body `id` is an unknown key and refused.
+export const adminUpdateUserBodySchema = adminUpdateUserBodyObject
+  .superRefine(refineUserUpdatePayload)
+  .meta({ allOf: userPayloadRules({ update: true }) });
 
 // Reject unknown keys with .strict() so a client sending email/roleId/password/
 // isActive gets a 4xx instead of a misleading 200 with the fields silently stripped.

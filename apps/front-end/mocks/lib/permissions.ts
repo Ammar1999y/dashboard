@@ -25,6 +25,7 @@ import {
 
 import { currentUser, roleOf, roles } from '../store';
 import { errorResponse, notFoundError } from './http';
+import { requireReauthWindow } from './reauth';
 
 export const insufficientPermissions = () =>
   new CustomError(MSG_INSUFFICIENT_PERMISSIONS, HTTP_STATUS.FORBIDDEN);
@@ -38,6 +39,23 @@ export function mayHoldSession(user: MockUser): boolean {
 /** A role's matrix as the server sanitises it. */
 const grantsOf = (matrix: Parameters<typeof toPermissionRows>[0]) =>
   sanitizePermissions(toPermissionRows(matrix));
+
+/**
+ * The `metadata` the server keeps on a session: its role and that role's
+ * sanitised matrix, which the dashboard reads to decide what to offer. Read
+ * live here, where the server reads it at sign-in; an account with no role has
+ * none.
+ */
+export function sessionMetadata(user: MockUser) {
+  const role = roleOf(user);
+  if (!role || !user.role) return {};
+  return {
+    roleId: user.roleId,
+    roleName: user.role.roleName,
+    roleScope: user.role.scope,
+    permissions: grantsOf(role.permissions),
+  };
+}
 
 interface Grants {
   user: MockUser;
@@ -68,11 +86,16 @@ function liveGrants(): Grants {
  * The server's `requirePermission`, with the scope it resolves: `'own'` reaches
  * only the records the caller created. `throwError: false` returns a refusal as
  * `allowed: false` for a route that decides later, as the server's does.
+ * `reauth` is the route's `reauth: true`: asked only of a caller the grant
+ * admits, so one without it never learns whether a proof would have helped.
  */
 export function requirePermission(
   resource: DashboardPage,
   action: PermissionAction,
-  { throwError = true }: { throwError?: boolean } = {}
+  {
+    throwError = true,
+    reauth = false,
+  }: { throwError?: boolean; reauth?: boolean } = {}
 ) {
   const grants = liveGrants();
   const { allowed, scope } = resolveActionScope(
@@ -81,6 +104,7 @@ export function requirePermission(
     action
   );
   if (!allowed && throwError) throw insufficientPermissions();
+  if (reauth && allowed) requireReauthWindow();
   return { ...grants, allowed, scope };
 }
 

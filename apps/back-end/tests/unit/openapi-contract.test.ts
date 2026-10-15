@@ -1,15 +1,20 @@
-import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
-import path from 'node:path';
-import type {
-  RouteDefinition,
-  RouteManifestEntry,
-} from '@/lib/http/route-manifest';
+/**
+ * What the served document promises a client, operation by operation, held to
+ * the runtime it describes. It reads the document `GET /openapi.json`
+ * serves, generated from the registered bindings and the Better Auth merge;
+ * `openapi-document.test.ts` holds the same document to the validators and to
+ * each binding's own declaration.
+ */
+import { beforeAll, describe, expect, test } from 'bun:test';
+import type { AnyBinding } from '@/lib/http/binding';
+import type { JsonSchema } from '@/lib/http/openapi/json-schema';
 import type { PaginationMeta } from '@app/shared/types/api';
 
-import { ROUTES } from '@/routes';
-import * as z from 'zod';
+import { createApp } from '@/app';
+import { BINDINGS, REGISTERED_BINDINGS, registeredBindings } from '@/modules';
+import { generateDocument } from '@/server/elysia/openapi';
 
+import { isRawResponse } from '@app/shared/api/endpoint';
 import { operatorsForSpec } from '@app/shared/data-table/column-specs';
 import {
   MEDIA_FILTER_COLUMNS,
@@ -21,11 +26,14 @@ import {
   MAX_FILTER_VALUES,
   MAX_FILTERS_RAW_LENGTH,
   MAX_ID_LENGTH,
+  MAX_PER_PAGE,
   MAX_SORT_ITEMS,
   MAX_VALUE_LENGTH,
 } from '@app/shared/data-table/parsers';
-import { isBetterAuthResponseRoute } from '@app/shared/response-contract';
-import { reauthGrantSchema } from '@app/shared/responses/auth';
+import {
+  BETTER_AUTH_RESPONSES,
+  isBetterAuthResponseRoute,
+} from '@app/shared/response-contract';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
 import {
   MAX_DOCUMENT_SIZE_MB,
@@ -41,49 +49,60 @@ import { auth } from '@/lib/auth';
 import {
   BETTER_AUTH_ENDPOINTS,
   BETTER_AUTH_KNOWN_PATHS,
+  BETTER_AUTH_ROUTE_PREFIX,
   betterAuthServes,
 } from '@/lib/auth/allowed-paths';
-import { LIBRARY_VERIFIER_PATHS } from '@/lib/http/openapi/better-auth';
 import {
   BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
   BETTER_AUTH_SPENT_INPUT_REMEDIES,
   BETTER_AUTH_TRUSTED_RESPONSES,
+  LIBRARY_VERIFIER_PATHS,
 } from '@/lib/http/openapi/better-auth-tables';
-import { successSourceProblems } from '@/lib/http/openapi/consistency';
-import { openApiDocument } from '@/lib/http/openapi/document';
-import {
-  memoiseOpenApiDocument,
-  resolveOpenApiDocument,
-} from '@/lib/http/openapi/route';
-import { operationKey } from '@/lib/http/openapi/route-operations';
-import {
-  MEDIA_REFUSAL_CODES,
-  MEDIA_REFUSALS_WITHOUT_IDS,
-  SPENT_INPUT_REMEDIES,
-} from '@/lib/http/openapi/route-tables';
-import { convertContract } from '@/lib/http/openapi/success-schemas';
+import { finalizeDocument } from '@/lib/http/openapi/finalize';
 import { isSafeMethod } from '@/lib/http/origin';
-import {
-  toManifest,
-  toPublishedManifest,
-  toRegisteredRoutes,
-} from '@/lib/http/route-manifest';
-import { MEDIA_CODES_WITH_IDS } from '@/lib/media/errors';
+import { generateUuidV7 } from '@/lib/id';
 
 import { compareCodeUnits } from '@/utils/text';
 
-const REPO_ROOT = path.join(import.meta.dir, '..', '..');
+/**
+ * The production surface (this tier runs as `test`, which registers what
+ * production does) and the development one, which adds `/api/dev/*`.
+ */
+const documents: { production: JsonSchema; development: JsonSchema } = {
+  production: {},
+  development: {},
+};
+const DEVELOPMENT_BINDINGS = registeredBindings(BINDINGS, true);
 
-/** Locale-independent string ordering, so a sorted comparison is stable. */
+beforeAll(async () => {
+  documents.production = await generateDocument(
+    createApp({
+      bindings: REGISTERED_BINDINGS,
+      prefixes: [BETTER_AUTH_ROUTE_PREFIX],
+    }),
+    REGISTERED_BINDINGS
+  );
+  documents.development = await generateDocument(
+    createApp({
+      bindings: DEVELOPMENT_BINDINGS,
+      prefixes: [BETTER_AUTH_ROUTE_PREFIX],
+    }),
+    DEVELOPMENT_BINDINGS
+  );
+});
+
+const production = (): JsonSchema => documents.production;
+const development = (): JsonSchema => documents.development;
+
+const openApiPath = (path: string) => path.replaceAll(/:(\w+)/g, '{$1}');
+const label = (binding: AnyBinding) => binding.key;
+
 /** The status codes one operation declares, sorted. */
 function statusesOf(document: unknown, path: string, method: string): string[] {
-  const paths = (document as { paths: Record<string, unknown> }).paths;
-  const entry = paths[path];
-  if (!entry) throw new Error(`${path} is not in the document`);
-  const operation = (entry as Record<string, unknown>)[method];
-  if (!operation) throw new Error(`${method} ${path} is not in the document`);
-  const responses = (operation as { responses: Record<string, unknown> })
-    .responses;
+  const responses = operationOf(document, path, method).responses as Record<
+    string,
+    unknown
+  >;
   return Object.keys(responses).toSorted(compareCodeUnits);
 }
 
@@ -114,14 +133,21 @@ function operationOf(
   return operation as Record<string, unknown>;
 }
 
-/**
- * Follows a `$ref` into `components.schemas`.
- *
- * The document publishes its repeated schemas once and references them — the
- * media file schema was inlined nine times and the error envelope at every
- * refusal of every operation — so a test that reads `properties` off a response
- * has to resolve first or it is asserting against the reference object.
- */
+const bindingOperation = (document: unknown, binding: AnyBinding) =>
+  operationOf(
+    document,
+    openApiPath(binding.entry.path),
+    binding.entry.method.toLowerCase()
+  );
+
+const bindingStatuses = (document: unknown, binding: AnyBinding) =>
+  statusesOf(
+    document,
+    openApiPath(binding.entry.path),
+    binding.entry.method.toLowerCase()
+  );
+
+/** Follows a `$ref` into `components.schemas`; an inline schema is returned as it is. */
 function resolveRef(
   document: unknown,
   schema: Record<string, unknown>
@@ -213,16 +239,21 @@ function documentOperations(document: unknown): Array<{
   return operations;
 }
 
+const hasCaptchaHeader = (operation: Record<string, unknown>) =>
+  (Array.isArray(operation.parameters) ? operation.parameters : []).some(
+    (parameter) =>
+      typeof parameter === 'object' &&
+      parameter !== null &&
+      'name' in parameter &&
+      parameter.name === 'x-captcha-response'
+  );
+
 describe('the OpenAPI document', () => {
   test('email commits document revoking every session and the required client alert on both routes', () => {
-    const document = openApiDocument(toPublishedManifest(ROUTES));
+    // The prose sits on the operation: the success status's wording is the
+    // policy's.
     const descriptionOf = (path: string): string =>
-      String(
-        objectProperty(
-          objectProperty(operationOf(document, path, 'post'), 'responses'),
-          '200'
-        ).description
-      );
+      String(operationOf(development(), path, 'post').description);
 
     for (const path of [
       '/api/dash/users/me/change-email',
@@ -248,314 +279,80 @@ describe('the OpenAPI document', () => {
   });
 
   test('credential proof fields describe the optional reauthentication window and errors preserve their code', () => {
-    const document = openApiDocument(toPublishedManifest(ROUTES));
     for (const path of [
       '/api/dash/users/me/change-password',
       '/api/dash/users/me/change-email',
       '/api/dash/users/me/change-phone',
     ]) {
-      const schema = requestSchemaOf(document, path, 'post');
+      const schema = requestSchemaOf(development(), path, 'post');
       expect(
         objectProperty(objectProperty(schema, 'properties'), 'currentPassword')
           .description
       ).toContain('401 REAUTH_REQUIRED');
       expect(schema.required).not.toContain('currentPassword');
-      const error = responseSchemaOf(document, path, 'post', '401');
+      const error = responseSchemaOf(development(), path, 'post', '401');
       expect(
         objectProperty(objectProperty(error, 'properties'), 'code').type
       ).toBe('string');
     }
   });
 
-  test('builds from the full route table without throwing', () => {
-    const paths = pathsOf(openApiDocument(toManifest(ROUTES)));
-    expect(paths.length).toBeGreaterThan(0);
-  });
-
-  test('builds from the published manifest too', () => {
-    const paths = pathsOf(openApiDocument(toPublishedManifest(ROUTES)));
-    expect(paths.length).toBeGreaterThan(0);
-  });
-
-  test('builds under the PRODUCTION filter, which the running deployment uses', () => {
-    // The case a development-only check cannot reach: the published manifest
-    // withholds `/api/dev/*`, and the leftover-schema check read those schemas
-    // as pointing at routes that do not exist. `openApiDocument` threw, so
-    // `/openapi.json` answered every authorised caller with a 500 in production
-    // while passing here. `bun run build` now fails on the same condition.
-    const paths = pathsOf(openApiDocument(toPublishedManifest(ROUTES, true)));
-
+  test('builds over both surfaces, and the production one holds no /api/dev path', () => {
+    // The case a development-only check cannot reach: a document that builds
+    // only with `/api/dev/*` registered answers every authorised production
+    // caller with a 500.
+    expect(pathsOf(development()).length).toBeGreaterThan(0);
+    const paths = pathsOf(production());
     expect(paths.length).toBeGreaterThan(0);
     expect(paths.filter((path) => path.startsWith('/api/dev'))).toEqual([]);
-  });
-
-  test('refuses a path the table and the Better Auth prefix both claim, whatever the methods', () => {
-    // The generator ASSIGNS `paths[full]` for every Better Auth endpoint, so a
-    // table operation on a shared path is dropped whether or not the two share a
-    // method. A same-method duplicate is the obvious case; this is the one that
-    // passed validation and then disappeared from the document, which is the
-    // failure mode a published contract cannot afford.
-    const collision: RouteManifestEntry = {
-      method: 'POST',
-      path: '/api/auth/get-session',
-      preAuth: 'ip-limit',
-      auth: 'public',
-      captcha: false,
-      handlerRateLimit: false,
-      body: 'json',
-      response: 'envelope',
-      reauth: false,
-      checksPassword: false,
-    };
-
-    expect(() => openApiDocument([...toManifest(ROUTES), collision])).toThrow(
-      /\/api\/auth\/get-session is declared by the route table/
-    );
-  });
-
-  test('refuses a status override the route no longer matches', () => {
-    const manifest = toManifest(ROUTES);
-    const bodyless = manifest.map((entry) =>
-      operationKey(entry) === 'POST /api/dash/auth/reauth'
-        ? { ...entry, body: 'none' as const }
-        : entry
-    );
-    const withoutReset = manifest.filter(
-      (entry) =>
-        operationKey(entry) !== 'POST /api/dash/users/:id/two-factor/reset'
-    );
-
-    expect(() => openApiDocument(bodyless)).toThrow(
-      "POST /api/dash/auth/reauth has a BODY_SCHEMA_REFUSALS entry but declares body: 'none'"
-    );
-    expect(() => openApiDocument(withoutReset)).toThrow(
-      "ID_NOT_FOUND_ROUTES has 'POST /api/dash/users/:id/two-factor/reset', which is not a route"
-    );
-  });
-
-  test('refuses a row wired to a handler keyed for another route', () => {
-    const handlerOf = (key: string) => {
-      const route = ROUTES.find((entry) => operationKey(entry) === key);
-      if (!route) throw new Error(`${key} is not in the route table`);
-      return route.handler;
-    };
-    const rewire = (key: string, handler: RouteDefinition['handler']) =>
-      toManifest(
-        ROUTES.map((route) =>
-          operationKey(route) === key ? { ...route, handler } : route
-        )
-      );
-
-    expect(() =>
-      openApiDocument(
-        rewire('GET /api/dash/media', handlerOf('GET /api/dash/permissions'))
-      )
-    ).toThrow(
-      "GET /api/dash/media is served by the handler keyed 'GET /api/dash/permissions'"
-    );
-    // The storage check is raw, so it never carries a key.
-    expect(() =>
-      openApiDocument(
-        rewire('GET /api/dash/media', handlerOf('GET /api/health/storage'))
-      )
-    ).toThrow(
-      'GET /api/dash/media answers the envelope but its handler is not keyed'
-    );
-  });
-
-  test('reports a document keyword that no converted response reaches', () => {
-    // The real map has none: every entry reached a conversion.
-    expect(convertContract().unusedKeywords).toEqual([]);
-    // A reached instance is not reported; a fresh one that nothing converts is.
-    const unreached = z.string();
     expect(
-      convertContract(
-        new Map<z.core.$ZodType, Record<string, unknown>>([
-          [reauthGrantSchema.shape.expiresIn, { description: 'reached' }],
-          [unreached, { description: 'nobody converts this instance' }],
-        ])
-      ).unusedKeywords
-    ).toEqual(['{"description":"nobody converts this instance"}']);
+      pathsOf(development()).filter((path) => path.startsWith('/api/dev'))
+    ).not.toEqual([]);
   });
 
-  test('names an envelope row the contract does not cover, rather than failing to build it', () => {
-    const manifest = toManifest(
-      ROUTES.map((route) =>
-        operationKey(route) === 'GET /api/health/storage'
-          ? { ...route, response: 'envelope' as const }
-          : route
-      )
-    );
-    expect(() => openApiDocument(manifest)).toThrow(
-      'GET /api/health/storage answers the envelope but has no RESPONSE_DATA entry'
+  test('refuses a binding on a path the Better Auth prefix also claims, whatever the methods', () => {
+    // The merge assigns each Better Auth path item, so a binding on a shared
+    // path would vanish from the document whether or not the two share a
+    // method: the failure mode a published contract cannot afford.
+    const generated = {
+      paths: { '/api/auth/get-session': { post: { responses: {} } } },
+      components: {},
+    };
+    expect(() =>
+      finalizeDocument(generated, [], {
+        paths: { '/api/auth/get-session': { get: { responses: {} } } },
+        schemas: {},
+        securitySchemes: {},
+      })
+    ).toThrow(
+      '/api/auth/get-session is published by a binding and by the Better Auth prefix'
     );
   });
 
   test('names no /api/internal path — those routes no longer exist', () => {
-    const paths = pathsOf(openApiDocument(toManifest(ROUTES)));
-    expect(paths.filter((path) => path.startsWith('/api/internal'))).toEqual(
-      []
-    );
-  });
-
-  test('names every route in the manifest it was built from', () => {
-    const manifest = toPublishedManifest(ROUTES);
-    const documented = new Set(pathsOf(openApiDocument(manifest)));
-
-    for (const entry of manifest) {
-      const expected = entry.path.replaceAll(/:(\w+)/g, '{$1}');
-      expect(documented).toContain(expected);
-    }
-  });
-});
-
-describe('memoisation', () => {
-  test('the manifest getter is invoked exactly once, however many builds are asked for', () => {
-    let calls = 0;
-    const document = memoiseOpenApiDocument(() => {
-      calls++;
-      return toPublishedManifest(ROUTES);
-    });
-
-    const first = document();
-    for (let i = 0; i < 5; i++) expect(document()).toBe(first);
-
-    expect(calls).toBe(1);
-  });
-
-  test('a build failure is cached too, and rethrown rather than retried', () => {
-    let calls = 0;
-    const document = memoiseOpenApiDocument(() => {
-      calls++;
-      throw new Error('conversion failed');
-    });
-
-    const failures: string[] = [];
-    for (let i = 0; i < 3; i++) {
-      try {
-        document();
-      } catch (error) {
-        failures.push((error as Error).message);
-      }
-    }
-
-    expect(calls).toBe(1);
-    expect(failures).toEqual([
-      'conversion failed',
-      'conversion failed',
-      'conversion failed',
-    ]);
-  });
-});
-
-describe('artifact resolution', () => {
-  test('production fails closed when build/openapi.json is absent', () => {
-    let generated = false;
-    expect(() =>
-      resolveOpenApiDocument(
-        () => null,
-        () => {
-          generated = true;
-          return {};
-        },
-        true
-      )
-    ).toThrow('build/openapi.json is required in production');
-    expect(generated).toBe(false);
-  });
-
-  test('production serves the artifact without generating', () => {
-    const artifact = { openapi: '3.1.1', built: true };
-    let generated = false;
     expect(
-      resolveOpenApiDocument(
-        () => artifact,
-        () => {
-          generated = true;
-          return {};
-        },
-        true
-      )
-    ).toBe(artifact);
-    expect(generated).toBe(false);
+      pathsOf(development()).filter((path) => path.startsWith('/api/internal'))
+    ).toEqual([]);
   });
 
-  test('development may generate when no artifact exists', () => {
-    const document = { openapi: '3.1.1' };
-    expect(
-      resolveOpenApiDocument(
-        () => null,
-        () => document,
-        false
-      )
-    ).toBe(document);
-  });
-
-  test('development generates even when an artifact exists, and never reads it', () => {
-    const document = { openapi: '3.1.1' };
-    let read = false;
-    expect(
-      resolveOpenApiDocument(
-        () => {
-          read = true;
-          return { openapi: '3.1.1', stale: true };
-        },
-        () => document,
-        false
-      )
-    ).toBe(document);
-    expect(read).toBe(false);
-  });
-});
-
-describe('the production filter', () => {
-  const withEnv = <T>(value: string, run: () => T): T => {
-    const previous = process.env.NODE_ENV;
-    process.env.NODE_ENV = value;
-    try {
-      return run();
-    } finally {
-      process.env.NODE_ENV = previous;
+  test('names every route its surface registers', () => {
+    for (const [document, bindings] of [
+      [production(), REGISTERED_BINDINGS],
+      [development(), DEVELOPMENT_BINDINGS],
+    ] as const) {
+      const documented = new Set(pathsOf(document));
+      for (const binding of bindings)
+        expect(documented).toContain(openApiPath(binding.entry.path));
     }
-  };
-
-  test('drops /api/dev/* in production and keeps it elsewhere', () => {
-    const inProduction = withEnv('production', () =>
-      toPublishedManifest(ROUTES)
-    ).map((entry) => entry.path);
-
-    // The explicit flag and the ambient environment must agree, or the build
-    // artefact and the running server describe different servers.
-    expect(toPublishedManifest(ROUTES, true).map((e) => e.path)).toEqual(
-      inProduction
-    );
-    const inDevelopment = withEnv('development', () =>
-      toPublishedManifest(ROUTES)
-    ).map((entry) => entry.path);
-
-    expect(inDevelopment.some((path) => path.startsWith('/api/dev/'))).toBe(
-      true
-    );
-    expect(inProduction.some((path) => path.startsWith('/api/dev/'))).toBe(
-      false
-    );
-
-    expect(inProduction.length).toBeGreaterThan(0);
-    expect(new Set(inProduction).isSubsetOf(new Set(inDevelopment))).toBe(true);
   });
 });
 
 describe('the envelope schema against the shape handlers actually emit', () => {
   /**
-   * `ENVELOPE_SCHEMA` is written by hand — `HandlerEnvelope` is a TypeScript
-   * interface and types do not survive to runtime — so it is the one part of this
-   * document that can drift from the code, and it HAD: `meta` declared
-   * `pageSize`, a name that appears nowhere else in the repository, and omitted
-   * `pageCount`. Both paginated endpoints emit `PaginationMeta`, so a generated
-   * client read `undefined` for the page size and could not build a pager.
-   *
-   * Compared against a REAL `PaginationMeta` value rather than a copied list, so
-   * a field added to that type without the document fails here.
+   * Compared against a REAL `PaginationMeta` value rather than a copied list,
+   * so a field added to that type without the document fails here: a `meta`
+   * that once declared `pageSize` and omitted `pageCount` left every generated
+   * client without a pager.
    */
   const meta: PaginationMeta = {
     page: 1,
@@ -564,36 +361,30 @@ describe('the envelope schema against the shape handlers actually emit', () => {
     pageCount: 1,
   };
 
-  function metaProperties(): string[] {
-    const document = openApiDocument(toManifest(ROUTES));
-    const paths = (document as { paths: Record<string, unknown> }).paths;
-    const operation = (paths['/api/dash/users'] as Record<string, unknown>)
-      .get as Record<string, unknown>;
-    const responses = operation.responses as Record<string, unknown>;
-    const ok = responses['200'] as Record<string, unknown>;
-    const content = ok.content as Record<string, unknown>;
-    const json = content['application/json'] as Record<string, unknown>;
-    const schema = json.schema as Record<string, unknown>;
-    const properties = schema.properties as Record<string, unknown>;
-    const metaSchema = properties.meta as Record<string, unknown>;
-    return Object.keys(metaSchema.properties as Record<string, unknown>);
-  }
-
   test('meta declares exactly the keys of a PaginationMeta value', () => {
-    expect(metaProperties().toSorted(compareCodeUnits)).toEqual(
-      Object.keys(meta).toSorted(compareCodeUnits)
+    const schema = responseSchemaOf(
+      production(),
+      '/api/dash/users',
+      'get',
+      '200'
     );
+    const metaSchema = objectProperty(
+      objectProperty(schema, 'properties'),
+      'meta'
+    );
+    expect(
+      Object.keys(objectProperty(metaSchema, 'properties')).toSorted(
+        compareCodeUnits
+      )
+    ).toEqual(Object.keys(meta).toSorted(compareCodeUnits));
   });
 });
 
 describe('request and response contract fidelity', () => {
-  const document = openApiDocument(toPublishedManifest(ROUTES, true));
-
   test('the document is OpenAPI 3.1.1 and every operation is named, tagged, and explicit about security', () => {
-    expect((document as Record<string, unknown>).openapi).toBe('3.1.1');
-    expect((document as Record<string, unknown>).servers).toEqual([
-      expect.objectContaining({ url: '/' }),
-    ]);
+    const document = production();
+    expect(document.openapi).toBe('3.1.1');
+    expect(document.servers).toEqual([expect.objectContaining({ url: '/' })]);
 
     const operationIds = new Set<string>();
     for (const { operation } of documentOperations(document)) {
@@ -605,15 +396,10 @@ describe('request and response contract fidelity', () => {
       expect(operationIds.has(operation.operationId as string)).toBe(false);
       operationIds.add(operation.operationId as string);
     }
-    // Derived, not a literal. It used to be `30`, which meant every route added
-    // to the table failed this assertion for a reason that had nothing to do
-    // with what it tests — and the fix was always "bump the number", which is
-    // the shape of an assertion nobody reads. What it should say is that the
-    // document covers the served surface EXACTLY: one operation per table
-    // route, plus one per Better Auth method. `true` because this document is
-    // the PRODUCTION one, where `/api/dev/*` is not served.
+    // Derived, not a literal: one operation per registered binding plus one
+    // per Better Auth method, on the PRODUCTION surface.
     const expectedOperations =
-      toPublishedManifest(ROUTES, true).length +
+      REGISTERED_BINDINGS.length +
       BETTER_AUTH_ENDPOINTS.reduce(
         (total, endpoint) => total + endpoint.methods.length,
         0
@@ -622,10 +408,10 @@ describe('request and response contract fidelity', () => {
   });
 
   test('no subschema carries $schema', () => {
-    // The converter stamps it on results that get spliced in as SUBSCHEMAS,
-    // where 2020-12 does not allow it.
+    // A converter stamps it on results spliced in as SUBSCHEMAS, where 2020-12
+    // does not allow it.
     const offenders: string[] = [];
-    visitObjects(document, (value) => {
+    visitObjects(production(), (value) => {
       if ('$schema' in value)
         offenders.push(JSON.stringify(value).slice(0, 80));
     });
@@ -635,29 +421,25 @@ describe('request and response contract fidelity', () => {
   test('a user and the role endpoint publish the SAME permissions shape', () => {
     // Both handlers map `role.rolePermissions` identically, so the one field
     // the two endpoints share must not have two published types.
-    const user = responseSchemaOf(
-      document,
-      '/api/dash/users/{id}',
-      'get',
-      '200'
-    );
-    const role = responseSchemaOf(
-      document,
-      '/api/dash/permissions/{id}',
-      'get',
-      '200'
-    );
-    const permissionsOf = (envelope: Record<string, unknown>) =>
+    const permissionsOf = (path: string) =>
       objectProperty(
-        objectProperty(objectProperty(envelope, 'properties'), 'data'),
+        objectProperty(
+          objectProperty(
+            responseSchemaOf(production(), path, 'get', '200'),
+            'properties'
+          ),
+          'data'
+        ),
         'properties'
       ).permissions;
 
-    expect(permissionsOf(user)).toEqual({
+    const user = permissionsOf('/api/dash/users/{id}');
+    expect(user).toEqual({
       type: 'array',
+      description: expect.any(String),
       items: expect.objectContaining({ type: 'object' }),
     });
-    expect(permissionsOf(user)).toEqual(permissionsOf(role));
+    expect(user).toEqual(permissionsOf('/api/dash/permissions/{id}'));
   });
 
   test('the two routes that re-issue the session cookie say so', () => {
@@ -665,7 +447,7 @@ describe('request and response contract fidelity', () => {
       '/api/dash/users/me/change-email',
       '/api/dash/users/me/change-email/verify',
     ]) {
-      const responses = operationOf(document, pathName, 'post')
+      const responses = operationOf(production(), pathName, 'post')
         .responses as Record<string, Record<string, unknown>>;
       expect(objectProperty(responses['200'] ?? {}, 'headers')).toHaveProperty(
         'Set-Cookie'
@@ -673,7 +455,7 @@ describe('request and response contract fidelity', () => {
     }
     // Not on a route that leaves the identity alone.
     const password = operationOf(
-      document,
+      production(),
       '/api/dash/users/me/change-password',
       'post'
     ).responses as Record<string, Record<string, unknown>>;
@@ -682,40 +464,30 @@ describe('request and response contract fidelity', () => {
 
   test('a 503 that only a deployment change clears is not described as a throttle', () => {
     // The limiter owns the same status, and its "retry shortly" wording is
-    // wrong for a state only a deployment change clears.
+    // wrong for a state only a deployment change clears. The route's own words
+    // sit on the operation; the status keeps the policy's.
     for (const pathName of [
       '/api/dash/users/me/change-email',
       '/api/dash/users/me/change-phone',
-    ]) {
-      const responses = operationOf(document, pathName, 'post')
-        .responses as Record<string, Record<string, unknown>>;
-      expect(responses['503']?.description).toContain('OTP channel');
-    }
-    const password = operationOf(
-      document,
-      '/api/dash/users/me/change-password',
-      'post'
-    ).responses as Record<string, Record<string, unknown>>;
-    expect(password['503']?.description).not.toContain('OTP channel');
+    ])
+      expect(
+        String(operationOf(production(), pathName, 'post').description)
+      ).toContain('no channel this deployment enables');
+    expect(
+      String(
+        operationOf(production(), '/api/dash/users/me/change-password', 'post')
+          .description
+      )
+    ).not.toContain('channel');
   });
 
   test('a 503 after a single-use input was spent names the remedy, not a retry', () => {
-    const full = openApiDocument(toManifest(ROUTES));
-    const unavailable = (pathName: string) =>
-      String(
-        (
-          operationOf(full, pathName, 'post').responses as Record<
-            string,
-            Record<string, unknown>
-          >
-        )['503']?.description
-      );
-
+    const document = development();
     const betterAuthUnavailable = (pathName: string) =>
       String(
         (
           operationOf(
-            full,
+            document,
             `/api/auth${pathName}`,
             betterAuthServes(pathName, 'POST') ? 'post' : 'get'
           ).responses as Record<string, Record<string, unknown>>
@@ -760,26 +532,36 @@ describe('request and response contract fidelity', () => {
       expect(betterAuthUnavailable(pathName), pathName).toContain(RETRY);
     }
 
-    expect(unavailable('/api/auth/forgot-password/reset')).toContain(
+    // The project's own two spend a single-use input before the database can
+    // fail; the remedy is on the operation, the status keeps the policy's.
+    const operationText = (pathName: string) =>
+      String(operationOf(document, pathName, 'post').description);
+    expect(operationText('/api/auth/forgot-password/reset')).toContain(
       'request a new code'
     );
-    expect(unavailable('/api/auth/forgot-password/complete')).toContain(
+    expect(operationText('/api/auth/forgot-password/complete')).toContain(
       'start account recovery again'
     );
     expect(
-      Object.keys(SPENT_INPUT_REMEDIES).toSorted(compareCodeUnits)
+      operationText('/api/auth/forgot-password/second-factor/send')
+    ).not.toContain('spent');
+    expect(
+      DEVELOPMENT_BINDINGS.filter((binding) =>
+        /A 503 can follow .* spent/.test(
+          String(bindingOperation(document, binding).description)
+        )
+      )
+        .map(label)
+        .toSorted(compareCodeUnits)
     ).toEqual([
       'POST /api/auth/forgot-password/complete',
       'POST /api/auth/forgot-password/reset',
     ]);
-    expect(
-      unavailable('/api/auth/forgot-password/second-factor/send')
-    ).not.toContain('spent');
   });
 
   test('handler-enriched ids stay in the path and out of update bodies', () => {
     const permissionBody = requestSchemaOf(
-      document,
+      production(),
       '/api/dash/permissions/{id}',
       'put'
     );
@@ -787,26 +569,41 @@ describe('request and response contract fidelity', () => {
       Object.keys(permissionBody.properties as Record<string, unknown>)
     ).not.toContain('id');
 
-    const userBody = requestSchemaOf(document, '/api/dash/users/{id}', 'put');
-    const branches = userBody.oneOf as Record<string, unknown>[];
-    expect(branches).toHaveLength(2);
-    for (const branch of branches)
-      expect(
-        Object.keys(branch.properties as Record<string, unknown>)
-      ).not.toContain('id');
+    // The administrative shape alone: self-rename is `PUT /api/dash/users/me`.
+    const userBody = requestSchemaOf(
+      production(),
+      '/api/dash/users/{id}',
+      'put'
+    );
+    expect(userBody.anyOf).toBeUndefined();
+    expect(
+      Object.keys(userBody.properties as Record<string, unknown>)
+    ).not.toContain('id');
+    expect(userBody.required).toEqual(
+      expect.arrayContaining(['name', 'email', 'roleId', 'isActive'])
+    );
 
-    const operation = operationOf(document, '/api/dash/users/{id}', 'put');
+    const operation = operationOf(production(), '/api/dash/users/{id}', 'put');
+    const forbidden = (operation.responses as Record<string, unknown>)['403'];
+    expect(JSON.stringify(forbidden)).toInclude(
+      'The path names the caller’s own account'
+    );
     const id = (operation.parameters as Record<string, unknown>[]).find(
       (parameter) => parameter.name === 'id'
     );
-    const idSchema = id?.schema as Record<string, unknown>;
-    expect(idSchema).toMatchObject({ type: 'string', format: 'uuid' });
-    expect(idSchema.pattern).toBeString();
+    // The pattern tolerates the whitespace the runtime trims, so no `format`.
+    const idSchema = id?.schema as { type?: unknown; pattern?: string };
+    expect(idSchema.type).toBe('string');
+    /* eslint-disable-next-line security/detect-non-literal-regexp -- the
+       document's own published pattern is the assertion */
+    const idPattern = new RegExp(idSchema.pattern ?? '(?!)');
+    expect(idPattern.test(generateUuidV7())).toBe(true);
+    expect(idPattern.test(crypto.randomUUID())).toBe(false);
   });
 
   test('runtime password, phone, permission, and pagination constraints survive publication', () => {
     const passwordBody = requestSchemaOf(
-      document,
+      production(),
       '/api/dash/users/me/change-password',
       'post'
     );
@@ -828,7 +625,7 @@ describe('request and response contract fidelity', () => {
     }
 
     const phoneBody = requestSchemaOf(
-      document,
+      production(),
       '/api/dash/users/me/change-phone',
       'post'
     );
@@ -843,7 +640,7 @@ describe('request and response contract fidelity', () => {
     expect(phone.description).toContain('Saudi mobile');
 
     // The optional one must not inherit that bound: `''` is how it is cleared.
-    const userBody = requestSchemaOf(document, '/api/dash/users', 'post');
+    const userBody = requestSchemaOf(production(), '/api/dash/users', 'post');
     const optionalPhone = objectProperty(
       objectProperty(userBody, 'properties'),
       'phoneNumber'
@@ -851,7 +648,7 @@ describe('request and response contract fidelity', () => {
     expect(optionalPhone.type).toEqual(['string', 'number', 'null']);
 
     const permissionBody = requestSchemaOf(
-      document,
+      production(),
       '/api/dash/permissions',
       'post'
     );
@@ -885,7 +682,7 @@ describe('request and response contract fidelity', () => {
       'sort',
     ];
     for (const [pathName] of LIST_ROUTES) {
-      const operation = operationOf(document, pathName, 'get');
+      const operation = operationOf(production(), pathName, 'get');
       const parameters = operation.parameters as Record<string, unknown>[];
       expect(
         parameters
@@ -893,23 +690,24 @@ describe('request and response contract fidelity', () => {
           .filter((name): name is string => typeof name === 'string')
           .toSorted(compareCodeUnits)
           // Media adds `folder` and `scope` of its own; this test owns the
-          // shared DSL, and the media-specific pair is covered below.
+          // shared DSL.
           .filter((name) => expected.includes(name))
       ).toEqual(expected);
+      // A digit string, its bounds in the prose.
       const perPage = parameters.find(
         (parameter) => parameter.name === 'perPage'
       );
       expect(perPage?.schema).toMatchObject({
-        type: 'integer',
-        minimum: 1,
-        maximum: 100,
+        type: 'string',
+        pattern: String.raw`^\d+$`,
       });
+      expect(String(perPage?.description)).toContain(`1 to ${MAX_PER_PAGE}`);
       const filters = parameters.find(
         (parameter) => parameter.name === 'filters'
       );
       expect(filters?.schema).toMatchObject({
         type: 'string',
-        maxLength: 8192,
+        maxLength: MAX_FILTERS_RAW_LENGTH,
       });
       // The one parameter the parser ignores rather than rejects, so a
       // published length would be a bound the server never enforces.
@@ -918,22 +716,18 @@ describe('request and response contract fidelity', () => {
       );
       expect(search?.schema).toEqual({ type: 'string' });
       expect(search?.description).toContain('ignored rather than rejected');
-      expect(statusesOf(document, pathName, 'get')).toContain('422');
+      expect(statusesOf(production(), pathName, 'get')).toContain('422');
     }
   });
 
   /**
-   * The published allowlist IS the enforced one.
-   *
-   * The ids used to be a comma-separated string written beside the descriptor
-   * map instead of taken from it, so a column added to the map and not the
-   * prose — or removed from the map and left in the prose — published a
-   * contract the runtime does not honour. Asserting containment in both
-   * directions is what makes that impossible rather than merely unlikely.
+   * The published allowlist IS the enforced one: derived from the descriptor
+   * map the handler enforces, and asserted in both directions, so a column
+   * added to or removed from the map cannot leave the prose behind.
    */
   test('the published filter contract is derived from the enforced descriptors', () => {
     for (const [pathName, specs] of LIST_ROUTES) {
-      const parameters = operationOf(document, pathName, 'get')
+      const parameters = operationOf(production(), pathName, 'get')
         .parameters as Record<string, unknown>[];
       const describedBy = (name: string): string => {
         const parameter = parameters.find((p) => p.name === name);
@@ -981,19 +775,13 @@ describe('request and response contract fidelity', () => {
         expect(filters).toContain(String(cap));
       expect(sort).toContain(String(MAX_SORT_ITEMS));
       expect(sort).toContain(String(MAX_ID_LENGTH));
-
-      const filtersParameter = parameters.find((p) => p.name === 'filters');
-      expect(filtersParameter?.schema).toMatchObject({
-        type: 'string',
-        maxLength: MAX_FILTERS_RAW_LENGTH,
-      });
     }
   });
 
   test('only the sends narrow their channel union to what this deployment enabled', () => {
     // `channelEnabledRefine` is the half `z.toJSONSchema` cannot see.
     const channelsOf = (pathName: string): string[] => {
-      const schema = requestSchemaOf(document, pathName, 'post');
+      const schema = requestSchemaOf(production(), pathName, 'post');
       const branches = (schema.oneOf ?? schema.anyOf) as
         Record<string, unknown>[] | undefined;
       return (branches ?? [])
@@ -1007,7 +795,7 @@ describe('request and response contract fidelity', () => {
     const enabled: string[] = OTP_CHANNELS.filter((channel) =>
       isChannelEnabled(channel)
     );
-    // Guard: with none enabled the routes 404 and publish the full union.
+    // Guard: with none enabled the routes are withheld.
     expect(enabled.length).toBeGreaterThan(0);
 
     for (const pathName of [
@@ -1032,17 +820,16 @@ describe('request and response contract fidelity', () => {
   });
 
   test('every application envelope success has concrete data and errors have the error discriminator', () => {
-    const manifest = toPublishedManifest(ROUTES, true).filter(
-      (entry) => entry.response === 'envelope'
+    const envelopes = REGISTERED_BINDINGS.filter(
+      (binding) => !isRawResponse(binding.entry.response)
     );
-    for (const entry of manifest) {
-      const pathName = entry.path.replaceAll(/:(\w+)/g, '{$1}');
-      const method = entry.method.toLowerCase();
-      const operation = operationOf(document, pathName, method);
-      const responses = operation.responses as Record<string, unknown>;
-      const successStatus = '201' in responses ? '201' : '200';
+    expect(envelopes.length).toBeGreaterThan(0);
+    for (const binding of envelopes) {
+      const pathName = openApiPath(binding.entry.path);
+      const method = binding.entry.method.toLowerCase();
+      const successStatus = String(binding.entry.status);
       const success = responseSchemaOf(
-        document,
+        production(),
         pathName,
         method,
         successStatus
@@ -1053,32 +840,93 @@ describe('request and response contract fidelity', () => {
         Object.keys(objectProperty(successProperties, 'data')).length
       ).toBeGreaterThan(0);
 
-      const errorStatuses = Object.keys(responses).filter(
+      const refusals = bindingStatuses(production(), binding).filter(
         (status) => status !== successStatus
       );
-      for (const status of errorStatuses) {
-        const error = responseSchemaOf(document, pathName, method, status);
+      for (const status of refusals) {
+        const error = responseSchemaOf(production(), pathName, method, status);
         const errorProperties = objectProperty(error, 'properties');
         expect(objectProperty(errorProperties, 'success').const).toBe(false);
-        const data = objectProperty(errorProperties, 'data');
-        // Only a media refusal that names its blockers widens `data`.
-        if (data.type !== 'null')
-          expect(data.oneOf).toEqual([
-            { $ref: '#/components/schemas/MediaRefusalData' },
-            { type: 'null' },
-          ]);
       }
     }
   });
 
-  test('every media refusal status a route answers is published, under the envelope its codes need', () => {
-    // `consistency.ts` cannot infer which statuses a handler throws, so each
-    // route's row is the claim and the document is held to it here.
+  test('a refusal publishes ids in `data` only at a status whose codes name them, each envelope once', () => {
+    // Frozen: the statuses where a handler's refusal names ids, traced through
+    // `lib/media/errors.ts`. Every other refusal of every binding publishes
+    // `data: null`, a folder create's and an upload's included.
+    const withIds = [
+      'DELETE /api/dash/media 409',
+      'DELETE /api/dash/media/files 409',
+      'DELETE /api/dash/media/folders/{id} 409',
+      'POST /api/dash/media/files/{id}/publish 409',
+      'POST /api/dash/media/files/{id}/unpublish 409',
+      'PUT /api/dash/media 409',
+      'PUT /api/dash/media 422',
+      'PUT /api/dash/media/files 409',
+      'PUT /api/dash/media/files/{id} 409',
+      'PUT /api/dash/media/folders/{id} 409',
+      'PUT /api/dash/media/folders/{id} 422',
+    ];
+    const published: Record<string, string[]> = {};
+    for (const binding of REGISTERED_BINDINGS) {
+      const raw = isRawResponse(binding.entry.response)
+        ? Object.keys(binding.entry.response.refusals ?? {})
+        : [];
+      const responses = bindingOperation(production(), binding)
+        .responses as Record<string, Record<string, unknown>>;
+      const enveloped = bindingStatuses(production(), binding).filter(
+        (status) =>
+          status !== String(binding.entry.status) && !raw.includes(status)
+      );
+      for (const status of enveloped) {
+        const content = responses[status]?.content as Record<string, unknown>;
+        const { schema } = content['application/json'] as {
+          schema: { $ref?: unknown };
+        };
+        (published[String(schema.$ref)] ??= []).push(
+          `${binding.entry.method} ${openApiPath(binding.entry.path)} ${status}`
+        );
+      }
+    }
+    expect(Object.keys(published).toSorted(compareCodeUnits)).toEqual([
+      '#/components/schemas/ErrorEnvelope',
+      '#/components/schemas/MediaRefusalEnvelope',
+    ]);
+    expect(
+      published['#/components/schemas/MediaRefusalEnvelope']?.toSorted(
+        compareCodeUnits
+      )
+    ).toEqual(withIds.toSorted(compareCodeUnits));
+
+    const envelope = (name: string) =>
+      objectProperty(
+        resolveRef(production(), { $ref: `#/components/schemas/${name}` }),
+        'properties'
+      );
+    expect(objectProperty(envelope('ErrorEnvelope'), 'data')).toEqual({
+      type: 'null',
+    });
+    const ids = objectProperty(envelope('MediaRefusalEnvelope'), 'data');
+    expect(ids.anyOf).toEqual([
+      expect.objectContaining({
+        properties: {
+          fileIds: expect.any(Object),
+          folderIds: expect.any(Object),
+        },
+      }),
+      { type: 'null' },
+    ]);
+  });
+
+  test('every media refusal code a route answers is published at its status', () => {
+    // The entry's `errors` are the claim (`api/media.ts`); the document is held
+    // to it here.
     const expected: Record<string, Record<string, readonly string[]>> = {
       'PUT /api/dash/media': {
         '404': ['FOLDER_NOT_FOUND', 'FILE_NOT_FOUND'],
         '409': ['FILE_BUSY', 'FOLDER_NAME_EXISTS'],
-        '422': ['FOLDER_CYCLE', 'FOLDER_TOO_DEEP', 'FOLDER_TOO_MANY_CHILDREN'],
+        '422': ['FOLDER_TOO_MANY_CHILDREN', 'FOLDER_CYCLE', 'FOLDER_TOO_DEEP'],
       },
       'DELETE /api/dash/media': {
         '404': ['FOLDER_NOT_FOUND', 'FILE_NOT_FOUND'],
@@ -1090,34 +938,100 @@ describe('request and response contract fidelity', () => {
       },
       'GET /api/dash/media/folders/:id': { '404': ['FOLDER_NOT_FOUND'] },
     };
-    for (const [key, statuses] of Object.entries(expected))
-      expect(MEDIA_REFUSAL_CODES[key]).toEqual(statuses);
+    const codesOf = (binding: AnyBinding) =>
+      Object.fromEntries(
+        Object.entries(binding.entry.errors ?? {})
+          .map(
+            ([status, declared]) =>
+              [
+                status,
+                [...(declared?.codes ?? []), ...(declared?.codesWithIds ?? [])],
+              ] as const
+          )
+          .filter(([, codes]) => codes.length > 0)
+      );
+    for (const [key, statuses] of Object.entries(expected)) {
+      const binding = REGISTERED_BINDINGS.find((found) => found.key === key);
+      if (!binding) throw new Error(`${key} is not registered`);
+      expect(codesOf(binding)).toEqual(statuses);
+    }
 
-    for (const [key, statuses] of Object.entries(MEDIA_REFUSAL_CODES)) {
-      const [method = '', routePath = ''] = key.split(' ', 2);
-      const pathName = routePath.replaceAll(/:(\w+)/g, '{$1}');
-      const responses = operationOf(document, pathName, method.toLowerCase())
+    const coded = REGISTERED_BINDINGS.filter(
+      (binding) => Object.keys(codesOf(binding)).length > 0
+    );
+    expect(coded.length).toBeGreaterThanOrEqual(Object.keys(expected).length);
+    for (const binding of coded) {
+      const responses = bindingOperation(production(), binding)
         .responses as Record<string, Record<string, unknown>>;
-      for (const [status, codes] of Object.entries(statuses)) {
+      const declared = Object.entries(codesOf(binding));
+      for (const [status, codes] of declared) {
         const response = responses[status];
-        expect(response, `${key} ${status}`).toBeDefined();
+        expect(response, `${binding.key} ${status}`).toBeDefined();
         for (const code of codes)
           expect(String(response?.description)).toContain(`\`${code}\``);
-        const content = response?.content as Record<string, unknown>;
-        const json = content['application/json'] as { schema: unknown };
-        expect(json.schema).toEqual({
-          $ref:
-            !MEDIA_REFUSALS_WITHOUT_IDS.has(key) &&
-            codes.some((code) => MEDIA_CODES_WITH_IDS.has(code))
-              ? '#/components/schemas/MediaRefusalEnvelope'
-              : '#/components/schemas/ErrorEnvelope',
-        });
       }
     }
   });
 
+  test('each media code is declared with ids exactly where its handler attaches them, and published so', () => {
+    // Frozen from the handlers through `lib/media/errors.ts`. A code missing
+    // here answers `data: null` at that status; `FILE_IN_USE` may too.
+    const expected: Record<string, readonly string[]> = {
+      'DELETE /api/dash/media 409': [
+        'FILE_IN_USE',
+        'FILE_BUSY',
+        'FOLDER_NOT_EMPTY',
+        'FOLDER_BUSY',
+      ],
+      'DELETE /api/dash/media/files 409': ['FILE_IN_USE', 'FILE_BUSY'],
+      'DELETE /api/dash/media/folders/:id 409': [
+        'FILE_IN_USE',
+        'FILE_BUSY',
+        'FOLDER_NOT_EMPTY',
+        'FOLDER_BUSY',
+      ],
+      'POST /api/dash/media/files/:id/publish 409': ['FILE_BUSY'],
+      'POST /api/dash/media/files/:id/unpublish 409': ['FILE_BUSY'],
+      'PUT /api/dash/media 409': ['FILE_BUSY', 'FOLDER_NAME_EXISTS'],
+      'PUT /api/dash/media 422': ['FOLDER_CYCLE', 'FOLDER_TOO_DEEP'],
+      'PUT /api/dash/media/files 409': ['FILE_BUSY'],
+      'PUT /api/dash/media/files/:id 409': ['FILE_BUSY'],
+      'PUT /api/dash/media/folders/:id 409': ['FOLDER_NAME_EXISTS'],
+      'PUT /api/dash/media/folders/:id 422': [
+        'FOLDER_CYCLE',
+        'FOLDER_TOO_DEEP',
+      ],
+    };
+    const statuses = REGISTERED_BINDINGS.flatMap((binding) =>
+      Object.entries(binding.entry.errors ?? {}).map(
+        ([status, error]) => [binding, status, error] as const
+      )
+    );
+    const declared: Record<string, readonly string[]> = {};
+    for (const [binding, status, error] of statuses) {
+      const withIds = error?.codesWithIds ?? [];
+      expect(
+        withIds.filter((code) => error?.codes?.includes(code)),
+        `${binding.key} ${status} names a code twice`
+      ).toEqual([]);
+      if (withIds.length === 0) continue;
+      declared[`${binding.key} ${status}`] = withIds;
+      const responses = bindingOperation(production(), binding)
+        .responses as Record<string, Record<string, unknown>>;
+      expect(String(responses[status]?.description)).toContain(
+        `With ${withIds.map((code) => `\`${code}\``).join(' or ')}, \`data\` names`
+      );
+    }
+    expect(declared).toEqual(expected);
+  });
+
   test('representative response shapes match handler outputs', () => {
-    const users = responseSchemaOf(document, '/api/dash/users', 'get', '200');
+    const users = responseSchemaOf(
+      production(),
+      '/api/dash/users',
+      'get',
+      '200'
+    );
     expect(users.required).toEqual(['success', 'message', 'data', 'meta']);
     const userData = (users.properties as Record<string, unknown>)
       .data as Record<string, unknown>;
@@ -1136,7 +1050,7 @@ describe('request and response contract fidelity', () => {
     );
 
     const revoked = responseSchemaOf(
-      document,
+      production(),
       '/api/dash/users/{id}/sessions',
       'delete',
       '200'
@@ -1150,11 +1064,19 @@ describe('request and response contract fidelity', () => {
     expect(revokedIds?.items).toMatchObject({ format: 'uuid' });
   });
 
-  test('a generated component keeps the metadata of its shared schema and is referenced, not copied', () => {
-    expect(document).toMatchObject({
-      components: {
-        schemas: {
-          MediaFile: {
+  test('a shared schema keeps its metadata wherever it is published', () => {
+    // The media file schema is inlined where it is used (named schemas are
+    // banned); each copy carries the shared schema's own id pattern.
+    const file = responseSchemaOf(
+      production(),
+      '/api/upload/file',
+      'post',
+      '201'
+    );
+    expect(file).toMatchObject({
+      properties: {
+        data: {
+          items: {
             properties: {
               id: { type: 'string', format: 'uuid', pattern: UUID_V7_PATTERN },
             },
@@ -1162,18 +1084,10 @@ describe('request and response contract fidelity', () => {
         },
       },
     });
-    // The upload answer's element adds a client rule to the component, and is
-    // still published as the component.
-    expect(
-      responseSchemaOf(document, '/api/upload/file', 'post', '201')
-    ).toMatchObject({
-      properties: {
-        data: { items: { $ref: '#/components/schemas/MediaFile' } },
-      },
-    });
   });
 
   test('Better Auth fragments are valid 3.1, filtered, and include hidden session query options', () => {
+    const document = production();
     const getSession = operationOf(document, '/api/auth/get-session', 'get');
     expect(
       (getSession.parameters as Record<string, unknown>[])
@@ -1183,28 +1097,17 @@ describe('request and response contract fidelity', () => {
     ).toEqual(['disableCookieCache', 'disableRefresh']);
     expect(getSession.security).toEqual([{}, { sessionCookie: [] }]);
 
-    const components = (document as { components: Record<string, unknown> })
-      .components;
+    const components = document.components as Record<string, unknown>;
     const schemas = components.schemas as Record<string, unknown>;
-    // `Passkey` is contributed by the passkey plugin, so the set depends on
-    // which 2FA methods this deployment enables. Asserted against that rather
-    // than against a fixed list, which would fail for a correct configuration
-    // with passkey off. The project's own shared schemas sit beside them: the
-    // media file schema alone was inlined nine times, so a generator emitted
-    // nine anonymous copies of one type.
+    // The library's own named schemas, kept only while referenced; `Passkey`
+    // is contributed by the passkey plugin, so the set depends on which 2FA
+    // methods this deployment enables.
     expect(Object.keys(schemas).toSorted(compareCodeUnits)).toEqual(
       [
+        'BetterAuthError',
         'ErrorEnvelope',
-        'MediaFile',
-        'MediaFileDetails',
-        'MediaFolder',
-        'MediaFolderHit',
-        'MediaRefusalData',
         'MediaRefusalEnvelope',
-        'MediaUsage',
-        'PasskeyRequestOptions',
         'Session',
-        'TwoFactorChallenge',
         'User',
         ...(isTwoFactorMethodEnabled('passkey') ? ['Passkey'] : []),
       ].toSorted(compareCodeUnits)
@@ -1246,13 +1149,12 @@ describe('request and response contract fidelity', () => {
     // `files`, the library route reads `file`, and a client generated from one
     // block for both would send a form one of them answers "no file" to.
     const upload = requestSchemaOf(
-      document,
+      production(),
       '/api/upload/file',
       'post',
       'multipart/form-data'
     );
-    const files = (upload.properties as Record<string, unknown>)
-      .files as Record<string, unknown>;
+    const files = objectProperty(objectProperty(upload, 'properties'), 'files');
     expect(files).toMatchObject({
       type: 'string',
       format: 'binary',
@@ -1263,7 +1165,7 @@ describe('request and response contract fidelity', () => {
     expect(upload.required).toEqual(['files']);
 
     const library = requestSchemaOf(
-      document,
+      production(),
       '/api/dash/media/files',
       'post',
       'multipart/form-data'
@@ -1273,7 +1175,7 @@ describe('request and response contract fidelity', () => {
     ]);
     expect(library.required).toEqual(['file']);
 
-    const operation = operationOf(document, '/api/upload/file', 'post');
+    const operation = operationOf(production(), '/api/upload/file', 'post');
     const limited = (
       operation.responses as Record<string, Record<string, unknown>>
     )['429'];
@@ -1287,7 +1189,7 @@ describe('request and response contract fidelity', () => {
   test('405 is not falsely attached to correctly selected operations', () => {
     const offenders: string[] = [];
     for (const { pathName, method, operation } of documentOperations(
-      document
+      production()
     )) {
       const responses = operation.responses as Record<string, unknown>;
       if ('405' in responses) offenders.push(`${method} ${pathName}`);
@@ -1298,8 +1200,7 @@ describe('request and response contract fidelity', () => {
 
 describe('the Better Auth surface, per endpoint', () => {
   function operationsFor(authPath: string): string[] {
-    const document = openApiDocument(toManifest(ROUTES));
-    const paths = (document as { paths: Record<string, unknown> }).paths;
+    const paths = development().paths as Record<string, unknown>;
     const entry = paths[`/api/auth${authPath}`];
     if (!entry) throw new Error(`${authPath} is not in the document`);
     return Object.keys(entry as Record<string, unknown>).toSorted(
@@ -1330,17 +1231,14 @@ describe('the Better Auth surface, per endpoint', () => {
   test('the passwordless POST documents the body it actually validates', () => {
     // `lib/auth/passwordless.ts` parses `verifyOtpSchema`; the document listed no
     // body at all, so a client generated from it sent none and got a 422.
-    const document = openApiDocument(toManifest(ROUTES));
-    const paths = (document as { paths: Record<string, unknown> }).paths;
-    const post = (
-      paths['/api/auth/passwordless/verify'] as Record<string, unknown>
-    ).post as Record<string, unknown>;
-
-    expect(post.requestBody).toBeDefined();
+    expect(
+      operationOf(development(), '/api/auth/passwordless/verify', 'post')
+        .requestBody
+    ).toBeDefined();
   });
 
   test('Better Auth response schemas come from its generated contract', () => {
-    const document = openApiDocument(toManifest(ROUTES));
+    const document = development();
     const signIn = operationOf(document, '/api/auth/sign-in/email', 'post');
     const responses = signIn.responses as Record<string, unknown>;
 
@@ -1357,19 +1255,17 @@ describe('the Better Auth surface, per endpoint', () => {
     // against a two-factor account answers `twoFactorRedirect` and NO session
     // cookie; a document that published only the completed shape told a
     // generated client that a user who has not finished signing in is signed in.
-    const ok = responses['200'] as Record<string, unknown>;
-    const content = ok.content as Record<string, unknown>;
-    const json = content['application/json'] as Record<string, unknown>;
-    const schema = json.schema as { anyOf?: Record<string, unknown>[] };
+    const schema = responseSchemaOf(
+      document,
+      '/api/auth/sign-in/email',
+      'post',
+      '200'
+    ) as { anyOf?: Record<string, unknown>[] };
     expect(schema.anyOf).toHaveLength(2);
     const [completed, challenged] = schema.anyOf ?? [];
     expect(
       Object.keys(completed?.properties as Record<string, unknown>)
     ).toContain('token');
-    // Published once, as a component every challenging path references.
-    expect(challenged).toEqual({
-      $ref: '#/components/schemas/TwoFactorChallenge',
-    });
     const challengeKeys = Object.keys(
       resolveRef(document, challenged ?? {}).properties as Record<
         string,
@@ -1385,27 +1281,23 @@ describe('the Better Auth surface, per endpoint', () => {
       ])
     );
 
-    const components = (document as { components: Record<string, unknown> })
-      .components;
-    const schemas = components.schemas as Record<string, unknown>;
-    expect(Object.keys(schemas)).toEqual(
+    const components = document.components as Record<string, unknown>;
+    expect(Object.keys(components.schemas as Record<string, unknown>)).toEqual(
       expect.arrayContaining(['Session', 'User'])
     );
   });
 
   test('local auth hooks keep their narrower body contract and captcha is a header', () => {
-    const document = openApiDocument(toManifest(ROUTES));
-    const signIn = operationOf(document, '/api/auth/sign-in/email', 'post');
-    const requestBody = signIn.requestBody as Record<string, unknown>;
-    const content = requestBody.content as Record<string, unknown>;
-    const json = content['application/json'] as Record<string, unknown>;
-    const schema = json.schema as Record<string, unknown>;
+    const document = development();
+    const schema = requestSchemaOf(document, '/api/auth/sign-in/email', 'post');
 
     expect(schema.required).toEqual(['email', 'password']);
     expect(
       Object.keys(schema.properties as Record<string, unknown>)
     ).not.toContain('captcha');
-    expect(signIn.parameters).toEqual(
+    expect(
+      operationOf(document, '/api/auth/sign-in/email', 'post').parameters
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           name: 'x-captcha-response',
@@ -1424,46 +1316,30 @@ describe('the Better Auth surface, per endpoint', () => {
         `/api/auth${endpoint.path}`,
         endpoint.methods[0]?.toLowerCase() ?? ''
       );
-      const parameters = Array.isArray(operation.parameters)
-        ? operation.parameters
-        : [];
-      expect(
-        parameters.some(
-          (parameter) =>
-            typeof parameter === 'object' &&
-            parameter !== null &&
-            'name' in parameter &&
-            parameter.name === 'x-captcha-response'
-        )
-      ).toBe(endpoint.captcha);
+      expect(hasCaptchaHeader(operation)).toBe(endpoint.captcha);
     }
   });
 
   test('the custom passwordless success body has a concrete schema', () => {
-    const document = openApiDocument(toManifest(ROUTES));
-    const operation = operationOf(
-      document,
-      '/api/auth/passwordless/verify',
-      'post'
-    );
-    const responses = operation.responses as Record<string, unknown>;
-    const response = responses['200'] as Record<string, unknown>;
-    const content = response.content as Record<string, unknown>;
-    const json = content['application/json'] as Record<string, unknown>;
     // The same challenge as `/sign-in/email`, which the plugin's own hook
     // never would issue here. Both branches are this project's, so they are
     // published as one exclusive union.
-    const schema = json.schema as { oneOf?: Record<string, unknown>[] };
+    const schema = responseSchemaOf(
+      development(),
+      '/api/auth/passwordless/verify',
+      'post',
+      '200'
+    ) as { oneOf?: Record<string, unknown>[] };
     expect(schema.oneOf).toHaveLength(2);
     const [completed, challenged] = schema.oneOf ?? [];
-    expect(completed?.required).toEqual(['success', 'message', 'data']);
-    expect(challenged).toEqual({
-      $ref: '#/components/schemas/TwoFactorChallenge',
-    });
+    expect(completed?.required).toEqual(['message', 'data']);
+    expect(Object.keys(challenged?.properties ?? {})).toContain(
+      'twoFactorRedirect'
+    );
   });
 
   test('betterAuthServes answers on the method, not only the path', () => {
-    // The predicate the 405 boundary in `app.ts` uses.
+    // The predicate the 405 boundary uses.
     expect(betterAuthServes('/sign-out', 'POST')).toBe(true);
     expect(betterAuthServes('/sign-out', 'GET')).toBe(false);
     expect(betterAuthServes('/get-session', 'GET')).toBe(true);
@@ -1476,57 +1352,26 @@ describe('the Better Auth surface, per endpoint', () => {
 
 describe('the refusals an operation declares for its own authorisation', () => {
   /**
-   * No authenticated operation declared a 401 or a 403 at all, so a generated
-   * client could not represent the two failures its users hit most: any
-   * dashboard call before sign-in, and any call by someone whose role lacks the
-   * grant. Measured unauthenticated through `app.handle` on a throwaway
-   * environment, `GET /api/dash/users`, `PUT /api/dash/users/abc`,
-   * `POST /api/dash/users/me/change-password`, `POST /api/upload/file` and
-   * `GET /openapi.json` all answer 401 while the document offered 404/405/500.
-   *
-   * Driven off the manifest and not off a list of paths, so a route added under
-   * the wrong `auth` policy fails here instead of shipping a contract that omits
-   * its own refusals.
+   * No authenticated operation once declared a 401 or a 403, so a generated
+   * client could not represent the two failures its users hit most. Driven off
+   * the bindings and not off a list of paths, so a route added under the wrong
+   * policy fails here instead of shipping a contract that omits its refusals.
    */
-  const manifest = toManifest(ROUTES);
-  const label = (entry: RouteManifestEntry) => `${entry.method} ${entry.path}`;
-
-  const sourceOf = (entry: RouteManifestEntry) =>
-    path.join(
-      REPO_ROOT,
-      'app',
-      entry.path.replace('/api', 'api').replaceAll(/:(\w+)/g, '[$1]'),
-      'handler.ts'
+  const of = (auth: AnyBinding['entry']['policy']['auth']) =>
+    DEVELOPMENT_BINDINGS.filter(
+      (binding) => binding.entry.policy.auth === auth
     );
 
-  const reads = (file: string) =>
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- built from the route table in `routes.ts`, never from a request
-    existsSync(file) ? readFileSync(file, 'utf8') : null;
-
-  const of = (auth: RouteManifestEntry['auth']) =>
-    manifest.filter((entry) => entry.auth === auth);
-
-  /** The entries whose declared statuses fail `holds`, named for the failure. */
-  function offenders(
-    auth: RouteManifestEntry['auth'],
+  /** The bindings whose declared statuses fail `holds`, named for the failure. */
+  const offenders = (
+    auth: AnyBinding['entry']['policy']['auth'],
     holds: (statuses: readonly string[]) => boolean
-  ): string[] {
-    const document = openApiDocument(manifest);
-    return of(auth)
-      .filter(
-        (entry) =>
-          !holds(
-            statusesOf(
-              document,
-              entry.path.replaceAll(/:(\w+)/g, '{$1}'),
-              entry.method.toLowerCase()
-            )
-          )
-      )
+  ): string[] =>
+    of(auth)
+      .filter((binding) => !holds(bindingStatuses(development(), binding)))
       .map(label);
-  }
 
-  test('the table carries routes under every policy, so none of these passes vacuously', () => {
+  test('the bindings carry routes under every policy, so none of these passes vacuously', () => {
     expect(of('permission').length).toBeGreaterThan(0);
     expect(of('session').length).toBeGreaterThan(0);
     expect(of('public').length).toBeGreaterThan(0);
@@ -1542,53 +1387,43 @@ describe('the refusals an operation declares for its own authorisation', () => {
   });
 
   test('a session route declares 401', () => {
-    // Not 403: `requireSession` answers only 401, and the field states the
-    // authorisation policy rather than everything the handler can refuse.
+    // Not 403 by policy alone: `requireSession` answers only 401, and a
+    // session route that refuses a contextual grant declares its 403 itself.
     expect(
       offenders('session', (statuses) => statuses.includes('401'))
     ).toEqual([]);
   });
 
   test('authenticated operations declare the real Better Auth session cookie', async () => {
-    const document = openApiDocument(manifest);
-    const components = (document as { components: Record<string, unknown> })
-      .components;
+    const document = development();
+    const components = document.components as Record<string, unknown>;
     const securitySchemes = components.securitySchemes as Record<
-      string,
-      unknown
-    >;
-    const sessionCookie = securitySchemes.sessionCookie as Record<
       string,
       unknown
     >;
     const context = await auth.$context;
 
-    expect(sessionCookie).toEqual({
+    expect(securitySchemes.sessionCookie).toEqual({
       type: 'apiKey',
       in: 'cookie',
       name: context.authCookies.sessionToken.name,
     });
 
-    for (const entry of manifest) {
-      const operation = operationOf(
-        document,
-        entry.path.replaceAll(/:(\w+)/g, '{$1}'),
-        entry.method.toLowerCase()
-      );
-      expect(operation.security).toEqual(
-        entry.auth === 'public' ? [] : [{ sessionCookie: [] }]
-      );
-    }
+    for (const binding of DEVELOPMENT_BINDINGS)
+      expect([
+        binding.key,
+        bindingOperation(document, binding).security,
+      ]).toEqual([
+        binding.key,
+        binding.entry.policy.auth === 'public' ? [] : [{ sessionCookie: [] }],
+      ]);
   });
 
   test('the two-factor challenge scheme names the cookie the library sets', async () => {
-    // The six operations that complete a sign-in answer 401 without it, so
+    // The operations that complete a sign-in answer 401 without it, so
     // publishing them as anonymous made a generated client omit it for the
-    // whole second step. A scheme naming a cookie nobody sets would be the same
-    // failure with more words, so the name is read from the library.
-    const document = openApiDocument(manifest);
-    const components = (document as { components: Record<string, unknown> })
-      .components;
+    // whole second step. The name is read from the library.
+    const components = development().components as Record<string, unknown>;
     const schemes = components.securitySchemes as Record<
       string,
       Record<string, unknown>
@@ -1602,186 +1437,74 @@ describe('the refusals an operation declares for its own authorisation', () => {
     expect(schemes.twoFactorChallengeCookie?.type).toBe('apiKey');
   });
 
-  test('no dashboard route is public', () => {
-    // The independent half. Everything above proves the document agrees with the
-    // field, which a mistyped field satisfies too — flipping `GET
-    // /api/dash/roles` to `public` passed all of them. The path is the check the
-    // field cannot supply: `/api/dash/*` and the document route itself are
-    // behind a session (each measured 401 unauthenticated), so `public` there is
-    // a typo rather than a decision.
+  test('captcha is published exactly where the gate verifies one', () => {
+    // Whether the gate verifies is the binding's policy; that no module
+    // verifies one itself is `bindings.test.ts`'s.
+    for (const binding of DEVELOPMENT_BINDINGS)
+      expect([
+        binding.key,
+        hasCaptchaHeader(bindingOperation(development(), binding)),
+      ]).toEqual([binding.key, binding.entry.policy.captcha]);
     expect(
-      manifest
-        .filter(
-          (entry) =>
-            entry.auth === 'public' &&
-            (entry.path.startsWith('/api/dash/') ||
-              entry.path === '/openapi.json')
-        )
-        .map(label)
-    ).toEqual([]);
-  });
-
-  /**
-   * The same independence the test above supplies for `auth`. `captcha` decides
-   * a 403, and a document that merely agrees with a wrong field is wrong twice
-   * rather than caught — so the field is checked against the handler that has to
-   * answer it, not against the document derived from it.
-   */
-  test('captcha is set exactly where the handler verifies one', () => {
-    const wrong = manifest.filter((entry) => {
-      const source = reads(sourceOf(entry));
-      return (
-        source !== null &&
-        source.includes('verifyTurnstileRequest') !== entry.captcha
-      );
-    });
-
-    expect(wrong.map(label)).toEqual([]);
-    // Non-vacuous: the mapping has to actually reach the handlers.
-    expect(
-      manifest.filter((entry) => reads(sourceOf(entry)) !== null).length
-    ).toBeGreaterThan(20);
-
-    const document = openApiDocument(manifest);
-    for (const entry of manifest) {
-      const operation = operationOf(
-        document,
-        entry.path.replaceAll(/:(\w+)/g, '{$1}'),
-        entry.method.toLowerCase()
-      );
-      const parameters = Array.isArray(operation.parameters)
-        ? operation.parameters
-        : [];
-      expect(
-        parameters.some(
-          (parameter) =>
-            typeof parameter === 'object' &&
-            parameter !== null &&
-            'name' in parameter &&
-            parameter.name === 'x-captcha-response'
-        )
-      ).toBe(entry.captcha);
-    }
+      DEVELOPMENT_BINDINGS.some((binding) => binding.entry.policy.captcha)
+    ).toBe(true);
   });
 
   test('a public envelope route declares no 401, and a 403 only for its captcha or a write', () => {
     // `public` is about SESSIONS. A captcha refusal is a 403 on a route no
-    // session guards — measured, `POST /api/auth/otp/send` with no
-    // `x-captcha-response` answers 403 in this envelope — and so is the
-    // adapter's cross-origin refusal of any write, so only `auth` decides 401.
-    const document = openApiDocument(manifest);
+    // session guards, and so is the cross-origin refusal of any write, so only
+    // `auth` decides 401.
+    const publicEnvelopes = of('public').filter(
+      (binding) => !isRawResponse(binding.entry.response)
+    );
     expect(
-      of('public')
-        .filter((entry) => entry.response === 'envelope')
-        .filter((entry) =>
-          statusesOf(
-            document,
-            entry.path.replaceAll(/:(\w+)/g, '{$1}'),
-            entry.method.toLowerCase()
-          ).includes('401')
+      publicEnvelopes
+        .filter((binding) =>
+          bindingStatuses(development(), binding).includes('401')
         )
         .map(label)
     ).toEqual([]);
     expect(
       of('public')
         .filter(
-          (entry) =>
-            statusesOf(
-              document,
-              entry.path.replaceAll(/:(\w+)/g, '{$1}'),
-              entry.method.toLowerCase()
-            ).includes('403') !== (entry.captcha || !isSafeMethod(entry.method))
+          (binding) =>
+            bindingStatuses(development(), binding).includes('403') !==
+            (binding.entry.policy.captcha ||
+              !isSafeMethod(binding.entry.method))
         )
         .map(label)
     ).toEqual([]);
   });
 
   test('permission-only refusals do not claim a captcha failure', () => {
-    const document = openApiDocument(manifest);
-    const operation = operationOf(document, '/api/dash/permissions', 'get');
-    const responses = operation.responses as Record<string, unknown>;
-    const forbidden = responses['403'] as { description: string };
-    expect(forbidden.description.toLowerCase()).not.toContain('captcha');
+    const responses = operationOf(development(), '/api/dash/permissions', 'get')
+      .responses as Record<string, { description: string }>;
+    expect(responses['403']?.description.toLowerCase()).not.toContain(
+      'captcha'
+    );
   });
 
-  /**
-   * The names `source` imports from `@/lib/…` whose exported declaration calls
-   * `enforceRateLimit(` itself, so a handler behind a named limiter still counts.
-   * The body ends at the first unindented `}`, which is prettier's layout.
-   */
-  function importedRateLimiters(source: string): string[] {
-    const imports = source.matchAll(
-      /import\s*\{([^}]*)\}\s*from\s*'@\/lib\/([^']+)'/g
+  test('a rate-limited binding publishes 429 and 503', () => {
+    const limited = DEVELOPMENT_BINDINGS.filter(
+      (binding) => binding.entry.policy.rateLimited
     );
-    return imports
-      .flatMap(([, names = '', module = '']) => {
-        const lib =
-          reads(path.join(REPO_ROOT, 'lib', `${module}.ts`)) ??
-          reads(path.join(REPO_ROOT, 'lib', module, 'index.ts')) ??
-          '';
-        const limiters = new Set(
-          lib
-            .matchAll(/^export async function (\w+)\([\s\S]*?^\}/gm)
-            .filter(([body]) => body.includes('enforceRateLimit('))
-            .map(([, name]) => name)
-        );
-        return names
-          .split(',')
-          .map((name) => name.trim())
-          .filter((name) => limiters.has(name));
-      })
-      .toArray();
-  }
-
-  const callsRateLimit = (source: string) =>
-    source.includes('enforceRateLimit(') ||
-    importedRateLimiters(source).some((name) => source.includes(`${name}(`));
-
-  test('handler rate-limit policy matches the handlers and publishes 429/503', () => {
-    const document = openApiDocument(manifest);
-    const wrong = ROUTES.filter((route) => {
-      const source = reads(sourceOf(route));
-      return (
-        source !== null && callsRateLimit(source) !== route.handlerRateLimit
-      );
-    });
-    expect(wrong.map(label)).toEqual([]);
-
-    const handlerLimited = manifest.filter((route) => route.handlerRateLimit);
-    for (const entry of handlerLimited) {
-      const statuses = statusesOf(
-        document,
-        entry.path.replaceAll(/:(\w+)/g, '{$1}'),
-        entry.method.toLowerCase()
-      );
-      expect(statuses).toContain('429');
-      expect(statuses).toContain('503');
+    expect(limited.length).toBeGreaterThan(0);
+    for (const binding of limited) {
+      const statuses = bindingStatuses(development(), binding);
+      expect([binding.key, statuses]).toEqual([
+        binding.key,
+        expect.arrayContaining(['429', '503']),
+      ]);
     }
   });
 
-  test('response policy matches every handler that returns a raw body', () => {
-    const wrong = ROUTES.filter((route) => {
-      const source = reads(sourceOf(route));
-      return (
-        source !== null &&
-        source.includes('apiRaw(') !== (route.response !== 'envelope')
-      );
-    });
-
-    expect(wrong.map(label)).toEqual([]);
-    expect(
-      ROUTES.find((route) => route.path === '/openapi.json')?.response
-    ).toBe('openapi-document');
-  });
-
   test('the document route publishes its raw success shape and envelope failures', () => {
-    const document = openApiDocument(manifest);
-    const operation = operationOf(document, '/openapi.json', 'get');
-    const responses = operation.responses as Record<string, unknown>;
-    const ok = responses['200'] as Record<string, unknown>;
-    const content = ok.content as Record<string, unknown>;
-    const json = content['application/json'] as Record<string, unknown>;
-    const schema = json.schema as Record<string, unknown>;
+    const schema = responseSchemaOf(
+      development(),
+      '/openapi.json',
+      'get',
+      '200'
+    );
 
     expect(schema.required).toEqual([
       'openapi',
@@ -1791,10 +1514,11 @@ describe('the refusals an operation declares for its own authorisation', () => {
       'components',
       'paths',
     ]);
-    expect(statusesOf(document, '/openapi.json', 'get')).toEqual([
+    expect(statusesOf(development(), '/openapi.json', 'get')).toEqual([
       '200',
       '401',
       '403',
+      '413',
       '429',
       '500',
       '503',
@@ -1802,7 +1526,6 @@ describe('the refusals an operation declares for its own authorisation', () => {
   });
 
   test('handler-level 400 and 409 responses are not hidden by generic policy', () => {
-    const document = openApiDocument(manifest);
     const conflicts = [
       'POST /api/dash/permissions',
       'PUT /api/dash/permissions/:id',
@@ -1818,34 +1541,34 @@ describe('the refusals an operation declares for its own authorisation', () => {
     for (const key of conflicts) {
       const separator = key.indexOf(' ');
       const method = key.slice(0, separator).toLowerCase();
-      const routePath = key.slice(separator + 1).replaceAll(/:(\w+)/g, '{$1}');
-      expect(statusesOf(document, routePath, method)).toContain('409');
+      const routePath = openApiPath(key.slice(separator + 1));
+      expect(statusesOf(development(), routePath, method)).toContain('409');
     }
 
     for (const routePath of [
       '/api/dash/permissions/{id}',
       '/api/dash/users/{id}',
     ])
-      expect(statusesOf(document, routePath, 'delete')).toContain('400');
+      expect(statusesOf(development(), routePath, 'delete')).toContain('400');
   });
 
   test('storage health declares its raw bodies and its token requirement', () => {
-    const document = openApiDocument(manifest);
-    const operation = operationOf(document, '/api/health/storage', 'get');
+    const operation = operationOf(development(), '/api/health/storage', 'get');
     // No 429: the route carries no limiter at all now that every caller has to
     // authenticate, which is what keeps the readiness probe off the limiter's
-    // write lock.
+    // write lock. Its 422 (a repeated key) and 500 are the binding's.
     expect(
       Object.keys(operation.responses as Record<string, unknown>).toSorted(
         compareCodeUnits
       )
-    ).toEqual(['200', '401', '503']);
+    ).toEqual(['200', '401', '413', '422', '500', '503']);
 
-    const responses = operation.responses as Record<string, unknown>;
-    const ok = responses['200'] as Record<string, unknown>;
-    const content = ok.content as Record<string, unknown>;
-    const json = content['application/json'] as Record<string, unknown>;
-    const schema = json.schema as Record<string, unknown>;
+    const schema = responseSchemaOf(
+      development(),
+      '/api/health/storage',
+      'get',
+      '200'
+    );
     expect(Object.keys(schema.properties as Record<string, unknown>)).toEqual([
       'status',
       'checks',
@@ -1867,23 +1590,15 @@ describe('the refusals an operation declares for its own authorisation', () => {
   test('the refusal bodies are the envelope, not an unconstrained schema', () => {
     // A client told only the status has been told nothing it can render, which
     // is the half of the defect a status code alone leaves open.
-    const document = openApiDocument(manifest);
-    const paths = (document as { paths: Record<string, unknown> }).paths;
-    const operation = (paths['/api/dash/users'] as Record<string, unknown>)
-      .get as { responses: Record<string, unknown> };
-
-    for (const status of ['401', '403']) {
-      const response = operation.responses[status] as Record<string, unknown>;
-      const content = response.content as Record<string, unknown>;
-      const json = content['application/json'] as Record<string, unknown>;
-      const schema = resolveRef(
-        document,
-        json.schema as Record<string, unknown>
-      );
+    for (const status of ['401', '403'])
       expect(
-        Object.keys(schema.properties as Record<string, unknown>)
+        Object.keys(
+          objectProperty(
+            responseSchemaOf(development(), '/api/dash/users', 'get', status),
+            'properties'
+          )
+        )
       ).toContain('message');
-    }
   });
 });
 
@@ -1922,12 +1637,17 @@ describe('the statuses each Better Auth operation declares', () => {
    * allow-list with a guessed status set would pass. Two lists written from the
    * same measurement, which must agree, is the whole mechanism.
    *
-   * Three statuses repeat and are worth naming once. 401: no session where one
-   * is required, no challenge where one is, or a refused password. 403: Better
-   * Auth's origin check, which engages on any request carrying a COOKIE, so a
-   * session-bearing call without an `origin` header never reaches the handler —
-   * absent from the GET paths, where that check is skipped. 422: the generic
-   * over-length `password` guard.
+   * Four statuses repeat and are worth naming once. 400 on every POST: Better
+   * Call refuses a body it cannot parse before any middleware. 401: no session
+   * where one is required, no challenge where one is, a refused password, or a
+   * wrong second-factor code. 403: Better Auth's origin check, which engages on
+   * any request carrying a COOKIE, so a session-bearing call without an
+   * `origin` header never reaches the handler — absent from the GET paths,
+   * where that check is skipped. 422: the generic over-length `password` guard.
+   *
+   * The first probe missed the 400s and the verifiers' 401; the integration
+   * tier's document check (`tests/helpers/document-check.ts`) found them, and
+   * holds every answer to these lists from now on.
    */
   const TWO_FACTOR_MEASURED: Record<string, readonly string[]> = {
     '/two-factor/disable': [
@@ -1936,6 +1656,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '422',
@@ -1946,6 +1667,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '422',
@@ -1956,6 +1678,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '409',
@@ -1980,6 +1703,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '500',
       '503',
       '400',
+      '401',
       '403',
       '422',
     ],
@@ -1989,6 +1713,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '422',
@@ -1999,6 +1724,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '422',
@@ -2010,6 +1736,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '500',
       '503',
       '400',
+      '401',
       '403',
       '422',
     ],
@@ -2063,6 +1790,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '422',
@@ -2074,6 +1802,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '422',
@@ -2087,6 +1816,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '409',
@@ -2098,6 +1828,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '422',
@@ -2109,6 +1840,7 @@ describe('the statuses each Better Auth operation declares', () => {
       '429',
       '500',
       '503',
+      '400',
       '401',
       '403',
       '409',
@@ -2238,14 +1970,12 @@ describe('the statuses each Better Auth operation declares', () => {
   test('every allowlisted path declares exactly what was measured on it', () => {
     // Walks the endpoint table, so a path added to the allowlist without being
     // probed fails here rather than publishing refusals nobody checked.
-    const document = openApiDocument(toManifest(ROUTES));
-
     for (const endpoint of BETTER_AUTH_ENDPOINTS)
       for (const method of endpoint.methods)
         expect([
           endpoint.path,
           statusesOf(
-            document,
+            development(),
             `/api/auth${endpoint.path}`,
             method.toLowerCase()
           ),
@@ -2253,26 +1983,47 @@ describe('the statuses each Better Auth operation declares', () => {
           endpoint.path,
           [
             ...(MEASURED[endpoint.path] ?? []),
-            // Derived from the METHOD, not measured on the path: the body
-            // ceiling is enforced by the boundary in `app.ts` before the library
-            // is called, so every body-bearing operation under this prefix
-            // publishes it and no GET does. Added here rather than pasted into
-            // thirty entries of a map whose whole point is that each line was
-            // probed.
-            ...(method === 'POST' ? ['413'] : []),
+            // Not measured on the path: the request hook refuses a declared
+            // length over the prefix's ceiling before the library is called,
+            // whatever the method, as it does on a binding that reads no body.
+            '413',
           ].toSorted(compareCodeUnits),
         ]);
   });
 
+  /**
+   * Where a Better Auth path's 200 comes from. The generated Better Auth
+   * contract describes the plugin's INTENDED shapes, and two of them were
+   * wrong; this makes "nobody has checked" a failing state rather than a
+   * silent default, and two sources one too: they would publish one body and
+   * check another.
+   */
+  function successSourceProblems(
+    paths: ReadonlySet<string>,
+    sources: readonly (readonly [string, ReadonlySet<string>])[]
+  ): string[] {
+    const problems: string[] = [];
+    for (const path of paths) {
+      const named = sources
+        .filter(([, keys]) => keys.has(path))
+        .map(([name]) => name);
+      if (named.length !== 1)
+        problems.push(`${path} takes its 200 from [${named.join(', ')}]`);
+    }
+    for (const [name, keys] of sources)
+      for (const key of keys)
+        if (!paths.has(key)) problems.push(`${name} has unknown '${key}'`);
+    return problems;
+  }
+
   test('every Better Auth path takes its 200 from exactly one source', () => {
-    // The generated Better Auth contract describes the plugin's INTENDED
-    // shapes, and two of them were wrong: both verifiers answer `{token, user}`
-    // through one shared `valid()`, while the document published
-    // `{status: boolean}` for one and a required `{user, session}` for the
-    // other. This makes "nobody has checked" a failing state rather than a
-    // silent default, and two sources one too: they would publish one body
-    // and check another.
-    expect(successSourceProblems(BETTER_AUTH_KNOWN_PATHS)).toEqual([]);
+    expect(
+      successSourceProblems(BETTER_AUTH_KNOWN_PATHS, [
+        ['BETTER_AUTH_RESPONSES', new Set(Object.keys(BETTER_AUTH_RESPONSES))],
+        ['LIBRARY_VERIFIER_PATHS', LIBRARY_VERIFIER_PATHS],
+        ['BETTER_AUTH_TRUSTED_RESPONSES', BETTER_AUTH_TRUSTED_RESPONSES],
+      ])
+    ).toEqual([]);
     expect(LIBRARY_VERIFIER_PATHS).toEqual(
       new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code'])
     );
@@ -2286,9 +2037,9 @@ describe('the statuses each Better Auth operation declares', () => {
         ['THEIRS', new Set(['/twice', '/gone'])],
       ])
     ).toEqual([
-      'Better Auth /twice takes its 200 from OURS and THEIRS; it must come from exactly one',
-      "Better Auth /nowhere takes its 200 from no source: give it a BETTER_AUTH_RESPONSES entry, or attest the library's in BETTER_AUTH_TRUSTED_RESPONSES",
-      "THEIRS has '/gone', which is not a Better Auth endpoint",
+      '/twice takes its 200 from [OURS, THEIRS]',
+      '/nowhere takes its 200 from []',
+      "THEIRS has unknown '/gone'",
     ]);
   });
 
@@ -2297,9 +2048,8 @@ describe('the statuses each Better Auth operation declares', () => {
     // only the password made every generated client send a body the handler
     // answers 422. The pair is asserted together because the value the client
     // must echo is what links them.
-    const document = openApiDocument(toManifest(ROUTES));
     const generated = responseSchemaOf(
-      document,
+      development(),
       '/api/auth/two-factor/generate-backup-codes',
       'post',
       '200'
@@ -2310,7 +2060,7 @@ describe('the statuses each Better Auth operation declares', () => {
     expect(data?.required).toEqual(['backupCodes', 'setId']);
 
     const acknowledge = requestSchemaOf(
-      document,
+      development(),
       '/api/auth/two-factor/backup-codes/acknowledge',
       'post'
     );
@@ -2323,13 +2073,9 @@ describe('the statuses each Better Auth operation declares', () => {
   });
 
   test('the two plugin verifiers publish the body their shared valid() returns', () => {
-    const document = openApiDocument(toManifest(ROUTES));
-    for (const endpointPath of [
-      '/two-factor/verify-totp',
-      '/two-factor/verify-backup-code',
-    ]) {
+    for (const endpointPath of LIBRARY_VERIFIER_PATHS) {
       const schema = responseSchemaOf(
-        document,
+        development(),
         `/api/auth${endpointPath}`,
         'post',
         '200'
@@ -2346,7 +2092,6 @@ describe('the statuses each Better Auth operation declares', () => {
     // `security: []` for every operation behind `sessionMiddleware` or behind
     // the two-factor challenge cookie. It reads the endpoint's own metadata
     // now, so this asserts the two agree rather than restating a list.
-    const document = openApiDocument(toManifest(ROUTES));
     const expected = {
       session: [{ sessionCookie: [] }],
       optional: [{}, { sessionCookie: [] }],
@@ -2361,7 +2106,7 @@ describe('the statuses each Better Auth operation declares', () => {
     for (const endpoint of BETTER_AUTH_ENDPOINTS)
       for (const method of endpoint.methods) {
         const operation = operationOf(
-          document,
+          development(),
           `/api/auth${endpoint.path}`,
           method.toLowerCase()
         );
@@ -2387,22 +2132,17 @@ describe('the statuses each Better Auth operation declares', () => {
   });
 
   test('a transformed field publishes the constraint that fits its INPUT', () => {
-    // `z.toJSONSchema` describes what the validator sees AFTER `z.preprocess`.
-    // The email schema lowercases and trims first, so the emitted allowlist
-    // pattern rejected ` User@Gmail.com ` — an address the server accepts.
-    //
-    // No `format: 'email'` either, and that is the same rule rather than an
-    // omission: `format` asserts under a validator that turns assertion on, and
-    // a padded address is not an email address by that rule. The RESPONSE
-    // schemas keep it, because a stored address is already normalised.
-    const document = openApiDocument(toManifest(ROUTES));
-    const email = requestSchemaOf(document, '/api/dash/users', 'post')
+    // `z.toJSONSchema` describes what the validator sees AFTER `z.preprocess`
+    // unless asked for the input side. The email schema lowercases and trims
+    // first, so an output-side allowlist pattern rejected ` User@Gmail.com ` —
+    // an address the server accepts. No `format: 'email'` either, for the
+    // same reason; the RESPONSE schemas keep it.
+    const email = requestSchemaOf(development(), '/api/dash/users', 'post')
       .properties as Record<string, { pattern?: string; format?: string }>;
 
     expect(email.email?.format).toBeUndefined();
     /* eslint-disable-next-line security/detect-non-literal-regexp -- the
-       pattern comes from the document this file builds, which is the thing
-       under test */
+       pattern comes from the document under test */
     const pattern = new RegExp(email.email?.pattern ?? '(?!)');
     expect(pattern.test('user@gmail.com')).toBe(true);
     expect(pattern.test('User@Gmail.COM')).toBe(true);
@@ -2413,12 +2153,11 @@ describe('the statuses each Better Auth operation declares', () => {
   test('a partial-update body publishes that it cannot be empty', () => {
     // Every property optional plus a `.refine` the converter drops: the
     // document described `{}` as a valid request that answers 422.
-    const document = openApiDocument(toManifest(ROUTES));
     for (const path of [
       '/api/dash/media/folders/{id}',
       '/api/dash/media/files/{id}',
     ]) {
-      const schema = requestSchemaOf(document, path, 'put');
+      const schema = requestSchemaOf(development(), path, 'put');
       const names = Object.keys(
         (schema.properties ?? {}) as Record<string, unknown>
       ).toSorted(compareCodeUnits);
@@ -2430,8 +2169,11 @@ describe('the statuses each Better Auth operation declares', () => {
   });
 
   test('a normalised name publishes the characters its refinement rejects', () => {
-    const document = openApiDocument(toManifest(ROUTES));
-    const schema = requestSchemaOf(document, '/api/dash/media/folders', 'post');
+    const schema = requestSchemaOf(
+      development(),
+      '/api/dash/media/folders',
+      'post'
+    );
     const name = (schema.properties as Record<string, { pattern?: string }>)
       .name;
     /* eslint-disable-next-line security/detect-non-literal-regexp -- same: the
@@ -2444,17 +2186,18 @@ describe('the statuses each Better Auth operation declares', () => {
   });
 
   test('a path with its own limiter declares BOTH throttle body shapes', () => {
-    // Two producers, two shapes: the wildcard's limiter answers through
-    // `handleApiError`, the endpoint's own through `toAuthApiError`.
-    const document = openApiDocument(toManifest(ROUTES));
+    // Two producers, two shapes: the wildcard's limiter answers in the
+    // envelope, the endpoint's own in Better Auth's error shape.
     const branchesOf = (pathName: string, status: string) =>
-      responseSchemaOf(document, pathName, 'post', status).anyOf as
+      responseSchemaOf(development(), pathName, 'post', status).anyOf as
         unknown[] | undefined;
 
     for (const status of ['429', '503']) {
       const branches = branchesOf('/api/auth/passwordless/verify', status);
       expect(branches).toHaveLength(2);
-      expect(branches?.[1]).toMatchObject({ required: ['message'] });
+      expect(branches?.[1]).toEqual({
+        $ref: '#/components/schemas/BetterAuthError',
+      });
       // `/sign-in/email` has no inner limiter, so widening it would advertise
       // a body it cannot send.
       expect(branchesOf('/api/auth/sign-in/email', status)).toBeUndefined();
@@ -2463,41 +2206,48 @@ describe('the statuses each Better Auth operation declares', () => {
 });
 
 describe('development-only routes are not registered outside development', () => {
-  test('a production route table contains no /api/dev path', () => {
-    // The decision is taken once, in `toRegisteredRoutes`, so the path is
+  test('a production surface contains no /api/dev path', () => {
+    // The decision is taken once, in `registeredBindings`, so the path is
     // genuinely unrouted rather than guarded inside its handler: 404 on every
-    // method, no `Allow`, no OPTIONS answer. Measured before the change with
+    // method, no `Allow`, no OPTIONS answer. Measured before that change with
     // `NODE_ENV=production`: `POST` answered 403 with its distinctive body,
     // `GET` answered `405 Allow: POST, OPTIONS`, `OPTIONS` answered 204 — which
     // confirms the endpoint's existence to any unauthenticated caller.
-    const registered = toRegisteredRoutes(ROUTES, false).map(
-      (route) => route.path
+    const registered = registeredBindings(BINDINGS, false).map(
+      ({ entry }) => entry.path
     );
 
     expect(registered.length).toBeGreaterThan(0);
     expect(registered.filter((path) => path.startsWith('/api/dev'))).toEqual(
       []
     );
-    // And the table itself still carries it, so the registration scanner and the
-    // build's production document can both see the handler.
-    expect(ROUTES.some((route) => route.path.startsWith('/api/dev'))).toBe(
-      true
+    // And the bindings still carry it, so registration is what withholds it.
+    expect(
+      BINDINGS.some(({ entry }) => entry.path.startsWith('/api/dev'))
+    ).toBe(true);
+    // The ambient default agrees with the explicit flag outside development.
+    expect(REGISTERED_BINDINGS.map(({ key }) => key)).toEqual(
+      registeredBindings(BINDINGS, false).map(({ key }) => key)
     );
   });
 
   test('development keeps it, so the seeding path stays reachable', () => {
-    const registered = toRegisteredRoutes(ROUTES, true).map(
-      (route) => route.path
+    const registered = registeredBindings(BINDINGS, true).map(
+      ({ entry }) => entry.path
     );
 
     expect(registered.some((path) => path.startsWith('/api/dev'))).toBe(true);
+    expect(
+      new Set(registeredBindings(BINDINGS, false)).isSubsetOf(
+        new Set(registeredBindings(BINDINGS, true))
+      )
+    ).toBe(true);
   });
 });
 
 describe('refusals a client branches on are published', () => {
-  const document = openApiDocument(toPublishedManifest(ROUTES, true));
   const description = (pathName: string, method: string, status: string) => {
-    const responses = operationOf(document, pathName, method)
+    const responses = operationOf(production(), pathName, method)
       .responses as Record<string, { description?: unknown }>;
     return String(responses[status]?.description);
   };
@@ -2550,7 +2300,7 @@ describe('refusals a client branches on are published', () => {
     '/api/auth/two-factor/disable',
     '/api/auth/two-factor/passkey/grant',
   ])('%s publishes the locked-account 429 in both shapes', (pathName) => {
-    const responses = operationOf(document, pathName, 'post')
+    const responses = operationOf(production(), pathName, 'post')
       .responses as Record<
       string,
       { description?: unknown; content?: unknown }
@@ -2566,28 +2316,26 @@ describe('refusals a client branches on are published', () => {
   });
 
   test('every envelope route publishes the database 503 with Retry-After', () => {
-    const manifest = toPublishedManifest(ROUTES, true).filter(
-      (entry) => entry.response === 'envelope'
+    const envelopes = REGISTERED_BINDINGS.filter(
+      (binding) => !isRawResponse(binding.entry.response)
     );
-    for (const entry of manifest) {
-      const responses = operationOf(
-        document,
-        entry.path.replaceAll(/:(\w+)/g, '{$1}'),
-        entry.method.toLowerCase()
-      ).responses as Record<
+    for (const binding of envelopes) {
+      const responses = bindingOperation(production(), binding)
+        .responses as Record<
         string,
         { description?: unknown; headers?: unknown }
       >;
-      const label = `${entry.method} ${entry.path}`;
-      expect(String(responses['503']?.description), label).toInclude(
+      expect(String(responses['503']?.description), binding.key).toInclude(
         'deadlock'
       );
-      expect(responses['503']?.headers, label).toHaveProperty('Retry-After');
+      expect(responses['503']?.headers, binding.key).toHaveProperty(
+        'Retry-After'
+      );
     }
   });
 
   test('every Better Auth operation publishes the database 503', () => {
-    const paths = (document as { paths: Record<string, unknown> }).paths;
+    const paths = production().paths as Record<string, unknown>;
     const betterAuth = Object.keys(paths).filter((pathName) =>
       pathName.startsWith('/api/auth/')
     );

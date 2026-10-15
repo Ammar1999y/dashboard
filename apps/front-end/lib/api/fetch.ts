@@ -1,3 +1,4 @@
+import type { MediaRefusalData } from '@app/shared/responses/media';
 import type { PaginationMeta } from '@app/shared/types/api';
 
 import * as z from 'zod';
@@ -8,6 +9,8 @@ import {
   MSG_SERVICE_UNAVAILABLE,
   MSG_TOO_MANY_REQUESTS,
 } from '@app/shared/messages/common';
+import { paginationMetaSchema } from '@app/shared/responses/common';
+import { mediaRefusalDataSchema } from '@app/shared/responses/media';
 import { MSG_OFFLINE, MSG_UNEXPECTED_ERROR } from '@/constants/messages';
 import { API_URL } from '@/lib/env';
 
@@ -43,17 +46,13 @@ function apiFetch(path: string, init: RequestInit = {}) {
   });
 }
 
-const count = z.number().int().nonnegative();
-
-/** `ApiEnvelope` from `@app/shared/types/api`, checked rather than assumed. */
+/** Every answer the API sends, a refusal included; `data` is the caller's to check. */
 const envelopeSchema = z.object({
   success: z.boolean(),
   message: z.string(),
   code: z.string().optional(),
   data: z.unknown(),
-  meta: z
-    .object({ page: count, perPage: count, total: count, pageCount: count })
-    .optional(),
+  meta: paginationMetaSchema.optional(),
 });
 
 export interface ApiResult<TData> {
@@ -75,9 +74,27 @@ export const invalidResponse = () =>
     INVALID_RESPONSE_CODE
   );
 
+/** Where a 2xx body broke what `href` should answer: paths and codes, never values. */
+export function logInvalidResponse(href: string, error: z.ZodError) {
+  console.error(
+    `invalid response from ${href}`,
+    error.issues.map(({ path, code }) => ({
+      path: path.map(String).join('.'),
+      code,
+    }))
+  );
+}
+
 /** Whether `error` is a failure tagged with `code`, by the server or this client. */
 export const hasErrorCode = (error: unknown, code: string) =>
   error instanceof CustomError && error.code === code;
+
+/**
+ * Whether `error` is a refusal with `status`: for the routes that answer a
+ * status and a message and no code.
+ */
+export const hasErrorStatus = (error: unknown, status: number) =>
+  error instanceof CustomError && error.status === status;
 
 const STATUS_MESSAGES = new Map<number, string>([
   [HTTP_STATUS.CONTENT_TOO_LARGE, MSG_BODY_TOO_LARGE],
@@ -91,8 +108,26 @@ const STATUS_MESSAGES = new Map<number, string>([
 export const failureMessage = (status: number) =>
   STATUS_MESSAGES.get(status) ?? MSG_UNEXPECTED_ERROR;
 
-function failure(message: string, response: Response, code?: string) {
-  const error = new CustomError(message, response.status, code);
+/** The ids a refusal names, when its `data` names any. */
+function refusalData(data: unknown): MediaRefusalData | undefined {
+  const parsed = mediaRefusalDataSchema.safeParse(data);
+  if (!parsed.success) return undefined;
+  const { fileIds, folderIds } = parsed.data;
+  return fileIds || folderIds ? parsed.data : undefined;
+}
+
+function failure(
+  message: string,
+  response: Response,
+  code?: string,
+  data?: unknown
+) {
+  const error = new CustomError(
+    message,
+    response.status,
+    code,
+    refusalData(data)
+  );
   const retryAfter = response.headers.get(RETRY_AFTER_HEADER);
   if (retryAfter !== null)
     error.responseHeaders = { [RETRY_AFTER_HEADER]: retryAfter };
@@ -115,17 +150,40 @@ export function retryAfterMs(error: unknown): number | undefined {
   return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 }
 
+/** What a request may carry beyond `fetch`'s own init. */
+export interface ApiInit extends RequestInit {
+  /**
+   * What the caller reads of the envelope's `data`. A body that does not
+   * match fails as `invalidResponse()`, and `data` is typed as its output.
+   * Write it as a plain `z.object`, which drops the keys it does not name.
+   */
+  schema?: z.ZodType;
+}
+
 /**
  * One request and its envelope. Every failure is a `CustomError` carrying the
  * response status, the envelope's `code` and the `Retry-After` header, except
  * an abort, which rethrows as is for the caller that aborted it.
  *
- * `data` is the caller's `TData` unchecked: only the envelope is validated.
+ * With `schema`, `data` is its output. Without one only the envelope is
+ * validated and `data` is the caller's `TData`, unchecked.
  */
-export async function apiRequest<TData>(
+export async function apiRequest<S extends z.ZodType>(
   path: string,
-  init: RequestInit = {}
-): Promise<ApiResult<TData>> {
+  init: ApiInit & { schema: S }
+): Promise<ApiResult<z.output<S>>>;
+export async function apiRequest<TData = unknown>(
+  path: string,
+  init?: RequestInit
+): Promise<ApiResult<TData>>;
+export async function apiRequest(
+  path: string,
+  init?: ApiInit
+): Promise<ApiResult<unknown>>;
+export async function apiRequest(
+  path: string,
+  { schema, ...init }: ApiInit = {}
+): Promise<ApiResult<unknown>> {
   const response = await apiFetch(path, init);
 
   let body: unknown;
@@ -137,13 +195,27 @@ export async function apiRequest<TData>(
 
   const envelope = envelopeSchema.safeParse(body);
   if (!envelope.success) {
-    if (response.ok) throw invalidResponse();
+    if (response.ok) {
+      logInvalidResponse(path, envelope.error);
+      throw invalidResponse();
+    }
     throw failure(failureMessage(response.status), response);
   }
 
   const { success, message, code, data, meta } = envelope.data;
   if (!success || !response.ok)
-    throw failure(message || failureMessage(response.status), response, code);
+    throw failure(
+      message || failureMessage(response.status),
+      response,
+      code,
+      data
+    );
 
-  return { data: data as TData, message, meta };
+  if (!schema) return { data, message, meta };
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) {
+    logInvalidResponse(path, parsed.error);
+    throw invalidResponse();
+  }
+  return { data: parsed.data, message, meta };
 }

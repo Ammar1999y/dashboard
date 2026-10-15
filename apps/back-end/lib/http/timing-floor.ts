@@ -1,9 +1,4 @@
-import type { HandlerInput, RouteHandler, RouteOutput } from './contract';
-import type { ResponseRoute } from '@app/shared/response-contract';
-
 import { BUSY_TIMEOUT_MS } from '@/lib/sqlite/database';
-
-import { handleApiError } from './response';
 
 /**
  * What a known account's branch does besides its one SQLite write (the global
@@ -80,36 +75,4 @@ export function timingFloor(): {
       if (left > 0) await new Promise((r) => setTimeout(r, left));
     },
   };
-}
-
-/**
- * `withApiErrors` for the anonymous surfaces: once `startFloor` has run, every
- * outcome, returned or thrown, waits out the floor.
- *
- * `rewriteError` rewrites the error before `handleApiError` sees it, which is how
- * a route collapses account-revealing statuses into one generic refusal.
- */
-export function withTimingFloor<K extends ResponseRoute>(
-  key: K,
-  fallbackMessage: string,
-  handler: (
-    ctx: HandlerInput,
-    startFloor: StartTimingFloor
-  ) => Promise<RouteOutput<K>>,
-  rewriteError?: (error: unknown) => unknown
-): RouteHandler<K> {
-  const floored = async (ctx: HandlerInput): Promise<RouteOutput<K>> => {
-    const floor = timingFloor();
-    try {
-      return await handler(ctx, floor.start);
-    } catch (error) {
-      return handleApiError(
-        rewriteError ? rewriteError(error) : error,
-        fallbackMessage
-      );
-    } finally {
-      await floor.settle();
-    }
-  };
-  return Object.assign(floored, { routeKey: key });
 }

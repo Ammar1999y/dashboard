@@ -1,13 +1,33 @@
 import { memo } from 'react';
 
+import { MSG_CANNOT_EDIT_OWN_ROLE } from '@app/shared/messages/permissions';
+import { MSG_OWN_ROLE_READ_ONLY } from '@/constants/messages';
+
+import { Icon } from '@/components/ui/icon';
+import { Notice } from '@/components/ui/notice';
 import FormInput from '@/components/form/form-input';
 import FormSwitch from '@/components/form/form-switch';
 import FormTextarea from '@/components/form/form-textarea';
 
 import { PermissionMatrix } from '../permission-matrix';
 
-export const PermissionFields = memo(() => (
+interface PermissionFieldsProps {
+  /** The role the signed-in user holds, which the server refuses to edit. */
+  ownRole?: boolean;
+}
+
+const OwnRoleNotice = () => (
+  <Notice role='status' className='flex items-start gap-2'>
+    <Icon icon='solar:lock-keyhole-linear' className='mt-0.5 size-4 shrink-0' />
+    <span>
+      <strong>{MSG_CANNOT_EDIT_OWN_ROLE}.</strong> {MSG_OWN_ROLE_READ_ONLY}
+    </span>
+  </Notice>
+);
+
+export const PermissionFields = memo(({ ownRole }: PermissionFieldsProps) => (
   <div className='formContentPadding space-y-6'>
+    {ownRole && <OwnRoleNotice />}
     <div className='grid gap-x-4 gap-y-5 xs2:grid-cols-12 md:gap-6'>
       <FormInput
         name='roleName'
@@ -30,10 +50,7 @@ export const PermissionFields = memo(() => (
       />
     </div>
 
-    <div>
-      <h2 className='mb-4 text-lg font-semibold'>الصلاحيات</h2>
-      <PermissionMatrix />
-    </div>
+    <PermissionMatrix readOnly={ownRole} />
   </div>
 ));
 
