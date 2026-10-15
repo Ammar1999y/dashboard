@@ -1,6 +1,6 @@
 # Coolify deployment: ElysiaJS, `bun:sql`, `bun:sqlite`
 
-Updated: 2026-09-04
+Updated: 2026-10-15
 
 > **Nothing here has been executed against a live Coolify instance since the
 > Elysia migration.** Treat it as revised instructions, not a verified
@@ -11,7 +11,7 @@ Updated: 2026-09-04
 
 One Coolify application on one VPS:
 
-- **Runtime:** Bun 1.4.2 — runtime, package manager and TypeScript loader. No
+- **Runtime:** Bun 1.4.3 — runtime, package manager and TypeScript loader. No
   Node process, no bundle, no `node-gyp`.
 - **Business data:** PostgreSQL via `bun:sql`. One pooled client in
   `db/index.ts`; `withTransaction` runs on it.
@@ -154,7 +154,7 @@ Do not expose production traffic until these are resolved.
 
 6. **Choose deployment overlap policy** — stop-first is the safe default (§6).
 7. **Confirm no secret is scoped to the build.** The build stage is
-   `tsc --noEmit`, which reads no environment, so every secret is runtime-only.
+   `bun check`, which executes no application code, so every secret is runtime-only.
    A build-scoped secret stays visible in image history unless BuildKit secrets
    are in use, for no benefit.
 8. **Decide rate-limit backup RPO.** With no off-host SQLite backup, host loss
@@ -264,7 +264,7 @@ served) fails `tests/unit/bindings.test.ts` instead, at runtime.
 | Watch Paths         | `apps/back-end/**`, `packages/shared/**`, `bun.lock`, `package.json`, `bunfig.toml`, `tsconfig.base.json`, `scripts/**`, `patches/**` |
 
 Install, build and start live in the Dockerfile, so the three command fields
-stay empty. The image runs `bun run build` (`tsc --noEmit`) in a `verify`
+stay empty. The image runs `bun run build` (`bun check`) in a `verify`
 stage the runtime stage cannot be built without, and the runtime stage's `CMD`
 is `bun --bun server.ts`. `GET /openapi.json` generates its document in memory
 on the first authorised request and serves that copy for the life of the
@@ -326,7 +326,7 @@ DevTools, the request must go to `https://example.com/api/...` with
 `curl -s https://example.com/api/health/storage` without the token must return
 the back-end's 401 JSON envelope, not a Next.js 404 page.
 
-The Dockerfile's `FROM oven/bun:1.4.2` is the second home of the Bun pin. Bump
+The Dockerfile's `FROM oven/bun:1.4.3` is the second home of the Bun pin. Bump
 it with `packageManager` (Renovate's `bun` group moves both, with the Bun
 types, in one PR); `scripts/require-bun.mjs` fails the image build when
 the image's Bun is older than the pin, and `server.ts` logs when it is newer.
@@ -367,13 +367,13 @@ other half.
 rejected runtime exits non-zero after one line: `{"msg":"startup rejected",…}`.
 A container restart-looping with that line is misconfigured, not crashing.
 
-| Condition                                                | Why fatal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV` not exactly `development`/`test`/`production` | Every production guard is an exact string comparison. `NODE_ENV=prodution` previously disabled the Better Auth secret floor, the Turnstile requirement, the absolute-`SQLITE_DIR` rule and HSTS at once, and still served traffic.                                                                                                                                                                                                                                                                                                     |
-| `PORT` not a decimal integer in `1..65535`               | `Number(PORT)` accepted `''` as 0 and `3000abc` as `NaN`; Bun then bound an ephemeral port while the log reported the requested one.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Bun OLDER than the pinned `1.4.2`                        | Both DB drivers are compiled into the Bun binary. Through 1.3.x, a simple-protocol query concurrent with a not-yet-prepared parameterized one could return the **wrong query's rows** — and `withTransaction`'s `BEGIN`/`COMMIT`/`ROLLBACK` are simple-protocol (Bun #32772, fixed in 1.4.0). Also through 1.3.x, `Bun.randomUUIDv7()` wrapped its sub-millisecond counter at 4,096 ids, breaking the time ordering the session keyset cursor depends on. Bun NEWER than the pin boots and logs `bun version ahead of the tested pin`. |
-| `packageManager` not `bun@<major>.<minor>.<patch>`       | It is the only source for the pin (below). A malformed field is treated as a missing runtime contract, not as "no pin".                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `sqlite_version()` below `3.51.3`                        | The WAL-reset floor (§6), now asserted rather than eyeballed in the build log.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Condition                                                | Why fatal                                                                                                                                                                                                                                                                                     |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV` not exactly `development`/`test`/`production` | Every production guard is an exact string comparison. `NODE_ENV=prodution` previously disabled the Better Auth secret floor, the Turnstile requirement, the absolute-`SQLITE_DIR` rule and HSTS at once, and still served traffic.                                                            |
+| `PORT` not a decimal integer in `1..65535`               | `Number(PORT)` accepted `''` as 0 and `3000abc` as `NaN`; Bun then bound an ephemeral port while the log reported the requested one.                                                                                                                                                          |
+| Bun OLDER than the pinned `1.4.3`                        | Both DB drivers are compiled into the Bun binary. The pin includes PostgreSQL query-isolation and rolled-back-commit reporting fixes, TLS verification hardening, and the native type checker used by the build. Bun NEWER than the pin boots and logs `bun version ahead of the tested pin`. |
+| `packageManager` not `bun@<major>.<minor>.<patch>`       | It is the only source for the pin (below). A malformed field is treated as a missing runtime contract, not as "no pin".                                                                                                                                                                       |
+| `sqlite_version()` below `3.51.3`                        | The WAL-reset floor (§6), now asserted rather than eyeballed in the build log.                                                                                                                                                                                                                |
 
 So the Bun version check is a **floor**, enforced rather than advisory: anything
 below the pin refuses to start, anything above it boots with a warning line. It
@@ -425,7 +425,7 @@ Two things the operator must know about it:
   "port": 3000,
   "hostname": "localhost",
   "env": "production",
-  "bun": "1.4.2",
+  "bun": "1.4.3",
   "idleTimeoutSeconds": 60,
   "maxRouteTimeoutSeconds": 120,
   "maxRequestBodyBytes": 8388608,
@@ -449,7 +449,7 @@ Read `shutdownTimeoutMs` from this log when setting the stop grace period (§6).
 
 ## 3. Configure environment
 
-Every variable below is **runtime-only**. `tsc --noEmit` reads no environment,
+Every variable below is **runtime-only**. `bun check` executes no application code,
 so nothing belongs in the build scope. If you deliberately add a build-time
 consumer, enable **Use Docker Build Secrets** first and abort if the build log
 or image history shows Coolify fell back to `--build-arg`.
@@ -1450,13 +1450,13 @@ curl -sS -H "x-maintenance-token: $SQLITE_MAINTENANCE_TOKEN" \
 
 The checks:
 
-| Check               | Requires                                                       |
-| ------------------- | -------------------------------------------------------------- |
-| `journalModeWal`    | `journal_mode` is `wal`                                        |
-| `schemaVersion`     | `user_version` equals the running build's schema version       |
-| `busyTimeout`       | `busy_timeout` is exactly `2000` — the value, not merely "set" |
-| `synchronousNormal` | `synchronous` is `1` (`NORMAL`)                                |
-| `postgres`          | a bounded `SELECT 1` answered within 2 s                       |
+| Check               | Requires                                                          |
+| ------------------- | ----------------------------------------------------------------- |
+| `journalModeWal`    | `journal_mode` is `wal`                                           |
+| `schemaVersion`     | `user_version` equals the running build's schema version          |
+| `busyTimeout`       | `busy_timeout` is exactly `2000` — the value, not merely "set"    |
+| `synchronousNormal` | `synchronous` is `1` (`NORMAL`)                                   |
+| `postgres`          | a bounded `SELECT 1` answered within 2 s, and the app pool usable |
 
 `busyTimeout` and `synchronousNormal` compare **exact values** because a
 database opened by something other than `openDatabase` — an older build, or a
@@ -1494,6 +1494,24 @@ surface.
   added.
 - **A mounted volume is not proven.** SQLite creates the same path in the
   container layer just as happily. Only §8 settles that.
+
+**The application pool, and the restart it relies on.** The `SELECT 1` above
+runs on the probe's own one-connection pool, which cannot see the application's.
+Bun 1.4.3's pool can wedge when its connections are killed while it reconnects
+(a PostgreSQL restart or failover, measured on 2026-10-15): every query then
+fails at once, for good, while the probe still answers. So `postgres` also
+fails when the application pool raises that wedge, and a watchdog in
+`server.ts` checks the pool every 30 s and, still wedged 5 s later, logs
+`database pool unusable` and exits with code 1.
+
+⚠️ **Recovery depends on the restart policy, not on this health check.**
+Coolify only takes an unhealthy container out of Traefik's routing; it never
+restarts one. Docker restarts a container that EXITS when its policy says so,
+and Coolify applies `unless-stopped`. Keep a policy that restarts on a non-zero
+exit; with `no`, a wedged pool becomes a stopped container. Measured on a real
+server, wedge to exit took 23–28 s: the watchdog's next check, its 5 s second
+look, then a clean shutdown that leaves the wedged pool unclosed, since closing
+one never completes.
 
 One interaction worth knowing when tuning the numbers above: the **5 s timeout**
 is generous today, but a synchronous stall in the process — an adversarial SVG
@@ -1533,7 +1551,7 @@ bun --version
 bun -e 'const {Database}=require("bun:sqlite");const d=new Database(":memory:");console.log(d.query("select sqlite_version() as v").get());d.close(false)'
 ```
 
-Expect Bun 1.4.2 and SQLite ≥ 3.51.3. **Record the SQLite version** — it is a
+Expect Bun 1.4.3 and SQLite ≥ 3.51.3. **Record the SQLite version** — it is a
 property of the Bun build, as are the WebP/PNG codecs and the image resampler.
 
 No native addon is on the request path: `bun:sqlite` replaced `better-sqlite3`
@@ -2303,7 +2321,7 @@ bucket CORS rule in the Cloudflare console — the API token cannot (measured
 ## Final checklist
 
 - [ ] Release committed, pushed, CI green.
-- [ ] Bun 1.4.2 in the build log; SQLite version recorded (§8).
+- [ ] Bun 1.4.3 in the build log; SQLite version recorded (§8).
 - [ ] Install, build and start command fields empty, so the image's `verify`
       stage and `CMD` apply; `NODE_ENV=production` set as a runtime variable;
       `--no-env-file` decided (§2).

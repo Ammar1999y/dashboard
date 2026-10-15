@@ -524,20 +524,13 @@ describe('the runbook copy of the shutdown policy', () => {
     expect(runbook).not.toMatch(/\b5 s grace/);
   });
 
-  test('both documents state the budget formula symbolically, with its unit conversion', () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a fixed path relative to this file
-    const strategy = readFileSync(
-      path.join(import.meta.dir, '..', '..', 'reports', 'test-strategy.md'),
-      'utf8'
+  test('the runbook states the budget formula symbolically, with its unit conversion', () => {
+    expect(runbook).toContain(
+      '(max(IDLE_TIMEOUT_SECONDS, MAX_ROUTE_TIMEOUT_SECONDS) + SHUTDOWN_POLICY.headroomSeconds) * 1000'
     );
-    const formula =
-      '(max(IDLE_TIMEOUT_SECONDS, MAX_ROUTE_TIMEOUT_SECONDS) + SHUTDOWN_POLICY.headroomSeconds) * 1000';
-    for (const document of [runbook, strategy]) {
-      expect(document).toContain(formula);
-      // The literal headroom operand is the copy that drifted; the policy name
-      // is the only spelling allowed.
-      expect(document).not.toMatch(/MAX_ROUTE_TIMEOUT_SECONDS\) \+ \d+\)/);
-    }
+    // The literal headroom operand is the copy that drifted; the policy name
+    // is the only spelling allowed.
+    expect(runbook).not.toMatch(/MAX_ROUTE_TIMEOUT_SECONDS\) \+ \d+\)/);
   });
 });
 

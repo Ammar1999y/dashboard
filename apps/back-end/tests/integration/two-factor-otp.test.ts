@@ -22,20 +22,17 @@ import {
   sessions,
   twoFactorMethods,
   users,
-  verificationCodes,
   verifications,
-  verificationSessions,
 } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { TWO_FACTOR_ALLOWED_ATTEMPTS } from '@/lib/auth/two-factor/challenge';
 import { PUBLIC_ORIGIN } from '@/lib/env';
-import { hashOtpCode } from '@/lib/otp/hash';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
-import { flooredBudget } from '../helpers/otp';
+import { flooredBudget, replaceOtpCode } from '../helpers/otp';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -80,37 +77,12 @@ function post(url: string, body: unknown, cookie?: string): Promise<Response> {
  * attempt counters this test is about — so the send is performed for real and
  * only the code is overwritten.
  */
-async function plantCode(
+function plantCode(
   userId: string,
   purpose: 'two_factor' | 'passwordless_login',
   contactKind: 'email' | 'phone'
 ): Promise<void> {
-  const [proof] = await db
-    .select({ id: verificationSessions.id })
-    .from(verificationSessions)
-    .where(
-      and(
-        eq(verificationSessions.userId, userId),
-        eq(verificationSessions.purpose, purpose),
-        eq(verificationSessions.contactKind, contactKind)
-      )
-    );
-  if (!proof) throw new Error(`no ${purpose}/${contactKind} proof row`);
-
-  await db
-    .insert(verificationCodes)
-    .values({
-      sessionId: proof.id,
-      code: hashOtpCode(RIGHT_CODE),
-      expiresAt: new Date(Date.now() + 10 * 60_000),
-    })
-    .onConflictDoUpdate({
-      target: verificationCodes.sessionId,
-      set: {
-        code: hashOtpCode(RIGHT_CODE),
-        expiresAt: new Date(Date.now() + 10 * 60_000),
-      },
-    });
+  return replaceOtpCode({ userId, purpose, contactKind, code: RIGHT_CODE });
 }
 
 async function signIn(user: SeededUser): Promise<{

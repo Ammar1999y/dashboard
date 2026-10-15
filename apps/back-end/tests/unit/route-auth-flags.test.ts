@@ -36,9 +36,9 @@ interface MethodGates {
 }
 
 /**
- * Filled once: the checker resolves lazily, so whichever case ran first used
- * to pay for every file its handler reaches, and timed out under load. Per
- * binding: its handler's reach, plus what its gate asks for.
+ * Filled once: the checker resolves lazily, so per case, whichever ran first
+ * would pay for every file its handler reaches. Per binding: its handler's
+ * reach, plus what its gate asks for.
  */
 const byBindingFile = new Map<string, MethodGates[]>();
 const endpoints: { path: string; gates: ReadonlySet<Gate> }[] = [];
@@ -90,9 +90,10 @@ beforeAll(async () => {
       fixture.set(name, error);
     }
   }
-  // Several times this hook's cost measured with the integration tier running
-  // alongside; the figures are in `reports/remaining-issues-fix-review-resolution.md` (#7).
-}, 120_000);
+  // Several times the hook's cost measured with three `eslint .` runs and a
+  // unit tier alongside, which parallel sessions make routine here. A timeout
+  // fails every case in the file and refuses the push.
+}, 300_000);
 
 describe('every route declares the gates its handler reaches', () => {
   test.each(bindingFiles)('%s', (file) => {
@@ -156,6 +157,11 @@ describe('the analyzer, on one fixture function per shape', () => {
     ['viaGetter', ['window']],
     ['viaLiteralKey', ['window']],
     ['viaLateAssignment', ['window']],
+    ['viaReassignedBinding', ['window']],
+    ['viaReassignedProperty', ['window']],
+    ['viaReassignedDestructuredBinding', ['window']],
+    ['viaObjectAssign', ['window']],
+    ['viaSetterInjection', ['window']],
     ['viaConstructor', ['window']],
     ['permissionByShorthand', ['window']],
   ])('%s', (name, gates) => {
@@ -190,6 +196,25 @@ describe('the analyzer, on one fixture function per shape', () => {
       'requirePermission options are not an inline object literal',
     ],
     ['viaComputedKey', 'calls through a computed key'],
+    ['viaIndexedCollection', 'calls through an undeclared key'],
+    ['viaLibraryTypedElement', 'calls through an undeclared key'],
+    [
+      'viaLoopElement',
+      `calls ${FIXTURE}#step, a loop element, which the analyzer cannot follow`,
+    ],
+    [
+      'viaCallbackParameter',
+      `calls ${FIXTURE}#each, a callback parameter, which the analyzer cannot follow`,
+    ],
+    ['viaReturnedValue', 'calls what another call returned'],
+    [
+      'viaEscapedSetter',
+      `writes ${FIXTURE}#replaced in a form the analyzer cannot follow`,
+    ],
+    [
+      'viaDestructuringWrite',
+      `writes ${FIXTURE}#swapped in a form the analyzer cannot follow`,
+    ],
     [
       'viaUnassigned',
       `calls ${FIXTURE}#unassigned, which the analyzer cannot follow`,

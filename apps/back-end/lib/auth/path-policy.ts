@@ -21,6 +21,11 @@ import { loginSchema } from '@app/shared/validation/auth';
 import { NAME_MAX, PASSWORD_MAX } from '@app/shared/validation/constants';
 import { normalizePasswordInput } from '@app/shared/validation/rules';
 
+import {
+  parseSetCookieHeaders,
+  queueResponseCookies,
+} from '@/lib/http/cookies';
+
 import { exceedsCodePoints } from '@/utils/text';
 
 import { BETTER_AUTH_ALLOWED_PATH_SET } from './allowed-paths';
@@ -161,10 +166,24 @@ export async function enforcePathPolicy(
   rejectOverlongPassword(ctx);
 
   const twoFactorContext = await enforceTwoFactorPathPolicy(ctx);
+  queueSessionReadCookies(ctx);
   if (twoFactorContext) return twoFactorContext;
 
   if (ctx.path === '/sign-in/email') return await signInContext(ctx);
   if (ctx.path === '/sign-out') await revokeSignedOutSession(ctx);
+}
+
+/**
+ * ⚠️ Better Auth replaces a before hook's response headers with the endpoint's
+ * once the endpoint runs, and the session read here memoises, so the
+ * endpoint's own read sets nothing. The read's cookies (the sliding refresh, a
+ * re-minted cache) go to the response's exit queue instead, where a cookie the
+ * endpoint sets itself wins its name.
+ */
+function queueSessionReadCookies(ctx: HookContext): void {
+  const cookies = ctx.responseHeaders?.getSetCookie() ?? [];
+  if (ctx.request && cookies.length > 0)
+    queueResponseCookies(ctx.request.headers, parseSetCookieHeaders(cookies));
 }
 
 // Ahead of the library, whose delete swallows a fault and answers 200 with the
@@ -274,7 +293,9 @@ async function enforceTwoFactorPathPolicy(
   if (!needsProof && !needsLiveSession)
     return withBody(ctx, { ...body, ...patch });
 
-  const session = await readRequestSession(ctx);
+  // Memoised for the endpoint's session middleware, which reads a fault as no
+  // session; liveness is checked against the row below, not the cookie cache.
+  const session = await resolveRequestSession(ctx);
   if (!session) throw sessionRequired();
 
   if (needsLiveSession)
@@ -347,21 +368,6 @@ async function assertPluginVerifierOffered(
   method: TwoFactorMethod
 ): Promise<void> {
   await requireTwoFactorChallenge(ctx, { method, signInOnly: true });
-}
-
-/** Not the cookie cache — see `LIVE_SESSION_PATHS`. */
-async function readRequestSession(
-  ctx: HookContext
-): Promise<{ userId: EntityID; sessionId: string } | null> {
-  const token = await ctx.getSignedCookie(
-    ctx.context.authCookies.sessionToken.name,
-    ctx.context.secret
-  );
-  if (!token) return null;
-  const found = await ctx.context.internalAdapter.findSession(token);
-  const userId = validID(found?.user.id);
-  if (!found || !userId) return null;
-  return { userId, sessionId: found.session.id };
 }
 
 /**

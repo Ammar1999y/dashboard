@@ -5,7 +5,6 @@ import type * as z from 'zod';
 import { REQUEST_BODIES } from '@app/shared/contract';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { twoFactorMsg } from '@app/shared/messages/auth';
 import { otpMsg } from '@app/shared/messages/otp';
 import { OTP_BASE_RESEND_DELAY_S } from '@app/shared/validation/constants';
 import { contactKindOf } from '@app/shared/validation/enums';
@@ -136,7 +135,10 @@ export function resolveRecoveryGrant(
 export function beginRecoveryAttempt(grant: MockRecoveryGrant): void {
   if (grant.attempts < RECOVERY_ALLOWED_ATTEMPTS) return;
   recoveryGrants.remove(grant.id);
-  throw new CustomError(twoFactorMsg.tooManyAttempts, HTTP_STATUS.BAD_REQUEST);
+  throw new CustomError(
+    otpMsg.recoveryAttemptsExhausted,
+    HTTP_STATUS.BAD_REQUEST
+  );
 }
 
 export function recordRecoveryFailure(grant: MockRecoveryGrant): void {

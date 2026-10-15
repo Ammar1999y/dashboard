@@ -23,8 +23,6 @@ import { twoFactorMsg } from '@app/shared/messages/auth';
 import { MSG_INVALID_INPUT, MSG_NOT_FOUND } from '@app/shared/messages/common';
 import { validID } from '@app/shared/utils';
 
-import { bestEffort } from '@/utils/log';
-
 import { authAuditMeta, bodyRecord } from '../context';
 import { authError, sessionRequired } from '../errors';
 import { pluginEndpoint } from '../plugin-endpoint';
@@ -33,6 +31,7 @@ import { withAuthTransaction } from '../transaction';
 import {
   expiresIn,
   randomToken,
+  replaceVerification,
   trustDeviceKey,
   twoFactorProofKey,
 } from '../verifications';
@@ -48,18 +47,23 @@ const IDENTIFIER_BYTES = 24;
 /** Long enough for the "remember this device" click after verification, no longer. */
 const TWO_FACTOR_PROOF_MAX_AGE_S = 600;
 
-// Consumed by `/two-factor/trust-device`, binding trust to a proof rather than
-// to holding a session — possibly one planted before 2FA was enabled.
+/**
+ * Consumed by `/two-factor/trust-device`, binding trust to a proof rather than
+ * to holding a session — possibly one planted before 2FA was enabled.
+ *
+ * ⚠️ Only in the transaction that accepted the factor, after its user lock.
+ * Method removal revokes proofs under that lock; one issued after the commit
+ * can land behind a removal and earn trust against the removed factor.
+ */
 export async function markTwoFactorProven(
-  ctx: AuthContext,
+  tx: Tx,
   sessionId: string
 ): Promise<void> {
-  await bestEffort('twoFactor.proof.recordFailed', () =>
-    ctx.context.internalAdapter.createVerificationValue({
-      value: sessionId,
-      identifier: twoFactorProofKey(sessionId),
-      expiresAt: expiresIn(TWO_FACTOR_PROOF_MAX_AGE_S),
-    })
+  await replaceVerification(
+    tx,
+    twoFactorProofKey(sessionId),
+    sessionId,
+    expiresIn(TWO_FACTOR_PROOF_MAX_AGE_S)
   );
 }
 

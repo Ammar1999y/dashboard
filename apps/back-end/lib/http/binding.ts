@@ -177,6 +177,12 @@ interface BindingDetail {
   requiredHeaders?: Readonly<Record<string, string>>;
   /** What a status means on this route beyond what its policy says. */
   responses?: Readonly<Partial<Record<number, string>>>;
+  /**
+   * What a retry needs after a database 503 that can follow a single-use input
+   * being spent; appended to the policy's 503 as Better Auth's paths append
+   * theirs (`BETTER_AUTH_SPENT_INPUT_REMEDIES`).
+   */
+  spentInput?: string;
 }
 
 interface PermissionOption {

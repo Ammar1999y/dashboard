@@ -15,7 +15,8 @@
     "build:mock": "NEXT_PUBLIC_API_MOCKING=enabled bun --bun next build",
     "start": "bun --bun run next start -p 3123",
     "start:mock": "NEXT_PUBLIC_API_MOCKING=enabled bun --bun run next start -p 3123",
-    "lint": "bun --bun tsc --noEmit && bun --bun eslint . --max-warnings 0 && bun run audit:css",
+    "typecheck": "bun check",
+    "lint": "bun run typecheck && bun --bun eslint . --max-warnings 0 && bun run audit:css",
     "test": "bun test tests scripts/lib/tweakcn-community.test.ts",
     "themes:sync": "bun scripts/sync-community-themes.ts",
     "audit": "bun scripts/audit.ts",
@@ -26,7 +27,7 @@
     "scan:secrets": "mise exec -- gitleaks git . --redact --verbose --no-banner",
     "scan:sast": "mise exec -- semgrep scan --config=p/typescript --config=p/secrets --error --metrics=off"
   },
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.3",
   "engines": {
     "npm": "use bun (run: node ../../scripts/require-bun.mjs)",
     "yarn": "use bun (run: node ../../scripts/require-bun.mjs)",
@@ -164,7 +165,7 @@
     "@iconify-json/uim": "^1",
     "@iconify/utils": "^3",
     "@ianvs/prettier-plugin-sort-imports": "^4",
-    "@types/bun": "^1.4.2",
+    "@types/bun": "^1.4.3",
     "@types/node": "^26",
     "@types/react": "^19",
     "@types/react-dom": "^19",

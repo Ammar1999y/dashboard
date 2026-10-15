@@ -146,11 +146,11 @@ export const BETTER_AUTH_SPENT_INPUT_REMEDIES: Readonly<
   '/passwordless/verify':
     'a retry with the same code can find it already spent; request a new code.',
   '/two-factor/otp/verify':
-    'signing in, a retry can find the challenge spent, so start a new sign-in; an enrolment can retry after `Retry-After`.',
+    'a retry with the same code can find it already spent; request a new code, which signing in can use under the same challenge. An enrolment can retry after `Retry-After`.',
   '/two-factor/verify-totp':
     'a retry with the same code can find it already spent; wait for the authenticator’s next code.',
   '/two-factor/passkey/verify':
-    'a retry can find the challenge spent, so start a new sign-in.',
+    'a retry with the same assertion can find its ceremony spent; start a new one at `/two-factor/passkey/options`.',
   '/passkey/delete-passkey':
     'a retry with the same grant can find it spent; request a new one at `/two-factor/passkey/grant`.',
   '/oauth/google/callback':

@@ -154,7 +154,7 @@ export type BetterAuthBody<K extends BetterAuthRoute> = z.input<
  * its field `unknown` here — and a field typed `unknown` accepts every value a
  * client can send, which is the one thing these exports exist to prevent.
  *
- * Erased at runtime, and checked by every consumer's `tsc` because they compile
+ * Erased at runtime, and checked by every consumer because they compile
  * these sources themselves. The failure is a type error on the line below; the
  * fix is to annotate the offending preprocess parameter with the wire type, as
  * `validation/rules.ts` describes.

@@ -19,7 +19,7 @@ pre-commit:
     # to re-check both consumers, which compile it with their own tsconfig.
     - name: front-end typecheck
       glob: ['apps/front-end/*.{ts,tsx,mts,cts}', 'packages/shared/*.ts']
-      run: cd apps/front-end && bun --bun tsc --noEmit
+      run: cd apps/front-end && bun run typecheck
     - name: front-end lint
       root: 'apps/front-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs}'
@@ -34,7 +34,7 @@ pre-commit:
       run: bun scripts/build-icons.ts --check
     - name: back-end typecheck
       glob: ['apps/back-end/*.{ts,tsx,mts,cts}', 'packages/shared/*.ts']
-      run: cd apps/back-end && bunx tsc --noEmit
+      run: cd apps/back-end && bun run typecheck
     - name: back-end lint
       root: 'apps/back-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs}'
@@ -46,7 +46,7 @@ pre-commit:
     - name: shared typecheck
       root: 'packages/shared/'
       glob: '*.ts'
-      run: bunx tsc --noEmit
+      run: bun run typecheck
     - name: shared lint
       root: 'packages/shared/'
       glob: '*.{ts,js,mjs}'
@@ -87,7 +87,7 @@ pre-push: &full_verify
         jobs:
           - name: front-end typecheck
             root: 'apps/front-end/'
-            run: bun --bun tsc --noEmit
+            run: bun run typecheck
           - name: front-end lint
             root: 'apps/front-end/'
             run: bun --bun eslint . --max-warnings 0
@@ -102,7 +102,7 @@ pre-push: &full_verify
               the source (run `bun scripts/build-icons.ts` inside apps/front-end)'
           - name: back-end typecheck
             root: 'apps/back-end/'
-            run: bunx tsc --noEmit
+            run: bun run typecheck
           - name: back-end lint
             root: 'apps/back-end/'
             run: bunx eslint . --max-warnings 0
@@ -111,7 +111,7 @@ pre-push: &full_verify
             run: bunx prettier --check .
           - name: shared typecheck
             root: 'packages/shared/'
-            run: bunx tsc --noEmit
+            run: bun run typecheck
           - name: shared lint
             root: 'packages/shared/'
             run: bunx eslint . --max-warnings 0

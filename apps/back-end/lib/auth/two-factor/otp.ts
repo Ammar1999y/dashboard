@@ -273,12 +273,19 @@ async function verifyForSignIn(
     throw asAuthError(caught, twoFactorMsg.invalidCode);
   }
 
-  // No restore: the challenge is about to be consumed.
-  const completed = await completeTwoFactorChallenge(
-    ctx,
-    challenge,
-    optionId('otp', contactKindOf(target.channel))
-  );
+  let completed;
+  try {
+    completed = await completeTwoFactorChallenge(
+      ctx,
+      challenge,
+      optionId('otp', contactKindOf(target.channel))
+    );
+  } catch (caught) {
+    // The completion rolled back, so the challenge survives and the attempt
+    // a correct code spent is owed back; a new code can then finish it.
+    await attempt.restore();
+    throw caught;
+  }
   if (!completed) throw challengeMissingError();
 
   return ctx.json({

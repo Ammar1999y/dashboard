@@ -158,14 +158,14 @@ export const twoFactorPasskey = () =>
                 passkeyId: verification.credential.id,
               });
 
-            // The challenge is about to be consumed; nothing may re-arm its counter.
-            settled = true;
-
+            // Settled once the completion answers: a throw rolled it back and
+            // left the challenge, whose attempt the catch then gives back.
             const completed = await completeTwoFactorChallenge(
               ctx,
               challenge,
               'passkey'
             );
+            settled = true;
             if (!completed) throw challengeMissingError();
 
             return ctx.json({

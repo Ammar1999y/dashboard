@@ -352,7 +352,7 @@ Order: S0 → S1 → S2 → S3 → S4 → S5, then S6, S7, S8 in any order (disj
 ### S0. Baseline (no code)
 
 - `git status`; note every existing diff (others' work).
-- Run and record: front end `bun run lint`, `bun run test`, and the time of `bun --bun tsc --noEmit` (R2); `packages/shared` `bun run lint`; back end the full acceptance set (§10). Record front-end first-load JS sizes from `bun run build` if it builds offline (P4-R6).
+- Run and record: front end `bun run lint`, `bun run test`, and the time of `bun run typecheck` (R2); `packages/shared` `bun run lint`; back end the full acceptance set (§10). Record front-end first-load JS sizes from `bun run build` if it builds offline (P4-R6). Take a fresh timing baseline when changing the checker; earlier TypeScript timings are not a Bun baseline.
 
 ### S1. Front end reads both formats, and catches up with the 2026-10-10 back end (no back-end change)
 
@@ -450,7 +450,7 @@ mock(entry, async ({ params, query, body, request }) => ({ data, message?, meta?
 
 Tests: type-level cases with `@ts-expect-error` (missing params, wrong body, missing `captcha` on a captcha entry, `meta` only on paged entries); `api()` cases (re-auth retry only on re-auth entries, captcha resubmit, abort, problem mapping, `invalid_response` → committed on a write and plain on a GET, `narrow`); a `mock()` case (lazy body, contract check throws under test).
 
-Acceptance: front end lint + test; `tsc` time against S0 (R2).
+Acceptance: front end lint + test; `bun run typecheck` time against S0 (R2).
 
 ### S4–S8. Per-domain migration
 
@@ -495,7 +495,7 @@ Acceptance per step: front end lint + test (mock contract tests included). No ba
 - `grep` proves no front-end import of `REQUEST_BODIES`, `RequestBody`, `RESPONSE_DATA`, `responseIssues`, `isResponseRoute` is left.
 - Update `apps/front-end/mocks/README.md` (how to write a mock).
 
-Acceptance: front end lint + test + `bun run find:unused-files` (knip); `tsc` time and first-load JS against S0.
+Acceptance: front end lint + test + `bun run find:unused-files` (knip); `bun run typecheck` time and first-load JS against S0.
 
 ### S10. Back end: `PUT /api/dash/users/:id` without self-rename (P4-D16) — done 2026-10-10
 
@@ -558,7 +558,7 @@ Known flakes (main plan records): a media DIFAT timing test under load, and setu
 | P4-R2  | A body built outside the builders keeps the old shape                                                      | every error site goes through `apiError`/`handleApiError` (§3.1, verified); S2's per-kind content-type test                                                                                                |
 | P4-R3  | better-fetch or the Better Auth client depends on a member we change                                       | `message` and `code` kept; better-fetch's own `status` equals ours; `tests/auth-client.test.ts` with a problem body                                                                                        |
 | P4-R4  | Next.js evaluates a page module before `_app`, so a schema is built before `jitless`                       | **not verified.** Pages-router entry scripts run in document order (`_app` first) as far as known. S1's test proves module order inside the graph only. Check when the CSP goes on (it reports violations) |
-| P4-R5  | Type-check cost of the typed client (main plan R2)                                                         | measure `tsc` at S0, S3, S9; report                                                                                                                                                                        |
+| P4-R5  | Type-check cost of the typed client (main plan R2)                                                         | measure `bun run typecheck` at S0, S3, S9; report                                                                                                                                                          |
 | P4-R6  | Bundle growth: per-domain entries import every schema of their domain                                      | most are imported today; compare first-load JS at S0 and S9; split an entry file only on evidence                                                                                                          |
 | P4-R7  | Conflicts with parallel front-end work                                                                     | small steps; only listed files; others' diffs untouched; isolated commits                                                                                                                                  |
 | P4-R8  | Mocks drift from the server's refusal order                                                                | lazy `body()` in `mock()` (P4-D12)                                                                                                                                                                         |

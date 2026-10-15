@@ -27,6 +27,7 @@ import { sessions } from '@/db/schema';
 import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { auth } from '@/lib/auth';
+import { PUBLIC_ORIGIN } from '@/lib/env';
 import { parseSetCookieHeaders } from '@/lib/http/cookies';
 
 import { resetTables } from '../helpers/database';
@@ -212,6 +213,49 @@ describe('a dashboard read delivers the cookies its session read sets', () => {
     const names = cookiesOf(response).map((cookie) => cookie.name);
     expect(names).toContain(CACHE);
     expect(names).toContain(TOKEN);
+    expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+/**
+ * The before hook reads the session for these and the endpoint reuses that
+ * read, so its cookies are the only ones the response can carry. The POST is
+ * handed to Better Auth as a rebuilt request, and its answer is a refusal.
+ */
+describe('a Better Auth route whose hook reads the session delivers its cookies', () => {
+  test.each([
+    ['GET', '/api/auth/two-factor/methods', undefined, HTTP_STATUS.OK],
+    ['GET', '/api/auth/reauth/methods', undefined, HTTP_STATUS.OK],
+    [
+      'POST',
+      '/api/auth/two-factor/methods/default',
+      { method: 'totp' },
+      HTTP_STATUS.NOT_FOUND,
+    ],
+  ] as const)('%s %s', async (method, path, body, status) => {
+    const session = withoutCookie(await remembered(), CACHE);
+    await ageSessionPastUpdateAge(session);
+    const before = await sessionExpiry(session);
+
+    const response = await app.handle(
+      authedRequest(session, path, {
+        method,
+        ...(body && {
+          body: JSON.stringify(body),
+          headers: {
+            'content-type': 'application/json',
+            origin: PUBLIC_ORIGIN,
+          },
+        }),
+      })
+    );
+    expect(response.status).toBe(status);
+    expect(await sessionExpiry(session)).toBeGreaterThan(before + DAY_MS / 2);
+    const [token] = named(response, TOKEN);
+    expect(token?.value).toBeTruthy();
+    expect(token?.options?.maxAge).toBe(EXPIRES_IN_S);
+    expect(named(response, CACHE)).toHaveLength(1);
+    const names = cookiesOf(response).map((cookie) => cookie.name);
     expect(new Set(names).size).toBe(names.length);
   });
 });

@@ -280,7 +280,7 @@ function answeredAuthCode(error: Error): string | null {
 }
 
 /** The first stack frame: where it was thrown, without quoting its message. */
-export function thrownAt(error: Error): string | undefined {
+function thrownAt(error: Error): string | undefined {
   const frame = error.stack
     ?.split('\n')
     .find((line) => line.trimStart().startsWith('at '));
@@ -458,16 +458,20 @@ export function errorClassOf(error: unknown): string {
 }
 
 /**
- * The one line a 5xx `CustomError` is logged with, by whichever boundary
- * answers it: where it was thrown and the diagnosis it carries as `cause`.
+ * What a `CustomError` is logged with besides its class, wherever it is
+ * logged: where it was thrown and the diagnosis it carries as `cause`.
  */
+export function customErrorFields(error: CustomError) {
+  return { thrownAt: thrownAt(error), cause: error.cause };
+}
+
+/** The one line a 5xx `CustomError` is logged with, by whichever boundary answers it. */
 export function logServerErrorResponse(error: CustomError): void {
   logSanitized('error', {
     msg: 'server error response',
     status: error.status,
     errorClass: errorClassOf(error),
-    thrownAt: thrownAt(error),
-    cause: error.cause,
+    ...customErrorFields(error),
   });
 }
 

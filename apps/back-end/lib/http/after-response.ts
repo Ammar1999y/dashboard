@@ -5,11 +5,11 @@
 import { CustomError } from '@app/shared/error-class';
 
 import {
+  customErrorFields,
   errorClassOf,
   logLine,
   logSanitized,
   serializeForLog,
-  thrownAt,
 } from '@/utils/log';
 
 type AfterResponseTask = () => void | Promise<void>;
@@ -71,15 +71,12 @@ function track(queue: AfterResponseTask[], path: string): void {
         await task();
       } catch (error) {
         // The class only, unless it is ours: a `CustomError`'s `cause` is the
-        // diagnosis its raiser chose to log, as `logServerErrorResponse` does.
+        // diagnosis its raiser chose to log.
         logSanitized('error', {
           msg: 'after-response task failed',
           path,
           errorClass: errorClassOf(error),
-          ...(error instanceof CustomError && {
-            thrownAt: thrownAt(error),
-            cause: error.cause,
-          }),
+          ...(error instanceof CustomError && customErrorFields(error)),
         });
       }
     }

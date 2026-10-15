@@ -76,7 +76,8 @@ const { drainAfterResponse, pendingAfterResponse } =
   await import('./lib/http/after-response');
 const { closeRateLimitStore } = await import('./lib/rate-limit/store');
 const { closeCacheStore } = await import('./lib/cache');
-const { closeDatabase } = await import('./db');
+const { applicationPoolUsable, closeDatabase } = await import('./db');
+const { watchApplicationPool } = await import('./lib/pool-watchdog');
 const { scheduleWhenOwner } = await import('./lib/maintenance/ownership');
 const { tryAcquireWriterLock } = await import('./lib/sqlite/writer-lock');
 const { SQLITE_DIR } = await import('./lib/env.server');
@@ -147,6 +148,19 @@ const shutdown = createShutdown(
   { shutdownMs: SHUTDOWN_TIMEOUT_MS }
 );
 
+const stopPoolWatch = watchApplicationPool({
+  usable: applicationPoolUsable,
+  intervalMs: 30_000,
+  confirmMs: 5000,
+  onWedged: () => {
+    logLine('error', {
+      msg: 'database pool unusable',
+      effect: 'exiting so the restart policy replaces this process',
+    });
+    void shutdown('applicationPoolUnusable', 1);
+  },
+});
+
 const closeState = { done: false };
 // One store's failure must not strand the others, but it must not be reported as
 // a clean stop either: every close is attempted, then the failures are raised
@@ -154,6 +168,7 @@ const closeState = { done: false };
 async function closeStores(): Promise<void> {
   if (closeState.done) return;
   closeState.done = true;
+  stopPoolWatch();
   const failures = [
     await closeStore('postgres', closeDatabase),
     await closeStore('rate-limit', closeRateLimitStore),

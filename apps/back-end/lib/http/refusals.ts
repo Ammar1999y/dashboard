@@ -22,6 +22,10 @@ export interface DerivedRefusal {
   )[];
 }
 
+/** A database 503's cause, which a route's remedy, if any, follows. */
+export const DATABASE_UNAVAILABLE =
+  'No database connection came free in time, or a transaction was aborted to break a deadlock';
+
 export const REAUTH_REQUIRED_REMEDY =
   'open the re-authentication window at `POST /api/dash/auth/reauth`, then retry.';
 
@@ -197,11 +201,14 @@ export function refusalsOf(binding: AnyBinding): DerivedRefusal[] {
       headers: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining'],
     });
 
+  const remedy = options.detail.spentInput;
   add({
     status: 503,
     description: [
       limited ? 'The limiter store is unavailable and fails closed.' : '',
-      'No database connection came free in time, or a transaction was aborted to break a deadlock.',
+      remedy
+        ? `${DATABASE_UNAVAILABLE}; ${remedy}`
+        : `${DATABASE_UNAVAILABLE}.`,
     ]
       .filter(Boolean)
       .join(' '),

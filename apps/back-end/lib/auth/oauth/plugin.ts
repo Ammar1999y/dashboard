@@ -30,7 +30,7 @@ import { auditLog } from '@/lib/audit';
 import { verifyTurnstileRequest } from '@/lib/captcha';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
-import { errorClassOf, logSanitized, thrownAt } from '@/utils/log';
+import { customErrorFields, errorClassOf, logSanitized } from '@/utils/log';
 
 import { authAuditMeta, requestHeaders } from '../context';
 import {
@@ -177,8 +177,7 @@ function serverFailure(
  */
 function faultDetail(error: unknown): Record<string, unknown> {
   if (isDatabaseContention(error)) return { fault: error };
-  if (error instanceof CustomError)
-    return { thrownAt: thrownAt(error), cause: error.cause };
+  if (error instanceof CustomError) return customErrorFields(error);
   return {};
 }
 
@@ -620,8 +619,8 @@ export const oauth = () =>
             if (!token || !BASE64URL_32_BYTES_PATTERN.test(token))
               throw authenticationDenied();
             // Together, and the cookie kept until they commit: a fault between
-            // two separate consumes left the result unreadable for the retry
-            // its 503 invites.
+            // two separate consumes would leave the result unreadable for the
+            // retry its 503 invites.
             const { owner, result } = await withAuthTransaction(
               ctx,
               async () => ({

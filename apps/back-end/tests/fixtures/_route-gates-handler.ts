@@ -102,6 +102,93 @@ let unassigned: (() => Promise<void>) | undefined;
 
 export const viaUnassigned = () => unassigned?.();
 
+let reassigned = async () => {};
+reassigned = async () => {
+  await requireReauthWindow('user', 'session');
+};
+
+export const viaReassignedBinding = () => reassigned();
+
+const replaceable = { run: async () => {} };
+// eslint-disable-next-line unicorn/no-immediate-mutation -- the shape under test
+replaceable.run = async () => {
+  await requireReauthWindow('user', 'session');
+};
+
+export const viaReassignedProperty = () => replaceable.run();
+
+const holder = { run: async () => {} };
+let { run: unpacked } = holder;
+unpacked = async () => {
+  await requireReauthWindow('user', 'session');
+};
+
+export const viaReassignedDestructuredBinding = () => unpacked();
+
+let swapped = async () => {};
+[swapped] = [async () => requireReauthWindow('user', 'session')];
+
+export const viaDestructuringWrite = () => swapped();
+
+const queued: Array<() => unknown> = [];
+// eslint-disable-next-line unicorn/no-immediate-mutation, unicorn/no-top-level-side-effects -- the shape under test
+queued.push(() => requireReauthWindow('user', 'session'));
+
+export const viaIndexedCollection = () => queued[0]?.();
+
+const libraryTyped: Array<typeof queueMicrotask> = [];
+
+export const viaLibraryTypedElement = () => libraryTyped[0]?.(() => {});
+
+const pipeline = [async () => requireReauthWindow('user', 'session')];
+
+export const viaLoopElement = async () => {
+  for (const step of pipeline) await step();
+};
+
+export const viaCallbackParameter = () => {
+  pipeline.forEach((each) => void each());
+};
+
+const registry = new Map([['x', () => requireReauthWindow('user', 'session')]]);
+
+export const viaReturnedValue = () => registry.get('x')?.();
+
+let injected = async () => {};
+
+export function inject(next: () => Promise<void>) {
+  // eslint-disable-next-line unicorn/no-top-level-assignment-in-function -- the shape under test
+  injected = next;
+}
+
+// eslint-disable-next-line unicorn/no-top-level-side-effects -- the shape under test
+inject(async () => {
+  await requireReauthWindow('user', 'session');
+});
+
+export const viaSetterInjection = () => injected();
+
+let replaced = async () => {};
+
+function replace(next: () => Promise<void>) {
+  // eslint-disable-next-line unicorn/no-top-level-assignment-in-function -- the shape under test
+  replaced = next;
+}
+
+export const setters = { replace };
+
+export const viaEscapedSetter = () => replaced();
+
+const assigned = { run: async () => {} };
+// eslint-disable-next-line unicorn/no-immediate-mutation, unicorn/no-top-level-side-effects -- the shape under test
+Object.assign(assigned, {
+  run: async () => {
+    await requireReauthWindow('user', 'session');
+  },
+});
+
+export const viaObjectAssign = () => assigned.run();
+
 class WithConstructor {
   constructor() {
     void requireReauthWindow('user', 'session');

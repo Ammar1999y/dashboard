@@ -112,8 +112,8 @@ describe('validID — the gate every id passes before it reaches SQL', () => {
   });
 
   test('surrounding whitespace is TRIMMED and ACCEPTED, not rejected', () => {
-    // Corrects the brief and `reports/test-strategy.md`, which both expect
-    // rejection. `validID` calls `.trim()` BEFORE testing, so padding is
+    // Accepted, though rejection is the natural guess. `validID` calls
+    // `.trim()` BEFORE testing, so padding is
     // stripped and the id is accepted — and what comes back is the canonical,
     // unpadded id, so SQL never sees the padding. This is the safe direction for
     // non-canonical input (unlike case, below): many spellings in, one out.

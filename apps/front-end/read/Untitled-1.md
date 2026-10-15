@@ -37,7 +37,7 @@ If a file is 95% refactor but has one real change, stage it and list the change 
 - For each file, compare the staged version (`git show :path`, or `HEAD:path` if the old file's deletion is already staged) with the working tree, statement by statement, ignoring imports, comments and formatting. The TypeScript printer with `removeComments: true` works well for this.
 - For moved code, match each removed declaration with a declaration elsewhere, by exact text or by name, and word-diff the pairs. Only the differences need reading.
 - Group files that exchanged code and judge each group once.
-- Before staging, run `bunx tsc --noEmit` and `bun run test` in `apps/back-end` (the unit run takes about 5 minutes, so run it in the background). Report the exact result.
+- Before staging, run `bun run typecheck` and `bun run test` in `apps/back-end` (the unit run takes about 5 minutes, so run it in the background). Report the exact result.
 
 ## When to ask me
 

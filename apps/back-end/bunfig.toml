@@ -22,7 +22,7 @@ coverageReporter = ["text", "lcov"]
 # No `coverageThreshold`: Bun applies it PER FILE, so it cannot express an
 # aggregate floor; `scripts/check-coverage.ts` is that gate.
 
-# `tsc`, `eslint`, `prettier`, `drizzle-kit`, `knip` and `lefthook` ship a
+# `eslint`, `prettier`, `drizzle-kit`, `knip` and `lefthook` ship a
 # `#!/usr/bin/env node` shebang, which `bun run` honours whenever `node` is on
 # `$PATH`. This makes the runtime Bun regardless of what else is installed, so
 # a Node-less container and a developer machine run the same thing. It relies on

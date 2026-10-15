@@ -11,7 +11,7 @@
  * is asserted against an error the real driver threw, or against SQL the real
  * server executed.
  *
- * What it pins down (reports/test-strategy.md §7.4 a, b, c, d, g):
+ * What it pins down:
  *  - the SQLSTATE arrives in `errno`, not `code` — the relocation that silently
  *    disabled `isUniqueViolation` and `isForeignKeyViolation` — at BOTH the
  *    `DrizzleQueryError` level and the driver-error level underneath it

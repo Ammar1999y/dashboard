@@ -4,11 +4,9 @@
  * type-aware path and an import across a core boundary actually FAIL the
  * check a developer and CI run?
  *
- * **ESLint is spawned directly, not `bun run lint`.** That script starts with
- * an incremental `tsc`, and a probe written into the tree and removed again
- * leaves `tsconfig.tsbuildinfo` naming a file that no longer exists, so the
- * next `tsc` fails for a reason unrelated to the rule under test. The `lint`
- * script is pinned separately below, by whole `&&` stage.
+ * ESLint is spawned directly so a probe's type errors cannot prevent the rule
+ * under test from running. The `lint` script is pinned separately below, by
+ * whole `&&` stage.
  *
  * **The probes are written INSIDE the repository**: `eslint.config.mjs` scopes
  * the type-aware block and the core import boundaries by `files`, so a probe
@@ -81,14 +79,14 @@ const LINT_RUN_TIMEOUT_MS = 600_000;
  *
  * Substring matching was not enough, and the gap was the whole point of the
  * assertion: `toInclude('eslint .')` passes for
- * `tsc --noEmit && eslint . --max-warnings 0 || true`, for
- * `tsc --noEmit ; eslint . --max-warnings 0`, and for a script whose ESLint
+ * `bun run typecheck && eslint . --max-warnings 0 || true`, for
+ * `bun run typecheck ; eslint . --max-warnings 0`, and for a script whose ESLint
  * invocation is commented out of a longer command — i.e. for exactly the edits
  * that disarm the gate. Whole stages plus a ban on `||` and `;` reject all
  * three.
  */
 const REQUIRED_LINT_STAGES = [
-  'tsc --noEmit',
+  'bun run typecheck',
   'eslint . --max-warnings 0',
 ] as const;
 
@@ -170,7 +168,10 @@ test('the lint script still runs ESLint over the tree with no warning budget', (
     readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')
   );
   const lint = (manifest as { scripts?: Record<string, string> }).scripts?.lint;
+  const typecheck = (manifest as { scripts?: Record<string, string> }).scripts
+    ?.typecheck;
 
+  expect(typecheck).toBe('bun check');
   expect(lint).toBeString();
   const script = String(lint);
 

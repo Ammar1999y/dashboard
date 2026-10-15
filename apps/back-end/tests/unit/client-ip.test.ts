@@ -390,11 +390,10 @@ describe('IPv6 is bucketed by its /64', () => {
   });
 
   test('a zone index never reaches the bucket at all', () => {
-    // `reports/test-strategy.md` and the brief both list `fe80::1%eth0` as a
-    // bucketing case. It is not one: the ipv6 schema rejects the zone suffix, so
-    // the request fails closed before `ipBucket` sees anything. Corrected here
-    // rather than dropped, and paired with the same address without the zone so
-    // the difference is visible.
+    // `fe80::1%eth0` looks like a bucketing case. It is not one: the ipv6
+    // schema rejects the zone suffix, so the request fails closed before
+    // `ipBucket` sees anything. Paired with the same address without the zone
+    // so the difference is visible.
     expect(getClientIp(header('fe80::1%eth0'))).toBeNull();
     expect(rejection(() => ipIdentifier(header('fe80::1%eth0'))).status).toBe(
       HTTP_STATUS.SERVICE_UNAVAILABLE

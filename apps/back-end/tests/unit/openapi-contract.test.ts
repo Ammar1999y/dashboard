@@ -499,9 +499,10 @@ describe('request and response contract fidelity', () => {
     // served with OAuth disabled, as in this tier.
     const remedies: Record<string, string> = {
       '/passwordless/verify': 'request a new code',
-      '/two-factor/otp/verify': 'start a new sign-in',
+      '/two-factor/otp/verify': 'request a new code',
       '/two-factor/verify-totp': 'next code',
-      '/two-factor/passkey/verify': 'start a new sign-in',
+      '/two-factor/passkey/verify':
+        'a new one at `/two-factor/passkey/options`',
       '/passkey/delete-passkey': 'a new one at `/two-factor/passkey/grant`',
       '/oauth/google/callback': 'start a new sign-in',
     };
@@ -532,31 +533,43 @@ describe('request and response contract fidelity', () => {
       expect(betterAuthUnavailable(pathName), pathName).toContain(RETRY);
     }
 
-    // The project's own two spend a single-use input before the database can
-    // fail; the remedy is on the operation, the status keeps the policy's.
-    const operationText = (pathName: string) =>
-      String(operationOf(document, pathName, 'post').description);
-    expect(operationText('/api/auth/forgot-password/reset')).toContain(
-      'request a new code'
+    // The project's own routes publish theirs on the same status.
+    const bindingUnavailable = (
+      binding: (typeof DEVELOPMENT_BINDINGS)[number]
+    ) =>
+      String(
+        (
+          bindingOperation(document, binding).responses as Record<
+            string,
+            Record<string, unknown>
+          >
+        )['503']?.description
+      );
+    const spentInput = DEVELOPMENT_BINDINGS.filter((binding) =>
+      bindingUnavailable(binding).includes('spent')
     );
-    expect(operationText('/api/auth/forgot-password/complete')).toContain(
-      'start account recovery again'
-    );
-    expect(
-      operationText('/api/auth/forgot-password/second-factor/send')
-    ).not.toContain('spent');
-    expect(
-      DEVELOPMENT_BINDINGS.filter((binding) =>
-        /A 503 can follow .* spent/.test(
-          String(bindingOperation(document, binding).description)
-        )
-      )
-        .map(label)
-        .toSorted(compareCodeUnits)
-    ).toEqual([
+    expect(spentInput.map(label).toSorted(compareCodeUnits)).toEqual([
       'POST /api/auth/forgot-password/complete',
       'POST /api/auth/forgot-password/reset',
     ]);
+    const remedyOf = (name: string) => {
+      const binding = spentInput.find((each) => label(each) === name);
+      if (!binding) throw new Error(`${name} publishes no spent-input remedy`);
+      return bindingUnavailable(binding);
+    };
+    expect(remedyOf('POST /api/auth/forgot-password/reset')).toContain(
+      'request a new code'
+    );
+    expect(remedyOf('POST /api/auth/forgot-password/complete')).toContain(
+      'keep the grant'
+    );
+    expect(
+      DEVELOPMENT_BINDINGS.filter((binding) =>
+        String(bindingOperation(document, binding).description).includes(
+          'A 503'
+        )
+      ).map(label)
+    ).toEqual([]);
   });
 
   test('handler-enriched ids stay in the path and out of update bodies', () => {

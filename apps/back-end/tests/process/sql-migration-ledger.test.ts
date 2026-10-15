@@ -651,10 +651,26 @@ describe('applySqlMigrations', () => {
         'reindex (concurrently false) table ledger_named.concurrently',
       ],
       [
-        'a REINDEX with an option value the reader cannot see',
+        'a REINDEX with the option turned off in a string',
         '015c_probe.sql',
         "reindex (concurrently 'false') table ledger_named.concurrently",
       ],
+      [
+        'a REINDEX whose last option turns it off',
+        '015ca_probe.sql',
+        'reindex (concurrently true, concurrently false) table ledger_named.concurrently',
+      ],
+      [
+        'a REINDEX with the option turned off by 0',
+        '015cb_probe.sql',
+        'reindex (concurrently 0) table ledger_named.concurrently',
+      ],
+      [
+        'a REINDEX with the option turned off in a dollar-quoted string',
+        '015cc_probe.sql',
+        'reindex (concurrently $$OFF$$) table ledger_named.concurrently',
+      ],
+      // Last: once applied, it detaches the partition every row above checks.
       [
         'a DETACH from a table named concurrently',
         '015d_probe.sql',
@@ -702,11 +718,87 @@ describe('applySqlMigrations', () => {
         '016c_probe.sql',
         'alter table ledger_parted.concurrently detach partition ledger_parted.child_c concurrently',
       ],
+      [
+        'REINDEX with the option on in a string',
+        '016d_probe.sql',
+        "reindex (concurrently 'true') table ledger_named.concurrently",
+      ],
+      [
+        'REINDEX whose last option turns it on',
+        '016e_probe.sql',
+        'reindex (concurrently false, concurrently) table ledger_named.concurrently',
+      ],
+      [
+        'REINDEX … CONCURRENTLY over a list turning it off',
+        '016f_probe.sql',
+        'reindex (concurrently off) table concurrently ledger_named.concurrently',
+      ],
+      [
+        'REINDEX with the option on by +1, under a quoted name',
+        '016g_probe.sql',
+        'reindex ("concurrently" +1) table ledger_named.concurrently',
+      ],
+      [
+        'REINDEX with the option on in a quoted name',
+        '016h_probe.sql',
+        'reindex (concurrently "On") table ledger_named.concurrently',
+      ],
+      [
+        'REINDEX with the option on in a continued string',
+        '016i_probe.sql',
+        "reindex (concurrently 'tr'\n'ue') table ledger_named.concurrently",
+      ],
     ])('%s still runs alone', async (_label, migration, statement) => {
       await write(migration, statement);
       expect(
         await applySqlMigrations(client, await readSqlMigrations(directory))
       ).toEqual([migration]);
+    });
+
+    test('a later option turning CONCURRENTLY off keeps the DDL beside it in the transaction', async () => {
+      await client.unsafe(`
+        create function ledger_refuse() returns trigger language plpgsql as $$
+          begin raise exception 'ledger refused'; end $$;
+        create trigger ledger_refuse before insert on drizzle.__sql_migrations
+          for each row execute function ledger_refuse()`);
+      try {
+        await write(
+          '017_probe.sql',
+          [
+            'reindex (concurrently true, concurrently false) table ledger_named.concurrently;',
+            'create table ledger_unrecorded (n integer);',
+          ].join('\n')
+        );
+        await expect(
+          applySqlMigrations(client, await readSqlMigrations(directory))
+        ).rejects.toThrow('ledger refused');
+        const [present]: Array<{ ok: boolean }> = await client`
+          select to_regclass('ledger_unrecorded') is not null as ok`;
+        expect(present).toEqual({ ok: false });
+      } finally {
+        await client.unsafe(`
+          drop trigger ledger_refuse on drizzle.__sql_migrations;
+          drop function ledger_refuse()`);
+      }
+      expect(
+        await applySqlMigrations(client, await readSqlMigrations(directory))
+      ).toEqual(['017_probe.sql']);
+    });
+
+    // An escape this reader does not decode spells `true` to PostgreSQL. Kept
+    // in the transaction, the file is refused there and commits nothing.
+    test('an option value the reader cannot decode keeps the transaction', async () => {
+      await write(
+        '018_probe.sql',
+        String.raw`reindex (concurrently E'\x74rue') table ledger_named.concurrently`
+      );
+      try {
+        await expect(
+          applySqlMigrations(client, await readSqlMigrations(directory))
+        ).rejects.toThrow('cannot run inside a transaction block');
+      } finally {
+        await remove('018_probe.sql');
+      }
     });
   });
 });

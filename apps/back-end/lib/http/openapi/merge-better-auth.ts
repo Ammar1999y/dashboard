@@ -37,7 +37,11 @@ import {
 import { TWO_FACTOR_COOKIE_NAME } from '@/lib/auth/two-factor/challenge';
 import { TOTP_ENROLMENT_MAX_AGE_S } from '@/lib/auth/two-factor/enrolment';
 
-import { DECLARED_LENGTH_REFUSAL, REAUTH_REQUIRED_REMEDY } from '../refusals';
+import {
+  DATABASE_UNAVAILABLE,
+  DECLARED_LENGTH_REFUSAL,
+  REAUTH_REQUIRED_REMEDY,
+} from '../refusals';
 import { bodyPolicyCeiling } from '../request';
 import {
   BETTER_AUTH_CREDENTIAL_LOCKOUT_PATHS,
@@ -300,7 +304,7 @@ function responsesOf(
           'So does a second-factor credential temporarily locked after repeated failed verifications, in Better Auth’s error shape.'
       )
     );
-  const database = `No database connection came free in time, or a transaction was aborted to break a deadlock; ${
+  const database = `${DATABASE_UNAVAILABLE}; ${
     BETTER_AUTH_SPENT_INPUT_REMEDIES[path] ?? 'retry after `Retry-After`.'
   }`;
   // A path that maps a failure itself (`asAuthError`) answers in Better Auth's

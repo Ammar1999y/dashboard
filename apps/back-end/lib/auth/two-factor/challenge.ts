@@ -311,7 +311,7 @@ export async function completeTwoFactorChallenge(
   const created = await withTwoFactorChallengeTransaction(
     ctx,
     challenge,
-    async () => {
+    async (tx) => {
       // Atomic consumption elects one verifier; rotation or another user-bound
       // value must never complete this challenge.
       const consumed =
@@ -334,7 +334,9 @@ export async function completeTwoFactorChallenge(
         challenge.user.id,
         !challenge.rememberMe
       );
-      return session ? { user, session } : null;
+      if (!session) return null;
+      await markTwoFactorProven(tx, session.id);
+      return { user, session };
     }
   );
   if (!created) {
@@ -345,7 +347,6 @@ export async function completeTwoFactorChallenge(
 
   await deliverSessionCookie(ctx, { session, user }, challenge.rememberMe);
   expireCookie(ctx, ctx.context.createAuthCookie(TWO_FACTOR_COOKIE_NAME));
-  await markTwoFactorProven(ctx, session.id);
 
   await recordCompletionEvent({
     user: challenge.user,

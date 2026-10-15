@@ -19,6 +19,7 @@ import type { RoutePrefix, Routing } from '@/lib/http/routing';
 import { auth } from '@/lib/auth';
 import { betterAuthServes } from '@/lib/auth/allowed-paths';
 import { localiseAuthError } from '@/lib/auth/errors';
+import { drainQueuedCookies, queueResponseCookies } from '@/lib/http/cookies';
 import {
   allowlistedPathScope,
   enforcePreAuthIpLimit,
@@ -32,6 +33,25 @@ import {
 } from '@/lib/http/response-check';
 
 const responseCheck = responseCheckMode();
+
+/**
+ * `auth.handler` on `forwarded`, with any cookie its hooks queued on that
+ * request moved to `request`, whose exit delivers the queue.
+ */
+async function handled(
+  forwarded: Request,
+  request: Request
+): Promise<Response> {
+  try {
+    return await auth.handler(forwarded);
+  } finally {
+    if (forwarded !== request)
+      queueResponseCookies(
+        request.headers,
+        drainQueuedCookies(forwarded.headers)
+      );
+  }
+}
 
 export function mountAuthPrefix(
   app: GatedApp,
@@ -81,7 +101,7 @@ export function mountAuthPrefix(
         responseCheck,
         subPath,
         request.method,
-        await localiseAuthError(await auth.handler(forwarded))
+        await localiseAuthError(await handled(forwarded, request))
       );
     } catch (error) {
       // Not a binding, so `run()` does not map its errors — the 413

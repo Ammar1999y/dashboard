@@ -8,7 +8,7 @@
 # refuses an image whose Bun is older than `packageManager`, and `server.ts`
 # logs when it is newer, so a forgotten bump here fails the build or shows in
 # the boot log rather than passing silently.
-FROM oven/bun:1.4.2 AS manifests
+FROM oven/bun:1.4.3 AS manifests
 WORKDIR /app
 # The install guard would otherwise try to repair the toolchain over the
 # network; inside a build the image IS the toolchain.
@@ -22,10 +22,8 @@ COPY apps/back-end/package.json apps/back-end/
 COPY apps/front-end/package.json apps/front-end/
 COPY packages/shared/package.json packages/shared/
 
-# Development dependencies too, so `bun run build` (`tsc --noEmit`) can
-# type-check: Bun runs TypeScript without checking it, so a type error would
-# otherwise build into an image that starts. No application code runs here, so
-# the stage needs no environment.
+# Development dependencies too: the typecheck includes tests and tooling that
+# import them. No application code runs here, so the stage needs no environment.
 #
 # `--filter` runs the selected workspaces' lifecycle scripts and NOT the root's,
 # so the Bun guard reaches this build through `apps/back-end/package.json`'s

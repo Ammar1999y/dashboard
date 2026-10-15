@@ -134,10 +134,8 @@ check(
 // produces: `bun:sql` reports `code: 'ERR_POSTGRES_SERVER_ERROR'` for every
 // server error and the five-character SQLSTATE in `errno`. So the `code` cases
 // exercise a compatibility fallback while the field the serializer actually
-// receives went uncovered — the same circularity `reports/test-strategy.md`
-// makes a standing rule of: never assert against a hand-authored fixture where
-// a real one is reachable (§5.1 records the concrete case, a manufactured
-// SQLite error name).
+// receives went uncovered. Never assert against a hand-authored fixture where a
+// real one is reachable.
 //
 // Built with Bun's OWN `SQL.PostgresError` rather than `Object.assign` on an
 // Error: the constructor is typed, so this fixture cannot drift from the shape

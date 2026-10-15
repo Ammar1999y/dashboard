@@ -34,7 +34,7 @@ import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { logSanitized } from '@/utils/log';
 
-import { authAuditMeta, bodyRecord } from '../context';
+import { authAuditMeta, bodyRecord, recordingFaults } from '../context';
 import { authError } from '../errors';
 import { RP_ID } from '../passkey-assertion';
 import { expireDontRememberMarker } from '../session/cookie';
@@ -74,46 +74,6 @@ function requireVerifierChallenge(
 }
 
 /**
- * `context` whose `internalAdapter` records the first fault any call raises.
- * The plugin swallows some: `beginAttempt` answers a failed counter consume
- * with 401 and drops a failed re-arm, so the fault would read as a refusal.
- */
-function recordingFaults(context: AuthContext['context']) {
-  const seen: { fault?: { error: unknown } } = {};
-  const record = (error: unknown) => {
-    seen.fault ??= { error };
-    return error;
-  };
-  const adapter = new Proxy(context.internalAdapter, {
-    get: (target, property, receiver) => {
-      const value: unknown = Reflect.get(target, property, receiver);
-      if (typeof value !== 'function') return value;
-      return (...args: unknown[]) => {
-        try {
-          const result: unknown = Reflect.apply(value, target, args);
-          return result instanceof Promise
-            ? result.catch((error: unknown) => {
-                throw record(error);
-              })
-            : result;
-        } catch (error) {
-          throw record(error);
-        }
-      };
-    },
-  });
-  return {
-    context: new Proxy(context, {
-      get: (target, property) =>
-        property === 'internalAdapter'
-          ? adapter
-          : Reflect.get(target, property),
-    }),
-    fault: () => seen.fault,
-  };
-}
-
-/**
  * The caller resolves the challenge so work that must stay outside the
  * transaction (the TOTP step reservation) can run first. `verify` must pass its
  * bound `context` to the endpoint it delegates to.
@@ -140,8 +100,15 @@ async function runPluginVerifier<T>(
       // statement reports only as the aborted transaction, is answered as itself.
       const fault = watched.fault();
       if (fault) throw fault.error;
-      // Invalid-code attempts must commit their counters before returning the error.
-      if ('error' in outcome && !isAPIError(outcome.error)) throw outcome.error;
+      if ('error' in outcome) {
+        // Invalid-code attempts must commit their counters before returning the error.
+        if (!isAPIError(outcome.error)) throw outcome.error;
+        return outcome;
+      }
+      const sessionId = ctx.context.newSession?.session.id;
+      if (!sessionId)
+        throw new Error('The verifier accepted a factor without a session');
+      await markTwoFactorProven(tx, sessionId);
       return outcome;
     }
   );
@@ -338,7 +305,8 @@ const twoFactorAuth = () => {
       after: [
         {
           // The library's verifiers bypass `completeTwoFactorChallenge`, so its
-          // tail (device-trust proof, completion event, companion rows) runs here.
+          // tail (completion event, companion rows) runs here; the device-trust
+          // proof is issued in `runPluginVerifier`.
           matcher: (context) =>
             context.path !== undefined &&
             context.path in PLUGIN_VERIFIER_METHOD,
@@ -347,7 +315,6 @@ const twoFactorAuth = () => {
             const newSession = ctx.context.newSession;
             const completedWith = PLUGIN_VERIFIER_METHOD[ctx.path];
             if (!newSession || !completedWith) return;
-            await markTwoFactorProven(ctx, newSession.session.id);
             await recordPluginCompletion(ctx, completedWith, newSession);
           }),
         },

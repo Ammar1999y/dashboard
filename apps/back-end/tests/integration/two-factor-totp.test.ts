@@ -826,12 +826,12 @@ describe('the backup-code verifier under the same concurrency', () => {
     expect(challenge.body).toMatchObject({ twoFactorRedirect: true });
 
     // Holds the verifier's request open AFTER its transaction commits: the
-    // device-trust proof is the first write of its after-hooks.
+    // challenge's companion rows are the first write of its after-hooks.
     await db.execute(
-      sql`create function _two_factor_proof_delay() returns trigger language plpgsql as $$ begin perform pg_sleep(3); return new; end $$`
+      sql`create function _two_factor_cleanup_delay() returns trigger language plpgsql as $$ begin perform pg_sleep(3); return old; end $$`
     );
     await db.execute(
-      sql`create trigger _two_factor_proof_delay before insert on verifications for each row when (new.identifier like '2fa-proven-%') execute function _two_factor_proof_delay()`
+      sql`create trigger _two_factor_cleanup_delay before delete on verifications for each row when (old.identifier like '2fa-state-%') execute function _two_factor_cleanup_delay()`
     );
     let regeneratedCount = 0;
     try {
@@ -854,9 +854,9 @@ describe('the backup-code verifier under the same concurrency', () => {
       expect(verified.status).toBe(HTTP_STATUS.OK);
     } finally {
       await db.execute(
-        sql`drop trigger _two_factor_proof_delay on verifications`
+        sql`drop trigger _two_factor_cleanup_delay on verifications`
       );
-      await db.execute(sql`drop function _two_factor_proof_delay()`);
+      await db.execute(sql`drop function _two_factor_cleanup_delay()`);
     }
 
     const [credential] = await db

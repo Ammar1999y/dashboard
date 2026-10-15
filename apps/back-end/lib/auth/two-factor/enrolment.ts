@@ -271,11 +271,10 @@ export const twoFactorEnrolment = () =>
 
             await tx.delete(verifications).where(pendingStart);
             await enableMethod(tx, ctx, session, 'totp');
+            // A code was just proven on this session, so device trust is
+            // redeemable — trust binds to a proof, not to holding a session.
+            await markTwoFactorProven(tx, session.sessionId);
           });
-
-          // A code was just proven on this session, so device trust is
-          // redeemable — trust binds to a proof, not to holding a session.
-          await markTwoFactorProven(ctx, session.sessionId);
 
           return ctx.json({
             message: twoFactorMsg.enabled,

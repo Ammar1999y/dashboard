@@ -403,6 +403,14 @@ const contractCoverageDir =
     ? mkdtempSync(path.join(os.tmpdir(), `response-coverage-${runToken}-`))
     : null;
 
+/**
+ * Every database case's default, sized from full-tier runs rather than lone
+ * files: a case pays an Argon2id sign-in or two, which other workers slow
+ * several times over. Bun does not stop a timed-out case, so its body runs on
+ * into the next one, after `beforeEach` has truncated the tables under it.
+ */
+const DATABASE_CASE_TIMEOUT_MS = 30_000;
+
 const startedAt = Date.now();
 let exitCode = 1;
 try {
@@ -410,6 +418,7 @@ try {
 
   const flags = [...tier.flags];
   if (tier.database) {
+    flags.push(`--timeout=${DATABASE_CASE_TIMEOUT_MS}`);
     if (run.created.length > 1) flags.push(`--parallel=${run.created.length}`);
     flags.push('--preload', './tests/helpers/preload-database.ts');
   }

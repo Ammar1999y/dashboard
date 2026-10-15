@@ -135,7 +135,9 @@ export const resetPasswordBinding = bind(resetPassword, {
   detail: {
     summary: 'Reset a forgotten password',
     description:
-      'A 403 follows a correct code when every second factor the account has is one this flow cannot check or sits on the contact the code arrived on; the password is unchanged, and an administrator’s two-factor reset is the way back. A 503 can follow the code being spent: a retry with the same code can find it already spent; request a new code.',
+      'A 403 follows a correct code when every second factor the account has is one this flow cannot check or sits on the contact the code arrived on; the password is unchanged, and an administrator’s two-factor reset is the way back.',
+    spentInput:
+      'a retry with the same code can find it already spent; request a new code.',
     tags: ['Authentication'],
   },
   handler: async ({ body: input, meta }) => {
@@ -348,8 +350,8 @@ export const completePasswordResetBinding = bind(completePasswordReset, {
   failure: otpMsg.passwordResetError,
   detail: {
     summary: 'Finish a password reset with a proven second factor',
-    description:
-      'A 503 can follow the grant being spent: a retry can find the recovery grant spent; start account recovery again.',
+    spentInput:
+      'a retry with the same code can find it already spent; keep the grant and use a new one: request another code at `/api/auth/forgot-password/second-factor/send`, wait for the authenticator’s next code, or use another backup code.',
     tags: ['Authentication'],
   },
   handler: async ({ body, meta }) => {
@@ -389,7 +391,7 @@ export const completePasswordResetBinding = bind(completePasswordReset, {
     const attempt = await spendRecoveryAttempt(grantToken);
     if (!attempt.ok)
       throw new CustomError(
-        twoFactorMsg.tooManyAttempts,
+        otpMsg.recoveryAttemptsExhausted,
         HTTP_STATUS.BAD_REQUEST
       );
 
@@ -418,43 +420,52 @@ export const completePasswordResetBinding = bind(completePasswordReset, {
     }
 
     // Trusted devices go too: the person recovering may not be the owner.
-    const written = await withTransaction(async (tx) => {
-      // Before the grant rows: every other writer of them holds the user lock.
-      await lockUser(tx, user.id);
+    let written: boolean;
+    try {
+      written = await withTransaction(async (tx) => {
+        // Before the grant rows: every other writer of them holds the user lock.
+        await lockUser(tx, user.id);
 
-      if (!(await consumeRecoveryGrant(tx, grantToken, user.id))) return false;
+        if (!(await consumeRecoveryGrant(tx, grantToken, user.id)))
+          return false;
 
-      const [account] = await tx
-        .select({ id: accounts.id })
-        .from(accounts)
-        .where(credentialAccountOf(user.id))
-        .for('update');
-      if (!account) return false;
+        const [account] = await tx
+          .select({ id: accounts.id })
+          .from(accounts)
+          .where(credentialAccountOf(user.id))
+          .for('update');
+        if (!account) return false;
 
-      await tx
-        .update(accounts)
-        .set({ password: hashedPassword })
-        .where(eq(accounts.id, account.id));
+        await tx
+          .update(accounts)
+          .set({ password: hashedPassword })
+          .where(eq(accounts.id, account.id));
 
-      await revokeOtherSessions(tx, user.id);
-      await revokePendingProofs(tx, user.id);
+        await revokeOtherSessions(tx, user.id);
+        await revokePendingProofs(tx, user.id);
 
-      await auditLog(tx, {
-        userId: user.id,
-        userEmail: user.email,
-        action: 'UPDATE',
-        tableName: 'accounts',
-        recordId: account.id,
-        oldData: {},
-        newData: {
-          passwordReset: true,
-          recoverySecondFactor: option.id,
-          recoveryExcludedContact: grant.excludeContactKind,
-        },
-        meta: auditMeta,
+        await auditLog(tx, {
+          userId: user.id,
+          userEmail: user.email,
+          action: 'UPDATE',
+          tableName: 'accounts',
+          recordId: account.id,
+          oldData: {},
+          newData: {
+            passwordReset: true,
+            recoverySecondFactor: option.id,
+            recoveryExcludedContact: grant.excludeContactKind,
+          },
+          meta: auditMeta,
+        });
+        return true;
       });
-      return true;
-    });
+    } catch (caught) {
+      // Rolled back, so the grant survives and the attempt a matched factor
+      // spent is owed back; a new code can then finish it.
+      await attempt.restore();
+      throw caught;
+    }
 
     if (!written) throw invalidOrExpiredCode();
 

@@ -89,7 +89,7 @@ function servedOnly<T extends object>(
  * would give every statement the full budget and let a transaction run for
  * their sum.
  *
- * Serves what Drizzle's Bun driver (0.45) calls on a transaction: `unsafe(...)`
+ * Serves what Drizzle's Bun driver calls on a transaction: `unsafe(...)`
  * awaited, `unsafe(...).values()`, and `savepoint`, whose callback gets a
  * client cut the same way, at any depth. `servedOnly` refuses the rest.
  */

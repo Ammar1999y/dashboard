@@ -64,7 +64,7 @@ jobs:
         # change can pass both runs above and still break it. The command is the
         # front-end's lefthook typecheck job.
         working-directory: apps/front-end
-        run: bun --bun tsc --noEmit
+        run: bun run typecheck
       - name: Root files lint and format
         # The guard script, hooks, workflows and manifests live above every
         # workspace; without this step nothing would check them.
@@ -122,7 +122,7 @@ jobs:
         # host below constructs without a connection attempt, and `close()` on a
         # never-connected pool resolves immediately. If a startup ping or an
         # eager connect is ever added, this step fails and the failure will look
-        # like a network problem. See reports/test-strategy.md §7.4e.
+        # like a network problem.
         #
         # These are throwaway values shaped to pass validation only — no real
         # credential belongs in this file.

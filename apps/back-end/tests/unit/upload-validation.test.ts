@@ -17,7 +17,7 @@
  * returns `isValid: true` and passes the payload through is the exact failure
  * mode, and `expect(result.isValid).toBe(true)` would call it a pass.
  *
- * Only the native form is stored as SVG (`reports/svg-processing-plan.md`).
+ * Only the native form is stored as SVG.
  * Most hostile spellings therefore answer `requires-conversion`, and the rows
  * that pin a review finding assert that reason, not just a refusal.
  *
@@ -681,9 +681,9 @@ describe('styling in an SVG', () => {
     });
   });
 
-  // The CSS converter stored these as `fill="bogus"`, dropped `all`/`font`, and
-  // erased attributes on `var()` (fix-review-assessment.md). With no converter,
-  // each is a file to convert.
+  // A CSS-to-attribute converter would store these as `fill="bogus"`, drop
+  // `all`/`font`, and erase attributes on `var()`. With none, each is a file to
+  // convert.
   test.each([
     '<rect fill="blue" style="fill:bogus"/>',
     '<rect style="fill:red;fill:bogus"/>',
@@ -938,8 +938,8 @@ describe('the structural gates on an SVG', () => {
     expect(result.cleanedSvg).not.toInclude('<!--');
   });
 
-  // fix-review-assessment.md: `=` was counted from one `<` to the next, so text
-  // reached the per-element attribute limit.
+  // `=` in text is not an attribute: counted from one `<` to the next, text
+  // would reach the per-element attribute limit.
   test.each([
     ['300 "a = b;" in a <text>', `<text>${'a = b; '.repeat(300)}</text>`],
     ['257 = in a <text>', `<text>${'='.repeat(257)}</text>`],
@@ -3308,8 +3308,8 @@ describe('an inline data: raster is held to the upload policy', () => {
       });
     });
 
-    // MEDIA-1 (fix-review.md): a quote that exists only after decoding opened a
-    // string the renderer never sees, which swallowed the next `url(`. `%` is
+    // A quote that exists only after decoding must not open a string the
+    // renderer never sees, or it swallows the next `url(`. `%` is
     // literal to CSS, so `url(%27#a)` is itself a relative fetch; a value with
     // `\` is outside the native form and converts unread.
     describe.each([
@@ -3344,8 +3344,7 @@ describe('an inline data: raster is held to the upload policy', () => {
       );
     });
 
-    // fix-review-assessment.md: CSS reads a comment and then a real fetch; the
-    // tokenizer read one local target.
+    // CSS reads a comment and then a real fetch here, not one local target.
     test('a CSS comment cannot hide a url()', () => {
       expectConversion(
         svg(

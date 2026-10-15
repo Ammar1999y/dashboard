@@ -36,6 +36,8 @@ export const otpMsg = {
   // Not collapsed: only a valid recovery code reaches it.
   recoverySecondFactorRequired:
     'تم التحقق من الرمز. أكمل التحقق بخطوتين لتعيين كلمة المرور الجديدة',
+  recoveryAttemptsExhausted:
+    'تجاوزت عدد المحاولات. يرجى بدء استعادة كلمة المرور من جديد',
   recoveryBlockedByTwoFactor:
     'لا يمكن إعادة تعيين كلمة المرور عبر هذه الوسيلة لأنها نفس وسيلة التحقق بخطوتين. استخدم طريقة تحقق أخرى أو تواصل مع الدعم',
 } as const;

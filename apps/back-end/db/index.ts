@@ -30,8 +30,22 @@ export type { Tx } from './transaction';
  * and set it well above that. Until then a runaway query holds one of
  * `MAX_POOL_CONNECTIONS` until it finishes or the client disconnects.
  * Transactions given a deadline apply a transaction-local limit per statement.
+ *
+ * `idle_in_transaction_session_timeout` does have a value: a request has been
+ * seen to stall in Bun's driver after its row lock wait, holding that user's
+ * lock until the process restarted. The timeout ends such a session and frees
+ * the lock, though the stalled request itself still never answers. The longest
+ * legitimate idle gap measured is a few seconds (Argon2 inside the sign-in
+ * transaction under load).
  */
-const client = new SQL(DATABASE_URL, { max: MAX_POOL_CONNECTIONS });
+const IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000;
+
+const client = new SQL(DATABASE_URL, {
+  max: MAX_POOL_CONNECTIONS,
+  connection: {
+    idle_in_transaction_session_timeout: String(IDLE_IN_TRANSACTION_TIMEOUT_MS),
+  },
+});
 
 export const db = drizzle<typeof schema>({ client, schema });
 
@@ -108,10 +122,52 @@ export function pingDatabase(): Promise<boolean> {
 }
 
 /**
+ * ⚠️ Whether the application pool still hands out working connections, which
+ * `pingDatabase` cannot see from its own pool. Bun's pool can wedge when
+ * connections die while it reconnects (a PostgreSQL restart or failover):
+ * every query then fails at once, for good, with a plain `Error` rather than
+ * one of Bun's SQL errors, which is what a dropped connection raises while the
+ * pool recovers. Only that answer counts against it: a query still waiting for
+ * a busy pool is not a fault. Single-flight, so a saturated pool queues at
+ * most one `select 1` however often readiness is polled.
+ */
+const poolCheck: { inFlight: Promise<boolean> | null; wedged: boolean } = {
+  inFlight: null,
+  wedged: false,
+};
+
+export function applicationPoolUsable(): Promise<boolean> {
+  poolCheck.inFlight ??= client`select 1`
+    .execute()
+    .then(
+      () => true,
+      (error: unknown) => error instanceof SQL.SQLError
+    )
+    .then((usable) => {
+      poolCheck.wedged = !usable;
+      return usable;
+    })
+    .finally(() => {
+      poolCheck.inFlight = null;
+    });
+  return Promise.race([
+    poolCheck.inFlight,
+    Bun.sleep(PROBE_TIMEOUT_MS).then(() => true),
+  ]);
+}
+
+/**
  * Closes both pools on shutdown. `close()` waits for in-flight queries; the
  * shutdown path in `server.ts` is already bounded by its own forced-exit timer,
  * so this needs no timeout of its own.
+ *
+ * A wedged application pool is left: its `close()` never resolves, `timeout: 0`
+ * included, and it has nothing left to finish, so waiting on it would only hold
+ * the exit its restart needs until that timer.
  */
 export async function closeDatabase(): Promise<void> {
-  await Promise.all([client.close(), probeClient.close()]);
+  await Promise.all([
+    poolCheck.wedged ? undefined : client.close(),
+    probeClient.close(),
+  ]);
 }

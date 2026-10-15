@@ -21,7 +21,7 @@
 import type { storageReadySchema } from '@app/shared/responses/health';
 import type * as z from 'zod';
 
-import { pingDatabase } from '@/db';
+import { applicationPoolUsable, pingDatabase } from '@/db';
 
 import { getStorageHealth } from '@app/shared/api/health';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -50,7 +50,7 @@ const PROBE_KEY = 'health:write-probe';
 
 async function postgresReachable(): Promise<boolean> {
   try {
-    return await pingDatabase();
+    if (!(await pingDatabase())) return false;
   } catch (error) {
     // Driver errors can include connection details, so log only their class.
     logLine('error', {
@@ -59,6 +59,11 @@ async function postgresReachable(): Promise<boolean> {
     });
     return false;
   }
+  // A reachable server is not enough: a wedged application pool fails every
+  // request while the probe's own pool answers, and only a restart clears it.
+  if (await applicationPoolUsable()) return true;
+  logLine('error', { msg: 'health.postgres applicationPoolUnusable' });
+  return false;
 }
 
 export const storageHealthBinding = bind(getStorageHealth, {

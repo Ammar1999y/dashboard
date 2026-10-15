@@ -1,11 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  expect,
-  setDefaultTimeout,
-  spyOn,
-  test,
-} from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 
 import { eq } from 'drizzle-orm';
 
@@ -40,9 +33,6 @@ import {
   signIn,
 } from '../helpers/session';
 import { syntheticAuthenticator } from '../helpers/webauthn';
-
-/** Each case pays several 64 MiB Argon2id hashes and verifies. */
-setDefaultTimeout(30_000);
 
 beforeEach(resetTables);
 beforeEach(resetRateLimits);
@@ -253,8 +243,8 @@ test('a ceremony that expires while the verify waits for the user lock opens no 
 
   // The wait for the user lock, outlasting the ceremony: the spend must read
   // the clock after `lockUser` returns. Not a real holder: in full parallel
-  // runs the request waiting on one never sent its next statement
-  // (`reports/remaining-issues-fix-review-resolution.md`).
+  // runs a request waiting on one stalled after its lock wait ended, never sent
+  // its next statement, and kept the lock from every later test in the worker.
   const lockUser = eligibility.lockUser;
   const waited = spyOn(eligibility, 'lockUser').mockImplementation(
     async (...args) => {

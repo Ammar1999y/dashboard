@@ -27,6 +27,8 @@ import {
 import { symmetricEncrypt } from 'better-auth/crypto';
 import * as z from 'zod';
 
+import { MSG_LOGIN_REQUIRED, twoFactorMsg } from '@app/shared/messages/auth';
+
 import { auth } from '@/lib/auth';
 import { hasAdminReauth } from '@/lib/auth/reauth/window';
 import { issueRecoveryGrant } from '@/lib/auth/recovery/grant';
@@ -47,7 +49,7 @@ import {
   failVerificationWrites,
   failWholeRowReads,
 } from '../helpers/faults';
-import { seedOtpProof } from '../helpers/otp';
+import { replaceOtpCode, seedOtpProof } from '../helpers/otp';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { baseHeaders, seedUser, signIn, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
@@ -182,6 +184,68 @@ describe('the two-factor sign-in challenge', () => {
     await expect(verify()).resolves.toHaveProperty('status', 200);
   });
 
+  test('a 503 after the code matched gives its attempt back, and a new code completes the challenge', async () => {
+    const { user, cookie, verify } = await otpChallenge();
+    errorLines();
+    await armWriteFault('insert', '2fa-proven-%', '40P01');
+
+    const refused = await verify();
+    expect(refused.status).toBe(503);
+    expect(await attemptsLeft('2fa-attempts-%')).toEqual(['0']);
+    await cleanups.pop()?.();
+
+    // The code itself stays spent: the remedy is a new one, same challenge.
+    await expect(verify()).resolves.toHaveProperty('status', 400);
+    const sent = await call('/api/auth/two-factor/otp/send', cookie, {
+      option: 'otp:phone',
+    });
+    expect(sent.status).toBe(200);
+    await replaceOtpCode({
+      userId: user.userId,
+      purpose: 'two_factor',
+      contactKind: 'phone',
+      code: RIGHT_CODE,
+    });
+    await expect(verify()).resolves.toHaveProperty('status', 200);
+  });
+
+  test('a 503 after the passkey matched gives its attempt back, and a new ceremony completes the challenge', async () => {
+    const user = await seedUser();
+    const device = await givePasskey(user);
+    await enable(user, 'passkey');
+    const { cookie } = await signIn(user);
+    // The authenticator's signature counter: each assertion must exceed the last accepted.
+    const assert = async (counter: number) => {
+      const started = await call(
+        '/api/auth/two-factor/passkey/options',
+        cookie,
+        {}
+      );
+      const { data } = challengeSchema.parse(await started.json());
+      return device.assertion({
+        challenge: data.challenge,
+        origin: PUBLIC_ORIGIN,
+        rpId: RP_ID,
+        counter,
+      });
+    };
+    const verify = (response: unknown) =>
+      call('/api/auth/two-factor/passkey/verify', cookie, { response });
+    errorLines();
+    await armWriteFault('insert', '2fa-proven-%', '40P01');
+
+    const spent = await assert(1);
+    await expect(verify(spent)).resolves.toHaveProperty('status', 503);
+    expect(await attemptsLeft('2fa-attempts-%')).toEqual(['0']);
+    await cleanups.pop()?.();
+
+    await expect(verify(spent)).resolves.toHaveProperty('status', 400);
+    await expect(verify(await assert(2))).resolves.toHaveProperty(
+      'status',
+      200
+    );
+  });
+
   test('a passkey rejected by WebAuthn charges one attempt; a fault reading the credential charges none', async () => {
     const user = await seedUser();
     const device = await givePasskey(user);
@@ -238,23 +302,24 @@ describe('the two-factor sign-in challenge', () => {
     await expect(verify(accepted)).resolves.toHaveProperty('status', 200);
   });
 
-  test('a fault recording the device-trust proof is logged once and the sign-in still completes', async () => {
+  test('a fault recording the device-trust proof answers 503 and signs nobody in', async () => {
     const { user, verify } = await otpChallenge();
     const lines = errorLines();
-    await armWriteFault('insert', '2fa-proven-%', 'XX000');
+    await armWriteFault('insert', '2fa-proven-%', '40P01');
 
-    await expect(verify()).resolves.toHaveProperty('status', 200);
-    const logged = lines();
-    expect(logged).toHaveLength(1);
-    expect(logged[0]).toContain('twoFactor.proof.recordFailed');
-    expect(logged[0]).toContain('XX000');
-    const [session] = await db.query.sessions.findMany({
-      where: (row, { eq: is }) => is(row.userId, user.userId),
-    });
-    if (!session) throw new Error('the sign-in created no session');
-    // Drizzle's message carries the bound values; none may reach the line.
-    expect(logged[0]).not.toContain(session.id);
-    expect(logged[0]).not.toContain('2fa-proven-');
+    const refused = await verify();
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get('retry-after')).toBe(
+      String(DATABASE_RETRY_AFTER_S)
+    );
+    expect(lines()).toHaveLength(1);
+    // The proof commits with the session or not at all.
+    expect(
+      await db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.userId, user.userId))
+    ).toHaveLength(0);
   });
 });
 
@@ -553,6 +618,85 @@ describe('re-authentication', () => {
   });
 });
 
+/**
+ * A grant route and a live-session route refuse without a session; a dual-mode
+ * route takes the sign-in branch instead. Either way a fault must not read as
+ * no session.
+ */
+describe('reading the session', () => {
+  const routes = [
+    {
+      path: '/api/auth/passkey/delete-passkey',
+      body: { id: generateUuidV7(), grant: 'unspent' },
+      missing: MSG_LOGIN_REQUIRED,
+    },
+    {
+      path: '/api/auth/two-factor/methods/disable',
+      body: { method: 'totp', password: 'unchecked' },
+      missing: MSG_LOGIN_REQUIRED,
+    },
+    {
+      path: '/api/auth/two-factor/otp/send',
+      body: {},
+      missing: twoFactorMsg.challengeMissing,
+    },
+  ];
+
+  /** The session cookie alone, so the read reaches the row, not the cache. */
+  async function uncachedSession() {
+    const user = await seedUser();
+    const { cookie } = await signIn(user);
+    const context = await auth.$context;
+    const { name } = context.authCookies.sessionToken;
+    const token = cookie
+      .split('; ')
+      .filter((pair) => pair.startsWith(`${name}=`));
+    expect(token).toHaveLength(1);
+    return { user, cookie: token.join('; ') };
+  }
+
+  test.each(routes)(
+    'a fault on $path answers 5xx, not as no session',
+    async ({ path, body }) => {
+      const { cookie } = await uncachedSession();
+      const context = await auth.$context;
+      const lines = errorLines();
+      for (const [fault, status] of [
+        [await driverError('40P01'), 503],
+        [await connectionClosedError(), 500],
+      ] as const) {
+        const read = spyOn(
+          context.internalAdapter,
+          'findSession'
+        ).mockRejectedValueOnce(fault);
+        try {
+          const answered = await call(path, cookie, body);
+          expect(read).toHaveBeenCalled();
+          expect(answered.status).toBe(status);
+          expect(answered.headers.get('retry-after')).toBe(
+            status === 503 ? String(DATABASE_RETRY_AFTER_S) : null
+          );
+        } finally {
+          read.mockRestore();
+        }
+      }
+      expect(lines()).toHaveLength(2);
+    }
+  );
+
+  test.each(routes)(
+    'a session that is gone on $path is refused as missing',
+    async ({ path, body, missing }) => {
+      const { user, cookie } = await uncachedSession();
+      await db.delete(sessions).where(eq(sessions.userId, user.userId));
+
+      const answered = await call(path, cookie, body);
+      expect(answered.status).toBe(401);
+      expect(await answered.json()).toMatchObject({ message: missing });
+    }
+  );
+});
+
 describe('account recovery', () => {
   test('a contended attempt spend at completion answers 503 and keeps the budget', async () => {
     const phone = uniquePhone();
@@ -586,5 +730,54 @@ describe('account recovery', () => {
       .from(verifications)
       .where(and(eq(verifications.identifier, `recovery-${grant}`)));
     expect(still).toBeDefined();
+  }, 30_000);
+
+  test('a 503 after the factor matched gives its attempt back, and a new code completes the reset', async () => {
+    const phone = uniquePhone();
+    const user = await seedUser({
+      phoneNumber: phone,
+      phoneNumberVerified: true,
+    });
+    await enable(user, 'otp', 'sms');
+    const grant = await issueRecoveryGrant({
+      userId: user.userId,
+      excludeContactKind: 'email',
+      options: recoveryOptions(await readEnrolmentState(user.userId), 'email'),
+    });
+    await seedOtpProof({
+      userId: user.userId,
+      identifier: phone,
+      purpose: 'two_factor',
+      channel: 'sms',
+      code: RIGHT_CODE,
+    });
+    const complete = () =>
+      call('/api/auth/forgot-password/complete', '', {
+        grant,
+        option: 'otp:phone',
+        code: RIGHT_CODE,
+        newPassword: 'Recovered-Pass-1!',
+      });
+    errorLines();
+    // Inside the completing transaction, after the factor was spent.
+    await armWriteFault('delete', `recovery-${grant}`, '40P01');
+
+    await expect(complete()).resolves.toHaveProperty('status', 503);
+    expect(await attemptsLeft(`recovery-attempts-${grant}`)).toEqual(['0']);
+    await cleanups.pop()?.();
+
+    await expect(complete()).resolves.toHaveProperty('status', 400);
+    await replaceOtpCode({
+      userId: user.userId,
+      purpose: 'two_factor',
+      contactKind: 'phone',
+      code: RIGHT_CODE,
+    });
+    await expect(complete()).resolves.toHaveProperty('status', 200);
+    const signedIn = await call('/api/auth/sign-in/email', '', {
+      email: user.email,
+      password: 'Recovered-Pass-1!',
+    });
+    expect(signedIn.status).toBe(200);
   }, 30_000);
 });

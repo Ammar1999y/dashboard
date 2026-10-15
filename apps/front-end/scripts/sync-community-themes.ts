@@ -18,9 +18,13 @@ const presetsPath = new URL(
   import.meta.url
 );
 const temporaryPath = new URL(`${presetsPath.href}.${randomUUID()}.tmp`);
+const FETCH_CONCURRENCY = 6;
+using requests = new Bun.FetchSession({
+  keepAlive: { maxIdleSockets: FETCH_CONCURRENCY },
+});
 
 async function fetchText(url: string | URL, init?: RequestInit) {
-  const response = await fetch(url, {
+  const response = await requests.fetch(url, {
     ...init,
     signal: AbortSignal.timeout(30_000),
   });
@@ -45,9 +49,9 @@ async function discoverAction() {
         url.origin === new URL(COMMUNITY_URL).origin &&
         url.pathname.startsWith('/_next/static/chunks/')
     );
-  for (let index = 0; index < urls.length; index += 6) {
+  for (let index = 0; index < urls.length; index += FETCH_CONCURRENCY) {
     const results = await Promise.allSettled(
-      urls.slice(index, index + 6).map((url) => fetchText(url))
+      urls.slice(index, index + FETCH_CONCURRENCY).map((url) => fetchText(url))
     );
     for (const result of results) {
       if (result.status === 'rejected')
@@ -92,7 +96,9 @@ const source = await format(
   { parser: 'typescript', singleQuote: true, trailingComma: 'es5' }
 );
 try {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- module-relative preset URL with a generated UUID suffix
   await writeFile(temporaryPath, source, 'utf8');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- both URLs are derived from this module, without external path input
   await rename(temporaryPath, presetsPath);
 } finally {
   await rm(temporaryPath, { force: true });

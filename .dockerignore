@@ -27,7 +27,7 @@
 
 # Then the test suite — the largest thing in the back-end and served by nothing.
 #
-# `tsconfig.json` includes `**/*.ts`, so the `verify` stage's `tsc --noEmit`
+# `tsconfig.json` includes `**/*.ts`, so the `verify` stage's `bun check`
 # would type-check these too; the image needs only what it ships to check, and
 # CI's `bun run lint` type-checks the suite on every push regardless.
 #

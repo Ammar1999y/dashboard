@@ -7,7 +7,13 @@
  * right one. `hashOtpCode` is the same envelope the real send writes, so the
  * verify path is exercised for real.
  */
-import type { OtpChannel, OtpPurpose } from '@app/shared/validation/enums';
+import type {
+  ContactKind,
+  OtpChannel,
+  OtpPurpose,
+} from '@app/shared/validation/enums';
+
+import { and, eq } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { verificationCodes, verificationSessions } from '@/db/schema';
@@ -58,4 +64,38 @@ export async function seedOtpProof(options: {
   });
 
   return { sessionId: row.id, code: options.code };
+}
+
+/**
+ * A new code on the proof row a real send already created, as a resend writes
+ * one. The row carries the purpose binding and the counters a test asserts, so
+ * only the code is replaced.
+ */
+export async function replaceOtpCode(options: {
+  userId: string;
+  purpose: OtpPurpose;
+  contactKind: ContactKind;
+  code: string;
+}): Promise<void> {
+  await assertHarnessDatabase();
+  const [proof] = await db
+    .select({ id: verificationSessions.id })
+    .from(verificationSessions)
+    .where(
+      and(
+        eq(verificationSessions.userId, options.userId),
+        eq(verificationSessions.purpose, options.purpose),
+        eq(verificationSessions.contactKind, options.contactKind)
+      )
+    );
+  if (!proof)
+    throw new Error(`no ${options.purpose}/${options.contactKind} proof row`);
+  const code = {
+    code: hashOtpCode(options.code),
+    expiresAt: new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000),
+  };
+  await db
+    .insert(verificationCodes)
+    .values({ sessionId: proof.id, ...code })
+    .onConflictDoUpdate({ target: verificationCodes.sessionId, set: code });
 }

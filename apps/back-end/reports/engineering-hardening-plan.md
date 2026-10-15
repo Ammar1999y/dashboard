@@ -77,7 +77,7 @@ rewrite files) followed by `lefthook run verify` (every gate, in parallel).
 | `bun run fix`               | writes only                                               |
 | `bun run find:unused-files` | knip — **informational, not a gate** (see below)          |
 
-`verify` runs: `tsc --noEmit`, `eslint . --max-warnings 0`, `prettier --check`,
+`verify` runs: `bun run typecheck` (`bun check`), `eslint . --max-warnings 0`, `prettier --check`,
 `bun audit`, `gitleaks git .`, `semgrep scan`, `actionlint`.
 
 The `verify` set is defined once in `lefthook.yml` and reused by `pre-push`
@@ -216,8 +216,8 @@ Kept so they are not reintroduced:
 - **`gitleaks protect` and `gitleaks detect` no longer exist.** Both were
   removed in gitleaks 8.30. The equivalents are `gitleaks git --staged`
   (pre-commit) and `gitleaks git .` (history sweep).
-- **`bun tsc --noEmit` and `bun eslint` are not valid invocations.** `bun` runs
-  scripts and files, not bin shims; use `bunx`.
+- **Use the package scripts for checks.** `bun run typecheck` runs the native
+  checker; `bun run lint` also runs the configured ESLint gate.
 - **`bun audit --audit-level=high` hid two real advisories.** The gate now runs
   with no level, so every severity fails it.
 - **`actions/checkout@v4` was three majors stale.** v7.0.1 is current — checked

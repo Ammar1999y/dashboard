@@ -25,11 +25,9 @@ import { collapseToNotFound } from '@/lib/permissions/scope';
  * `resolveActionScope` — the two cases its own comment records as previously
  * wrong, plus the hostile-key cases.
  *
- * `reports/test-strategy.md` §7.5 calls this the highest-value target in the
- * repository: a bug here is an authorization bypass, and the function is pure. It
- * was not exported, so the matrix the strategy asks for was not writable as a
- * unit test at all — every case would have cost a session and a database round
- * trip. It is exported now.
+ * The highest-value target in the repository: a bug here is an authorization
+ * bypass, and the function is pure, so it is exported for unit tests rather
+ * than reached through a session and a database round trip per case.
  *
  * **This is not the full matrix.** The `DASHBOARD_PAGE_NAMES × PERMISSION_ACTION_NAMES`
  * walk belongs to its own shard. What is here is the part that cannot wait: the

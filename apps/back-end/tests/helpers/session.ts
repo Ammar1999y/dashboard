@@ -4,7 +4,7 @@
  * **The cookie comes from the real sign-in endpoint.** Hand-forging one means
  * reimplementing Better Auth's signing, which is both the thing most likely to
  * drift and the thing whose drift a forged cookie would hide: a complete
- * authentication outage once passed `tsc --noEmit` and 150/150 probes because
+ * authentication outage once passed type checking and 150/150 probes because
  * nothing in the suite ever signed anybody in.
  *
  * **Sign in once per file, in `beforeAll`.** The password KDF is Argon2id at

@@ -1,12 +1,14 @@
 # Plan: shared zod response schemas
 
 Status: **Phases 0 and 1 done** (2026-10-06).
+
 - **What exists:** all 42 table routes are keyed and checked; the hand-written success schemas and every bridge are gone.
 - **Checks that pass:** lint, unit, matrix and process tiers, the build, and the integration coverage gate (45 of 47 answers seen, 2 allowlisted).
 - **One open item:** the integration tier has timeouts that predate this work (`apps/back-end/reports/review-findings.md` #7).
 - **Next:** Phase 2 waits for the front-end commit. Phase 3 starts with its mapping.
 
 Phase 3 back-end and shared parts (steps 2, 3 and 5) are also done (2026-10-06):
+
 - **What exists:**
   - 25 plugin endpoints in `BETTER_AUTH_RESPONSES`, typed through `pluginEndpoint(path, …)`;
   - the runtime check at the Better Auth prefix route;
@@ -27,6 +29,7 @@ Phase 3 back-end and shared parts (steps 2, 3 and 5) are also done (2026-10-06):
     - add the option-id enum on the recovery result.
 
 Phase 1 deviations, accepted:
+
 - **The coverage gate runs on the integration tier only.** The matrix tier reaches 4 of 47 answers, all also reached by integration; it still enforces the check.
 - **`consistency.ts` reports a missing key as a named problem** instead of throwing while it builds the operation.
 - **Two more document differences:**
@@ -34,6 +37,7 @@ Phase 1 deviations, accepted:
   - `MediaFileDetails.usedBy.items` as `$ref MediaUsage`, whose body is identical.
 
 Known limits:
+
 - A mismatch inside a test's child process fails that test only through the status the child checks.
 - The leftover-keyword check has no permanent test yet; its map is private.
 
@@ -43,6 +47,7 @@ Owner decisions taken 2026-10-06:
 - **Front-end binding:** a call keeps building its href and imports the shared schema. There is no typed route-key client.
 
 Reviews: three external reviews on 2026-10-06. Every finding was checked against the code or with a probe on the installed zod 4.6.5 before it was applied. Two findings were narrowed:
+
 - the `Date`-in-any-string limit is kept and documented;
 - the MIME "mismatch" was not one.
 
@@ -50,15 +55,16 @@ Reviews: three external reviews on 2026-10-06. Every finding was checked against
 
 A route's success response is described three times today, and nothing checks the three copies against each other:
 
-| Copy | Where | Checked by |
-| --- | --- | --- |
-| What the handler returns | `apiSuccess({ data })` in `app/api/**/handler.ts`; `T` is erased by `Handler` (`lib/http/contract.ts:93`). Back-end wire types such as `MediaFile` (`lib/media/files.ts:230`) are a fourth copy | nothing |
-| What the document publishes | hand-written JSON Schema: `SUCCESS_DATA_SCHEMAS` (`lib/http/openapi/success-schemas.ts`, 565 lines, 42 keys) plus `components.ts` | `consistency.ts` checks only that a key exists |
-| What the front-end parses | hand-written zod in `types/{api,user,permission}.ts`, `lib/media/schemas.ts`, `lib/files/upload.ts`, `lib/account/schemas.ts`, `components/dash/auth/schemas.ts`, `hooks/use-resend-cooldown.ts`, `theme-customizer/preferences.ts`, `lib/auth/reauth-proof.ts` | the front-end's own copy only |
+| Copy                        | Where                                                                                                                                                                                                                                                           | Checked by                                     |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| What the handler returns    | `apiSuccess({ data })` in `app/api/**/handler.ts`; `T` is erased by `Handler` (`lib/http/contract.ts:93`). Back-end wire types such as `MediaFile` (`lib/media/files.ts:230`) are a fourth copy                                                                 | nothing                                        |
+| What the document publishes | hand-written JSON Schema: `SUCCESS_DATA_SCHEMAS` (`lib/http/openapi/success-schemas.ts`, 565 lines, 42 keys) plus `components.ts`                                                                                                                               | `consistency.ts` checks only that a key exists |
+| What the front-end parses   | hand-written zod in `types/{api,user,permission}.ts`, `lib/media/schemas.ts`, `lib/files/upload.ts`, `lib/account/schemas.ts`, `components/dash/auth/schemas.ts`, `hooks/use-resend-cooldown.ts`, `theme-customizer/preferences.ts`, `lib/auth/reauth-proof.ts` | the front-end's own copy only                  |
 
 No test compares a real response with the document, and `build/openapi.json` is git-ignored, so there is no drift gate either. Request bodies already have the target pattern: `REQUEST_BODIES` in `packages/shared/src/contract.ts`, parsed by the server and typed on the client with `RequestBody<K>`.
 
 The goal is one zod schema per response in `packages/shared`, from which four things follow:
+
 - the front-end parses with it and gets its types from it;
 - the back-end's handler output is checked against it at compile time;
 - in tests and mock mode, every real answer is also checked against the published contract;
@@ -142,7 +148,7 @@ The goal is one zod schema per response in `packages/shared`, from which four th
   - it replaces any non-root component instance (`MediaFile`, `MediaFileDetails`, `MediaFolder`, `MediaFolderHit`, `MediaUsage`) with `$ref: '#/components/schemas/<name>'`.
 - **Components and routes:**
   - Components are converted once, as roots, into `components.schemas`.
-  - A route whose data *is* a component gets the `$ref` directly.
+  - A route whose data _is_ a component gets the `$ref` directly.
   - The names are unchanged; `openapi-contract.test.ts:1029` pins them.
   - Probed: formats, prose and nested or repeated `$ref`s come out right, with no registry ids, no `$defs` hoisting and no ref rewriting.
 - **The envelope** is converted from the shared builder too, replacing `successEnvelopeSchema` in `envelope.ts`.
@@ -223,13 +229,13 @@ The goal is one zod schema per response in `packages/shared`, from which four th
    - a wrong field is a compile error inside the handler file;
    - a mis-wired row fails `consistency.ts`;
    - the literal and union outcomes compile, and a wrong discriminator fails;
-   - a wrong enum value, or a `Date` in an enum field, fails `tsc`;
-   - a paginated route without `meta` fails `tsc`;
-   - an envelope route returning `apiRaw` fails `tsc`;
+   - a wrong enum value, or a `Date` in an enum field, fails `bun check`;
+   - a paginated route without `meta` fails `bun check`;
+   - an envelope route returning `apiRaw` fails `bun check`;
    - `MediaFile.id` keeps `format` and `pattern` in the document, and every emitted `$ref` resolves;
    - the strict check rejects the probe's negative cases and accepts the positive ones;
    - the generated schemas equal today's document, apart from the expected differences listed under Verification;
-   - `tsc` time on the back-end does not grow noticeably (measure it).
+   - `bun run typecheck` time on the back-end does not grow noticeably (measure it).
 
 ### Phase 1: shared + back-end, table routes
 
@@ -280,9 +286,10 @@ The goal is one zod schema per response in `packages/shared`, from which four th
 4. **Front-end:** swap the schemas in `lib/account/schemas.ts`, `components/dash/auth/schemas.ts`, `lib/auth/reauth-proof.ts` and `lib/auth/passkey.ts` that describe our endpoints.
 
 **Mapping done (2026-10-06).** 27 `createAuthEndpoint` routes: 25 with our own bodies, and 2 that pass the library's verifier body through. Decisions taken:
+
 1. **The two pass-through verifiers** (`verify-totp`, `verify-backup-code`) stay out of the registry. The back-end override keeps documenting them, renamed `LIBRARY_VERIFIER_RESPONSES`, because the shared registry takes the name `BETTER_AUTH_RESPONSES`.
 2. **A 200 carrying `twoFactorRedirect` on any auth path** is checked against the shared challenge schema. That includes our hook's body on the library's `/sign-in/email`. Other library bodies stay unchecked.
-3. **WebAuthn `extensions`** mirrors the library's closed type, `PublicKeyCredentialRequestOptionsJSON` in simplewebauthn 13.3.x, which has four optional keys. This replaces the planned opaque exemption: an open record cannot type-check against the library's interface, and the server never sets `extensions`. tsc checks the schema against the library's type in both directions.
+3. **WebAuthn `extensions`** mirrors the library's closed type, `PublicKeyCredentialRequestOptionsJSON` in simplewebauthn 13.3.x, which has four optional keys. This replaces the planned opaque exemption: an open record cannot type-check against the library's interface, and the server never sets `extensions`. The type checker checks the schema against the library's type in both directions.
 4. **The challenge requires `twoFactorMethods`.** The server always sends it, and a registry entry describes the full shape. This is a deliberate client tightening.
 5. **Each entry is the whole 2xx body.** It states `message` exactly as the endpoint sends it. The two no-data bodies (`backup-codes/acknowledge`, `two-factor/disable`) have no `data` key.
    - Client tightening is limited to fields the server always sends; the two `plain` paths are where it shows.
@@ -296,28 +303,28 @@ The goal is one zod schema per response in `packages/shared`, from which four th
 8. **`ctx.json` typing:** a keyed endpoint wrapper, proven first on three endpoints, including the OAuth callback's redirect branch and a no-data body. If Better Call's types refuse it, fall back to `satisfies` on each `ctx.json`.
 9. **The document gains two components,** `TwoFactorChallenge` and `PasskeyRequestOptions`. The hand-written schemas (`better-auth.ts:188-246`), `envelopeResponse` and every plugin's `metadata.openapi` are deleted. Only `/sign-in/email` keeps an appended alternative, because its other branch is the library's body.
 10. **Coverage:** the callback's 302 counts as its own member. Each id a test doesn't reach gets a test, or an allowlist entry with its reason.
-5. **Verify:**
-   - run `bun run test:matrix`, and confirm its children receive the runner variable;
-   - extend the document diff to the Better Auth paths.
+11. **Verify:**
+    - run `bun run test:matrix`, and confirm its children receive the runner variable;
+    - extend the document diff to the Better Auth paths.
 
 ## Mismatches the typing will surface (settle in Phase 1)
 
 Rule: narrow the server type to what the code already guarantees, or widen the schema where the server really sends more. Never add an unchecked cast.
 
-| # | Mismatch | Settle by |
-| --- | --- | --- |
-| 1 | Every date is a `Date` in the handler and a `string` on the wire | `ServerValue<T>` (Design above) |
-| 2 | `ANONYMOUS_SEND_DATA` is typed `{ nextAllowedIn: number }`; the document says `const 30` | Optional hardening (`as const`). The client rule stays a positive number and `const 30` is metadata, so tsc no longer requires it; the strict check enforces it |
-| 3 | `OfferedOption.method` includes `passkey`; the recovery-option enum does not | Optional hardening (a type predicate on `recoveryOptions`, `lib/auth/two-factor/methods.ts:239`). The client keeps today's `z.enum(TWO_FACTOR_METHODS)` and the 3-value list is metadata, which the strict check enforces |
-| 4 | Users list: `publicRoleFields` returns a nullable `roleId`/`role`; the document says non-null (inner join) | type `publicRoleFields` so a non-null role gives a non-null result; select the non-null join column for the list |
-| 5 | `PUT /api/dash/media/files/:id`: `unfiledAt` is `Date \| null`; the document says `null` | confirm `filedInto` clears it, then return the literal `null`, as the bulk move route already does |
-| 6 | Folder search and `renameSelf` rows are `any` (raw SQL) | parse each raw row as `unknown` with a back-end row schema at the mapping, per CLAUDE.md's types rule. Typing `execute<T>` alone does not check columns (reviewer probe) |
+| #   | Mismatch                                                                                                   | Settle by                                                                                                                                                                                                                 |
+| --- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Every date is a `Date` in the handler and a `string` on the wire                                           | `ServerValue<T>` (Design above)                                                                                                                                                                                           |
+| 2   | `ANONYMOUS_SEND_DATA` is typed `{ nextAllowedIn: number }`; the document says `const 30`                   | Optional hardening (`as const`). The client rule stays a positive number and `const 30` is metadata, so the type checker no longer requires it; the strict check enforces it                                              |
+| 3   | `OfferedOption.method` includes `passkey`; the recovery-option enum does not                               | Optional hardening (a type predicate on `recoveryOptions`, `lib/auth/two-factor/methods.ts:239`). The client keeps today's `z.enum(TWO_FACTOR_METHODS)` and the 3-value list is metadata, which the strict check enforces |
+| 4   | Users list: `publicRoleFields` returns a nullable `roleId`/`role`; the document says non-null (inner join) | type `publicRoleFields` so a non-null role gives a non-null result; select the non-null join column for the list                                                                                                          |
+| 5   | `PUT /api/dash/media/files/:id`: `unfiledAt` is `Date \| null`; the document says `null`                   | confirm `filedInto` clears it, then return the literal `null`, as the bulk move route already does                                                                                                                        |
+| 6   | Folder search and `renameSelf` rows are `any` (raw SQL)                                                    | parse each raw row as `unknown` with a back-end row schema at the mapping, per CLAUDE.md's types rule. Typing `execute<T>` alone does not check columns (reviewer probe)                                                  |
 
 `mimeType` is **not** a mismatch. `KNOWN_MIME_TYPES` is typed `readonly string[]` (`packages/shared/src/validation/media-types.ts:68`), so the type is `string` either way. Its enum is now metadata, enforced by the strict check.
 
 ## Open choices for the owner
 
-- **Type the mock answers per route.** The front-end's only CI check is `tsc`; front-end tests run only locally.
+- **Type the mock answers per route.** The front-end's only CI check is `bun check`; front-end tests run only locally.
   - Benefit: mock drift fails CI.
   - Cost: every mock answer site uses a keyed `ok()`.
   - Not in the plan unless you ask.

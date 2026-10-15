@@ -42,6 +42,61 @@ export function authAuditMeta(
   );
 }
 
+/**
+ * `context` whose `internalAdapter` records the first fault any call raises.
+ * The library swallows some: the two-factor plugin's `beginAttempt` answers a
+ * failed counter consume with 401 and drops a failed re-arm, and
+ * `getSessionFromCtx` answers any fault as no session, so the fault would read
+ * as a refusal. The caller rethrows the fault for its boundary to log, so the
+ * library's own line for it is dropped.
+ */
+export function recordingFaults(context: AuthContext['context']) {
+  const seen: { fault?: { error: unknown } } = {};
+  const record = (error: unknown) => {
+    seen.fault ??= { error };
+    return error;
+  };
+  const adapter = new Proxy(context.internalAdapter, {
+    get: (target, property, receiver) => {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        try {
+          const result: unknown = Reflect.apply(value, target, args);
+          return result instanceof Promise
+            ? result.catch((error: unknown) => {
+                throw record(error);
+              })
+            : result;
+        } catch (error) {
+          throw record(error);
+        }
+      };
+    },
+  });
+  const logger = new Proxy(context.logger, {
+    get: (target, property, receiver) => {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (property !== 'error' || typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        if (seen.fault && args.includes(seen.fault.error)) return;
+        Reflect.apply(value, target, args);
+      };
+    },
+  });
+  return {
+    context: new Proxy(context, {
+      get: (target, property) =>
+        property === 'internalAdapter'
+          ? adapter
+          : property === 'logger'
+            ? logger
+            : Reflect.get(target, property),
+    }),
+    fault: () => seen.fault,
+  };
+}
+
 export function parseAuthBody<S extends z.ZodType>(
   ctx: { body?: unknown },
   schema: S,

@@ -12,16 +12,23 @@ import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import { sessions, trustedDevices, twoFactorCredentials } from '@/db/schema';
+import {
+  sessions,
+  trustedDevices,
+  twoFactorCredentials,
+  twoFactorMethods,
+} from '@/db/schema';
 import { symmetricDecrypt } from 'better-auth/crypto';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { auth } from '@/lib/auth';
+import * as trustedDevice from '@/lib/auth/two-factor/trusted-device';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables, waitForUserLock } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { replaceOtpCode } from '../helpers/otp';
 import {
   baseHeaders,
   mergeCookies,
@@ -33,6 +40,7 @@ import { resetSqliteStores } from '../helpers/sqlite';
 const TURNSTILE_HOST = 'challenges.cloudflare.com';
 const BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET ?? '';
 const USER_AGENT = 'Mozilla/5.0 (harness) TrustedDeviceTest/1.0';
+const RIGHT_CODE = '424242';
 
 const fixture: {
   user: SeededUser | null;
@@ -156,15 +164,7 @@ async function enrolTotp(
   if (start.status !== HTTP_STATUS.OK)
     throw new Error(`totp/start returned ${start.status}`);
 
-  const [credential] = await db
-    .select({ secret: twoFactorCredentials.secret })
-    .from(twoFactorCredentials)
-    .where(eq(twoFactorCredentials.userId, user.userId));
-  if (!credential) throw new Error('no TOTP credential stored');
-  const secret = await symmetricDecrypt({
-    key: BETTER_AUTH_SECRET,
-    data: credential.secret,
-  });
+  const secret = await storedTotpSecret(user);
 
   const confirm = await request(
     'POST',
@@ -178,37 +178,111 @@ async function enrolTotp(
 
   // Backup codes are their own method now, with their own generation and their
   // own acknowledgement — enrolling TOTP no longer mints a set as a side effect.
-  let backupCodes: string[] = [];
-  if (withBackupCodes) {
-    const generated = await request(
-      'POST',
-      '/api/auth/two-factor/generate-backup-codes',
-      { password: user.password },
-      first.cookie,
-      ip
-    );
-    if (generated.status !== HTTP_STATUS.OK)
-      throw new Error(`generate-backup-codes returned ${generated.status}`);
-    const generatedSet = (await generated.json()) as {
-      data?: { backupCodes?: string[]; setId?: string };
-    };
-    backupCodes = generatedSet.data?.backupCodes ?? [];
-    const acknowledged = await request(
-      'POST',
-      '/api/auth/two-factor/backup-codes/acknowledge',
-      { password: user.password, setId: generatedSet.data?.setId },
-      first.cookie,
-      ip
-    );
-    if (acknowledged.status !== HTTP_STATUS.OK)
-      throw new Error(`acknowledge returned ${acknowledged.status}`);
-  }
+  const backupCodes = withBackupCodes
+    ? await acknowledgeBackupCodes(user, first.cookie, ip)
+    : [];
 
   return {
     jar: mergeCookies(first.cookie, confirm.headers.getSetCookie()),
     secret,
     backupCodes,
   };
+}
+
+async function storedTotpSecret(user: SeededUser): Promise<string> {
+  const [credential] = await db
+    .select({ secret: twoFactorCredentials.secret })
+    .from(twoFactorCredentials)
+    .where(eq(twoFactorCredentials.userId, user.userId));
+  if (!credential) throw new Error('no TOTP credential stored');
+  return symmetricDecrypt({ key: BETTER_AUTH_SECRET, data: credential.secret });
+}
+
+/** Generates a set and acknowledges it, which is what enables the method. */
+async function acknowledgeBackupCodes(
+  user: SeededUser,
+  jar: string,
+  ip: string
+): Promise<string[]> {
+  const generated = await request(
+    'POST',
+    '/api/auth/two-factor/generate-backup-codes',
+    { password: user.password },
+    jar,
+    ip
+  );
+  if (generated.status !== HTTP_STATUS.OK)
+    throw new Error(`generate-backup-codes returned ${generated.status}`);
+  const generatedSet = (await generated.json()) as {
+    data?: { backupCodes?: string[]; setId?: string };
+  };
+  const acknowledged = await request(
+    'POST',
+    '/api/auth/two-factor/backup-codes/acknowledge',
+    { password: user.password, setId: generatedSet.data?.setId },
+    jar,
+    ip
+  );
+  if (acknowledged.status !== HTTP_STATUS.OK)
+    throw new Error(`acknowledge returned ${acknowledged.status}`);
+  return generatedSet.data?.backupCodes ?? [];
+}
+
+/**
+ * Runs `verify` up to the point it issues its device-trust proof, removes a
+ * method while it is held there, then lets both finish. Answers the verify.
+ */
+async function verifyRacingRemoval(
+  verify: () => Promise<Response>,
+  remove: () => Promise<Response>
+): Promise<Response> {
+  const issue = trustedDevice.markTwoFactorProven;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const held = spyOn(trustedDevice, 'markTwoFactorProven').mockImplementation(
+    async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return issue(...args);
+    }
+  );
+  try {
+    const verifying = verify();
+    await Promise.race([entered.promise, verifying]);
+    const removing = remove();
+    // Queued behind the verify's user lock, or, with none, already done.
+    await Promise.race([removing, waitForUserLock()]);
+    release.resolve();
+    const [verified, removed] = await Promise.all([verifying, removing]);
+    expect(verified.status).toBe(HTTP_STATUS.OK);
+    expect(removed.status).toBe(HTTP_STATUS.OK);
+    return verified;
+  } finally {
+    release.resolve();
+    held.mockRestore();
+  }
+}
+
+/** No trust can be minted on `jar`, and the next sign-in from it is challenged. */
+async function expectNoTrustFor(user: SeededUser, jar: string): Promise<void> {
+  const trusted = await request(
+    'POST',
+    '/api/auth/two-factor/trust-device',
+    {},
+    jar
+  );
+  expect(trusted.status).toBe(HTTP_STATUS.FORBIDDEN);
+  expect(
+    await db
+      .select({ id: trustedDevices.id })
+      .from(trustedDevices)
+      .where(eq(trustedDevices.userId, user.userId))
+  ).toHaveLength(0);
+  const again = await signIn(
+    mergeCookies(jar, trusted.headers.getSetCookie()),
+    user
+  );
+  expect(again.body).toMatchObject({ twoFactorRedirect: true });
 }
 
 beforeAll(async () => {
@@ -532,6 +606,125 @@ describe('the skip, and taking it away', () => {
       owner
     );
     expect(again.body).toMatchObject({ twoFactorRedirect: true });
+  });
+
+  test('a backup-code sign-in racing a method removal leaves no trust behind', async () => {
+    const owner = await seedUser();
+    const enrolled = await enrolTotp(owner, true);
+    const code = enrolled.backupCodes[0];
+    expect(code).toBeDefined();
+    const challenged = await signIn('', owner, nextTestIp());
+    expect(challenged.body).toMatchObject({ twoFactorRedirect: true });
+
+    const verified = await verifyRacingRemoval(
+      () =>
+        request(
+          'POST',
+          '/api/auth/two-factor/verify-backup-code',
+          { code },
+          challenged.cookie
+        ),
+      () =>
+        request(
+          'POST',
+          '/api/auth/two-factor/methods/disable',
+          { method: 'backup_code', password: owner.password },
+          enrolled.jar
+        )
+    );
+
+    await expectNoTrustFor(
+      owner,
+      mergeCookies(challenged.cookie, verified.headers.getSetCookie())
+    );
+  });
+
+  test('a TOTP enrolment racing its removal leaves no trust behind', async () => {
+    const owner = await seedUser();
+    const ip = nextTestIp();
+    const first = await signIn('', owner, ip);
+    await acknowledgeBackupCodes(owner, first.cookie, ip);
+    const started = await request(
+      'POST',
+      '/api/auth/two-factor/totp/start',
+      { password: owner.password },
+      first.cookie,
+      ip
+    );
+    expect(started.status).toBe(HTTP_STATUS.OK);
+    const secret = await storedTotpSecret(owner);
+
+    const confirmed = await verifyRacingRemoval(
+      async () =>
+        request(
+          'POST',
+          '/api/auth/two-factor/totp/confirm',
+          { code: await totpCode(secret) },
+          first.cookie,
+          ip
+        ),
+      () =>
+        request(
+          'POST',
+          '/api/auth/two-factor/methods/disable',
+          { method: 'totp', password: owner.password },
+          first.cookie,
+          ip
+        )
+    );
+
+    await expectNoTrustFor(
+      owner,
+      mergeCookies(first.cookie, confirmed.headers.getSetCookie())
+    );
+  });
+
+  test('an OTP sign-in racing a method removal leaves no trust behind', async () => {
+    const owner = await seedUser();
+    const enrolled = await enrolTotp(owner, true);
+    await db
+      .insert(twoFactorMethods)
+      .values({ userId: owner.userId, method: 'otp', channel: 'email' });
+    const ip = nextTestIp();
+    const challenged = await signIn('', owner, ip);
+    expect(challenged.body).toMatchObject({ twoFactorRedirect: true });
+    const sent = await request(
+      'POST',
+      '/api/auth/two-factor/otp/send',
+      { option: 'otp:email' },
+      challenged.cookie,
+      ip
+    );
+    expect(sent.status).toBe(HTTP_STATUS.OK);
+    await replaceOtpCode({
+      userId: owner.userId,
+      purpose: 'two_factor',
+      contactKind: 'email',
+      code: RIGHT_CODE,
+    });
+
+    const verified = await verifyRacingRemoval(
+      () =>
+        request(
+          'POST',
+          '/api/auth/two-factor/otp/verify',
+          { code: RIGHT_CODE },
+          challenged.cookie,
+          ip
+        ),
+      () =>
+        request(
+          'POST',
+          '/api/auth/two-factor/methods/disable',
+          { method: 'otp', contactKind: 'email', password: owner.password },
+          enrolled.jar
+        )
+    );
+
+    await expectNoTrustFor(
+      owner,
+      mergeCookies(challenged.cookie, verified.headers.getSetCookie())
+    );
   });
 
   test('a device id that is not the caller’s is refused', async () => {

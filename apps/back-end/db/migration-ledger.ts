@@ -89,7 +89,8 @@ const LEDGER_DDL = `
 type SqlToken =
   | { kind: 'word'; text: string }
   | { kind: 'quoted'; name: string }
-  | { kind: 'string' }
+  /** `text` is null where this reader does not decode the constant. */
+  | { kind: 'string'; text: string | null }
   | { kind: 'other'; text: string };
 
 const SQL_SPACE = /^[ \t\n\r\f\v]$/;
@@ -145,18 +146,27 @@ function blockCommentEnd(text: string, from: number): number {
   return text.length;
 }
 
+interface QuotedRun {
+  body: string;
+  /** A backslash escape was read as the character it precedes, which `\n` or `\x41` is not. */
+  escaped: boolean;
+  end: number;
+}
+
 /** A quoted run whose opening quote precedes `from`: its unescaped body, and the index past it. */
 function quotedRun(
   text: string,
   from: number,
   quote: string,
   rules: QuoteRules
-): { body: string; end: number } {
+): QuotedRun {
   let body = '';
+  let escaped = false;
   let at = from;
   while (at < text.length) {
     const char = text.charAt(at);
     if (char === BACKSLASH && rules.backslashEscapes) {
+      escaped = true;
       body += text.charAt(at + 1);
       at += 2;
     } else if (char !== quote) {
@@ -165,9 +175,9 @@ function quotedRun(
     } else if (rules.doubledQuote && text.charAt(at + 1) === quote) {
       body += quote;
       at += 2;
-    } else return { body, end: at + 1 };
+    } else return { body, escaped, end: at + 1 };
   }
-  return { body, end: text.length };
+  return { body, escaped, end: text.length };
 }
 
 /** The `'` that continues the string ending at `from`, or null when it ends there. */
@@ -186,24 +196,31 @@ function continuationAt(text: string, from: number): number | null {
   return newline && text.charAt(at) === "'" ? at : null;
 }
 
-/** The index past a string constant whose opening quote precedes `from`, every segment joined to it included. */
-function stringConstantEnd(
+/** A string constant whose opening quote precedes `from`, every segment joined to it included. */
+function stringConstant(
   text: string,
   from: number,
   rules: QuoteRules
-): number {
-  let end = quotedRun(text, from, "'", rules).end;
+): QuotedRun {
+  const constant = quotedRun(text, from, "'", rules);
   for (
-    let next = continuationAt(text, end);
+    let next = continuationAt(text, constant.end);
     next !== null;
-    next = continuationAt(text, end)
-  )
-    end = quotedRun(text, next + 1, "'", rules).end;
-  return end;
+    next = continuationAt(text, constant.end)
+  ) {
+    const segment = quotedRun(text, next + 1, "'", rules);
+    constant.body += segment.body;
+    constant.escaped ||= segment.escaped;
+    constant.end = segment.end;
+  }
+  return constant;
 }
 
-/** The index past a dollar-quoted string opening at `from`, or null when its `$` opens none. */
-function dollarQuotedEnd(text: string, from: number): number | null {
+/** A dollar-quoted string opening at `from`, or null when its `$` opens none. */
+function dollarQuoted(
+  text: string,
+  from: number
+): { body: string; end: number } | null {
   let at = from + 1;
   if (isIdentifierChar(text.charAt(at), true)) {
     at++;
@@ -216,10 +233,12 @@ function dollarQuotedEnd(text: string, from: number): number | null {
   if (text.charAt(at) !== '$') return null;
   const delimiter = text.slice(from, at + 1);
   const close = text.indexOf(delimiter, at + 1);
-  return close === -1 ? text.length : close + delimiter.length;
+  return close === -1
+    ? { body: text.slice(at + 1), end: text.length }
+    : { body: text.slice(at + 1, close), end: close + delimiter.length };
 }
 
-/** Reads the word at `at`, or the string constant it prefixes; answers where the next token begins. */
+/** A word may prefix a string constant (`E'…'`, `U&'…'`), which is read with it. */
 function readWord(text: string, at: number, tokens: SqlToken[]): number {
   let end = at + 1;
   while (end < text.length && isIdentifierChar(text.charAt(end), false)) end++;
@@ -227,11 +246,15 @@ function readWord(text: string, at: number, tokens: SqlToken[]): number {
   const next = text.charAt(end);
   const unicodeQuote = text.charAt(end + 1);
   if (next === "'" && STRING_PREFIX.test(word)) {
-    tokens.push({ kind: 'string' });
-    return stringConstantEnd(text, end + 1, {
+    const constant = stringConstant(text, end + 1, {
       backslashEscapes: ESCAPE_STRING_PREFIX.test(word),
       doubledQuote: !BIT_STRING_PREFIX.test(word),
     });
+    // Only an escape string is a plain string constant: `B`, `X` and `N`
+    // spell other tokens.
+    const plain = ESCAPE_STRING_PREFIX.test(word) && !constant.escaped;
+    tokens.push({ kind: 'string', text: plain ? constant.body : null });
+    return constant.end;
   }
   if (
     next === '&' &&
@@ -239,8 +262,9 @@ function readWord(text: string, at: number, tokens: SqlToken[]): number {
     UNICODE_ESCAPE_PREFIX.test(word)
   ) {
     if (unicodeQuote === "'") {
-      tokens.push({ kind: 'string' });
-      return stringConstantEnd(text, end + 2, PLAIN);
+      // Its `\XXXX` escapes are not decoded here.
+      tokens.push({ kind: 'string', text: null });
+      return stringConstant(text, end + 2, PLAIN).end;
     }
     // `U&"…"` spells a name in escapes this reader does not decode.
     tokens.push({ kind: 'other', text: 'U&"' });
@@ -250,7 +274,6 @@ function readWord(text: string, at: number, tokens: SqlToken[]): number {
   return end;
 }
 
-/** Reads the token at `at` into `tokens`; answers where the next one begins. */
 function readToken(text: string, at: number, tokens: SqlToken[]): number {
   const char = text.charAt(at);
   if (SQL_SPACE.test(char)) return at + 1;
@@ -263,14 +286,15 @@ function readToken(text: string, at: number, tokens: SqlToken[]): number {
       return end;
     }
     case "'": {
-      tokens.push({ kind: 'string' });
-      return stringConstantEnd(text, at + 1, PLAIN);
+      const { body, end } = stringConstant(text, at + 1, PLAIN);
+      tokens.push({ kind: 'string', text: body });
+      return end;
     }
     case '$': {
-      const end = dollarQuotedEnd(text, at);
-      if (end === null) break;
-      tokens.push({ kind: 'string' });
-      return end;
+      const quoted = dollarQuoted(text, at);
+      if (quoted === null) break;
+      tokens.push({ kind: 'string', text: quoted.body });
+      return quoted.end;
     }
     default: {
       if (isIdentifierChar(char, true)) return readWord(text, at, tokens);
@@ -283,8 +307,8 @@ function readToken(text: string, at: number, tokens: SqlToken[]): number {
 /**
  * `text` as PostgreSQL's lexer (`scan.l`) splits it, as far as the ledger
  * reads it: a `word` per keyword or identifier, a `quoted` identifier, one
- * `string` per string constant whatever it holds, and an `other` per remaining
- * character. Whitespace and comments yield nothing, so nothing inside them or
+ * `string` per string constant whatever it holds, with its text where it is
+ * decoded, and an `other` per remaining character. Whitespace and comments yield nothing, so nothing inside them or
  * a string reads as SQL and nothing outside them is hidden. A string constant runs on through every `'` that follows it
  * after whitespace holding a newline, `--` comments allowed, in its own mode
  * (`quotecontinue`); a block comment in that gap ends it. Where a pattern
@@ -308,13 +332,16 @@ function isSymbol(token: SqlToken | undefined, symbol: string): boolean {
   return token?.kind === 'other' && token.text === symbol;
 }
 
-/** `tokens` split at each `;`, empty statements dropped. */
-function statementsOf(tokens: readonly SqlToken[]): SqlToken[][] {
-  const statements: SqlToken[][] = [[]];
+function splitAt(tokens: readonly SqlToken[], separator: string): SqlToken[][] {
+  const parts: SqlToken[][] = [[]];
   for (const token of tokens)
-    if (isSymbol(token, ';')) statements.push([]);
-    else statements.at(-1)?.push(token);
-  return statements.filter((statement) => statement.length > 0);
+    if (isSymbol(token, separator)) parts.push([]);
+    else parts.at(-1)?.push(token);
+  return parts;
+}
+
+function statementsOf(tokens: readonly SqlToken[]): SqlToken[][] {
+  return splitAt(tokens, ';').filter((statement) => statement.length > 0);
 }
 
 async function appliedRows(client: SQL): Promise<AppliedRow[]> {
@@ -347,15 +374,18 @@ function storedIdentifier(name: string): string {
   return stored;
 }
 
+// PostgreSQL folds only A-Z, in a name and in `pg_strcasecmp`; `toLowerCase`
+// folds `Ä` too.
+function foldAscii(text: string): string {
+  return text.replaceAll(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
 /** The name `token` spells, as PostgreSQL stores it, or null for none. */
 function identifierName(token: SqlToken | undefined): string | null {
   if (token?.kind === 'quoted')
     return token.name === '' ? null : storedIdentifier(token.name);
   if (token?.kind !== 'word') return null;
-  // PostgreSQL folds only A-Z in an unquoted name; `toLowerCase` folds `Ä` too.
-  return storedIdentifier(
-    token.text.replaceAll(/[A-Z]/g, (letter) => letter.toLowerCase())
-  );
+  return storedIdentifier(foldAscii(token.text));
 }
 
 /** An index and the relation it is built on, as SQL text `to_regclass` reads. */
@@ -422,37 +452,70 @@ const REINDEX_TARGETS: ReadonlySet<string> = new Set([
   'system',
 ]);
 
-/**
- * Whether the `( … )` list `options` turns `concurrently` on: alone, or with
- * `true`, `on` or `1`, as `defGetBoolean` reads it. Any other value, a string
- * among them, reads as off.
- */
-function optionEnables(options: readonly SqlToken[]): boolean {
-  const elements: SqlToken[][] = [[]];
-  for (const token of options)
-    if (isSymbol(token, ',')) elements.push([]);
-    else elements.at(-1)?.push(token);
-  return elements.some(([name, ...value]) => {
-    if (!isWord(name, 'concurrently')) return false;
-    if (value.length === 0) return true;
-    const [only] = value;
-    return (
-      value.length === 1 &&
-      (isWord(only, 'true') || isWord(only, 'on') || isSymbol(only, '1'))
-    );
-  });
+const INTEGER = /^[+-]?\d+$/;
+
+function isOther(
+  token: SqlToken
+): token is Extract<SqlToken, { kind: 'other' }> {
+  return token.kind === 'other';
 }
 
-/** `REINDEX [ ( option, … ) ] target [ CONCURRENTLY ] …`, by position. */
+function spelledText(value: readonly SqlToken[]): string | null {
+  const [only, ...rest] = value;
+  if (!only || rest.length > 0) return null;
+  if (only.kind === 'word') return only.text;
+  if (only.kind === 'quoted') return only.name;
+  return only.kind === 'string' ? only.text : null;
+}
+
+/**
+ * An option's value as `defGetBoolean` reads it: none is true, an integer is
+ * 0 or 1, and any other spelling is `true`, `false`, `on` or `off` in any case.
+ * Null where it refuses the value or this reader does not decode it.
+ */
+function booleanOption(value: readonly SqlToken[]): boolean | null {
+  if (value.length === 0) return true;
+  const spelled = spelledText(value);
+  if (spelled !== null) {
+    const folded = foldAscii(spelled);
+    if (folded === 'true' || folded === 'on') return true;
+    return folded === 'false' || folded === 'off' ? false : null;
+  }
+  // Every `other` token is one character, so an integer arrives digit by digit.
+  const digits = value.every(isOther)
+    ? value.map((token) => token.text).join('')
+    : '';
+  if (!INTEGER.test(digits)) return null;
+  const number = Number(digits);
+  return number === 1 ? true : number === 0 ? false : null;
+}
+
+/**
+ * The `( … )` list's `concurrently`, read as `ExecReindex` reads it: in order,
+ * so the last element naming it decides. Null when that element's value is
+ * not read here.
+ */
+function listedConcurrently(options: readonly SqlToken[]): boolean | null {
+  let enabled: boolean | null = false;
+  for (const [name, ...value] of splitAt(options, ','))
+    if (identifierName(name) === 'concurrently') enabled = booleanOption(value);
+  return enabled;
+}
+
+/**
+ * `REINDEX [ ( option, … ) ] target [ CONCURRENTLY ] …`, by position. The
+ * keyword is appended after the list (`gram.y`), so it overrides the list; a
+ * value this cannot read keeps the transaction.
+ */
 function reindexIsConcurrent(statement: readonly SqlToken[]): boolean {
   let at = 1;
-  let enabled = false;
+  let listed: boolean | null = false;
   if (isSymbol(statement[at], '(')) {
     const close = statement.findIndex(
       (token, index) => index > at && isSymbol(token, ')')
     );
     if (close === -1) return false;
-    enabled = optionEnables(statement.slice(at + 1, close));
+    listed = listedConcurrently(statement.slice(at + 1, close));
     at = close + 1;
   }
   const target = statement[at];
@@ -461,7 +524,7 @@ function reindexIsConcurrent(statement: readonly SqlToken[]): boolean {
     !REINDEX_TARGETS.has(target.text.toLowerCase())
   )
     return false;
-  return enabled || isWord(statement[at + 1], 'concurrently');
+  return listed === true || isWord(statement[at + 1], 'concurrently');
 }
 
 /**
@@ -526,7 +589,6 @@ function concurrentForm(
   return undefined;
 }
 
-/** The `name` of each row, or the row itself when it has none. */
 function indexNames(rows: readonly unknown[]): string[] {
   return rows.flatMap((row) => {
     if (typeof row !== 'object' || row === null || !('name' in row))
@@ -616,7 +678,6 @@ export async function assertSqlMigrationHistory(
     assertLedgerPrefix(SQL_FILES, files, await appliedRows(client));
 }
 
-/** Whether the schema-qualified `name` resolves to a table. */
 export async function tableExists(client: SQL, name: string): Promise<boolean> {
   const [probe]: unknown[] = await client`
     select to_regclass(${name}) is not null as present

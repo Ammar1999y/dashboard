@@ -5,6 +5,7 @@ For the agent working in `apps/front-end`. This is Phase 2 plus Phase 3 step 4 o
 ## Where things stand
 
 The back-end and `packages/shared` are done:
+
 - Every server success response now has one zod schema in `packages/shared/src/responses/*.ts`.
 - The back-end is type-checked against those schemas, and validated against them at runtime under its test runner.
 - The OpenAPI document is generated from them.
@@ -31,39 +32,39 @@ The front-end still parses with its own hand-written copies. Your job is to repl
 
 ### Table routes (`@app/shared/responses/*`)
 
-| Front-end today | Shared replacement |
-| --- | --- |
-| `types/api.ts`: `createdResponseSchema`, `updatedResponseSchema`, `noDataResponseSchema` / `deletedResponseSchema` | `common`: `createdIdSchema`, `updatedAtSchema`, `noDataSchema`. These also serve the pending entities through `use-entity-mutations.ts`. `storedRowSchema` stays front-end, because it is pending-only |
-| `types/user.ts`: `userRowsSchema`, `userDetailSchema`, `sessionsPageSchema`, `revokedSessionsSchema` | `users`: same names, plus `userDetailBaseSchema` |
-| `types/permission.ts`: `roleSummarySchema`, `roleSummariesSchema`, `permissionRowsSchema`, `permissionDetailSchema`, `permissionMatrixSchema` | `permissions`: same names |
-| `lib/account/schemas.ts`: `contactChangeStartedSchema` | `users`: `contactChangeStartedSchema` (now `z.xor`; `'otpSent' in data` still narrows) |
-| `lib/account/schemas.ts`: `contactChangeCommittedSchema` | `auth`: `verifiedSchema` |
-| `theme-customizer/preferences.ts`: `storedPreferencesSchema`, `savedPreferencesSchema` | `users`: `storedPreferencesSchema`; `common`: `updatedAtSchema` |
-| `lib/media/schemas.ts`: `libraryFileSchema`, `fileDetailSchema`, the breadcrumb/folder/hit/usage schemas | `media`: `mediaFileSchema` (its `url` is already lenient), `mediaFileDetailsSchema`, `mediaFolderSchema`, `mediaFolderHitSchema`, `mediaUsageSchema` |
-| `lib/media/schemas.ts`: `listingSchemas.folder` / `.all` / `.unfiled` | `media`: `folderListingSchema`, `searchListingSchema`, `unfiledListingSchema`, each with your local `scope` transform |
-| `lib/media/schemas.ts`: the updated/moved/deleted file and created/updated/deleted folder schemas | `media`: `updatedFileSchema`, `movedFilesSchema`, `deletedFilesSchema`, `createdFolderSchema`, `updatedFolderSchema`, `deletedFolderSchema` |
-| `lib/files/upload.ts`: `mediaFileSchema` (6 fields) and the upload tuple | `media`: `mediaFileSchema.pick({ id, kind, displayName, mimeType, sizeBytes, url }).extend({ url: z.string().min(1) })` inside a one-element array. This keeps today's 6-field tolerance and the non-empty url |
-| `hooks/use-resend-cooldown.ts`: `otpSentSchema` | `auth`: `anonymousOtpSentSchema` for `/api/auth/{otp,passwordless,forgot-password}/send`; `ladderOtpSentSchema` for `/api/auth/forgot-password/second-factor/send` and the plugin's `/two-factor/otp/send`. Both have the same client rule |
-| `components/dash/auth/schemas.ts`: `verifiedSchema`, `recoveryResultSchema`, `resetDoneSchema` | `auth`: same names |
-| `lib/auth/reauth-proof.ts`: `grantSchema` | `auth`: `reauthGrantSchema`, for both `/api/dash/auth/reauth` and the plugin's `/reauth/passkey/verify` |
-| `components/dash/auth/sign-up.tsx`: no schema today | `common`: `createdIdSchema` |
+| Front-end today                                                                                                                               | Shared replacement                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `types/api.ts`: `createdResponseSchema`, `updatedResponseSchema`, `noDataResponseSchema` / `deletedResponseSchema`                            | `common`: `createdIdSchema`, `updatedAtSchema`, `noDataSchema`. These also serve the pending entities through `use-entity-mutations.ts`. `storedRowSchema` stays front-end, because it is pending-only                                     |
+| `types/user.ts`: `userRowsSchema`, `userDetailSchema`, `sessionsPageSchema`, `revokedSessionsSchema`                                          | `users`: same names, plus `userDetailBaseSchema`                                                                                                                                                                                           |
+| `types/permission.ts`: `roleSummarySchema`, `roleSummariesSchema`, `permissionRowsSchema`, `permissionDetailSchema`, `permissionMatrixSchema` | `permissions`: same names                                                                                                                                                                                                                  |
+| `lib/account/schemas.ts`: `contactChangeStartedSchema`                                                                                        | `users`: `contactChangeStartedSchema` (now `z.xor`; `'otpSent' in data` still narrows)                                                                                                                                                     |
+| `lib/account/schemas.ts`: `contactChangeCommittedSchema`                                                                                      | `auth`: `verifiedSchema`                                                                                                                                                                                                                   |
+| `theme-customizer/preferences.ts`: `storedPreferencesSchema`, `savedPreferencesSchema`                                                        | `users`: `storedPreferencesSchema`; `common`: `updatedAtSchema`                                                                                                                                                                            |
+| `lib/media/schemas.ts`: `libraryFileSchema`, `fileDetailSchema`, the breadcrumb/folder/hit/usage schemas                                      | `media`: `mediaFileSchema` (its `url` is already lenient), `mediaFileDetailsSchema`, `mediaFolderSchema`, `mediaFolderHitSchema`, `mediaUsageSchema`                                                                                       |
+| `lib/media/schemas.ts`: `listingSchemas.folder` / `.all` / `.unfiled`                                                                         | `media`: `folderListingSchema`, `searchListingSchema`, `unfiledListingSchema`, each with your local `scope` transform                                                                                                                      |
+| `lib/media/schemas.ts`: the updated/moved/deleted file and created/updated/deleted folder schemas                                             | `media`: `updatedFileSchema`, `movedFilesSchema`, `deletedFilesSchema`, `createdFolderSchema`, `updatedFolderSchema`, `deletedFolderSchema`                                                                                                |
+| `lib/files/upload.ts`: `mediaFileSchema` (6 fields) and the upload tuple                                                                      | `media`: `mediaFileSchema.pick({ id, kind, displayName, mimeType, sizeBytes, url }).extend({ url: z.string().min(1) })` inside a one-element array. This keeps today's 6-field tolerance and the non-empty url                             |
+| `hooks/use-resend-cooldown.ts`: `otpSentSchema`                                                                                               | `auth`: `anonymousOtpSentSchema` for `/api/auth/{otp,passwordless,forgot-password}/send`; `ladderOtpSentSchema` for `/api/auth/forgot-password/second-factor/send` and the plugin's `/two-factor/otp/send`. Both have the same client rule |
+| `components/dash/auth/schemas.ts`: `verifiedSchema`, `recoveryResultSchema`, `resetDoneSchema`                                                | `auth`: same names                                                                                                                                                                                                                         |
+| `lib/auth/reauth-proof.ts`: `grantSchema`                                                                                                     | `auth`: `reauthGrantSchema`, for both `/api/dash/auth/reauth` and the plugin's `/reauth/passkey/verify`                                                                                                                                    |
+| `components/dash/auth/sign-up.tsx`: no schema today                                                                                           | `common`: `createdIdSchema`                                                                                                                                                                                                                |
 
 ### Our Better Auth plugin endpoints (`@app/shared/responses/better-auth`)
 
 The registry entries are whole bodies. For a call through `authRequest`/`authFetch` **without** `plain`, the transport already checks the envelope, so pass the **data** schema below. With `plain`, pass the whole-body schema.
 
-| Front-end today | Shared replacement |
-| --- | --- |
-| `components/dash/auth/schemas.ts`: `twoFactorChallengeSchema`, and the option schemas | `twoFactorChallengeSchema`. It now **requires `twoFactorMethods`**, which the server always sends. Derive the option type as `z.output<typeof twoFactorChallengeSchema>['twoFactorOptions'][number]` |
-| `components/dash/auth/schemas.ts`: `loggedInSchema` | `loggedInSchema` |
-| `components/dash/auth/schemas.ts`: `signInResultSchema` (plain, one schema for two routes) | `passwordlessResultSchema` for `/passwordless/verify`, where the session body carries `message`; `oauthOutcomeSchema` for `/oauth/result`, where it does not |
-| `components/dash/auth/schemas.ts`: `trustedSchema`, `capabilitiesSchema`, `oauthStartSchema` | `deviceTrustedSchema`, `capabilitiesSchema` (keep your transform), `oauthStartedSchema` (http(s)-only, as today) |
-| `lib/auth/reauth-proof.ts`: `methodsSchema` | `reauthMethodsSchema` |
-| `lib/account/schemas.ts`: `methodsSchema` / `enrolledMethodSchema` | `enrolledMethodsSchema` / `enrolledMethodSchema` (keep your array transform) |
-| `lib/account/schemas.ts`: `totpStartedSchema`, `totpEnabledSchema`, `otpEnabledSchema`, `backupCodesSchema`, `removedMethodSchema`, `defaultMethodSchema`, `passkeyDeletedSchema`, `trustedDevicesSchema` / `trustedDeviceSchema`, `deviceRevokedSchema` | same names (keep the `devices` transform) |
-| `lib/auth/passkey.ts`: `passkeyGrantResponseSchema` | `passkeyGrantedSchema` |
-| `lib/auth/passkey.ts`: `requestOptionsSchema` (`z.looseObject({ challenge })`), and the two options calls that pass no schema (`reauth-proof.ts:44`, `challenge.tsx:77`) | `passkeyRequestOptionsSchema`, passed at both calls and used in `authenticateWithPasskey`. It mirrors the library's full options type, so nothing the browser needs is stripped |
-| `lib/account/two-factor.ts:236` (`/two-factor/backup-codes/acknowledge`) and `:281` (`/two-factor/disable`): no schema today | `pluginMessage()` with `plain: true`. These bodies have no `data` key |
+| Front-end today                                                                                                                                                                                                                                          | Shared replacement                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `components/dash/auth/schemas.ts`: `twoFactorChallengeSchema`, and the option schemas                                                                                                                                                                    | `twoFactorChallengeSchema`. It now **requires `twoFactorMethods`**, which the server always sends. Derive the option type as `z.output<typeof twoFactorChallengeSchema>['twoFactorOptions'][number]` |
+| `components/dash/auth/schemas.ts`: `loggedInSchema`                                                                                                                                                                                                      | `loggedInSchema`                                                                                                                                                                                     |
+| `components/dash/auth/schemas.ts`: `signInResultSchema` (plain, one schema for two routes)                                                                                                                                                               | `passwordlessResultSchema` for `/passwordless/verify`, where the session body carries `message`; `oauthOutcomeSchema` for `/oauth/result`, where it does not                                         |
+| `components/dash/auth/schemas.ts`: `trustedSchema`, `capabilitiesSchema`, `oauthStartSchema`                                                                                                                                                             | `deviceTrustedSchema`, `capabilitiesSchema` (keep your transform), `oauthStartedSchema` (http(s)-only, as today)                                                                                     |
+| `lib/auth/reauth-proof.ts`: `methodsSchema`                                                                                                                                                                                                              | `reauthMethodsSchema`                                                                                                                                                                                |
+| `lib/account/schemas.ts`: `methodsSchema` / `enrolledMethodSchema`                                                                                                                                                                                       | `enrolledMethodsSchema` / `enrolledMethodSchema` (keep your array transform)                                                                                                                         |
+| `lib/account/schemas.ts`: `totpStartedSchema`, `totpEnabledSchema`, `otpEnabledSchema`, `backupCodesSchema`, `removedMethodSchema`, `defaultMethodSchema`, `passkeyDeletedSchema`, `trustedDevicesSchema` / `trustedDeviceSchema`, `deviceRevokedSchema` | same names (keep the `devices` transform)                                                                                                                                                            |
+| `lib/auth/passkey.ts`: `passkeyGrantResponseSchema`                                                                                                                                                                                                      | `passkeyGrantedSchema`                                                                                                                                                                               |
+| `lib/auth/passkey.ts`: `requestOptionsSchema` (`z.looseObject({ challenge })`), and the two options calls that pass no schema (`reauth-proof.ts:44`, `challenge.tsx:77`)                                                                                 | `passkeyRequestOptionsSchema`, passed at both calls and used in `authenticateWithPasskey`. It mirrors the library's full options type, so nothing the browser needs is stripped                      |
+| `lib/account/two-factor.ts:236` (`/two-factor/backup-codes/acknowledge`) and `:281` (`/two-factor/disable`): no schema today                                                                                                                             | `pluginMessage()` with `plain: true`. These bodies have no `data` key                                                                                                                                |
 
 **Out of scope:** the Better Auth library's own shapes keep their front-end schemas. That covers `signedInSchema`, `creationOptionsSchema`, `storedPasskeySchema`, `passkeysSchema` and `grantsSchema`.
 
@@ -94,6 +95,7 @@ Add `@typescript-eslint/no-restricted-imports` with `allowTypeImports` for `@app
 ## Intended client changes
 
 These are the only ways the client may become stricter:
+
 - the two-factor challenge requires `twoFactorMethods`;
 - the `/passwordless/verify` session body requires `message`;
 - `z.xor` unions refuse a body matching two branches (contact change, the `/two-factor/otp/verify` data);
@@ -103,11 +105,11 @@ Anything else that parses differently from today is a regression. Report it.
 
 ## Verification
 
-1. `bun run lint` in `apps/front-end` (tsc, ESLint, `audit:css`).
+1. `bun run lint` in `apps/front-end` (`bun check`, ESLint, `audit:css`).
 2. `bun test tests`, the local, git-ignored suite. Update tests that imported the removed schemas. Every 2xx mock answer now goes through the wrapper check.
 3. **Deliberate break:** change one mock answer's field type and confirm a test fails with the route key and the issue path; then revert it.
 4. `bun run build` once at the end. `prebuild` regenerates committed assets, so report any resulting diff in them.
-5. Read-only: `cd apps/back-end && bun --bun tsc --noEmit` stays clean. You changed nothing there; this confirms it.
+5. Read-only: `cd apps/back-end && bun run typecheck` stays clean. You changed nothing there; this confirms it.
 
 ## Report back
 

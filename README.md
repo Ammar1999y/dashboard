@@ -29,6 +29,7 @@ cd apps/back-end && bun run dev
 bun run --filter @app/front-end dev
 
 # every workspace that defines the script, plus the root-level files
+bun run typecheck       # all three workspace tsconfigs, using bun check
 bun run lint
 bun run format:check
 bun run test            # the back-end unit tier
@@ -38,6 +39,33 @@ Each app's own `package.json` lists its full script set (`test:all`, `smoke`,
 `db:generate`, `check:schema-drift`, …). Git hooks come from the root
 `lefthook.yml` and run each job inside the workspace it names; `bun run verify`
 inside `apps/back-end` runs the whole pre-push set by hand.
+
+Type checking uses [Bun's built-in checker](https://bun.com/docs/runtime/check).
+Run `bun check -p apps/back-end` from the root to check one workspace.
+TypeScript stays installed for Next.js, ESLint and editor support.
+
+Tests and app startup do not run type checking automatically. Run
+`bun run typecheck` separately when needed.
+
+Current commands and deployment instructions use `bun check`. Historical
+review results retain the TypeScript commands that actually produced them.
+
+## Bun 1.4.3 adoption
+
+The [release notes](https://bun.com/blog/bun-v1.4.3) were checked against the
+current integrations and deployment:
+
+| Feature                                                       | Project decision                                                                                                                                                                             |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Bun.FetchSession`                                            | Adopted in `themes:sync`: at most six idle connections, matching the existing request batch size, disposed on success or failure. Request deadlines remain in place.                         |
+| Server CPU/HTTP, TLS, PostgreSQL and SQLite fixes             | Supplied by the runtime/image upgrade. Existing transaction deadlines, error handling and graceful-shutdown safeguards still serve separate purposes.                                        |
+| `crypto.randomInt`, rejected promises and CSS bundling fixes  | Existing OTP/backup-code generation, theme discovery and `build-editor-css.ts` already use these operations. No API migration is needed.                                                     |
+| Proxy matching and install tarball pruning                    | Automatic when applicable. Preserve the deployment's proxy environment and CI's frozen lockfile; neither needs a new setting.                                                                |
+| `CompressionStream` levels and `If-Range`                     | No application compression stream or local-file download service to migrate. Media downloads use R2 URLs.                                                                                    |
+| Native S3 streaming fixes                                     | Keep the AWS SDK: R2 requires checksum readback, conditional creation, copy metadata and batch deletion. Equivalent native-client behaviour has not been established.                        |
+| Code-generation restriction                                   | A probe confirmed that blocking strings makes `z.compile` fall back to interpreted validation; strict compilation throws. Enabling it would remove the fast path used by route registration. |
+| `Bun.ModuleGraph`                                             | No multi-instance host here. Retain the existing test harness and its database/process ownership guards.                                                                                     |
+| Compiled bytecode profiles, JIT tuning and wider chunk hashes | The API runs from source; Next.js builds the dashboard. Revisit if introducing a compiled API image or split Bun JavaScript bundles, with startup/memory measurements.                       |
 
 ## The shared package
 

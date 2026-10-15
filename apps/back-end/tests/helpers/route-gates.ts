@@ -3,14 +3,20 @@
  * text: a call resolves to its declaration whatever the import path or local
  * name. Followed, in any workspace file: function declarations, methods,
  * accessors, constructors under `new`, functions held in a variable, an object
- * property (shorthand included) or a class field, a callee held as any other
- * value through what that value resolves to, and an element-access call with a
- * literal key. `requirePermission`'s window is read from a literal `reauth`
- * at the call. What the analyzer cannot read throws, naming the site, instead
- * of reading as "no gate": unreadable options, `requirePermission` referenced
- * without a call, a computed key over workspace members, and a workspace callee
- * it cannot follow. Interface members and parameters are not followed: their
- * implementation is followed where it is written.
+ * property (shorthand included) or a class field, every value a later write
+ * puts there (`Object.assign` with a literal included, and a stored parameter
+ * through the arguments its call sites pass), a callee held as any other value
+ * through what that value resolves to, and an element-access call with a
+ * literal key naming a declared member. `requirePermission`'s window is read
+ * from a literal `reauth` at the call. Interface members and parameters are not
+ * followed: their implementation is followed where it is written.
+ *
+ * What the analyzer cannot read throws, naming the site, instead of reading as
+ * "no gate": unreadable options, `requirePermission` referenced without a
+ * call, a write that is not one whole value, and a workspace callee it cannot
+ * follow. So does a call of code held as data outside a parameter: any other
+ * element key, a loop element or callback parameter fed from a workspace
+ * binding, and the function another call returned (`registry.get(key)()`).
  */
 import path from 'node:path';
 
@@ -105,6 +111,55 @@ function passesReauth(call: ts.CallExpression): boolean {
   return reauth;
 }
 
+/** The assignments whose right side is the whole new value. */
+const WHOLE_VALUE_ASSIGNMENTS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+function unwrapped(node: ts.Expression): ts.Expression {
+  let inner = node;
+  while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+  return inner;
+}
+
+/** What a destructuring assignment's left side writes to. */
+function patternTargets(node: ts.Expression): ts.Expression[] {
+  let target = unwrapped(node);
+  // A default: `[a = fallback] = …` writes `a`.
+  while (
+    ts.isBinaryExpression(target) &&
+    target.operatorToken.kind === ts.SyntaxKind.EqualsToken
+  )
+    target = unwrapped(target.left);
+  if (ts.isArrayLiteralExpression(target))
+    return target.elements.flatMap((element) =>
+      ts.isOmittedExpression(element)
+        ? []
+        : patternTargets(
+            ts.isSpreadElement(element) ? element.expression : element
+          )
+    );
+  if (ts.isObjectLiteralExpression(target))
+    return target.properties.flatMap((property) =>
+      ts.isShorthandPropertyAssignment(property)
+        ? [property.name]
+        : ts.isPropertyAssignment(property)
+          ? patternTargets(property.initializer)
+          : ts.isSpreadAssignment(property)
+            ? patternTargets(property.expression)
+            : []
+    );
+  return [target];
+}
+
+function isFunction(node: ts.Node): boolean {
+  const value = ts.isExpression(node) ? unwrapped(node) : node;
+  return ts.isArrowFunction(value) || ts.isFunctionExpression(value);
+}
+
 /** What a declaration runs when reached, or null for anything that is not a function. */
 function bodyOf(declaration: ts.Declaration): ts.Node | null {
   if (
@@ -121,8 +176,7 @@ function bodyOf(declaration: ts.Declaration): ts.Node | null {
       ts.isPropertyAssignment(declaration) ||
       ts.isPropertyDeclaration(declaration)) &&
     declaration.initializer &&
-    (ts.isArrowFunction(declaration.initializer) ||
-      ts.isFunctionExpression(declaration.initializer))
+    isFunction(declaration.initializer)
   )
     return declaration.initializer;
   return null;
@@ -211,20 +265,23 @@ export function createRouteGateAnalyzer(
     return source;
   }
 
-  /** `file#name`, or null for a declaration outside this workspace's sources. */
-  function keyOf(declaration: ts.Declaration): string | null {
-    const source = declaration.getSourceFile();
+  /** `source` relative to the workspace, or null for a file outside its sources. */
+  function workspaceFile(source: ts.SourceFile): string | null {
     const file = path
       .relative(REPO_ROOT, source.fileName)
       .replaceAll(path.sep, '/');
-    if (
-      source.isDeclarationFile ||
+    return source.isDeclarationFile ||
       file.startsWith('..') ||
       file.includes('node_modules/')
-    )
-      return null;
+      ? null
+      : file;
+  }
+
+  /** `file#name`, or null for a declaration outside this workspace's sources. */
+  function keyOf(declaration: ts.Declaration): string | null {
+    const file = workspaceFile(declaration.getSourceFile());
     const name = ts.getNameOfDeclaration(declaration);
-    return name ? `${file}#${name.getText()}` : null;
+    return file !== null && name ? `${file}#${name.getText()}` : null;
   }
 
   const resolved = (symbol: ts.Symbol | undefined) =>
@@ -259,30 +316,279 @@ export function createRouteGateAnalyzer(
     return checker.getPropertyOfType(type, text)?.declarations ?? [];
   }
 
-  /** Every value assigned to a variable declared without one, in its file. */
-  function assignedValues(declaration: ts.VariableDeclaration): ts.Node[] {
-    const symbol = checker.getSymbolAtLocation(declaration.name);
-    const values: ts.Node[] = [];
-    const visit = (node: ts.Node) => {
-      if (
-        ts.isBinaryExpression(node) &&
-        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        ts.isIdentifier(node.left) &&
-        checker.getSymbolAtLocation(node.left) === symbol
-      )
-        values.push(node.right);
-      ts.forEachChild(node, visit);
-    };
-    if (symbol) visit(declaration.getSourceFile());
-    return values;
-  }
-
   function symbolAt(node: ts.Identifier): ts.Symbol | undefined {
     return resolved(
       ts.isShorthandPropertyAssignment(node.parent)
         ? checker.getShorthandAssignmentValueSymbol(node.parent)
         : checker.getSymbolAtLocation(node)
     );
+  }
+
+  /** `Object.assign(…)`, by the global it resolves to, not by spelling alone. */
+  function isObjectAssign(call: ts.CallExpression): boolean {
+    const callee = unwrapped(call.expression);
+    if (
+      !ts.isPropertyAccessExpression(callee) ||
+      callee.name.text !== 'assign' ||
+      !ts.isIdentifier(callee.expression) ||
+      callee.expression.text !== 'Object'
+    )
+      return false;
+    const declarations =
+      checker.getSymbolAtLocation(callee.expression)?.declarations ?? [];
+    return declarations.some(
+      (declaration) => declaration.getSourceFile().isDeclarationFile
+    );
+  }
+
+  function inWorkspace(declaration: ts.Declaration | undefined): boolean {
+    return (
+      declaration !== undefined &&
+      workspaceFile(declaration.getSourceFile()) !== null
+    );
+  }
+
+  /**
+   * The binding a value is read out of: `steps` in `steps.forEach`, `registry`
+   * in `registry.get(…)`. A parameter is followed where its arguments are
+   * written.
+   */
+  function holderKind(
+    expression: ts.Expression
+  ): 'parameter' | 'workspace' | null {
+    let root = unwrapped(expression);
+    while (
+      ts.isPropertyAccessExpression(root) ||
+      ts.isElementAccessExpression(root) ||
+      ts.isCallExpression(root) ||
+      ts.isNonNullExpression(root)
+    )
+      root = unwrapped(root.expression);
+    if (!ts.isIdentifier(root)) return null;
+    const declarations = symbolAt(root)?.declarations ?? [];
+    if (declarations.some(ts.isParameter)) return 'parameter';
+    return declarations.some(inWorkspace) ? 'workspace' : null;
+  }
+
+  /**
+   * Whether `call` may run workspace code held as data: read out of a workspace
+   * binding (`holder`), or typed by a signature declared here. A method of the
+   * receiver's type, such as `text[Symbol.iterator]()`, is a call on a value
+   * rather than of one, so only a workspace method counts.
+   */
+  function mayHoldWorkspaceCode(
+    call: ts.CallExpression | ts.NewExpression,
+    holder: ts.Expression | undefined
+  ): boolean {
+    const kind = holder === undefined ? null : holderKind(holder);
+    if (kind === 'parameter') return false;
+    const declaration = checker.getResolvedSignature(call)?.declaration;
+    if (
+      declaration &&
+      (ts.isMethodSignature(declaration) || ts.isMethodDeclaration(declaration))
+    )
+      return inWorkspace(declaration);
+    return kind === 'workspace' || inWorkspace(declaration);
+  }
+
+  /**
+   * Where a loop element or an inline callback's parameter gets its value: the
+   * collection iterated, or the receiver of the call it is passed to. Any other
+   * parameter is followed where its arguments are written.
+   */
+  function dataSource(
+    declaration: ts.Declaration
+  ): { what: string; holder: ts.Expression | undefined } | null {
+    if (
+      ts.isVariableDeclaration(declaration) &&
+      (ts.isForOfStatement(declaration.parent.parent) ||
+        ts.isForInStatement(declaration.parent.parent))
+    )
+      return {
+        what: 'a loop element',
+        holder: declaration.parent.parent.expression,
+      };
+    if (!ts.isParameter(declaration)) return null;
+    const callback = declaration.parent;
+    if (
+      !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ||
+      !ts.isCallExpression(callback.parent) ||
+      !callback.parent.arguments.some((argument) => argument === callback)
+    )
+      return null;
+    const callee = unwrapped(callback.parent.expression);
+    return {
+      what: 'a callback parameter',
+      holder: ts.isPropertyAccessExpression(callee)
+        ? callee.expression
+        : undefined,
+    };
+  }
+
+  interface Writes {
+    values: ts.Expression[];
+    /** Writes whose value is not one expression: destructuring, `+=`, `++`, a loop target. */
+    unreadable: ts.Node[];
+  }
+
+  const passedArguments = new Map<ts.ParameterDeclaration, Writes>();
+
+  /**
+   * What each call site in the workspace passes for `parameter`. Its function
+   * referenced other than by a call, called with a spread, or unnamed (an
+   * inline callback) is passed values nothing here can see.
+   */
+  function argumentsFor(parameter: ts.ParameterDeclaration): Writes {
+    const cached = passedArguments.get(parameter);
+    if (cached) return cached;
+    const passed: Writes = { values: [], unreadable: [] };
+    passedArguments.set(parameter, passed);
+    const fn = parameter.parent;
+    const named =
+      ts.isFunctionDeclaration(fn) || ts.isMethodDeclaration(fn)
+        ? fn
+        : (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+            ts.isVariableDeclaration(fn.parent)
+          ? fn.parent
+          : undefined;
+    const name = named && ts.getNameOfDeclaration(named);
+    const position = fn.parameters.indexOf(parameter);
+    if (!named || !name || !ts.isIdentifier(name) || parameter.dotDotDotToken) {
+      passed.unreadable.push(parameter);
+      return passed;
+    }
+    const visit = (node: ts.Node) => {
+      if (
+        node !== name &&
+        ts.isIdentifier(node) &&
+        node.text === name.text &&
+        !ts.isImportSpecifier(node.parent) &&
+        !ts.isExportSpecifier(node.parent) &&
+        !ts.isTypeQueryNode(node.parent) &&
+        (symbolAt(node)?.declarations ?? []).includes(named)
+      ) {
+        const call = invocationOf(node);
+        const argument =
+          call &&
+          ts.isCallExpression(call) &&
+          !call.arguments.slice(0, position + 1).some(ts.isSpreadElement)
+            ? call.arguments[position]
+            : null;
+        if (argument) passed.values.push(argument);
+        else if (argument === null) passed.unreadable.push(node);
+      }
+      ts.forEachChild(node, visit);
+    };
+    for (const source of program.getSourceFiles())
+      if (workspaceFile(source) !== null) visit(source);
+    return passed;
+  }
+
+  let writeIndex: Map<ts.Declaration, Writes> | undefined;
+
+  /** Every write to `declaration` anywhere in the workspace, its initializer aside. */
+  function writesTo(declaration: ts.Declaration): Writes {
+    writeIndex ??= indexWrites();
+    return writeIndex.get(declaration) ?? { values: [], unreadable: [] };
+  }
+
+  function indexWrites(): Map<ts.Declaration, Writes> {
+    const index = new Map<ts.Declaration, Writes>();
+    const recordTo = (
+      symbol: ts.Symbol | undefined,
+      site: ts.Node,
+      value: ts.Expression | null
+    ) => {
+      const declarations = symbol?.declarations ?? [];
+      for (const declaration of declarations) {
+        const writes = index.get(declaration) ?? { values: [], unreadable: [] };
+        index.set(declaration, writes);
+        if (value) writes.values.push(value);
+        else writes.unreadable.push(site);
+      }
+    };
+    const record = (target: ts.Expression, value: ts.Expression | null) =>
+      recordTo(
+        ts.isIdentifier(target)
+          ? symbolAt(target)
+          : ts.isPropertyAccessExpression(target)
+            ? checker.getSymbolAtLocation(target.name)
+            : ts.isElementAccessExpression(target)
+              ? checker.getSymbolAtLocation(target.argumentExpression)
+              : undefined,
+        target,
+        value
+      );
+    const recordPattern = (pattern: ts.Expression) => {
+      for (const target of patternTargets(pattern)) record(target, null);
+    };
+    // `Object.assign(target, { name: value })` writes `value` to `name`; a
+    // source it cannot read property by property writes every property.
+    const recordAssign = (call: ts.CallExpression) => {
+      const [target, ...sources] = call.arguments;
+      if (!target) return;
+      const type = checker.getTypeAtLocation(target);
+      const property = (name: string) => checker.getPropertyOfType(type, name);
+      for (const source of sources) {
+        const literal = unwrapped(source);
+        if (!ts.isObjectLiteralExpression(literal)) {
+          for (const each of checker.getPropertiesOfType(type))
+            recordTo(each, source, null);
+          continue;
+        }
+        for (const member of literal.properties) {
+          const name = ts.isSpreadAssignment(member)
+            ? null
+            : staticName(member.name);
+          if (name === null) {
+            for (const each of checker.getPropertiesOfType(type))
+              recordTo(each, member, null);
+          } else if (ts.isPropertyAssignment(member))
+            recordTo(property(name), member, member.initializer);
+          else if (ts.isShorthandPropertyAssignment(member))
+            recordTo(property(name), member, member.name);
+          else recordTo(property(name), member, null);
+        }
+      }
+    };
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+      ) {
+        const target = unwrapped(node.left);
+        if (
+          ts.isArrayLiteralExpression(target) ||
+          ts.isObjectLiteralExpression(target)
+        )
+          recordPattern(target);
+        else
+          record(
+            target,
+            WHOLE_VALUE_ASSIGNMENTS.has(node.operatorToken.kind)
+              ? node.right
+              : null
+          );
+      } else if (
+        (ts.isPrefixUnaryExpression(node) ||
+          ts.isPostfixUnaryExpression(node)) &&
+        (node.operator === ts.SyntaxKind.PlusPlusToken ||
+          node.operator === ts.SyntaxKind.MinusMinusToken)
+      )
+        record(unwrapped(node.operand), null);
+      else if (
+        (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+        !ts.isVariableDeclarationList(node.initializer)
+      )
+        recordPattern(node.initializer);
+      else if (ts.isCallExpression(node) && isObjectAssign(node))
+        recordAssign(node);
+      ts.forEachChild(node, visit);
+    };
+    for (const source of program.getSourceFiles())
+      if (workspaceFile(source) !== null) visit(source);
+    return index;
   }
 
   const scanned = new Map<ts.Node, { gates: Gate[]; next: ts.Node[] }>();
@@ -293,6 +599,52 @@ export function createRouteGateAnalyzer(
     if (cached) return cached;
     const found: { gates: Gate[]; next: ts.Node[] } = { gates: [], next: [] };
 
+    /**
+     * Each later write to `declaration`, followed as the declaration itself
+     * is: a function always, any value when called. Answers how many were.
+     */
+    const followWrites = (
+      declaration: ts.Declaration,
+      key: string,
+      invocation: ts.CallExpression | ts.NewExpression | null,
+      holdsFunction: boolean
+    ): number => {
+      const writes = writesTo(declaration);
+      // A parameter written here stands for what its call sites pass.
+      const values: ts.Expression[] = [];
+      const unreadables: ts.Node[] = [...writes.unreadable];
+      const pending = [...writes.values];
+      const seen = new Set<ts.Node>();
+      for (let value = pending.pop(); value; value = pending.pop()) {
+        if (seen.has(value)) continue;
+        seen.add(value);
+        const read = unwrapped(value);
+        const parameter = ts.isIdentifier(read)
+          ? (symbolAt(read)?.declarations ?? []).find(ts.isParameter)
+          : undefined;
+        if (!parameter) {
+          values.push(value);
+          continue;
+        }
+        const passed = argumentsFor(parameter);
+        pending.push(...passed.values);
+        unreadables.push(...passed.unreadable);
+      }
+      const written = values.filter(
+        (value) => invocation !== null || isFunction(value)
+      );
+      const [unreadable] = unreadables;
+      if (
+        unreadable &&
+        (invocation !== null || holdsFunction || written.length > 0)
+      )
+        throw new Error(
+          `${siteOf(unreadable)}: writes ${key} in a form the analyzer cannot follow`
+        );
+      found.next.push(...written);
+      return written.length;
+    };
+
     /** `declaration`, reached at `site`, and invoked by `invocation` if any. */
     const consider = (
       declaration: ts.Declaration,
@@ -302,6 +654,14 @@ export function createRouteGateAnalyzer(
       const targets = aliasedDeclarations(declaration);
       if (targets) {
         for (const target of targets) consider(target, site, invocation);
+        const alias = keyOf(declaration);
+        if (alias !== null)
+          followWrites(
+            declaration,
+            alias,
+            invocation,
+            targets.some((target) => bodyOf(target) !== null)
+          );
         return;
       }
       const key = keyOf(declaration);
@@ -321,6 +681,7 @@ export function createRouteGateAnalyzer(
         return;
       }
       const body = bodyOf(declaration);
+      const written = followWrites(declaration, key, invocation, body !== null);
       if (body) {
         found.next.push(body);
         return;
@@ -356,43 +717,75 @@ export function createRouteGateAnalyzer(
         found.next.push(declaration.initializer);
         return;
       }
-      if (isOpaque(declaration)) return;
-      const assigned = ts.isVariableDeclaration(declaration)
-        ? assignedValues(declaration)
-        : [];
-      if (assigned.length > 0) {
-        found.next.push(...assigned);
-        return;
-      }
+      const source = dataSource(declaration);
+      if (source && mayHoldWorkspaceCode(invocation, source.holder))
+        throw new Error(
+          `${siteOf(site)}: calls ${key}, ${source.what}, which the analyzer cannot follow`
+        );
+      if (isOpaque(declaration) || written > 0) return;
       throw new Error(
         `${siteOf(site)}: calls ${key}, which the analyzer cannot follow`
       );
     };
 
-    /** `object[key](…)`: a literal key resolves; a computed one over workspace members throws. */
+    /**
+     * `object[key](…)`: a literal key naming a declared member resolves. Any
+     * other key, a literal reaching an array or index signature included,
+     * throws when the object or the element holds workspace code.
+     */
     const considerElementCall = (
       callee: ts.ElementAccessExpression,
       call: ts.CallExpression
     ): void => {
       const type = checker.getTypeAtLocation(callee.expression);
       const argument = callee.argumentExpression;
-      if (ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument)) {
-        const declarations =
-          checker.getPropertyOfType(type, argument.text)?.declarations ?? [];
+      const literal =
+        ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument);
+      const declarations = literal
+        ? (checker.getPropertyOfType(type, argument.text)?.declarations ?? [])
+        : [];
+      if (declarations.length > 0) {
         for (const declaration of declarations)
           consider(declaration, callee, call);
         return;
       }
-      const workspaceMembers = checker
-        .getPropertiesOfType(type)
-        .some((property) =>
-          (property.declarations ?? []).some(
-            (declaration) => keyOf(declaration) !== null
-          )
-        );
-      if (workspaceMembers)
+      const workspaceCode =
+        checker
+          .getPropertiesOfType(type)
+          .some((property) =>
+            (property.declarations ?? []).some(inWorkspace)
+          ) || mayHoldWorkspaceCode(call, callee);
+      if (workspaceCode)
         throw new Error(
-          `${siteOf(callee)}: calls through a computed key, which the analyzer cannot follow`
+          `${siteOf(callee)}: calls through ${literal ? 'an undeclared' : 'a computed'} key, which the analyzer cannot follow`
+        );
+    };
+
+    /**
+     * `inner(…)(…)`: a workspace function's body holds what it returns, and is
+     * followed through `inner`. Anything else, such as `registry.get(key)`,
+     * returns data.
+     */
+    const considerReturnedCall = (
+      inner: ts.CallExpression,
+      call: ts.CallExpression
+    ): void => {
+      const callee = unwrapped(inner.expression);
+      const symbol = ts.isPropertyAccessExpression(callee)
+        ? resolved(checker.getSymbolAtLocation(callee.name))
+        : ts.isIdentifier(callee)
+          ? symbolAt(callee)
+          : undefined;
+      const declarations = symbol?.declarations ?? [];
+      if (
+        declarations.some(
+          (declaration) => inWorkspace(declaration) && bodyOf(declaration)
+        )
+      )
+        return;
+      if (mayHoldWorkspaceCode(call, inner))
+        throw new Error(
+          `${siteOf(call)}: calls what another call returned, which the analyzer cannot follow`
         );
     };
 
@@ -411,6 +804,8 @@ export function createRouteGateAnalyzer(
           callee = callee.expression;
         if (ts.isElementAccessExpression(callee))
           considerElementCall(callee, node);
+        else if (ts.isCallExpression(callee))
+          considerReturnedCall(callee, node);
       }
       ts.forEachChild(node, visit);
     };

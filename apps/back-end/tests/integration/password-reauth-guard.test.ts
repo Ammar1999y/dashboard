@@ -4,14 +4,7 @@
  * unevaluatable stored hash answers, and the contact change that would strand
  * the only second factor.
  */
-import {
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  setDefaultTimeout,
-  test,
-} from 'bun:test';
+import { beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import crypto from 'node:crypto';
 import type { SeededUser, SignedInSession } from '../helpers/session';
 
@@ -52,9 +45,6 @@ import {
   uniquePhone,
 } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
-
-/** Every case pays at least one sign-in and one verify at 64 MiB Argon2id. */
-setDefaultTimeout(30_000);
 
 beforeAll(async () => {
   await resetTables();

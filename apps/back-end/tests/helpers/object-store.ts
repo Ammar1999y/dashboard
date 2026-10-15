@@ -23,7 +23,7 @@
  * carried by a copy, and the ETag of a copy equals its source's.
  *
  * Command inputs are the SDK's own exported types, so a production call that
- * omits a required field or names one the SDK does not have fails `tsc` here as
+ * omits a required field or names one the SDK does not have fails type checking here as
  * well as against the real client.
  */
 import { createHash } from 'node:crypto';

@@ -6,7 +6,7 @@
     "apps/*",
     "packages/*"
   ],
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.3",
   "engines": {
     "npm": "use bun (run: node scripts/require-bun.mjs)",
     "yarn": "use bun (run: node scripts/require-bun.mjs)",
@@ -17,6 +17,7 @@
     "prepare": "lefthook install && bun scripts/install-git-hooks.mjs",
     "dev:api": "bun run --filter @app/back-end dev",
     "dev:web": "bun run --filter @app/front-end dev",
+    "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run lint:root && bun run --filter '*' lint",
     "lint:root": "eslint scripts *.mjs --max-warnings 0",
     "format": "bun run format:root && bun run --filter '*' format",
