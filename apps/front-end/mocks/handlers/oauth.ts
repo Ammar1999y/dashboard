@@ -1,4 +1,6 @@
-import { http, HttpResponse } from 'msw';
+import type { MockOAuthResult } from '../store';
+
+import * as contract from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
@@ -9,7 +11,8 @@ import {
 } from '@app/shared/validation/oauth';
 
 import { requireUnspentCaptcha } from '../lib/captcha';
-import { api, asPlugin, pluginOk, readJson } from '../lib/http';
+import { mock } from '../lib/endpoint';
+import { readJson } from '../lib/http';
 import { mayHoldSession } from '../lib/permissions';
 import { issueChallenge, startSession } from '../lib/sign-in';
 import { oauthResult, users } from '../store';
@@ -50,7 +53,7 @@ function returnURL(input: string | undefined): string | null {
 }
 
 /** What the callback leaves for `/oauth/result`; `null` is a refused sign-in. */
-function callbackOutcome(rememberMe: boolean): Record<string, unknown> | null {
+function callbackOutcome(rememberMe: boolean): MockOAuthResult['body'] {
   const user = users.all().find((row) => row.email === MOCK_GOOGLE_EMAIL);
   if (!user || !mayHoldSession(user)) return null;
 
@@ -63,15 +66,15 @@ function callbackOutcome(rememberMe: boolean): Record<string, unknown> | null {
   if (outcome.kind === 'challenge') return { ...outcome.body };
 
   startSession(user);
-  return { success: true, data: { loggedIn: true } };
+  return { data: { loggedIn: true as const } };
 }
 
 export const oauthHandlers = [
-  http.get(api('/api/auth/capabilities'), () =>
-    pluginOk({ oauthProviders: OAUTH_PROVIDERS })
-  ),
+  mock(contract.authCapabilities, () => ({
+    raw: { data: { oauthProviders: [...OAUTH_PROVIDERS] } },
+  })),
 
-  http.post(api('/api/auth/oauth/google/start'), async ({ request }) => {
+  mock(contract.googleStart, async ({ request }) => {
     requireUnspentCaptcha(request);
     const parsed = googleStartSchema.safeParse(await readJson(request));
     if (!parsed.success)
@@ -83,14 +86,16 @@ export const oauthHandlers = [
         body: callbackOutcome(parsed.data.rememberMe ?? true),
         expiresAt: new Date(Date.now() + RESULT_TTL_S * 1000).toISOString(),
       });
-    return pluginOk({ url: destination ?? new URL('/dash', origin()).href });
+    return {
+      raw: { data: { url: destination ?? new URL('/dash', origin()).href } },
+    };
   }),
 
-  http.get(api('/api/auth/oauth/result'), () => {
+  mock(contract.oauthResult, () => {
     const result = oauthResult.get();
     oauthResult.set(null);
     if (!result || Date.parse(result.expiresAt) <= Date.now()) throw denied();
     if (!result.body) throw denied();
-    return HttpResponse.json(result.body);
+    return { raw: result.body };
   }),
-].map(asPlugin);
+];

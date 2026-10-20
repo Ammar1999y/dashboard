@@ -2,7 +2,7 @@ import { getOpenApiDocument } from '@app/shared/api/openapi';
 import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
 
 import { bind } from '@/lib/http/binding';
-import { servedDocument } from '@/lib/http/openapi/serve';
+import { servedDocumentBody } from '@/lib/http/openapi/serve';
 import { requireDashboardAccess } from '@/lib/http/session';
 
 /**
@@ -20,6 +20,6 @@ export const openApiDocumentBinding = bind(getOpenApiDocument, {
   },
   handler: async ({ actor, meta }) => {
     await requireDashboardAccess(meta, actor);
-    return { raw: await servedDocument() };
+    return { raw: await servedDocumentBody() };
   },
 });

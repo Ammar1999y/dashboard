@@ -15,6 +15,7 @@ import { expect, spyOn, test } from 'bun:test';
 import { APIError } from 'better-auth/api';
 import * as z from 'zod';
 
+import { PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
 import {
   CUSTOM_AUTH_CODE,
   EMAIL_NOT_VERIFIED_CODE,
@@ -40,6 +41,7 @@ const RUNNER = 'tests/fixtures/_email-not-verified-child.ts';
 
 const reportSchema = z.object({
   status: z.number(),
+  contentType: z.string().nullable(),
   body: z.unknown(),
   logged: z.array(z.string()),
 });
@@ -63,9 +65,14 @@ test('the login gate answers its own message under its own code, and does not lo
   const report = reportSchema.parse(JSON.parse(line ?? ''));
 
   expect(report.status).toBe(HTTP_STATUS.FORBIDDEN);
+  expect(report.contentType).toBe(PROBLEM_MEDIA_TYPE);
   expect(report.body).toEqual({
-    message: MSG_EMAIL_NOT_VERIFIED,
+    type: 'about:blank',
+    title: 'Forbidden',
+    status: HTTP_STATUS.FORBIDDEN,
+    detail: MSG_EMAIL_NOT_VERIFIED,
     code: EMAIL_NOT_VERIFIED_CODE,
+    message: MSG_EMAIL_NOT_VERIFIED,
   });
   expect(report.logged).toEqual([]);
 }, 60_000);

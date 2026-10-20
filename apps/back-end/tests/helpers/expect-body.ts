@@ -1,15 +1,20 @@
 /**
- * The only way new tests read a body: through the entry's own schemas, so the
- * wire format changes here and in the two core builders, not in every test.
+ * The only way new tests read a body: through the entry's own schemas and the
+ * shared problem schemas, so the wire format changes here and in the shared
+ * builders, not in every test.
  */
 import { expect } from 'bun:test';
 import type { AnyEndpoint, PagedResponse } from '@app/shared/api/endpoint';
+import type { Problem } from '@app/shared/api/wire';
 
 import * as z from 'zod';
 
-import { errorEnvelopeSchema } from '@app/shared/response-contract';
-
-import { successSchemaOf } from '@/lib/http/binding';
+import {
+  authProblemSchema,
+  PROBLEM_MEDIA_TYPE,
+  problemSchema,
+  successSchemaOf,
+} from '@app/shared/api/wire';
 
 type DataOf<E extends AnyEndpoint> =
   E['response'] extends PagedResponse<infer D>
@@ -79,14 +84,39 @@ export async function expectData<E extends AnyEndpoint>(
   return { message, data: data as DataOf<E>, meta };
 }
 
-/** A refusal: its status, exactly the error envelope, and its message when given. */
-export async function expectError(
+async function expectProblem<T extends Problem>(
+  schema: z.ZodType<T>,
+  response: Response,
+  status: number,
+  message: string | undefined
+): Promise<T> {
+  expect(response.status).toBe(status);
+  expect(response.headers.get('content-type')).toBe(PROBLEM_MEDIA_TYPE);
+  const body = parseWhole(schema, await response.json());
+  expect(body.status).toBe(status);
+  if (message !== undefined) expect(body.detail).toBe(message);
+  return body;
+}
+
+/** A binding's refusal: its status, exactly a problem, and its message when given. */
+export const expectError = (
   response: Response,
   status: number,
   message?: string
-): Promise<z.output<typeof errorEnvelopeSchema>> {
-  expect(response.status).toBe(status);
-  const body = parseWhole(errorEnvelopeSchema, await response.json());
-  if (message !== undefined) expect(body.message).toBe(message);
+) => expectProblem(problemSchema, response, status, message);
+
+/** A refusal under the Better Auth prefix, which repeats `detail` as `message`. */
+export async function expectAuthError(
+  response: Response,
+  status: number,
+  message?: string
+) {
+  const body = await expectProblem(
+    authProblemSchema,
+    response,
+    status,
+    message
+  );
+  expect(body.message).toBe(body.detail);
   return body;
 }

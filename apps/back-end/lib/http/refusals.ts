@@ -8,6 +8,7 @@ import type { EndpointErrorStatus } from '@app/shared/api/endpoint';
 import type { MediaCodeWithIds } from '@app/shared/responses/media';
 
 import { codesWithIds, isRawResponse } from '@app/shared/api/endpoint';
+import { INVALID_RESPONSE_CODE } from '@app/shared/error-codes';
 import { idsAreOptional } from '@app/shared/responses/media';
 
 import { isSafeMethod } from './origin';
@@ -28,6 +29,9 @@ export const DATABASE_UNAVAILABLE =
 
 export const REAUTH_REQUIRED_REMEDY =
   'open the re-authentication window at `POST /api/dash/auth/reauth`, then retry.';
+
+/** Every operation's 500, a binding's or Better Auth's. */
+export const SERVER_FAILURE = `An unexpected server or dependency failure occurred. With code \`${INVALID_RESPONSE_CODE}\` the operation completed but its answer failed its own contract: a write has committed, so do not send it again.`;
 
 /**
  * The request hook checks a declared length on every path before routing,
@@ -214,13 +218,10 @@ export function refusalsOf(binding: AnyBinding): DerivedRefusal[] {
       .join(' '),
     headers: ['Retry-After'],
   });
-  add({
-    status: 500,
-    description: 'An unexpected server or dependency failure occurred.',
-  });
+  add({ status: 500, description: SERVER_FAILURE });
 
   // The handler's raw body is the whole answer at its status, so nothing the
-  // envelope's derivation says about that status applies.
+  // derivation above says about that status applies.
   const raw = (
     isRawResponse(entry.response)
       ? Object.keys(entry.response.refusals ?? {})

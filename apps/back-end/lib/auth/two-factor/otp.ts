@@ -18,6 +18,7 @@ import { db } from '@/db';
 import { users } from '@/db/schema';
 import * as z from 'zod';
 
+import * as contract from '@app/shared/api/better-auth';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
@@ -135,9 +136,8 @@ export const twoFactorOtp = () =>
       // It answers the real delay, unlike the anonymous surfaces: behind a
       // session or a challenge cookie a countdown leaks nothing.
       twoFactorOtpSend: pluginEndpoint(
-        '/two-factor/otp/send',
+        contract.twoFactorOtpSend,
         {
-          method: 'POST',
           body: z.record(z.string(), z.unknown()).optional(),
         },
         async (ctx) => {
@@ -182,8 +182,8 @@ export const twoFactorOtp = () =>
       ),
 
       twoFactorOtpVerify: pluginEndpoint(
-        '/two-factor/otp/verify',
-        { method: 'POST', body: z.record(z.string(), z.unknown()) },
+        contract.twoFactorOtpVerify,
+        { body: z.record(z.string(), z.unknown()) },
         async (ctx) => {
           assertOtpAvailable();
 
@@ -238,7 +238,7 @@ async function verifyForSignIn(
   ctx: AuthContext,
   challenge: ResolvedChallenge,
   code: string
-): Promise<PluginAnswer<'/two-factor/otp/verify'>> {
+): Promise<PluginAnswer<typeof contract.twoFactorOtpVerify>> {
   const target = signInTarget(challenge, bodyRecord(ctx).option);
 
   // Before the challenge budget: `spendChallengeAttempt` does not write the
@@ -298,7 +298,7 @@ async function verifyForEnrolment(
   ctx: AuthContext,
   requestSession: RequestSession,
   code: string
-): Promise<PluginAnswer<'/two-factor/otp/verify'>> {
+): Promise<PluginAnswer<typeof contract.twoFactorOtpVerify>> {
   const target = await enrolmentTargetFromSession(ctx, requestSession);
   const auditMeta = authAuditMeta(ctx, '/two-factor/otp/verify');
 

@@ -1,6 +1,5 @@
 /**
- * A binding's handler, run, and every failure on its way mapped to the frozen
- * wire format. Framework-free: `server/elysia` hands in what it validated and
+ * A binding's handler, run, and every failure on its way mapped to a problem. Framework-free: `server/elysia` hands in what it validated and
  * sends what comes back.
  */
 import type { AnyBinding, AnyBindingResult, InputPart } from './binding';
@@ -8,12 +7,12 @@ import type { HandlerError, HandlerOutput } from './contract';
 import type * as z from 'zod';
 
 import { codesWithIds, declaredCodes } from '@app/shared/api/endpoint';
+import { successBody } from '@app/shared/api/wire';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   MSG_INTERNAL_ERROR,
   MSG_INVALID_INPUT,
 } from '@app/shared/messages/common';
-import { isResponseRoute } from '@app/shared/response-contract';
 import { idsAreOptional } from '@app/shared/responses/media';
 import {
   authoredMessage,
@@ -32,7 +31,7 @@ import {
 import { queryKeysOf } from './binding';
 import { refusalsOf } from './refusals';
 import { buildRequestMeta, UnreadableBody, withBodyPolicy } from './request';
-import { apiError, apiRaw, handleApiError, successBody } from './response';
+import { apiError, apiRaw, handleApiError, invalidResponse } from './response';
 import {
   checkSuccess,
   described,
@@ -108,12 +107,8 @@ function outputOf(
     });
 
   const body = successBody(result.message, result.data, result.meta);
-  if (
-    responseCheck !== null &&
-    isResponseRoute(binding.key) &&
-    !checkSuccess(responseCheck, binding.key, body)
-  )
-    return internalError();
+  if (responseCheck !== null && !checkSuccess(responseCheck, binding, body))
+    return invalidResponse();
 
   return {
     status: entry.status,
@@ -243,14 +238,14 @@ function refusalProblem(
   )
     return 'a business 400 is not declared';
   if (code === undefined)
-    return data === null ? undefined : `ids without a code at ${status}`;
+    return data === undefined ? undefined : `ids without a code at ${status}`;
   if (!declaredCodes(entry, status).includes(code))
     return `code ${code} is not declared at ${status}`;
   const declaredWithIds: readonly string[] = codesWithIds(entry, status);
   const withIds = declaredWithIds.includes(code);
-  if (data !== null && !withIds)
+  if (data !== undefined && !withIds)
     return `code ${code} names ids at ${status}, which the entry does not declare`;
-  if (data === null && withIds && !idsAreOptional(code))
+  if (data === undefined && withIds && !idsAreOptional(code))
     return `code ${code} names no ids at ${status}`;
   return undefined;
 }
@@ -284,7 +279,7 @@ export function responseFailure(
     route: bindingOf(request)?.key,
     problems: described(issues.filter(isIssueHead)),
   });
-  return internalError();
+  return invalidResponse();
 }
 
 function unreadableBody(

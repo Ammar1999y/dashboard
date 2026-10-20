@@ -1,5 +1,5 @@
 /**
- * The bindings held to the shared registries and to their policy: the
+ * The bindings held to the shared entries and to their policy: the
  * security assertions the legacy route table's tests made, carried over.
  * The type-level half is in `contract-types.test.ts`.
  */
@@ -10,16 +10,10 @@ import path from 'node:path';
 import { BINDINGS } from '@/modules';
 import * as z from 'zod';
 
-import { isPagedResponse, isRawResponse } from '@app/shared/api/endpoint';
+import { ENDPOINTS } from '@app/shared/api/all';
 import { getPermission, listPermissions } from '@app/shared/api/permissions';
-import { REQUEST_BODIES } from '@app/shared/contract';
 import { DATA_TABLE_PARAM_KEYS } from '@app/shared/data-table/parsers';
 import { dataTableQuerySchema } from '@app/shared/data-table/query';
-import {
-  isPaginatedRoute,
-  isResponseRoute,
-  RESPONSE_DATA,
-} from '@app/shared/response-contract';
 
 import { actorOf, GateSkipped } from '@/lib/http/admit';
 import { bind, createdBindings } from '@/lib/http/binding';
@@ -107,28 +101,15 @@ test('every binding a module creates is registered', () => {
   ).toEqual([]);
 });
 
+test('binds every shared entry, each once', () => {
+  const bound = BINDINGS.map(({ entry }) => entry);
+  expect(ENDPOINTS.filter((entry) => !bound.includes(entry))).toEqual([]);
+  expect(new Set(bound).size).toBe(bound.length);
+  expect(bound.length).toBe(ENDPOINTS.length);
+});
+
 describe.each(cases)('%s', (key, binding) => {
   const { entry, options } = binding;
-
-  test('reuses the shared registries’ schema objects', () => {
-    const registered: unknown = Object.entries(REQUEST_BODIES).find(
-      ([name]) => name === key
-    )?.[1];
-    // The registry holds JSON bodies; a form is typed by the contract alone.
-    if (entry.bodyKind === 'json') expect(registered).toBe(entry.body);
-    else expect(Object.hasOwn(REQUEST_BODIES, key)).toBe(false);
-
-    const { response } = entry;
-    // The registry holds envelopes; a raw answer has none.
-    if (isRawResponse(response)) {
-      expect(isResponseRoute(key)).toBe(false);
-      return;
-    }
-    if (!isResponseRoute(key)) throw new Error(`${key} has no registry entry`);
-    const data = isPagedResponse(response) ? response.data : response;
-    expect<unknown>(RESPONSE_DATA[key]).toBe(data);
-    expect(isPagedResponse(response)).toBe(isPaginatedRoute(key));
-  });
 
   test('declares the success status the legacy route answered', () => {
     expect(entry.status).toBe(CREATED_ROUTES.has(key) ? 201 : 200);

@@ -13,6 +13,13 @@ export const authClient = createAuthClient({
   },
 });
 
+/**
+ * Makes every `useSession` subscriber read the session again. The auth client
+ * does it itself only after its own sign-in and sign-out; `api()` calls this
+ * after an entry that `changesSession`.
+ */
+export const refreshSession = () => authClient.$store.notify('$sessionSignal');
+
 /** The plain object the auth client answers a refused request with. */
 const authErrorSchema = z.object({
   status: z.number(),

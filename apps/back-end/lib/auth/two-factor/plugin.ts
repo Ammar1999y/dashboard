@@ -10,9 +10,10 @@ import type { ResolvedChallenge } from './challenge';
 import type { TotpVerdict } from './totp-replay';
 import type { Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
+import type { TwoFactorMethod } from '@app/shared/validation/enums';
 import type { BetterAuthPlugin } from 'better-auth';
 
-import { withTransaction } from '@/db';
+import { db } from '@/db';
 import { passkey } from '@better-auth/passkey';
 import {
   createAuthEndpoint,
@@ -44,7 +45,6 @@ import { transactionBoundContext } from '../transaction';
 import { spendBackupCode } from './backup-codes';
 import {
   challengeMissingError,
-  PLUGIN_VERIFIER_METHOD,
   recordPluginCompletion,
   requireTwoFactorChallenge,
   TWO_FACTOR_CHALLENGE_MAX_AGE_S,
@@ -57,8 +57,8 @@ import { twoFactorOtp } from './otp';
 import { twoFactorPasskey } from './passkey';
 import {
   consumeTotpCode,
+  decryptTotpSecret,
   DELEGATED_TOTP_WINDOW,
-  readVerifiedTotpSecret,
 } from './totp-replay';
 import { markTwoFactorProven, trustedDevice } from './trusted-device';
 
@@ -122,9 +122,9 @@ async function runPluginVerifier<T>(
 const SPENT_TOTP_CODE = 'spent!';
 
 /**
- * Reads the credential itself: the plugin has no hook between "code valid" and
- * "session issued". Every failure answers `'rejected'` so the library still
- * gives its own answer and counters.
+ * Checks the code itself, against the credential the challenge read: the
+ * plugin has no hook between "code valid" and "session issued". Every failure
+ * answers `'rejected'` so the library still gives its own answer and counters.
  *
  * ⚠️ Runs BEFORE the challenge transaction, so a claimed step stays spent even
  * if the request later rolls back (deliberate). Moving it inside means passing
@@ -132,25 +132,41 @@ const SPENT_TOTP_CODE = 'spent!';
  */
 async function reserveSignInTotpStep(
   ctx: AuthContext,
-  userId: EntityID
+  challenge: ResolvedChallenge
 ): Promise<TotpVerdict> {
   const { code } = bodyRecord(ctx);
-  if (typeof code !== 'string') return 'rejected';
+  if (typeof code !== 'string' || !challenge.totpSecret) return 'rejected';
 
-  const secret = await readVerifiedTotpSecret(userId, ctx.context.secretConfig);
+  const secret = await decryptTotpSecret(
+    challenge.totpSecret,
+    ctx.context.secretConfig
+  );
   if (!secret) return 'rejected';
 
-  return consumeTotpCode(userId, secret, code, {
+  return consumeTotpCode(challenge.user.id, secret, code, {
     window: DELEGATED_TOTP_WINDOW,
   });
 }
 
-function forwardVerifierHeaders(ctx: AuthContext, headers: Headers) {
+/**
+ * The library's verifiers bypass `completeTwoFactorChallenge`, so its tail
+ * (completion event, companion rows) runs here; the device-trust proof is
+ * issued in `runPluginVerifier`.
+ */
+async function completeVerifier(
+  ctx: AuthContext,
+  challenge: ResolvedChallenge,
+  completedWith: TwoFactorMethod,
+  headers: Headers
+): Promise<void> {
   for (const cookie of headers.getSetCookie())
     ctx.responseHeaders?.append('set-cookie', cookie);
   headers.forEach((value, name) => {
     if (name !== 'set-cookie') ctx.responseHeaders?.set(name, value);
   });
+  const created = ctx.context.newSession;
+  if (created)
+    await recordPluginCompletion(ctx, challenge, completedWith, created);
 }
 
 // `/passkey/verify-registration` answers with the persisted `Passkey` row; its
@@ -242,7 +258,7 @@ const twoFactorAuth = () => {
           // Reserved before the library verifies, since afterwards there is a
           // session to undo. Every verdict still reaches the library, which owns
           // the attempt counter, lockout and invalid-code answer.
-          const reserved = await reserveSignInTotpStep(ctx, challenge.user.id);
+          const reserved = await reserveSignInTotpStep(ctx, challenge);
 
           const result = await runPluginVerifier(
             ctx,
@@ -272,7 +288,7 @@ const twoFactorAuth = () => {
               return verified;
             }
           );
-          forwardVerifierHeaders(ctx, result.headers);
+          await completeVerifier(ctx, challenge, 'totp', result.headers);
           return ctx.json(result.response);
         }
       ),
@@ -296,28 +312,13 @@ const twoFactorAuth = () => {
               return verified;
             }
           );
-          forwardVerifierHeaders(ctx, result.headers);
+          await completeVerifier(ctx, challenge, 'backup_code', result.headers);
           return ctx.json(result.response);
         }
       ),
     },
     hooks: {
       after: [
-        {
-          // The library's verifiers bypass `completeTwoFactorChallenge`, so its
-          // tail (completion event, companion rows) runs here; the device-trust
-          // proof is issued in `runPluginVerifier`.
-          matcher: (context) =>
-            context.path !== undefined &&
-            context.path in PLUGIN_VERIFIER_METHOD,
-          handler: createAuthMiddleware(async (ctx) => {
-            if (isAPIError(ctx.context.returned)) return;
-            const newSession = ctx.context.newSession;
-            const completedWith = PLUGIN_VERIFIER_METHOD[ctx.path];
-            if (!newSession || !completedWith) return;
-            await recordPluginCompletion(ctx, completedWith, newSession);
-          }),
-        },
         {
           // The one read that clones the second factor. Not caught: a
           // disclosure that cannot be recorded is refused instead.
@@ -326,11 +327,9 @@ const twoFactorAuth = () => {
             if (isAPIError(ctx.context.returned)) return;
             const requestSession = await resolveRequestSession(ctx);
             if (!requestSession) throw challengeMissingError();
-            await withTransaction((tx) =>
-              auditLifecycle(tx, ctx, requestSession, {
-                twoFactorSecretDisclosed: true,
-              })
-            );
+            await auditLifecycle(db, ctx, requestSession, {
+              twoFactorSecretDisclosed: true,
+            });
           }),
         },
         {

@@ -87,8 +87,8 @@ const prompt = (startedAt: number, signal?: AbortSignal) =>
 /**
  * Runs `attempt` and, when the server answers `REAUTH_REQUIRED`, prompts and
  * retries it once. See `retryAfterReauth` for what is and is not retried.
- * `mutate` and `authRequest` apply it already; call it directly only around a
- * request that goes through neither.
+ * `api()` applies it to an entry with `policy.reauth`; call it directly only
+ * around a request that does not go through it.
  */
 export const withReauth = <T>(
   attempt: () => Promise<T>,

@@ -1,4 +1,10 @@
-import type { Column, ColumnSort, SortDirection } from '@tanstack/react-table';
+import type { DataTableFeatures } from '../features';
+import type {
+  Column,
+  ColumnSort,
+  RowData,
+  SortDirection,
+} from '@tanstack/react-table';
 import type { ComponentProps, KeyboardEvent } from 'react';
 
 import { memo, useCallback, useId, useMemo, useRef, useState } from 'react';
@@ -53,15 +59,15 @@ const SORT_SHORTCUT_KEY = 'j';
 
 const getSortItemValue = (item: ColumnSort) => item.id;
 
-interface DataTableSortListProps<TData> extends ComponentProps<
+interface DataTableSortListProps<TData extends RowData> extends ComponentProps<
   typeof PopoverContent
 > {
-  columns: Column<TData>[];
+  columns: Column<DataTableFeatures, TData>[];
   defaultSort: ColumnSort[];
   disabled?: boolean;
 }
 
-export function DataTableSortList<TData>({
+export function DataTableSortList<TData extends RowData>({
   columns: allColumns,
   defaultSort,
   disabled,

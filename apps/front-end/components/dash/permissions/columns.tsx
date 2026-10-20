@@ -1,3 +1,4 @@
+import type { DataTableFeatures } from '@/components/ui/data-table';
 import type { PermissionClient } from '@/types/permission';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -13,7 +14,7 @@ import { rowActionsColumn } from '../shared/row-actions';
 import { removeRoleOption } from './cache';
 import { permissionEntity } from './entity';
 
-export const columns: ColumnDef<PermissionClient>[] = [
+export const columns: ColumnDef<DataTableFeatures, PermissionClient>[] = [
   textColumn('roleName', 'اسم الصلاحية', {
     size: 200,
     cellClassName: 'text-start font-medium',

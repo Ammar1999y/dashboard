@@ -73,7 +73,6 @@ import {
   DEFAULT_PAGE_PERMISSIONS,
   ROLE_SCOPE,
 } from '@app/shared/permissions/constants';
-import { OTP_CHANNELS, OTP_PURPOSES } from '@app/shared/validation/enums';
 import { DEFAULT_PREFERENCES } from '@app/shared/validation/preferences';
 
 import { auditLog } from '@/lib/audit';
@@ -109,7 +108,7 @@ const LOCKING_SELECT = {
   anchor: 'FOR SHARE OF r',
 } as const;
 const ADVISORY_LOCK = {
-  file: 'lib/otp/send.ts',
+  file: 'lib/media/folders.ts',
   anchor: 'pg_advisory_xact_lock',
 } as const;
 
@@ -331,9 +330,10 @@ describe('a real unique violation', () => {
 
     expect(output?.status).toBe(409);
     expect(output?.body).toEqual({
-      success: false,
-      message: MSG_EMAIL_EXISTS,
-      data: null,
+      type: 'about:blank',
+      title: 'Conflict',
+      status: 409,
+      detail: MSG_EMAIL_EXISTS,
     });
 
     // The 409 says the address is taken and nothing else: not the index name it
@@ -579,19 +579,13 @@ describe('the permission-refresh merge', () => {
 });
 
 describe('a transaction is one session', () => {
-  test('two pg_backend_pid() reads inside one withTransaction match, and the OTP advisory lock is held by that backend', async () => {
+  test('two pg_backend_pid() reads inside one withTransaction match, and an advisory lock is held by that backend', async () => {
     const observed = await withTransaction(async (tx) => {
       const first = await tx.execute<{ pid: number }>(
         sql`SELECT pg_backend_pid() AS pid`
       );
-      // The statement `processOtpSend` really issues, read out of `lib/otp/send.ts`.
-      await tx.execute(
-        productionStatement(ADVISORY_LOCK, [
-          seeded().signedIn.user.userId,
-          OTP_CHANNELS[0],
-          OTP_PURPOSES[0],
-        ])
-      );
+      // The lock `lockTree` really takes, read out of `lib/media/folders.ts`.
+      await tx.execute(productionStatement(ADVISORY_LOCK, []));
       const locks = await tx.execute<{ n: number }>(sql`
         SELECT count(*)::int AS n FROM pg_locks
          WHERE locktype = 'advisory' AND pid = pg_backend_pid()`);

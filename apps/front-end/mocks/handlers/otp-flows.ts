@@ -1,10 +1,17 @@
 import type { OfferedOption } from '../lib/two-factor-model';
 import type { MockRecoveryGrant, MockUser } from '../store';
-import type * as z from 'zod';
 
-import { http, HttpResponse } from 'msw';
+import {
+  completePasswordReset,
+  resetPassword,
+  sendOtp,
+  sendPasswordlessCode,
+  sendPasswordResetCode,
+  sendRecoverySecondFactorCode,
+  verifyOtp,
+} from '@app/shared/api/auth';
+import { passwordlessVerify } from '@app/shared/api/better-auth';
 import { OTP_AUTO_VERIFY, PASSWORDLESS_ENABLED } from '@app/shared/config';
-import { BETTER_AUTH_BODIES, REQUEST_BODIES } from '@app/shared/contract';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
@@ -14,14 +21,8 @@ import { contactKindOf } from '@app/shared/validation/enums';
 import { OTP_ENABLED } from '@app/shared/validation/otp';
 
 import { requireUnspentCaptcha } from '../lib/captcha';
-import {
-  api,
-  asPlugin,
-  ok,
-  parseOrThrow,
-  pluginOk,
-  readJson,
-} from '../lib/http';
+import { mock } from '../lib/endpoint';
+import { parseOrThrow, readJson } from '../lib/http';
 import {
   beginRecoveryAttempt,
   destinationOf,
@@ -71,19 +72,11 @@ import { recoveryGrants, users } from '../store';
  * not checked against the breach list.
  */
 
-const sendBody = REQUEST_BODIES['POST /api/auth/otp/send'];
-const verifyBody = REQUEST_BODIES['POST /api/auth/otp/verify'];
-const resetBody = REQUEST_BODIES['POST /api/auth/forgot-password/reset'];
-const secondFactorSendBody =
-  REQUEST_BODIES['POST /api/auth/forgot-password/second-factor/send'];
-const completeBody = REQUEST_BODIES['POST /api/auth/forgot-password/complete'];
-
 /** The wait every anonymous send advertises, whatever the identifier. */
 const ANONYMOUS_SEND_DATA = { nextAllowedIn: OTP_BASE_RESEND_DELAY_S };
 
 /** Every route here refuses a body with the same text, whatever is wrong with it. */
-const parse = <S extends z.ZodType>(schema: S, body: unknown): z.output<S> =>
-  parseOrThrow(schema, body, otpMsg.invalidInput);
+const ANY_BAD_BODY = otpMsg.invalidInput;
 
 /** A password written by a reset: the account's own, with every credential rotated. */
 function writePassword(user: MockUser, password: string) {
@@ -153,10 +146,10 @@ async function verifyFactor(
 }
 
 export const otpFlowHandlers = [
-  http.post(api('/api/auth/otp/send'), async ({ request }) => {
+  mock(sendOtp, async ({ request, body }) => {
     requireServed(OTP_ENABLED);
     requireUnspentCaptcha(request);
-    const contact = parse(sendBody, await readJson(request));
+    const contact = await body(ANY_BAD_BODY);
     const user = userWithContact(contact);
     const kind = contactKindOf(contact.channel);
     const verified =
@@ -166,13 +159,13 @@ export const otpFlowHandlers = [
       if (OTP_AUTO_VERIFY) markContactVerified(user, kind);
       else sendAnonymousCode(user, 'verify_contact', destinationOf(contact));
     }
-    return ok(ANONYMOUS_SEND_DATA, otpMsg.sendSuccess);
+    return { message: otpMsg.sendSuccess, data: ANONYMOUS_SEND_DATA };
   }),
 
-  http.post(api('/api/auth/otp/verify'), async ({ request }) => {
+  mock(verifyOtp, async ({ request, body }) => {
     requireServed(OTP_ENABLED);
     requireUnspentCaptcha(request);
-    const input = parse(verifyBody, await readJson(request));
+    const input = await body(ANY_BAD_BODY);
     const user = userWithContact(input);
     if (!user) throw invalidOrExpiredCode();
 
@@ -183,35 +176,38 @@ export const otpFlowHandlers = [
       input.code
     );
     markContactVerified(user, contactKindOf(input.channel));
-    return ok({ verified: true }, otpMsg.verifySuccess(input.channel));
+    return {
+      message: otpMsg.verifySuccess(input.channel),
+      data: { verified: true as const },
+    };
   }),
 
-  http.post(api('/api/auth/passwordless/send'), async ({ request }) => {
+  mock(sendPasswordlessCode, async ({ request, body }) => {
     requireServed(OTP_ENABLED && PASSWORDLESS_ENABLED);
     requireUnspentCaptcha(request);
-    const contact = parse(sendBody, await readJson(request));
+    const contact = await body(ANY_BAD_BODY);
     const user = userWithContact(contact);
     if (user)
       sendAnonymousCode(user, 'passwordless_login', destinationOf(contact));
-    return ok(ANONYMOUS_SEND_DATA, otpMsg.sendSuccess);
+    return { message: otpMsg.sendSuccess, data: ANONYMOUS_SEND_DATA };
   }),
 
-  http.post(api('/api/auth/forgot-password/send'), async ({ request }) => {
+  mock(sendPasswordResetCode, async ({ request, body }) => {
     requireServed(OTP_ENABLED);
     requireUnspentCaptcha(request);
-    const contact = parse(sendBody, await readJson(request));
+    const contact = await body(ANY_BAD_BODY);
     const user = userWithContact(contact);
     if (user)
       sendAnonymousCode(user, 'forgot_password', destinationOf(contact));
-    return ok(ANONYMOUS_SEND_DATA, otpMsg.sendSuccess);
+    return { message: otpMsg.sendSuccess, data: ANONYMOUS_SEND_DATA };
   }),
 
   // The code proves the contact. An account with a second factor gets a grant
   // instead of a new password, which a factor's own proof then spends.
-  http.post(api('/api/auth/forgot-password/reset'), async ({ request }) => {
+  mock(resetPassword, async ({ request, body }) => {
     requireServed(OTP_ENABLED);
     requireUnspentCaptcha(request);
-    const input = parse(resetBody, await readJson(request));
+    const input = await body(ANY_BAD_BODY);
     const user = userWithContact(input);
     if (!user) throw invalidOrExpiredCode();
 
@@ -244,49 +240,46 @@ export const otpFlowHandlers = [
         kind,
         allowed.map(({ id }) => id)
       );
-      return ok(
-        {
-          reset: false,
-          twoFactorRequired: true,
+      return {
+        message: otpMsg.recoverySecondFactorRequired,
+        data: {
+          reset: false as const,
+          twoFactorRequired: true as const,
           grant,
           options: listed(allowed),
           defaultMethod: defaultOption(allowed),
         },
-        otpMsg.recoverySecondFactorRequired
-      );
+      };
     }
 
     writePassword(user, input.newPassword);
-    return ok({ reset: true }, otpMsg.passwordResetSuccess);
+    return {
+      message: otpMsg.passwordResetSuccess,
+      data: { reset: true as const },
+    };
   }),
 
-  http.post(
-    api('/api/auth/forgot-password/second-factor/send'),
-    async ({ request }) => {
-      requireServed(OTP_ENABLED);
-      const { grant: token, option } = parse(
-        secondFactorSendBody,
-        await readJson(request)
-      );
-      const grant = resolveRecoveryGrant(token, option);
-      const user = users.find(grant.userId);
-      if (!user || (option !== 'otp:email' && option !== 'otp:phone'))
-        throw invalidOrExpiredCode();
+  mock(sendRecoverySecondFactorCode, async ({ body }) => {
+    requireServed(OTP_ENABLED);
+    const { grant: token, option } = await body(ANY_BAD_BODY);
+    const grant = resolveRecoveryGrant(token, option);
+    const user = users.find(grant.userId);
+    if (!user || (option !== 'otp:email' && option !== 'otp:phone'))
+      throw invalidOrExpiredCode();
 
-      const kind = option === 'otp:phone' ? 'phone' : 'email';
-      const destination = kind === 'email' ? user.email : user.phoneNumber;
-      if (!destination) throw invalidOrExpiredCode();
+    const kind = option === 'otp:phone' ? 'phone' : 'email';
+    const destination = kind === 'email' ? user.email : user.phoneNumber;
+    if (!destination) throw invalidOrExpiredCode();
 
-      const nextAllowedIn = sendCode(user.id, 'two_factor', destination, kind);
-      return ok({ nextAllowedIn }, otpMsg.sendSuccess);
-    }
-  ),
+    const nextAllowedIn = sendCode(user.id, 'two_factor', destination, kind);
+    return { message: otpMsg.sendSuccess, data: { nextAllowedIn } };
+  }),
 
   // The only write of the password for an account with a second factor: the
   // grant, one of the factors it lists proven, and the five attempts they share.
-  http.post(api('/api/auth/forgot-password/complete'), async ({ request }) => {
+  mock(completePasswordReset, async ({ body }) => {
     requireServed(OTP_ENABLED);
-    const input = parse(completeBody, await readJson(request));
+    const input = await body(ANY_BAD_BODY);
     const grant = resolveRecoveryGrant(input.grant, input.option);
     const user = users.find(grant.userId);
     if (!user?.isActive) throw invalidOrExpiredCode();
@@ -300,42 +293,46 @@ export const otpFlowHandlers = [
 
     recoveryGrants.remove(grant.id);
     writePassword(user, input.newPassword);
-    return ok({ reset: true }, otpMsg.passwordResetSuccess);
+    return {
+      message: otpMsg.passwordResetSuccess,
+      data: { reset: true as const },
+    };
   }),
 
-  asPlugin(
-    http.post(api('/api/auth/passwordless/verify'), async ({ request }) => {
-      requireServed(OTP_ENABLED && PASSWORDLESS_ENABLED);
-      requireUnspentCaptcha(request);
-      const input = parse(
-        BETTER_AUTH_BODIES['/passwordless/verify'],
-        await readJson(request)
-      );
-      const user = userWithContact(input);
-      if (!user) throw invalidOrExpiredCode();
+  mock(passwordlessVerify, async ({ request }) => {
+    requireServed(OTP_ENABLED && PASSWORDLESS_ENABLED);
+    requireUnspentCaptcha(request);
+    const input = parseOrThrow(
+      passwordlessVerify.body,
+      await readJson(request),
+      ANY_BAD_BODY
+    );
+    const user = userWithContact(input);
+    if (!user) throw invalidOrExpiredCode();
 
-      const kind = contactKindOf(input.channel);
-      verifyAnonymousCode(
-        user,
-        'passwordless_login',
-        destinationOf(input),
-        input.code
-      );
-      markContactVerified(user, kind);
+    const kind = contactKindOf(input.channel);
+    verifyAnonymousCode(
+      user,
+      'passwordless_login',
+      destinationOf(input),
+      input.code
+    );
+    markContactVerified(user, kind);
 
-      // Like a password login, it passes the session gates, and the contact
-      // the code reached is not offered again as a second factor.
-      admitSession(user);
-      const outcome = issueChallenge(user, {
-        firstFactor: 'passwordless',
-        rememberMe: input.rememberMe ?? true,
-        excludeContactKind: kind,
-      });
-      if (outcome.kind === 'refused') throw twoFactorUnavailable();
-      if (outcome.kind === 'challenge') return HttpResponse.json(outcome.body);
+    // Like a password login, it passes the session gates, and the contact
+    // the code reached is not offered again as a second factor.
+    admitSession(user);
+    const outcome = issueChallenge(user, {
+      firstFactor: 'passwordless',
+      rememberMe: input.rememberMe ?? true,
+      excludeContactKind: kind,
+    });
+    if (outcome.kind === 'refused') throw twoFactorUnavailable();
+    if (outcome.kind === 'challenge') return { raw: outcome.body };
 
-      startSession(user);
-      return pluginOk({ loggedIn: true }, otpMsg.loginSuccess);
-    })
-  ),
+    startSession(user);
+    return {
+      raw: { message: otpMsg.loginSuccess, data: { loggedIn: true as const } },
+    };
+  }),
 ];

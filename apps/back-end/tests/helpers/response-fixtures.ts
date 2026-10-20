@@ -49,10 +49,10 @@ export function mediaFolderWire() {
   };
 }
 
-/** The success envelope around `data`. */
+/** The success body around `data`. */
 export function successEnvelope(
   data: unknown,
   extra: Record<string, unknown> = {}
 ) {
-  return { success: true, message: MSG_FETCHED, data, ...extra };
+  return { message: MSG_FETCHED, data, ...extra };
 }

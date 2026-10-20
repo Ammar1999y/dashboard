@@ -74,10 +74,12 @@ const { app, MAX_ROUTE_TIMEOUT_SECONDS } = await import('./app');
 const { MAX_REQUEST_BODY_BYTES } = await import('./lib/http/request');
 const { drainAfterResponse, pendingAfterResponse } =
   await import('./lib/http/after-response');
+const { prepareServedDocument } = await import('./lib/http/openapi/serve');
 const { closeRateLimitStore } = await import('./lib/rate-limit/store');
 const { closeCacheStore } = await import('./lib/cache');
 const { applicationPoolUsable, closeDatabase } = await import('./db');
 const { watchApplicationPool } = await import('./lib/pool-watchdog');
+const { stopSvgWorker } = await import('./lib/media/image/svg-jobs');
 const { scheduleWhenOwner } = await import('./lib/maintenance/ownership');
 const { tryAcquireWriterLock } = await import('./lib/sqlite/writer-lock');
 const { SQLITE_DIR } = await import('./lib/env.server');
@@ -125,6 +127,10 @@ app.listen({ port, idleTimeout: IDLE_TIMEOUT_SECONDS }, (server) => {
 const listener = app.server;
 if (!listener) fail('the listener did not start');
 
+// After `listen`, so the port opens without waiting for it, and in production
+// only: a development restart should not pay for a page it may never open.
+if (nodeEnv === 'production') prepareServedDocument();
+
 const stopServer = (budgetMs: number) =>
   stopServerGracefully({
     budgetMs,
@@ -169,6 +175,7 @@ async function closeStores(): Promise<void> {
   if (closeState.done) return;
   closeState.done = true;
   stopPoolWatch();
+  stopSvgWorker();
   const failures = [
     await closeStore('postgres', closeDatabase),
     await closeStore('rate-limit', closeRateLimitStore),

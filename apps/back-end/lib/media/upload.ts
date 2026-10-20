@@ -263,7 +263,7 @@ export async function admitUpload(
     );
   const validatedSvg =
     mimeType === 'image/svg+xml'
-      ? validateSvgUpload(buffer, entry.name)
+      ? await validateSvgUpload(buffer, entry.name)
       : undefined;
 
   return { file: entry, buffer, mimeType, spec, validatedSvg };
@@ -442,16 +442,26 @@ async function storeUpload(params: {
     key,
   };
 
+  let pending: MediaFileRow | null = null;
   if (target.activate) await db.insert(files).values(pendingRow);
   else
-    await withTransaction(async (tx) => {
-      await tx.insert(files).values(pendingRow);
+    pending = await withTransaction(async (tx) => {
+      const [row] = await tx
+        .insert(files)
+        .values(pendingRow)
+        .returning(FILE_COLUMNS);
+      if (!row)
+        throw new CustomError(
+          mediaMsg.uploadFailed,
+          HTTP_STATUS.INTERNAL_ERROR
+        );
       await auditAs(tx, actor, {
         action: 'INSERT',
         tableName: 'files',
         recordId: id,
         newData: { ...audited, status: 'pending' },
       });
+      return row;
     });
 
   try {
@@ -483,15 +493,9 @@ async function storeUpload(params: {
     });
   }
 
-  if (!target.activate) {
-    const [row] = await db
-      .select(FILE_COLUMNS)
-      .from(files)
-      .where(eq(files.id, id));
-    if (!row)
-      throw new CustomError(mediaMsg.uploadFailed, HTTP_STATUS.INTERNAL_ERROR);
-    return row;
-  }
+  // As inserted: the object write changes no column, and no one else can know
+  // this id before it is answered.
+  if (pending) return pending;
 
   return withTransaction(async (tx) => {
     const [row] = await tx

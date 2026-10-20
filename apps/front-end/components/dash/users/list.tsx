@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 
 import { DASHBOARD_PAGE_LABELS } from '@app/shared/messages/permissions';
-import { userRowsSchema } from '@app/shared/responses/users';
 
 import { DataTable } from '@/components/ui/data-table';
 
@@ -26,10 +25,8 @@ export default function UsersList() {
       cta={cta}
       columns={columns}
       queryKey={userEntity.keys.list}
-      href={userEntity.href}
-      schema={userRowsSchema}
+      endpoint={userEntity.endpoints.list}
       storageKey='users-table'
-      serverSide
     />
   );
 }

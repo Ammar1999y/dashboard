@@ -1,4 +1,5 @@
-import type { Entity } from './entity';
+import type { Entity, EntityEndpoints } from './entity';
+import type { BodyOf } from '@/lib/api/client';
 import type { StoredRow } from '@/types/api';
 import type { EntityID } from '@app/shared/types';
 
@@ -7,8 +8,8 @@ import { useCallback } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { createdIdSchema, updatedAtSchema } from '@app/shared/responses/common';
-import { isCommitted, mutate } from '@/lib/api/mutation';
+import { api } from '@/lib/api/client';
+import { isCommitted } from '@/lib/api/mutation';
 import { cacheCreated, cacheUpdated } from '@/lib/api/query-cache';
 
 interface Row {
@@ -29,7 +30,10 @@ export type CreatedRow = StoredRow;
  * but the view could not be refreshed" rather than as a failed save — and still
  * leaves the form, which would otherwise submit the write again.
  */
-export function useEntityMutations<TRow extends Row>(entity: Entity) {
+export function useEntityMutations<
+  TRow extends Row,
+  E extends EntityEndpoints = EntityEndpoints,
+>(entity: Entity<E>) {
   const queryClient = useQueryClient();
   const router = useRouter();
 
@@ -46,31 +50,33 @@ export function useEntityMutations<TRow extends Row>(entity: Entity) {
   );
 
   const create = useCallback(
-    async <TPayload>(
-      payload: TPayload,
+    async (
+      payload: BodyOf<E['create']>,
       toRow: (created: CreatedRow) => TRow,
       afterCreate?: (row: TRow) => void,
       afterUnreadCreate?: () => void
     ) => {
       const result = await leaveAfter(
-        mutate({
-          href: entity.href,
-          method: 'POST',
-          data: payload,
-          schema: createdIdSchema,
-          onSuccess: ({ id }) => {
-            const now = new Date().toISOString();
-            const row = toRow({ id, createdAt: now, updatedAt: now });
-            cacheCreated<TRow>(queryClient, entity.keys, row);
-            afterCreate?.(row);
-          },
-          // The id came with the lost answer, so the row exists only on the
-          // server: the lists refetch to show it.
-          onUnreadAnswer: () => {
-            afterUnreadCreate?.();
-            void queryClient.invalidateQueries({ queryKey: entity.keys.list });
-          },
-        })
+        api(
+          entity.endpoints.create,
+          { body: payload },
+          {
+            onSuccess: ({ id }) => {
+              const now = new Date().toISOString();
+              const row = toRow({ id, createdAt: now, updatedAt: now });
+              cacheCreated<TRow>(queryClient, entity.keys, row);
+              afterCreate?.(row);
+            },
+            // The id came with the lost answer, so the row exists only on the
+            // server: the lists refetch to show it.
+            onUnreadAnswer: () => {
+              afterUnreadCreate?.();
+              void queryClient.invalidateQueries({
+                queryKey: entity.keys.list,
+              });
+            },
+          }
+        )
       );
 
       toast.success(result.message);
@@ -80,9 +86,9 @@ export function useEntityMutations<TRow extends Row>(entity: Entity) {
   );
 
   const update = useCallback(
-    async <TPayload>(
+    async (
       id: EntityID,
-      payload: TPayload,
+      payload: BodyOf<E['update']>,
       toPatch: (updatedAt: string) => Partial<TRow>,
       afterUpdate?: () => void
     ) => {
@@ -92,14 +98,14 @@ export function useEntityMutations<TRow extends Row>(entity: Entity) {
       };
 
       const result = await leaveAfter(
-        mutate({
-          href: entity.itemHref(id),
-          method: 'PUT',
-          data: payload,
-          schema: updatedAtSchema,
-          onSuccess: ({ updatedAt }) => write(updatedAt),
-          onUnreadAnswer: () => write(new Date().toISOString()),
-        })
+        api(
+          entity.endpoints.update,
+          { params: { id }, body: payload },
+          {
+            onSuccess: ({ updatedAt }) => write(updatedAt),
+            onUnreadAnswer: () => write(new Date().toISOString()),
+          }
+        )
       );
 
       toast.success(result.message);

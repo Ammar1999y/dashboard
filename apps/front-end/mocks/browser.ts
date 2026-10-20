@@ -1,4 +1,5 @@
 import { setupWorker } from 'msw/browser';
+import { HttpNetworkFrame } from 'msw/experimental';
 import { API_URL } from '@/lib/env';
 
 import { installControls } from './controls';
@@ -17,11 +18,15 @@ export function startWorker(): Promise<void> {
   started ??= (
     typeof crypto.randomUUID === 'function'
       ? worker.start({
-          onUnhandledRequest(request, print) {
+          onUnhandledFrame({ frame, defaults }) {
             // A backend call nothing answers is a missing mock: it goes on to
             // an origin that does not resolve. Assets, fonts and the captcha
             // go to the network as usual.
-            if (request.url.startsWith(API_URL)) print.error();
+            if (
+              frame instanceof HttpNetworkFrame &&
+              frame.data.request.url.startsWith(API_URL)
+            )
+              defaults.error();
           },
         })
       : Promise.reject(

@@ -28,6 +28,7 @@ import { getRateLimitStore } from '@/lib/rate-limit/store';
 import { compareCodeUnits } from '@/utils/text';
 
 import { egressCallsTo } from '../helpers/egress';
+import { expectAuthError, expectError } from '../helpers/expect-body';
 import { baseHeaders } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -121,15 +122,16 @@ describe('a sub-path outside the allowlist', () => {
   ];
 
   test.each([...CRAFTED, ...randomSubPaths(8)])(
-    '%s answers 404 in this API envelope and spends no captcha quota',
+    '%s answers 404 as a problem and spends no captcha quota',
     async (subPath) => {
       const response = await callAuth(subPath);
 
-      expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
-      expect(await response.json()).toEqual({
-        success: false,
+      expect(await expectAuthError(response, 404, MSG_PAGE_NOT_FOUND)).toEqual({
+        type: 'about:blank',
+        title: 'Not Found',
+        status: 404,
+        detail: MSG_PAGE_NOT_FOUND,
         message: MSG_PAGE_NOT_FOUND,
-        data: null,
       });
       expect(egressCallsTo(TURNSTILE_HOST)).toEqual([]);
     }
@@ -208,17 +210,35 @@ describe('a sub-path outside the allowlist', () => {
       const throughWildcard = await callAuth(subPath, 'GET');
       const throughRouter = await callAuth(subPath, 'PUT');
 
-      expect(throughWildcard.status, `GET ${subPath}`).toBe(
+      // A binding's own refusal: a plain problem, with no `message`.
+      await expectError(
+        throughWildcard.clone(),
         HTTP_STATUS.METHOD_NOT_ALLOWED
       );
-      expect(throughRouter.status, `PUT ${subPath}`).toBe(
-        HTTP_STATUS.METHOD_NOT_ALLOWED
-      );
+      await expectError(throughRouter.clone(), HTTP_STATUS.METHOD_NOT_ALLOWED);
       expect(throughWildcard.headers.get('allow')).toBe(
         throughRouter.headers.get('allow')
       );
       expect(throughWildcard.headers.get('allow')).toBe('POST, OPTIONS');
     }
+  });
+
+  test('a Better Auth path answers a wrong method 405 as an auth problem, with its Allow', async () => {
+    const postOnly = BETTER_AUTH_ENDPOINTS.find(
+      (endpoint) => !endpoint.methods.includes('GET')
+    );
+    if (!postOnly) throw new Error('no POST-only Better Auth path');
+
+    const response = await callAuth(postOnly.path, 'GET');
+
+    expect(
+      await expectAuthError(response, HTTP_STATUS.METHOD_NOT_ALLOWED)
+    ).toMatchObject({ title: 'Method Not Allowed' });
+    const allow = (response.headers.get('allow') ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .toSorted(compareCodeUnits);
+    expect(allow).toEqual(advertised(postOnly.methods));
   });
 
   test('HEAD is served wherever GET is, and refused wherever it is not', async () => {
@@ -274,15 +294,22 @@ describe('the budget an unknown sub-path draws on', () => {
     // they share one counter and the last is refused.
     const paths = randomSubPaths(PRE_AUTH_LIMIT + 1);
     const statuses: number[] = [];
+    let last: Response | undefined;
     for (const subPath of paths) {
-      const response = await callAuth(subPath);
-      statuses.push(response.status);
+      last = await callAuth(subPath);
+      statuses.push(last.status);
     }
 
     expect(statuses.slice(0, PRE_AUTH_LIMIT)).toEqual(
       Array.from({ length: PRE_AUTH_LIMIT }, () => HTTP_STATUS.NOT_FOUND)
     );
     expect(statuses.at(-1)).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+    // The prefix's own refusal, an auth problem that tells when to retry.
+    if (!last) throw new Error('no request was sent');
+    expect(last.headers.get('retry-after')).not.toBeNull();
+    expect(
+      await expectAuthError(last, HTTP_STATUS.TOO_MANY_REQUESTS)
+    ).toMatchObject({ title: 'Too Many Requests' });
 
     // The keyspace half, stated separately: 121 paths from one IP must leave one
     // row behind, not 121. This is the property the sweep ceiling is sized on.

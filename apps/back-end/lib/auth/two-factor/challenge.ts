@@ -16,7 +16,7 @@ import type {
 
 import { and, eq, isNull } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
+import { db } from '@/db';
 import { users } from '@/db/schema';
 import { APIError } from 'better-auth/api';
 import { expireCookie } from 'better-auth/cookies';
@@ -46,7 +46,7 @@ import {
   defaultOption,
   offeredMethodNames,
   offeredMethods,
-  readEnrolmentState,
+  readEnrolment,
 } from './methods';
 import { parseIssuedState, spendAttemptBudget } from './pending-proof';
 import { markTwoFactorProven } from './trusted-device';
@@ -106,8 +106,7 @@ async function readChallengeState(
   return parseChallengeState(row.value);
 }
 
-// `path-policy.ts` gates on this before the plugin runs; `plugin.ts` records
-// completion from it after.
+// `path-policy.ts` gates on this before the plugin's verifiers run.
 export const PLUGIN_VERIFIER_METHOD: Readonly<Record<string, TwoFactorMethod>> =
   {
     '/two-factor/verify-totp': 'totp',
@@ -127,10 +126,35 @@ export interface ResolvedChallenge {
   defaultMethod: string | null;
   firstFactor: FirstFactor;
   rememberMe: boolean;
+  /** Still encrypted; null unless a verified TOTP credential exists. */
+  totpSecret: string | null;
+}
+
+/**
+ * ⚠️ One request only: the path policy and the verifier both check the
+ * challenge, and nothing between them changes it. What acts on it re-checks
+ * under the user lock (`withTwoFactorChallengeTransaction`).
+ */
+const resolvedChallenges = new WeakMap<
+  Request,
+  Promise<ResolvedChallenge | null>
+>();
+
+function resolveTwoFactorChallenge(
+  ctx: AuthContext
+): Promise<ResolvedChallenge | null> {
+  const { request } = ctx;
+  if (!request) return readTwoFactorChallenge(ctx);
+  let resolved = resolvedChallenges.get(request);
+  if (!resolved) {
+    resolved = readTwoFactorChallenge(ctx);
+    resolvedChallenges.set(request, resolved);
+  }
+  return resolved;
 }
 
 // Does not consume: sending an OTP needs the challenge to survive.
-async function resolveTwoFactorChallenge(
+async function readTwoFactorChallenge(
   ctx: AuthContext
 ): Promise<ResolvedChallenge | null> {
   const challengeId = await readChallengeCookie(ctx);
@@ -168,7 +192,7 @@ async function resolveTwoFactorChallenge(
     .limit(1);
   if (!user) return null;
 
-  const state = await readEnrolmentState(user.id);
+  const { state, totpSecret } = await readEnrolment(user.id);
   // Narrow only, never widen.
   const issuedIds = new Set(issued.options);
   const options = offeredMethods(state).filter((option) =>
@@ -186,6 +210,7 @@ async function resolveTwoFactorChallenge(
       : defaultOption(options),
     firstFactor: issued.firstFactor,
     rememberMe: issued.rememberMe,
+    totpSecret,
   };
 }
 
@@ -382,57 +407,45 @@ async function recordCompletionEvent(params: {
   await bestEffort(
     'twoFactor.completionAudit.failed',
     () =>
-      withTransaction((tx) =>
-        auditLog(tx, {
-          userId: params.user.id,
-          userEmail: params.user.email,
-          action: 'UPDATE',
-          tableName: 'sessions',
-          recordId: params.session.id,
-          oldData: null,
-          newData: {
-            twoFactorCompleted: true,
-            firstFactor: params.firstFactor,
-            secondFactor: params.completedWith,
-            rememberMe: params.rememberMe,
-          },
-          meta: boundedAuditMeta(
-            params.session.ipAddress ?? null,
-            params.session.userAgent,
-            params.apiPath
-          ),
-        })
-      ),
+      auditLog(db, {
+        userId: params.user.id,
+        userEmail: params.user.email,
+        action: 'UPDATE',
+        tableName: 'sessions',
+        recordId: params.session.id,
+        oldData: null,
+        newData: {
+          twoFactorCompleted: true,
+          firstFactor: params.firstFactor,
+          secondFactor: params.completedWith,
+          rememberMe: params.rememberMe,
+        },
+        meta: boundedAuditMeta(
+          params.session.ipAddress ?? null,
+          params.session.userAgent,
+          params.apiPath
+        ),
+      }),
     { userId: params.user.id }
   );
 }
 
-// The plugin's `valid()` consumed the challenge but cannot read the companion
-// record. The request cookie still carries the id the response just expired.
+// The plugin's `valid()` consumed the challenge and minted `created`, but
+// leaves the companion rows and knows nothing of the factor chain.
 export async function recordPluginCompletion(
   ctx: AuthContext,
+  challenge: ResolvedChallenge,
   completedWith: TwoFactorMethod,
-  created: { user: { id: string; email: string }; session: CompletedSession }
+  created: { user: { id: string }; session: CompletedSession }
 ): Promise<void> {
-  const challengeId = await readChallengeCookie(ctx);
-  if (!challengeId) return;
-
-  // Best-effort like the rest of this tail: the session already exists.
-  const issued = await bestEffort(
-    'twoFactor.completion.stateReadFailed',
-    () => readChallengeState(ctx, challengeId),
-    { userId: created.user.id, skipped: 'completion audit' }
-  );
-  await dropCompanionRows(ctx, challengeId);
-
-  const userId = validID(created.user.id);
-  if (!issued || !userId || issued.userId !== userId) return;
+  await dropCompanionRows(ctx, challenge.challengeId);
+  if (validID(created.user.id) !== challenge.user.id) return;
   await recordCompletionEvent({
-    user: { id: userId, email: created.user.email },
+    user: challenge.user,
     session: created.session,
-    firstFactor: issued.firstFactor,
+    firstFactor: challenge.firstFactor,
     completedWith,
-    rememberMe: issued.rememberMe,
+    rememberMe: challenge.rememberMe,
     apiPath: ctx.path ?? '/two-factor',
   });
 }

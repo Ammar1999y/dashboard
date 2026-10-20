@@ -3,11 +3,12 @@ import type { TwoFactorChallenge } from './schemas';
 
 import { memo, useCallback } from 'react';
 
+import { sendPasswordlessCode } from '@app/shared/api/auth';
+import { passwordlessVerify } from '@app/shared/api/better-auth';
 import { HONOUR_REMEMBER_ME } from '@app/shared/config';
-import { passwordlessResultSchema } from '@app/shared/responses/better-auth';
 import { ENABLED_OTP_CHANNELS } from '@app/shared/validation/otp';
 import { MSG_PASSWORDLESS_INTRO, MSG_RESEND_CODE } from '@/constants/messages';
-import { authRequest } from '@/lib/auth/request';
+import { api } from '@/lib/api/client';
 
 import { RememberMeOption } from './checkbox-option';
 import { CodeForm } from './code-form';
@@ -39,20 +40,20 @@ const PasswordlessCodeForm = memo(
     onResend,
   }: PasswordlessCodeFormProps) => {
     const onVerify = useCallback(
-      async (code: string, headers: Record<string, string>) => {
+      async (code: string, captcha: string) => {
         try {
-          const { data } = await authRequest('/passwordless/verify', {
-            method: 'POST',
-            data: {
-              ...contact,
-              code,
-              ...(HONOUR_REMEMBER_ME && { rememberMe }),
+          const result = await api(
+            passwordlessVerify,
+            {
+              body: {
+                ...contact,
+                code,
+                ...(HONOUR_REMEMBER_ME && { rememberMe }),
+              },
             },
-            headers,
-            plain: true,
-            schema: passwordlessResultSchema,
-          });
-          routeSignInResult(data, onChallenge);
+            { captcha }
+          );
+          routeSignInResult(result, onChallenge);
         } catch (error) {
           const unavailable = twoFactorUnavailableMessage(error);
           if (unavailable === null) throw error;
@@ -104,7 +105,7 @@ export default function PasswordlessSignIn({
 
   return (
     <SendThenCode
-      href='/api/auth/passwordless/send'
+      endpoint={sendPasswordlessCode}
       channels={CHANNELS}
       intro={MSG_PASSWORDLESS_INTRO}
     >

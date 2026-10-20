@@ -1,4 +1,4 @@
-import type { Tx } from '@/db';
+import type { Executor } from '@/db';
 import type { AuditAction } from '@/db/schema';
 import type { HandlerRequestMeta } from '@/lib/http/contract';
 import type { EntityID } from '@app/shared/types';
@@ -236,12 +236,20 @@ interface AuditLogParams {
 }
 
 /**
- * Must be called inside the same transaction as the mutation to guarantee atomicity.
+ * A mutation passes its own transaction, or the row can outlive a rollback; an
+ * event with no mutation passes `db`.
  *
  * The trail lives in the database it audits, so anyone with write access to
  * that database can erase it; an external append-only sink is the fix.
  */
-export async function auditLog(tx: Tx, params: AuditLogParams) {
+export async function auditLog(executor: Executor, params: AuditLogParams) {
+  const row = auditRow(params);
+  if (!row) return;
+  await executor.insert(auditLogs).values(row);
+}
+
+/** An event's stored row; `null` for an UPDATE `skipIfUnchanged` drops. */
+function auditRow(params: AuditLogParams) {
   const { userId, userEmail, action, tableName, recordId, meta } = params;
 
   const safeFields = params.safeFields ? new Set(params.safeFields) : undefined;
@@ -265,9 +273,9 @@ export async function auditLog(tx: Tx, params: AuditLogParams) {
 
   // Only when both sides were supplied — `changedFields` is null (not empty)
   // when the caller gave no before/after pair, and that is not a no-op.
-  if (params.skipIfUnchanged && changedFields?.length === 0) return;
+  if (params.skipIfUnchanged && changedFields?.length === 0) return null;
 
-  await tx.insert(auditLogs).values({
+  return {
     userId,
     userEmail,
     action,
@@ -279,5 +287,18 @@ export async function auditLog(tx: Tx, params: AuditLogParams) {
     ipAddress: meta.ip,
     userAgent: meta.userAgent,
     apiPath: meta.apiPath,
-  });
+  };
+}
+
+/**
+ * `auditLog` for many events in one INSERT, each judged on its own. For a
+ * write that audits a row per item under a lock, where a round trip per row
+ * is lock time. 11 parameters a row, against PostgreSQL's 65 535.
+ */
+export async function auditMany(
+  executor: Executor,
+  entries: readonly AuditLogParams[]
+): Promise<void> {
+  const rows = entries.flatMap((entry) => auditRow(entry) ?? []);
+  if (rows.length > 0) await executor.insert(auditLogs).values(rows);
 }

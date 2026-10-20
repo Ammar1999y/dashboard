@@ -32,7 +32,12 @@ test('a 5xx CustomError is logged with its status, class, throw site and cause',
 
     expect(output).toEqual({
       status: HTTP_STATUS.INTERNAL_ERROR,
-      body: { success: false, message: MSG_INTERNAL_ERROR, data: null },
+      body: {
+        type: 'about:blank',
+        title: 'Internal Server Error',
+        status: HTTP_STATUS.INTERNAL_ERROR,
+        detail: MSG_INTERNAL_ERROR,
+      },
     });
     expect(logged).toHaveBeenCalledTimes(1);
     const line = String(logged.mock.calls[0]?.[0]);
@@ -109,7 +114,12 @@ test.each([
 
     expect(output).toEqual({
       status: HTTP_STATUS.SERVICE_UNAVAILABLE,
-      body: { success: false, message: MSG_SERVICE_UNAVAILABLE, data: null },
+      body: {
+        type: 'about:blank',
+        title: 'Service Unavailable',
+        status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+        detail: MSG_SERVICE_UNAVAILABLE,
+      },
       headers: { 'Retry-After': String(DATABASE_RETRY_AFTER_S) },
     });
     expect(logged).toHaveBeenCalledTimes(1);

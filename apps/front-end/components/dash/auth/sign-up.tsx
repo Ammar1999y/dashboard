@@ -6,9 +6,9 @@ import { useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { createdIdSchema } from '@app/shared/responses/common';
+import { devSignUp } from '@app/shared/api/dev';
 import { devSignUpSchema } from '@app/shared/validation/dev';
-import { mutate } from '@/lib/api/mutation';
+import { api } from '@/lib/api/client';
 
 import { Form } from '@/components/form/form';
 import FormInput from '@/components/form/form-input';
@@ -31,12 +31,7 @@ export default function DevSignUp() {
 
   const onSubmit = useCallback(
     async (data: DevSignUpOutput) => {
-      const { message } = await mutate({
-        href: '/api/dev/sign-up',
-        method: 'POST',
-        data,
-        schema: createdIdSchema,
-      });
+      const { message } = await api(devSignUp, { body: data });
       toast.success(message);
       void replace(SIGN_IN_PATH);
     },

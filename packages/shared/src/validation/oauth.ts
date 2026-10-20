@@ -18,3 +18,16 @@ export const googleStartSchema = z
     rememberMe: z.boolean().optional(),
   })
   .strict();
+
+/** `generateState`'s token: 32 of `generateRandomString`'s `a-z0-9A-Z-_`. */
+const OAUTH_STATE_PATTERN = /^[\w-]{32}$/;
+
+/** `GET /api/auth/oauth/google/callback`, the query Google redirects the browser with. */
+export const googleCallbackQuerySchema = z.object({
+  code: z.string().min(1).max(4096).optional(),
+  // `generateState`'s own shape. Not proof the state is ours: the server
+  // checks its marker.
+  state: z.string().regex(OAUTH_STATE_PATTERN),
+  error: z.string().max(256).optional(),
+  iss: z.string().max(255).optional(),
+});

@@ -45,15 +45,26 @@ export async function withAuthTransaction<T>(
   ctx: AuthContext,
   fn: (tx: Tx) => Promise<T>
 ): Promise<T> {
+  const adapter = ctx.context.adapter;
+  const transaction: typeof adapter.transaction = (run) =>
+    withTransaction((tx) =>
+      transactions.run(tx, () =>
+        run(drizzleAdapter(tx, authAdapterOptions)(ctx.context.options))
+      )
+    );
   return await runWithTransaction(
     {
-      ...ctx.context.adapter,
-      transaction: (run) =>
-        withTransaction((tx) =>
-          transactions.run(tx, () =>
-            run(drizzleAdapter(tx, authAdapterOptions)(ctx.context.options))
-          )
-        ),
+      ...adapter,
+      transaction,
+      // The library adapter reports `transaction: false`, and for such an
+      // adapter Better Auth runs the queued after-commit hooks even when the
+      // work throws. This one rolls back, so its hooks must not run then.
+      ...(adapter.options && {
+        options: {
+          ...adapter.options,
+          adapterConfig: { ...adapter.options.adapterConfig, transaction },
+        },
+      }),
     },
     () => {
       const tx = transactions.getStore();

@@ -9,23 +9,23 @@ import type { AnyBinding } from '@/lib/http/binding';
 import * as z from 'zod';
 
 import { isRawResponse } from '@app/shared/api/endpoint';
-import { refusalEnvelopeOf } from '@app/shared/response-contract';
+import { problemSchemaOf, successSchemaOf } from '@app/shared/api/wire';
 
-import { successSchemaOf } from '@/lib/http/binding';
+import { responsePayload } from '@/lib/http/contract';
 import { refusalsOf } from '@/lib/http/refusals';
-import { toWebResponse } from '@/lib/http/response';
+import { SerializedJson, toWebResponse } from '@/lib/http/response';
 import { runBinding } from '@/lib/http/run';
 
 import { answerValue } from './respond';
 
-const envelopes = new Map<z.ZodType, z.ZodType>();
+const problems = new Map<z.ZodType, z.ZodType>();
 
-/** Each envelope compiled once: every refusal status of every binding declares one. */
-function compiledEnvelope(schema: z.ZodType): z.ZodType {
-  let compiled = envelopes.get(schema);
+/** Each problem schema compiled once: every refusal status of every binding declares one. */
+function compiledProblem(schema: z.ZodType): z.ZodType {
+  let compiled = problems.get(schema);
   if (!compiled) {
     compiled = z.compile(schema);
-    envelopes.set(schema, compiled);
+    problems.set(schema, compiled);
   }
   return compiled;
 }
@@ -38,7 +38,7 @@ function routeOptions(binding: AnyBinding) {
   const { entry } = binding;
   const response: Record<number, z.ZodType> = {};
   for (const { status } of refusalsOf(binding))
-    response[status] = compiledEnvelope(refusalEnvelopeOf(entry, status));
+    response[status] = compiledProblem(problemSchemaOf(entry, status));
   for (const [status, schema] of rawRefusalsOf(binding))
     response[status] = z.compile(schema);
   response[entry.status] = z.compile(successSchemaOf(entry));
@@ -88,8 +88,12 @@ export function registerBinding(app: GatedApp, binding: AnyBinding): void {
   const answer = async (context: BindingContext) => {
     const answered = await runBinding(binding, context.request, context);
     // Any other status is a refusal already shaped by core, which the
-    // framework must send as it is.
-    if (!valued.has(answered.status)) return toWebResponse(answered);
+    // framework must send as it is; so is a body serialised ahead of time.
+    if (
+      !valued.has(answered.status) ||
+      responsePayload(answered.body) instanceof SerializedJson
+    )
+      return toWebResponse(answered);
     return answerValue(context.request, context.set, answered);
   };
 

@@ -1,5 +1,6 @@
+import type { DataTableFeatures } from '../features';
 import type { PinSide } from '../store/column-store';
-import type { Header } from '@tanstack/react-table';
+import type { Header, RowData } from '@tanstack/react-table';
 import type { KeyboardEvent } from 'react';
 
 import { memo, useCallback, useMemo } from 'react';
@@ -57,6 +58,7 @@ const SortButton = memo(({ columnId }: { columnId: string }) => {
             ? 'opacity-100'
             : 'opacity-0 hover:!opacity-100 group-hover/header:opacity-80 touch:opacity-80'
         )}
+        data-sort={direction ?? 'none'}
         onClick={handleSort}
         onKeyDown={handleKeyDown}
         onPointerDown={stopDragStart}
@@ -82,13 +84,13 @@ enum InsertPosition {
   After = 1,
 }
 
-interface HeaderCellProps<TData> {
-  header: Header<TData, unknown>;
+interface HeaderCellProps<TData extends RowData> {
+  header: Header<DataTableFeatures, TData>;
   pinSide: PinSide | undefined;
   pinEdge: boolean;
 }
 
-const HeaderCellInner = <TData,>({
+const HeaderCellInner = <TData extends RowData>({
   header,
   pinSide,
   pinEdge,

@@ -30,6 +30,7 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { auditLogs, roles, sessions, users } from '@/db/schema';
 
+import { authProblemSchema, PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
 import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { betterAuthMsg } from '@app/shared/messages/auth';
@@ -47,6 +48,7 @@ import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
 import { egressCallsTo, scriptEgress } from '../helpers/egress';
+import { expectAuthError } from '../helpers/expect-body';
 import { seedOtpProof } from '../helpers/otp';
 import { dropMockedClockWindows } from '../helpers/rate-limit';
 import { baseHeaders, seedUser, signIn, TEST_IP } from '../helpers/session';
@@ -424,16 +426,16 @@ describe('a refused or unavailable Turnstile verification', () => {
 
     expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
     // The captcha plugin answers from `onRequest`, upstream of every Better Auth
-    // hook, so its raw English body and framework code used to reach the client
-    // untranslated. `localiseAuthError` in `app.ts` is the only position
-    // downstream of the whole plugin chain, and it maps them there.
-    expect(JSON.parse(body)).toEqual({
+    // hook, so its raw English body and framework code would reach the client
+    // untranslated. `toAuthProblem` in the exit step is the only position
+    // downstream of the whole plugin chain, and it words them there.
+    expect(response.headers.get('content-type')).toBe(PROBLEM_MEDIA_TYPE);
+    expect(authProblemSchema.parse(JSON.parse(body))).toMatchObject({
+      status: HTTP_STATUS.FORBIDDEN,
+      detail: betterAuthMsg.VERIFICATION_FAILED,
       message: betterAuthMsg.VERIFICATION_FAILED,
       code: CUSTOM_AUTH_CODE,
     });
-    expect(response.headers.get('content-type')).toStartWith(
-      'application/json'
-    );
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(egressCallsTo(TURNSTILE_HOST).length).toBe(1);
 
@@ -457,13 +459,15 @@ describe('a refused or unavailable Turnstile verification', () => {
 
     const response = await attempt(actor().email, actor().password);
 
-    expect(response.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
-    // Translated at the prefix handler like the other two captcha outcomes; the
-    // STATUS is the fail-closed assertion and it is unchanged.
-    expect(await response.json()).toEqual({
-      message: betterAuthMsg.UNKNOWN_ERROR,
-      code: CUSTOM_AUTH_CODE,
-    });
+    // Worded like the other two captcha outcomes; the STATUS is the
+    // fail-closed assertion and it is unchanged.
+    expect(
+      await expectAuthError(
+        response,
+        HTTP_STATUS.INTERNAL_ERROR,
+        betterAuthMsg.UNKNOWN_ERROR
+      )
+    ).toMatchObject({ code: CUSTOM_AUTH_CODE });
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await sessionCount(actor().userId)).toBe(0);
     expect(egressCallsTo(TURNSTILE_HOST).length).toBe(1);
@@ -517,17 +521,16 @@ describe('outbound captcha admission', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
     // The most common client error on this endpoint — a stale page, a blocked
     // `challenges.cloudflare.com`, a native client. It used to answer in English
     // with a raw framework code and NO `content-type`.
-    expect(response.headers.get('content-type')).toStartWith(
-      'application/json'
-    );
-    expect(await response.json()).toEqual({
-      message: betterAuthMsg.MISSING_RESPONSE,
-      code: CUSTOM_AUTH_CODE,
-    });
+    expect(
+      await expectAuthError(
+        response,
+        HTTP_STATUS.BAD_REQUEST,
+        betterAuthMsg.MISSING_RESPONSE
+      )
+    ).toMatchObject({ code: CUSTOM_AUTH_CODE });
     expect(egressCallsTo(TURNSTILE_HOST)).toEqual([]);
   });
 

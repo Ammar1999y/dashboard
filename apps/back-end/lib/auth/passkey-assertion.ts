@@ -1,5 +1,5 @@
 import type { Executor } from '@/db';
-import type { Assert } from '@app/shared/contract';
+import type { Assert } from '@app/shared/api/fields-are-typed';
 import type { passkeyRequestOptionsSchema } from '@app/shared/responses/better-auth';
 import type { EntityID } from '@app/shared/types';
 import type {

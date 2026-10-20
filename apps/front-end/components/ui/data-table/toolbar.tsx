@@ -1,4 +1,5 @@
-import type { Column, ColumnSort } from '@tanstack/react-table';
+import type { DataTableFeatures } from './features';
+import type { Column, ColumnSort, RowData } from '@tanstack/react-table';
 
 import { DataTableFilterList } from './filters/data-table-filter-list';
 import { DataTableSearch } from './filters/data-table-search';
@@ -6,12 +7,12 @@ import { DataTableSortList } from './filters/data-table-sort-list';
 import { genericMemo } from './utils/generic-memo';
 import { DataTableViewOptions } from './view-options';
 
-interface DataTableToolbarProps<TData> {
-  columns: Column<TData>[];
+interface DataTableToolbarProps<TData extends RowData> {
+  columns: Column<DataTableFeatures, TData>[];
   defaultSort: ColumnSort[];
 }
 
-const DataTableToolbarInner = <TData,>({
+const DataTableToolbarInner = <TData extends RowData>({
   columns,
   defaultSort,
 }: DataTableToolbarProps<TData>) => (

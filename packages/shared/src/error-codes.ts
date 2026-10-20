@@ -81,6 +81,14 @@ export const MEDIA_ERROR_CODES = [
 
 export type MediaErrorCode = (typeof MEDIA_ERROR_CODES)[number];
 
+/**
+ * A success whose body broke its contract: the server did the work and its
+ * answer failed validation. Never retried, as the same request answers the
+ * same way, and a write that carries it has committed. The front end raises
+ * it too, for a body that fails its own parse.
+ */
+export const INVALID_RESPONSE_CODE = 'invalid_response' as const;
+
 /** Tells the `after` hook to leave the already-localised message alone. */
 export const CUSTOM_AUTH_CODE = '__' as const;
 

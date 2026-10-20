@@ -5,11 +5,10 @@ import { memo } from 'react';
 
 import { useWatch } from 'react-hook-form';
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
-import { roleSummariesSchema } from '@app/shared/responses/permissions';
 
 import FormCombobox from '@/components/form/form-combobox';
 
-import { ROLE_OPTIONS_HREF, ROLE_OPTIONS_KEY } from '../permissions/entity';
+import { ROLE_OPTIONS, ROLE_OPTIONS_KEY } from '../permissions/entity';
 import { useResourceAccess } from '../shared/access';
 
 const toOption = (role: RoleSummary): ComboboxOption => ({
@@ -39,8 +38,7 @@ export const RoleCombobox = memo(() => {
       placeholder='اختر الصلاحية'
       searchPlaceholder='ابحث عن الصلاحية...'
       queryKey={ROLE_OPTIONS_KEY}
-      href={ROLE_OPTIONS_HREF}
-      schema={roleSummariesSchema}
+      endpoint={ROLE_OPTIONS}
       toOption={toOption}
       extraOptions={offersCustom ? CUSTOM_OPTIONS : NO_OPTIONS}
     />

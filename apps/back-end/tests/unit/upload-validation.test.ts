@@ -23,7 +23,7 @@
  *
  * Everything runs through `sanitizeSvgServer`, not `sanitizeSvg` directly. That
  * wrapper is four lines that inject jsdom's `DOMParser`/`XMLSerializer`, it is
- * what `processImage` calls (`upload-helper.ts:206`), and calling it means the
+ * what the upload's SVG worker runs (`svg-worker.ts`), and calling it means the
  * assertions cover both parsers — the XML one the app sweeps on and the HTML one
  * DOMPurify re-parses with. Several payloads below are stopped by the second and
  * not the first, which a test of `sanitizeSvg` in isolation could not tell you.
@@ -82,11 +82,13 @@ import {
 import {
   ALLOWED_IMAGE_TYPES,
   isAllowedImageType,
+  optimizeSvgUpload,
   validateMagicBytes,
   validateSvgUpload,
 } from '@/lib/media/image/process';
 import { imageToRgba } from '@/lib/media/image/rgba';
-import { sanitizeSvgServer, svgOptimizerServer } from '@/lib/media/image/svg';
+import { sanitizeSvgServer } from '@/lib/media/image/svg';
+import { createSvgWorker } from '@/lib/media/image/svg-jobs';
 import {
   admitUpload,
   DOCUMENT_BYTE_BUDGET_MIB,
@@ -131,10 +133,10 @@ function expectNeutralised(markup: string, forbidden: readonly string[]) {
 }
 
 /** The refusal a direct upload of `markup` gets, through the upload entry point. */
-function uploadRefusal(markup: string, name = 'a.svg'): unknown {
+async function uploadRefusal(markup: string, name = 'a.svg'): Promise<unknown> {
   const logged = spyOn(console, 'warn').mockImplementation(() => {});
   try {
-    validateSvgUpload(Buffer.from(markup), name);
+    await validateSvgUpload(Buffer.from(markup), name);
   } catch (error) {
     return error;
   } finally {
@@ -439,9 +441,12 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
 </svg>
 `;
 
-  const pipeline = (markup: string) => {
-    const { cleanedSvg } = validateSvgUpload(Buffer.from(markup), 'a.svg');
-    return { cleanedSvg, stored: svgOptimizerServer({ data: cleanedSvg }) };
+  const pipeline = async (markup: string) => {
+    const { cleanedSvg } = await validateSvgUpload(
+      Buffer.from(markup),
+      'a.svg'
+    );
+    return { cleanedSvg, stored: await optimizeSvgUpload(cleanedSvg) };
   };
 
   const parseStored = (output: string) => {
@@ -449,8 +454,8 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
     return new window.DOMParser().parseFromString(output, 'image/svg+xml');
   };
 
-  test('an Inkscape 1.x file is accepted with its gradient intact and no svg: prefix', () => {
-    const { cleanedSvg, stored } = pipeline(inkscape);
+  test('an Inkscape 1.x file is accepted with its gradient intact and no svg: prefix', async () => {
+    const { cleanedSvg, stored } = await pipeline(inkscape);
 
     for (const output of [cleanedSvg, stored]) {
       expect(output).toStartWith('<svg ');
@@ -475,8 +480,8 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
     expect(doc.querySelectorAll('stop').length).toBeGreaterThanOrEqual(2);
   });
 
-  test('prefixed svg: children are stored unprefixed', () => {
-    const { cleanedSvg, stored } = pipeline(
+  test('prefixed svg: children are stored unprefixed', async () => {
+    const { cleanedSvg, stored } = await pipeline(
       `<svg xmlns="${SVG_NS}" xmlns:svg="${SVG_NS}" width="8" height="8">` +
         '<svg:defs><svg:linearGradient id="g"><svg:stop offset="0" stop-color="red"/></svg:linearGradient></svg:defs>' +
         '<svg:g><svg:rect width="8" height="8" fill="url(#g)"/></svg:g></svg>'
@@ -490,8 +495,8 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
     expect(stored).toInclude('#g');
   });
 
-  test('a root written only with a prefix is stored unprefixed', () => {
-    const { cleanedSvg, stored } = pipeline(
+  test('a root written only with a prefix is stored unprefixed', async () => {
+    const { cleanedSvg, stored } = await pipeline(
       `<svg:svg xmlns:svg="${SVG_NS}" width="8" height="8"><svg:rect width="8" height="8"/></svg:svg>`
     );
 
@@ -500,8 +505,8 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
     expect(stored).not.toInclude('svg:');
   });
 
-  test('a prefix bound twice to the SVG namespace is stored unprefixed', () => {
-    const { cleanedSvg, stored } = pipeline(
+  test('a prefix bound twice to the SVG namespace is stored unprefixed', async () => {
+    const { cleanedSvg, stored } = await pipeline(
       `<svg:svg xmlns:svg="${SVG_NS}" xmlns:s="${SVG_NS}" width="8" height="8">` +
         '<s:rect width="4" height="4"/><svg:circle r="2" cx="4" cy="4"/></svg:svg>'
     );
@@ -512,8 +517,8 @@ describe('an SVG that binds extra prefixes to the SVG namespace', () => {
     expect(cleanedSvg).toInclude('<circle');
   });
 
-  test('a default namespace plus an svg prefix keeps both kinds of child', () => {
-    const { cleanedSvg, stored } = pipeline(
+  test('a default namespace plus an svg prefix keeps both kinds of child', async () => {
+    const { cleanedSvg, stored } = await pipeline(
       `<svg xmlns="${SVG_NS}" xmlns:svg="${SVG_NS}" width="8" height="8">` +
         '<rect width="4" height="4"/><svg:rect x="4" width="4" height="4"/></svg>'
     );
@@ -646,16 +651,16 @@ describe('styling in an SVG', () => {
       ['an Illustrator file', illustrator],
     ])(
       '%s needs conversion, and the upload route says so',
-      (_label, markup) => {
+      async (_label, markup) => {
         expectConversion(markup);
-        expect(uploadRefusal(markup)).toMatchObject({
+        expect(await uploadRefusal(markup)).toMatchObject({
           status: HTTP_STATUS.BAD_REQUEST,
           message: MSG_SVG_REQUIRES_CONVERSION,
         });
       }
     );
 
-    test('a Figma file written with attributes is stored as SVG, gradient intact', () => {
+    test('a Figma file written with attributes is stored as SVG, gradient intact', async () => {
       const figma =
         `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="${SVG_NS}">` +
         '<path d="M2 2h20v20H2z" fill="url(#paint0_linear_1_2)"/>' +
@@ -663,8 +668,11 @@ describe('styling in an SVG', () => {
         '<stop stop-color="#FF0000"/><stop offset="1" stop-color="#0000FF"/>' +
         '</linearGradient></defs></svg>';
 
-      const { cleanedSvg } = validateSvgUpload(Buffer.from(figma), 'f.svg');
-      const stored = svgOptimizerServer({ data: cleanedSvg });
+      const { cleanedSvg } = await validateSvgUpload(
+        Buffer.from(figma),
+        'f.svg'
+      );
+      const stored = await optimizeSvgUpload(cleanedSvg);
 
       expect(stored).toInclude('fill="url(#paint0_linear_1_2)"');
       expect(stored).toInclude('<linearGradient id="paint0_linear_1_2"');
@@ -1232,9 +1240,9 @@ describe('external references in SVG', () => {
     }
   );
 
-  test('the upload route names an external reference as such', () => {
+  test('the upload route names an external reference as such', async () => {
     expect(
-      uploadRefusal(
+      await uploadRefusal(
         svg('<image href="https://evil.example/p.svg" width="8" height="8"/>')
       )
     ).toMatchObject({
@@ -1267,7 +1275,7 @@ describe('external references in SVG', () => {
     expect(result.isValid).toBe(false);
   });
 
-  test('whatever §13 produces, a malformed document is never STORED', () => {
+  test('whatever §13 produces, a malformed document is never STORED', async () => {
     // The pipeline either refuses, or throws in svgo, but it does not hand R2 a
     // two-root document.
     for (const markup of [
@@ -1279,7 +1287,7 @@ describe('external references in SVG', () => {
 
       let optimized: string | null = null;
       try {
-        optimized = svgOptimizerServer({ data: result.cleanedSvg });
+        optimized = await optimizeSvgUpload(result.cleanedSvg);
       } catch {
         // svgo refused it; nothing is stored.
         continue;
@@ -1908,31 +1916,31 @@ describe('the xlink namespace, however it is spelled', () => {
     ).toMatchObject({ isValid: false, reason: 'external-reference' });
   });
 
-  test('a same-document reference under a foreign prefix is stored', () => {
+  test('a same-document reference under a foreign prefix is stored', async () => {
     // The HTML re-parse reads xlink only under `xlink:`, so DOMPurify dropped
     // `xl:href` and stored a `<use/>` that names nothing.
-    const { cleanedSvg } = validateSvgUpload(
+    const { cleanedSvg } = await validateSvgUpload(
       Buffer.from(
         withPrefix('<symbol id="a"><circle r="1"/></symbol><use xl:href="#a"/>')
       ),
       'sprite.svg'
     );
-    const stored = svgOptimizerServer({ data: cleanedSvg });
+    const stored = await optimizeSvgUpload(cleanedSvg);
 
     expect(stored).toMatch(/<use [^>]*href="#a"/);
     expect(stored).toInclude('id="a"');
   });
 
-  test('an embedded raster under a foreign prefix is stored', () => {
+  test('an embedded raster under a foreign prefix is stored', async () => {
     const raster = `data:image/png;base64,${realPng.toString('base64')}`;
-    const { cleanedSvg } = validateSvgUpload(
+    const { cleanedSvg } = await validateSvgUpload(
       Buffer.from(
         withPrefix(`<image width="8" height="8" xl:href="${raster}"/>`)
       ),
       'embedded.svg'
     );
 
-    expect(svgOptimizerServer({ data: cleanedSvg })).toInclude(raster);
+    expect(await optimizeSvgUpload(cleanedSvg)).toInclude(raster);
   });
 });
 
@@ -2172,6 +2180,45 @@ function buildNoisePng(size: number): Buffer {
       raw[pixel + 1] = (seed >>> 8) & 0xff;
       raw[pixel + 2] = seed & 0xff;
       raw[pixel + 3] = 0xff;
+    }
+  }
+
+  return Buffer.concat([
+    Buffer.from(PNG_SIGNATURE),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * Smooth waves under light seeded noise. Its WebP size curve has a photo's
+ * shape (steep above quality 75, nearly flat below), which `buildNoisePng`'s
+ * white noise does not.
+ */
+function buildPhotoPng(width: number, height: number): Buffer {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2; // colour type 2: truecolour
+
+  const stride = 1 + width * 3;
+  const raw = Buffer.alloc(height * stride);
+  let seed = 1;
+  for (let y = 0; y < height; y++) {
+    raw[y * stride] = 0;
+    for (let x = 0; x < width; x++) {
+      seed = (seed * 1_664_525 + 1_013_904_223) >>> 0;
+      const noise = ((seed >>> 24) / 255 - 0.5) * 6;
+      const wave =
+        Math.sin(x / 41 + Math.sin(y / 97) * 3) * 50 +
+        Math.sin((x + y) / 3) * 25 +
+        Math.cos((x * 0.7 - y) / 1.8) * 20;
+      const pixel = y * stride + 1 + x * 3;
+      raw[pixel] = Math.max(0, Math.min(255, 110 + wave + noise));
+      raw[pixel + 1] = Math.max(0, Math.min(255, 120 - wave * 0.6 + noise));
+      raw[pixel + 2] = Math.max(0, Math.min(255, 100 + wave * 0.3 + noise));
     }
   }
 
@@ -2456,8 +2503,8 @@ describe('one side over what WebP can hold', () => {
     expect(out.format).toBe('webp');
     expect(out.size).toBeGreaterThan(1);
     expect(out.size).toBeLessThanOrEqual(800 * 1024);
-    // Two encodes, not the whole ladder: the floor rung is measured before the
-    // search, so an unreachable target is settled without walking to it.
+    // Two encodes, not the whole ladder: a miss this wide at rung 0 aims the
+    // next probe straight at the floor, which settles an unreachable target.
     expect(out.iterations).toBe(2);
   });
 
@@ -2523,6 +2570,55 @@ describe('one side over what WebP can hold', () => {
       },
     });
   });
+});
+
+describe('the encode search', () => {
+  const targetSize = SERVER_MAX_IMAGE_SIZE * 1024 * 1024;
+  const encode = (input: Buffer, quality: number) =>
+    new Bun.Image(input).webp({ quality }).buffer();
+
+  test('a q95 2048 px WebP, as the dashboard sends it, takes at most 3 encodes and lands on the rung a full walk picks', async () => {
+    const input = await encode(buildPhotoPng(2048, 1536), 95);
+    expect(input.length).toBeGreaterThan(targetSize);
+    expect(input.length).toBeLessThan(MAX_IMAGE_SIZE * 1024 * 1024);
+
+    const logged = spyOn(console, 'log').mockImplementation(() => {});
+    const lines: unknown[] = [];
+    const out = await optimizeImage(input).finally(() => {
+      for (const [line] of logged.mock.calls)
+        lines.push(JSON.parse(String(line)));
+      logged.mockRestore();
+    });
+
+    expect(out.iterations).toBeLessThanOrEqual(3);
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        msg: 'image.optimize',
+        iterations: out.iterations,
+        durationMs: expect.any(Number),
+      })
+    );
+
+    // The walk the search replaces: the earliest quality at full width that fits.
+    let walked: Buffer | undefined;
+    for (let quality = 95; !walked && quality >= 50; quality -= 5) {
+      const attempt = await encode(input, quality);
+      if (attempt.length <= targetSize) walked = attempt;
+    }
+    expect(walked).toBeDefined();
+    expect(out.width).toBe(2048);
+    expect(out.buffer.equals(walked ?? Buffer.alloc(0))).toBe(true);
+  }, 120_000);
+
+  test('a PNG several times the target that fits at q95 still takes one encode', async () => {
+    const input = buildPhotoPng(640, 480);
+    expect(input.length).toBeGreaterThan(3 * targetSize);
+
+    const out = await optimizeImage(input);
+
+    expect(out.iterations).toBe(1);
+    expect(out.buffer.equals(await encode(input, 95))).toBe(true);
+  }, 30_000);
 });
 
 describe('validateMagicBytes', () => {
@@ -3117,7 +3213,7 @@ describe('an inline data: raster is held to the upload policy', () => {
     expect(result.cleanedSvg).toInclude(`data:image/png;base64,${payload}`);
   });
 
-  test('svgo does not delete a raster the sanitiser kept', () => {
+  test('svgo does not delete a raster the sanitiser kept', async () => {
     // `removeRasterImages` used to answer this question by attribute SPELLING —
     // deleting an `xlink:href` bitmap and keeping the identical `href` one. The
     // sanitiser is the single authority now, so the post-svgo bytes have to
@@ -3125,7 +3221,7 @@ describe('an inline data: raster is held to the upload policy', () => {
     const result = clean(inline('image/png', realPng));
     expect(result.isValid).toBe(true);
 
-    const stored = svgOptimizerServer({ data: result.cleanedSvg });
+    const stored = await optimizeSvgUpload(result.cleanedSvg);
     expect(stored).toInclude('data:image/png;base64,');
   });
 
@@ -3164,7 +3260,7 @@ describe('an inline data: raster is held to the upload policy', () => {
     ],
   ] as const)(
     'an inline raster %s is refused, as the direct path refuses it',
-    (_label, width, height, reason, message) => {
+    async (_label, width, height, reason, message) => {
       // The gap this closes: the direct path answers 422 on these bytes while
       // wrapping them in an SVG stored them, so the SVG was a way to pay the
       // floor for a raster the pixel ceiling exists to reject.
@@ -3175,7 +3271,7 @@ describe('an inline data: raster is held to the upload policy', () => {
 
       const logged = spyOn(console, 'warn').mockImplementation(() => {});
       try {
-        validateSvgUpload(
+        await validateSvgUpload(
           Buffer.from(inline('image/png', pngHeader(width, height))),
           'bomb.svg'
         );
@@ -3291,9 +3387,9 @@ describe('an inline data: raster is held to the upload policy', () => {
       ).toMatchObject({ isValid: false, reason: 'animated' });
     });
 
-    test('the upload route answers each with its own message', () => {
+    test('the upload route answers each with its own message', async () => {
       expect(
-        uploadRefusal(
+        await uploadRefusal(
           inUrl('mask', `data:image/png;base64,${realPng.toString('base64')}`)
         )
       ).toMatchObject({
@@ -3301,7 +3397,9 @@ describe('an inline data: raster is held to the upload policy', () => {
         message: MSG_SVG_REQUIRES_CONVERSION,
       });
       expect(
-        uploadRefusal(inUrl('mask', `data:image/svg+xml;base64,${innerSvg}`))
+        await uploadRefusal(
+          inUrl('mask', `data:image/svg+xml;base64,${innerSvg}`)
+        )
       ).toMatchObject({
         status: HTTP_STATUS.BAD_REQUEST,
         message: MSG_SVG_INVALID_INLINE_RASTER,
@@ -3382,7 +3480,7 @@ describe('an inline data: raster is held to the upload policy', () => {
 
     // svgo finds the definitions a `url()` names with its own pattern and
     // deletes what it cannot see named, so these run the upload path's two
-    // steps (`validateSvgUpload`, then `svgOptimizerServer`) and read the
+    // steps (`validateSvgUpload`, then `optimizeSvgUpload`) and read the
     // stored file.
     describe('a native url() reference, through the whole upload pipeline', () => {
       const stops =
@@ -3398,10 +3496,13 @@ describe('an inline data: raster is held to the upload policy', () => {
           `<filter id="${id}"><feFlood flood-color="red"/></filter>`,
       };
 
-      const store = (markup: string) =>
-        svgOptimizerServer({
-          data: validateSvgUpload(Buffer.from(markup), 'a.svg').cleanedSvg,
-        });
+      const store = async (markup: string) => {
+        const { cleanedSvg } = await validateSvgUpload(
+          Buffer.from(markup),
+          'a.svg'
+        );
+        return optimizeSvgUpload(cleanedSvg);
+      };
 
       // Read off the stored file the way a renderer would: the definitions that
       // carry an id, and what every `url()` names.
@@ -3435,11 +3536,11 @@ describe('an inline data: raster is held to the upload policy', () => {
           ['unquoted', 'url(#g_1.a-b)'],
           ['single-quoted', "url('#g_1.a-b')"],
           ['double-quoted', 'url("#g_1.a-b")'],
-        ])('%s keeps what it names', (_label, value) => {
+        ])('%s keeps what it names', async (_label, value) => {
           const define = definitions[attribute];
           if (!define) throw new Error(`no definition for ${attribute}`);
           expectIntact(
-            store(
+            await store(
               svg(
                 `<defs>${define('g_1.a-b')}</defs><rect width="8" height="8" ${attribute}="${value.replaceAll('"', '&quot;')}"/>`
               )
@@ -3451,8 +3552,8 @@ describe('an inline data: raster is held to the upload policy', () => {
       // The browser-preprocessing finding: svgo rewrote `url(#f) url(#fx)` to
       // `url(#a) url(#ax)` and deleted `#fx`. A list is not native now; one id
       // that prefixes another is.
-      test('an id that prefixes another keeps both definitions', () => {
-        const output = store(
+      test('an id that prefixes another keeps both definitions', async () => {
+        const output = await store(
           svg(
             '<defs><filter id="f"><feFlood/></filter><filter id="fx"><feFlood/></filter></defs>' +
               '<rect width="8" height="8" filter="url(#f)"/><rect width="8" height="8" filter="url(#fx)"/>'
@@ -3795,10 +3896,13 @@ describe('ids and the references that name them, through the whole upload pipeli
     };
   };
 
-  const store = (markup: string) =>
-    svgOptimizerServer({
-      data: validateSvgUpload(Buffer.from(markup), 'ids.svg').cleanedSvg,
-    });
+  const store = async (markup: string) => {
+    const { cleanedSvg } = await validateSvgUpload(
+      Buffer.from(markup),
+      'ids.svg'
+    );
+    return optimizeSvgUpload(cleanedSvg);
+  };
 
   // Read off the stored file the way a renderer would: the elements that carry
   // an id, and what every `href` and `url()` names.
@@ -3828,9 +3932,9 @@ describe('ids and the references that name them, through the whole upload pipeli
     ['a leading underscore', '_g'],
   ])(
     'ids of %s keep every definition and reference',
-    (_label, base) => {
+    async (_label, base) => {
       const { markup, tags } = build(base);
-      const stored = store(markup);
+      const stored = await store(markup);
       const { definitions, references } = readStored(stored);
 
       expect(definitions.map(({ tag }) => tag).toSorted(byCode)).toEqual(
@@ -3930,10 +4034,13 @@ describe('ids and the references that name them, through the whole upload pipeli
 describe('svgo keeps what renders through references and inheritance', () => {
   // The recheck after svgo reads the form, not the picture, so these assert the
   // stored file itself.
-  const store = (inner: string) =>
-    svgOptimizerServer({
-      data: validateSvgUpload(Buffer.from(svg(inner)), 'kept.svg').cleanedSvg,
-    });
+  const store = async (inner: string) => {
+    const { cleanedSvg } = await validateSvgUpload(
+      Buffer.from(svg(inner)),
+      'kept.svg'
+    );
+    return optimizeSvgUpload(cleanedSvg);
+  };
   const parse = (output: string) => {
     const { window } = new JSDOM('', { runScripts: 'outside-only' });
     return new window.DOMParser().parseFromString(output, 'image/svg+xml');
@@ -3941,10 +4048,10 @@ describe('svgo keeps what renders through references and inheritance', () => {
 
   test.each(['display="none"', 'visibility="hidden"', 'opacity="0"'])(
     'a <use> of an element under %s keeps its target',
-    (hidden) => {
+    async (hidden) => {
       // The instance inherits from the <use>, not from the hidden group.
       const doc = parse(
-        store(
+        await store(
           `<g ${hidden}><path id="p" d="M2 2h4v4H2z" fill="red"/></g><use href="#p"/>`
         )
       );
@@ -3952,9 +4059,9 @@ describe('svgo keeps what renders through references and inheritance', () => {
     }
   );
 
-  test('a <use> of one of siblings that share a fill keeps the fill', () => {
+  test('a <use> of one of siblings that share a fill keeps the fill', async () => {
     const doc = parse(
-      store(
+      await store(
         '<g><path id="a" fill="red" d="M0 0h2v2H0z"/><path fill="red" d="M3 0h2v2H3z"/>' +
           '<path fill="red" d="M6 0h2v2H6z"/></g><use href="#a" y="4"/>'
       )
@@ -3985,9 +4092,9 @@ describe('svgo keeps what renders through references and inheritance', () => {
 
   test.each(['inherit', 'unset'])(
     'two siblings written fill="%s" keep the group colour',
-    (paint) => {
+    async (paint) => {
       const doc = parse(
-        store(
+        await store(
           `<g fill="red"><rect width="4" height="8" fill="${paint}"/><rect x="4" width="4" height="8" fill="${paint}"/></g>`
         )
       );
@@ -3995,9 +4102,9 @@ describe('svgo keeps what renders through references and inheritance', () => {
     }
   );
 
-  test('a single child written fill="unset" keeps the group colour', () => {
+  test('a single child written fill="unset" keeps the group colour', async () => {
     const doc = parse(
-      store('<g fill="red"><rect width="8" height="8" fill="unset"/></g>')
+      await store('<g fill="red"><rect width="8" height="8" fill="unset"/></g>')
     );
     expect(inheritsRed(doc, 'unset')).toBe(true);
   });
@@ -4140,28 +4247,28 @@ describe('hostile shapes at the size ceiling stay linear', () => {
     ],
   ];
 
-  const timeUpload = (markup: string) => {
+  const timeUpload = async (markup: string) => {
     const started = performance.now();
     try {
-      validateSvgUpload(Buffer.from(markup), 'hostile.svg');
+      await validateSvgUpload(Buffer.from(markup), 'hostile.svg');
     } catch (error) {
       if (!(error instanceof CustomError)) throw error;
     }
     return performance.now() - started;
   };
-  const best = (markup: string) =>
-    Math.min(timeUpload(markup), timeUpload(markup));
+  const best = async (markup: string) =>
+    Math.min(await timeUpload(markup), await timeUpload(markup));
 
   test.each(SHAPES)(
     '%s',
-    (_name, build) => {
+    async (_name, build) => {
       const logged = spyOn(console, 'warn').mockImplementation(() => {});
       try {
         const full = build(FULL);
         expect(Buffer.byteLength(full)).toBeLessThanOrEqual(SVG_SIZE_CAP);
 
-        const quarter = best(build(FULL / 4));
-        const whole = best(full);
+        const quarter = await best(build(FULL / 4));
+        const whole = await best(full);
 
         expect(whole).toBeLessThan(ABSOLUTE_MS);
         expect(whole / Math.max(quarter, MIN_BASELINE_MS)).toBeLessThan(
@@ -4173,4 +4280,158 @@ describe('hostile shapes at the size ceiling stay linear', () => {
     },
     60_000
   );
+});
+
+describe('the SVG worker', () => {
+  const BOOT_CHILD = 'tests/fixtures/_svg-boot-child.ts';
+  const STUB = new URL('../fixtures/_svg-worker-stub.ts', import.meta.url);
+  const fault = {
+    status: HTTP_STATUS.INTERNAL_ERROR,
+    message: uploadMsg.uploadFailed,
+  };
+
+  const runChild = async (...argv: string[]) => {
+    const proc = Bun.spawn(['bun', '--no-env-file', BOOT_CHILD, ...argv], {
+      env: { PATH: process.env.PATH ?? '' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+      timeout: 45_000,
+    });
+    const [out, err, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, out, err };
+  };
+
+  const stubWorker = (
+    overrides: Partial<Parameters<typeof createSvgWorker>[0]> = {}
+  ) =>
+    createSvgWorker({
+      url: STUB,
+      queueLimit: 4,
+      startTimeoutMs: 30_000,
+      jobTimeoutMs: 30_000,
+      ...overrides,
+    });
+
+  test('the upload pipeline loads none of the SVG libraries on the main thread', async () => {
+    const result = await runChild();
+    expect(result.code, result.err).toBe(0);
+    expect(JSON.parse(result.out)).toEqual({ loaded: [], stored: null });
+  }, 60_000);
+
+  test('a process that stored an SVG still ends on its own', async () => {
+    const result = await runChild('job');
+    expect(result.code, result.err).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({
+      loaded: [],
+      stored: expect.stringContaining('<path'),
+    });
+  }, 60_000);
+
+  test('a cap-sized SVG leaves the event loop free', async () => {
+    // At the element and byte caps: about 1 s of synchronous work on the main
+    // thread before the worker.
+    const paths = Array.from({ length: 490 }, (_, i) => {
+      let d = `M${i % 1000} ${(i * 7) % 1000}`;
+      for (let k = 0; k < 60; k++)
+        d += ` L${((i * 31 + k * 17) % 10_000) / 10} ${((i * 13 + k * 29) % 10_000) / 10}`;
+      return `<path fill="#${(i * 40_503).toString(16).padStart(6, '0').slice(-6)}" d="${d}Z"/>`;
+    });
+    const markup = `<svg xmlns="${SVG_NS}" viewBox="0 0 1000 1000">${paths.join('')}</svg>`;
+    expect(markup.length).toBeGreaterThan(SVG_SIZE_CAP * 0.8);
+    expect(markup.length).toBeLessThan(SVG_SIZE_CAP);
+
+    let longestGap = 0;
+    let last = performance.now();
+    const ticker = setInterval(() => {
+      const now = performance.now();
+      longestGap = Math.max(longestGap, now - last);
+      last = now;
+    }, 5);
+    try {
+      const { cleanedSvg } = await validateSvgUpload(
+        Buffer.from(markup),
+        'cap.svg'
+      );
+      expect(await optimizeSvgUpload(cleanedSvg)).toInclude('<path');
+    } finally {
+      clearInterval(ticker);
+    }
+    // Work that never yields finishes before the ticker's first run.
+    longestGap = Math.max(longestGap, performance.now() - last);
+    expect(longestGap).toBeLessThan(300);
+  }, 60_000);
+
+  test('a worker that crashes answers a 500, and the next job gets a fresh one', async () => {
+    const worker = stubWorker();
+    try {
+      await expect(worker.sanitize('crash')).rejects.toMatchObject(fault);
+      expect(await worker.sanitize('<svg/>')).toMatchObject({
+        isValid: true,
+        cleanedSvg: '<svg/>',
+      });
+    } finally {
+      worker.stop();
+    }
+  }, 60_000);
+
+  test('a worker that exits mid-job answers a 500', async () => {
+    const worker = stubWorker();
+    try {
+      await expect(worker.sanitize('exit')).rejects.toMatchObject(fault);
+    } finally {
+      worker.stop();
+    }
+  }, 60_000);
+
+  test('a job past its timeout terminates the worker and answers a 500', async () => {
+    const worker = stubWorker({ jobTimeoutMs: 200 });
+    try {
+      await expect(worker.sanitize('hang')).rejects.toMatchObject(fault);
+      expect(await worker.sanitize('<svg/>')).toMatchObject({ isValid: true });
+    } finally {
+      worker.stop();
+    }
+  }, 60_000);
+
+  test('a worker that fails to load answers a 500', async () => {
+    const worker = stubWorker({
+      url: new URL('../fixtures/_svg-worker-broken.ts', import.meta.url),
+    });
+    try {
+      await expect(worker.sanitize('<svg/>')).rejects.toMatchObject(fault);
+    } finally {
+      worker.stop();
+    }
+  }, 60_000);
+
+  test('an acceptance without markup is a 500, never an acceptance', async () => {
+    const worker = stubWorker();
+    try {
+      await expect(
+        worker.sanitize('accept-without-markup')
+      ).rejects.toMatchObject(fault);
+    } finally {
+      worker.stop();
+    }
+  }, 60_000);
+
+  test('a full queue answers the busy 503 at once', async () => {
+    const worker = stubWorker({ queueLimit: 1, jobTimeoutMs: 2000 });
+    try {
+      const running = worker.sanitize('hang');
+      const queued = worker.sanitize('<svg/>');
+      await expect(worker.sanitize('<svg/>')).rejects.toMatchObject({
+        status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+        message: uploadMsg.processingBusy,
+      });
+      await expect(running).rejects.toMatchObject(fault);
+      expect(await queued).toMatchObject({ isValid: true });
+    } finally {
+      worker.stop();
+    }
+  }, 60_000);
 });

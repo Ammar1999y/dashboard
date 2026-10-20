@@ -2,6 +2,7 @@ import { uploadRecordFile } from '@app/shared/api/media';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
+import { RECORD_UPLOAD_FIELD } from '@app/shared/validation/media';
 
 import { bind } from '@/lib/http/binding';
 import { requireAnyPermission } from '@/lib/http/session';
@@ -53,7 +54,7 @@ export const uploadRecordFileBinding = bind(uploadRecordFile, {
       meta,
       requestActor(meta, caller),
       {
-        field: 'files',
+        field: RECORD_UPLOAD_FIELD,
         visibility: purpose.visibility,
         kinds: purpose.kinds,
         folderId: null,

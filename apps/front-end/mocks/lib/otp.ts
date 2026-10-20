@@ -2,7 +2,7 @@ import type { MockRecoveryGrant, MockUser } from '../store';
 import type { ContactKind, OtpPurpose } from '@app/shared/validation/enums';
 import type * as z from 'zod';
 
-import { REQUEST_BODIES } from '@app/shared/contract';
+import { sendOtp } from '@app/shared/api/auth';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { otpMsg } from '@app/shared/messages/otp';
@@ -14,9 +14,7 @@ import { findProof, issueProof, verifyCode } from './two-factor';
 import { MOCK_OTP_CODE, randomToken } from './two-factor-model';
 
 /** Where an anonymous send goes, as the schema every one of them takes parses it. */
-export type OtpContact = z.output<
-  (typeof REQUEST_BODIES)['POST /api/auth/otp/send']
->;
+export type OtpContact = z.output<typeof sendOtp.body>;
 
 /** The contact's value, as the schema normalised it. */
 export const destinationOf = (contact: OtpContact) =>

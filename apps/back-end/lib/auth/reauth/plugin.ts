@@ -6,6 +6,7 @@ import { db, withTransaction } from '@/db';
 import { passkeys, verifications } from '@/db/schema';
 import * as z from 'zod';
 
+import * as contract from '@app/shared/api/better-auth';
 import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import { reauthPasskeySchema } from '@app/shared/validation/reauth';
 import { isTwoFactorMethodEnabled } from '@app/shared/validation/two-factor';
@@ -41,20 +42,16 @@ export const reauthentication = () =>
   ({
     id: 'reauthentication',
     endpoints: {
-      reauthMethods: pluginEndpoint(
-        '/reauth/methods',
-        { method: 'GET' },
-        async (ctx) => {
-          const { userId } = await requireReauthSession(ctx);
-          return ctx.json({
-            data: { methods: await availableReauthMethods(userId) },
-          });
-        }
-      ),
+      reauthMethods: pluginEndpoint(contract.reauthMethods, {}, async (ctx) => {
+        const { userId } = await requireReauthSession(ctx);
+        return ctx.json({
+          data: { methods: await availableReauthMethods(userId) },
+        });
+      }),
       ...(isTwoFactorMethodEnabled('passkey') && {
         reauthPasskeyOptions: pluginEndpoint(
-          '/reauth/passkey/options',
-          { method: 'POST' },
+          contract.reauthPasskeyOptions,
+          {},
           async (ctx) => {
             try {
               const { userId, sessionId } = await requireReauthSession(ctx);
@@ -84,8 +81,8 @@ export const reauthentication = () =>
           }
         ),
         reauthPasskeyVerify: pluginEndpoint(
-          '/reauth/passkey/verify',
-          { method: 'POST', body: reauthPasskeySchema },
+          contract.reauthPasskeyVerify,
+          { body: reauthPasskeySchema },
           async (ctx) => {
             try {
               const { userId, sessionId, userEmail } =

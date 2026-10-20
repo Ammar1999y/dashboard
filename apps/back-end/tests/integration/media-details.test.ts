@@ -52,7 +52,7 @@ import {
 
 interface Answer {
   status: number;
-  body: { success: boolean; message: string; code?: string; data: unknown };
+  body: { message?: string; detail?: string; code?: string; data?: unknown };
 }
 
 async function call(
@@ -596,7 +596,7 @@ describe('codes the routes answer', () => {
       const answer = await call(admin(), 'GET', `/api/dash/media/files/${id}`);
       expect(answer.status).toBe(HTTP_STATUS.NOT_FOUND);
       expect(answer.body.code).toBe(FILE_NOT_FOUND_CODE);
-      expect(answer.body.data).toBeNull();
+      expect(answer.body.data).toBeUndefined();
     }
   });
 

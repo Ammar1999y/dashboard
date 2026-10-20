@@ -68,8 +68,7 @@ const DataTableSearch = memo(() => {
         onCompositionStart={draft.compositionStart}
         onCompositionEnd={handleCompositionEnd}
         placeholder='...البحث السريع'
-        // eslint-disable-next-line tailwind/class-conventions
-        className='!h-9 border-0 bg-transparent pl-8 placeholder:!text-right'
+        className='!h-9 border-0 bg-transparent placeholder:!text-right ltr:pr-8 rtl:pl-8'
       />
     </div>
   );

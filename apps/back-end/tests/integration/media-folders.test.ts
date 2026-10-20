@@ -47,10 +47,10 @@ import { authedRequest, signedInUser } from '../helpers/session';
 interface Answer {
   status: number;
   body: {
-    success: boolean;
-    message: string;
+    message?: string;
+    detail?: string;
     code?: string;
-    data: unknown;
+    data?: unknown;
     meta?: unknown;
   };
 }
@@ -88,7 +88,7 @@ interface CreatedFolder {
 function createdFolderOf(answer: Answer): CreatedFolder {
   if (answer.status !== HTTP_STATUS.CREATED)
     throw new Error(
-      `expected a folder, got ${answer.status}: ${answer.body.message}`
+      `expected a folder, got ${answer.status}: ${answer.body.detail ?? answer.body.message}`
     );
   return answer.body.data as CreatedFolder;
 }
@@ -201,10 +201,10 @@ describe('creating folders', () => {
       parentId: parent,
     });
     expect(duplicate.status).toBe(HTTP_STATUS.CONFLICT);
-    expect(duplicate.body.message).toBe(mediaMsg.folderNameExists);
+    expect(duplicate.body.detail).toBe(mediaMsg.folderNameExists);
     expect(duplicate.body.code).toBe(FOLDER_NAME_EXISTS_CODE);
     // A create has no folder to name, so its contract declares no ids.
-    expect(duplicate.body.data).toBeNull();
+    expect(duplicate.body.data).toBeUndefined();
 
     // The same name under a DIFFERENT parent is fine.
     const elsewhere = await call(admin(), 'POST', '/api/dash/media/folders', {
@@ -230,14 +230,14 @@ describe('creating folders', () => {
       parentId: '0192b4b6-6f1a-7c3e-9a1f-2b3c4d5e6f70',
     });
     expect(missing.status).toBe(HTTP_STATUS.NOT_FOUND);
-    expect(missing.body.message).toBe(mediaMsg.folderNotFound);
+    expect(missing.body.detail).toBe(mediaMsg.folderNotFound);
     expect(missing.body.code).toBe(FOLDER_NOT_FOUND_CODE);
 
     const slash = await call(admin(), 'POST', '/api/dash/media/folders', {
       name: 'a/b',
     });
     expect(slash.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(slash.body.message).toBe(mediaValidationMsg.folderNameInvalid);
+    expect(slash.body.detail).toBe(mediaValidationMsg.folderNameInvalid);
 
     const empty = await call(admin(), 'POST', '/api/dash/media/folders');
     expect(empty.status).toBe(HTTP_STATUS.BAD_REQUEST);
@@ -248,7 +248,7 @@ describe('creating folders', () => {
       name: 'a\u{D83D}',
     });
     expect(created.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(created.body.message).toBe(mediaValidationMsg.folderNameInvalid);
+    expect(created.body.detail).toBe(mediaValidationMsg.folderNameInvalid);
 
     const folder = await seedFolder('Surrogate');
     const renamed = await call(
@@ -288,9 +288,9 @@ describe('creating folders', () => {
       parentId: createdFolderOf(last).id,
     });
     expect(tooDeep.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(tooDeep.body.message).toBe(mediaMsg.folderTooDeep);
+    expect(tooDeep.body.detail).toBe(mediaMsg.folderTooDeep);
     expect(tooDeep.body.code).toBe(FOLDER_TOO_DEEP_CODE);
-    expect(tooDeep.body.data).toBeNull();
+    expect(tooDeep.body.data).toBeUndefined();
   });
 
   test('a view-only session cannot create', async () => {
@@ -298,7 +298,7 @@ describe('creating folders', () => {
       name: 'Nope',
     });
     expect(answer.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(answer.body.message).toBe(MSG_INSUFFICIENT_PERMISSIONS);
+    expect(answer.body.detail).toBe(MSG_INSUFFICIENT_PERMISSIONS);
   });
 });
 
@@ -323,7 +323,7 @@ describe('renaming and moving folders', () => {
       parentId: a,
     });
     expect(self.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(self.body.message).toBe(mediaMsg.folderCycle);
+    expect(self.body.detail).toBe(mediaMsg.folderCycle);
     expect(self.body.code).toBe(FOLDER_CYCLE_CODE);
 
     const intoDescendant = await call(
@@ -335,7 +335,7 @@ describe('renaming and moving folders', () => {
       }
     );
     expect(intoDescendant.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(intoDescendant.body.message).toBe(mediaMsg.folderCycle);
+    expect(intoDescendant.body.detail).toBe(mediaMsg.folderCycle);
     expect(intoDescendant.body.code).toBe(FOLDER_CYCLE_CODE);
 
     // C moves up to the root: `parentId: null` is "the root", not "unchanged".
@@ -358,7 +358,7 @@ describe('renaming and moving folders', () => {
       {}
     );
     expect(nothing.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(nothing.body.message).toBe(mediaValidationMsg.nothingToUpdate);
+    expect(nothing.body.detail).toBe(mediaValidationMsg.nothingToUpdate);
   });
 
   test('a subtree cannot be moved to where it would exceed the depth cap', async () => {
@@ -379,7 +379,7 @@ describe('renaming and moving folders', () => {
       }
     );
     expect(refused.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(refused.body.message).toBe(mediaMsg.folderTooDeep);
+    expect(refused.body.detail).toBe(mediaMsg.folderTooDeep);
     expect(refused.body.code).toBe(FOLDER_TOO_DEEP_CODE);
   });
 
@@ -403,7 +403,7 @@ describe('renaming and moving folders', () => {
       }
     );
     expect(refused.status).toBe(HTTP_STATUS.NOT_FOUND);
-    expect(refused.body.message).toBe(mediaMsg.folderNotFound);
+    expect(refused.body.detail).toBe(mediaMsg.folderNotFound);
     expect(refused.body.code).toBe(FOLDER_NOT_FOUND_CODE);
     const [row] = await db
       .select({ name: folders.name })
@@ -424,7 +424,7 @@ describe('deleting folders', () => {
       `/api/dash/media/folders/${parent}`
     );
     expect(refused.status).toBe(HTTP_STATUS.CONFLICT);
-    expect(refused.body.message).toBe(mediaMsg.folderNotEmpty);
+    expect(refused.body.detail).toBe(mediaMsg.folderNotEmpty);
     expect(refused.body.code).toBe(FOLDER_NOT_EMPTY_CODE);
 
     const childGone = await call(
@@ -548,7 +548,7 @@ describe('the tree under concurrency', () => {
         name: 'cap-one-more',
       });
       expect(created.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-      expect(created.body.message).toBe(mediaMsg.folderTooManyChildren);
+      expect(created.body.detail).toBe(mediaMsg.folderTooManyChildren);
       expect(created.body.code).toBe(FOLDER_TOO_MANY_CHILDREN_CODE);
 
       const moved = await call(
@@ -558,7 +558,7 @@ describe('the tree under concurrency', () => {
         { parentId: null }
       );
       expect(moved.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-      expect(moved.body.message).toBe(mediaMsg.folderTooManyChildren);
+      expect(moved.body.detail).toBe(mediaMsg.folderTooManyChildren);
       expect(moved.body.code).toBe(FOLDER_TOO_MANY_CHILDREN_CODE);
     } finally {
       await db.delete(folders).where(eq(folders.id, nested));
@@ -638,6 +638,6 @@ describe('listing', () => {
       '/api/dash/media?scope=everything'
     );
     expect(scope.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(scope.body.message).toBe(mediaMsg.invalidScope);
+    expect(scope.body.detail).toBe(mediaMsg.invalidScope);
   });
 });

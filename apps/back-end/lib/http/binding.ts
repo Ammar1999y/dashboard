@@ -9,6 +9,7 @@ import type {
   HandlerRequestMeta,
 } from './contract';
 import type { OperationTag } from './openapi/tags';
+import type { SerializedJson } from './response';
 import type { RouteShape } from './routing';
 import type { requirePermission, requireSession } from './session';
 import type { StartTimingFloor } from './timing-floor';
@@ -26,12 +27,6 @@ import type {
 } from '@app/shared/permissions/constants';
 
 import * as z from 'zod';
-
-import { isPagedResponse, isRawResponse } from '@app/shared/api/endpoint';
-import {
-  isResponseRoute,
-  successEnvelope,
-} from '@app/shared/response-contract';
 
 type PermissionActor = Awaited<ReturnType<typeof requirePermission>>;
 type SessionActor = Awaited<ReturnType<typeof requireSession>>;
@@ -92,7 +87,7 @@ type RawResult<R extends z.ZodType, F> = {
         ? { raw: z.input<F[S]>; status: S }
         : never;
     }[keyof F & number]
-  | { raw: z.input<R>; status?: never }
+  | { raw: z.input<R> | SerializedJson<R>; status?: never }
 );
 
 type BindingResult<E extends AnyEndpoint> =
@@ -323,10 +318,6 @@ export function bind<
   const Deferred extends boolean = false,
 >(entry: E, options: BindOptions<E, Floored, Deferred>): AnyBinding {
   const key = `${entry.method} ${entry.path}`;
-  // The response check and the coverage gate are keyed by the shared registry
-  // until the envelope's wire format changes. A raw answer has no envelope to check.
-  if (!isRawResponse(entry.response) && !isResponseRoute(key))
-    throw new Error(`${key} has no RESPONSE_DATA entry to bind against.`);
   assertAgrees(key, entry, options);
   const { handler, ...rest } = options;
   const binding: AnyBinding = {
@@ -400,15 +391,6 @@ function assertAgrees(
 /** The keys a binding's query declares; `bind()` holds every query to an object. */
 export const queryKeysOf = ({ query }: AnyEndpoint): readonly string[] =>
   query instanceof z.ZodObject ? Object.keys(query.shape) : [];
-
-/** The schema a binding's success is validated against: the envelope, or the raw body. */
-export function successSchemaOf(entry: AnyEndpoint): z.ZodType {
-  const { response } = entry;
-  if (isRawResponse(response)) return response.raw;
-  return isPagedResponse(response)
-    ? successEnvelope(response.data, response.meta)
-    : successEnvelope(response);
-}
 
 /** What the route lookups read of a binding. */
 export const routeShapeOf = (binding: AnyBinding): RouteShape => ({

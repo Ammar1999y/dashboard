@@ -21,7 +21,7 @@ import {
 
 import { logSanitized } from '@/utils/log';
 
-import { auditAs } from './actor';
+import { auditManyAs } from './actor';
 import { fileNotFound } from './errors';
 import { distinctIds } from './ids';
 import { unreferenced } from './usages';
@@ -78,14 +78,17 @@ export async function claimFiles(
   if (claimed.length !== ids.length)
     throw fileNotFound(HTTP_STATUS.UNPROCESSABLE);
 
-  for (const row of claimed)
-    await auditAs(tx, actor, {
-      action: 'UPDATE',
+  await auditManyAs(
+    tx,
+    actor,
+    claimed.map((row) => ({
+      action: 'UPDATE' as const,
       tableName: 'files',
       recordId: row.id,
       oldData: { status: 'pending' },
       newData: { status: 'active' },
-    });
+    }))
+  );
   return claimed.map((row) => row.id);
 }
 
@@ -129,11 +132,14 @@ export async function finishDeleting(
     }
   }
 
+  // Public rows only: a copy opposite a private row was never published, since
+  // a delete refuses a file mid-transition and a transition clears its marker
+  // only once that copy is deleted and purged (`removeStaleCopy`).
   const unpurged = new Set<string>();
   const publicGone = goneFrom.get('public');
   if (publicGone && hasPublicUrl()) {
     const urls = rows
-      .filter((row) => publicGone.has(row.r2Key))
+      .filter((row) => row.bucketType === 'public' && publicGone.has(row.r2Key))
       .map((row) => getPublicUrl(row.r2Key));
     const purge = await purgeUrls(urls);
     for (const url of purge.failed) unpurged.add(url);

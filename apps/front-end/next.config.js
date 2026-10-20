@@ -1,5 +1,16 @@
+const { createHash } = require('node:crypto');
 const path = require('node:path');
+const { THEME_SCRIPT } = require('./components/theme-customizer/theme-script');
 const { API_URL, PUBLIC_URL } = require('./lib/env');
+
+// Every inline script `_document` renders. `scripts/check-inline-scripts.ts`
+// fails the build when the HTML carries one that is missing here.
+const INLINE_SCRIPT_HASHES = [THEME_SCRIPT]
+  .map(
+    (script) =>
+      `'sha256-${createHash('sha256').update(script).digest('base64')}'`
+  )
+  .join(' ');
 
 // TODO: clear the unuse
 const isDev = process.env.NODE_ENV !== 'production';
@@ -10,7 +21,7 @@ const isApiMocking = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
 const CSP = `
   base-uri 'self';
   default-src 'self';
-  script-src 'self' https://challenges.cloudflare.com/turnstile/${isDev ? " 'unsafe-eval' 'unsafe-inline'" : ''};
+  script-src 'self' https://challenges.cloudflare.com/turnstile/ ${isDev ? "'unsafe-eval' 'unsafe-inline'" : INLINE_SCRIPT_HASHES};
   style-src 'self' 'unsafe-inline';
   font-src 'self';
   connect-src 'self' ${API_URL}${isApiMocking ? ' https://challenges.cloudflare.com' : ''};
@@ -169,6 +180,26 @@ const nextConfig = {
   env: { NEXT_PUBLIC_API_MOCKING: isApiMocking ? 'enabled' : '' },
   // `@app/shared` ships TypeScript source from the workspace, not a build.
   transpilePackages: ['@platejs/math', 'react-tweet', '@app/shared'],
+  // A mock build still compiles `mocks/browser.ts` into the server render of
+  // `_app`, where `msw/browser` resolves to nothing (`"node": null`).
+  turbopack: {
+    resolveAlias: {
+      'msw/browser': {
+        browser: 'msw/browser',
+        default: './mocks/msw-browser-server.ts',
+      },
+    },
+  },
+  webpack(config, { isServer }) {
+    if (isServer)
+      config.resolve.alias['msw/browser'] = path.join(
+        __dirname,
+        'mocks/msw-browser-server.ts'
+      );
+    return config;
+  },
+  // Set by the Dockerfile only: `next start` warns on a standalone build.
+  output: process.env.NEXT_STANDALONE === 'true' ? 'standalone' : undefined,
   // The workspace root, so file tracing follows imports into `packages/`.
   outputFileTracingRoot: path.join(__dirname, '../../'),
   images: {
@@ -201,8 +232,11 @@ const nextConfig = {
       fullUrl: true,
     },
   },
-  // experimental: {
-  //   scrollRestoration: false,
-  // },
+  experimental: {
+    // On, Turbopack inlines each page's chunk list as a script whose hash
+    // changes every build, which the hashed `script-src` above would block.
+    turbopackSharedRuntime: false,
+    // scrollRestoration: false,
+  },
 };
 module.exports = nextConfig;

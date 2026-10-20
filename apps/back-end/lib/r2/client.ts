@@ -207,8 +207,10 @@ export async function uploadToR2(params: {
 export async function deleteFromR2(params: {
   key: string;
   bucketType: BucketType;
+  /** Ends the call, retries included, when it fires. */
+  signal?: AbortSignal;
 }): Promise<{ success: boolean }> {
-  const { key, bucketType } = params;
+  const { key, bucketType, signal } = params;
 
   const bucket = configuredBucket(bucketType);
 
@@ -216,7 +218,8 @@ export async function deleteFromR2(params: {
     new DeleteObjectCommand({
       Bucket: bucket,
       Key: key,
-    })
+    }),
+    { abortSignal: signal }
   );
 
   return { success: true };
@@ -265,7 +268,8 @@ export async function deleteObjectsFromR2(params: {
  *
  * `replace` restates the object's headers (`MetadataDirective: REPLACE`); without
  * it R2 copies them verbatim. A cross-bucket copy MUST replace: an object's
- * `Cache-Control` belongs to the bucket it is in.
+ * `Cache-Control` belongs to the bucket it is in. `etag` is the new object's,
+ * quoted like `ObjectHead.etag`.
  */
 export async function copyFileInR2(params: {
   sourceKey: string;
@@ -279,13 +283,13 @@ export async function copyFileInR2(params: {
     contentDisposition?: string;
     metadata?: Record<string, string>;
   };
-}): Promise<{ success: boolean; newKey: string }> {
+}): Promise<{ success: boolean; newKey: string; etag: string | null }> {
   const { sourceKey, destinationKey, bucketType, replace } = params;
 
   const bucket = configuredBucket(bucketType);
   const sourceBucket = getBucketName(params.sourceBucketType ?? bucketType);
 
-  await r2Client.send(
+  const copied = await r2Client.send(
     new CopyObjectCommand({
       Bucket: bucket,
       CopySource: `${sourceBucket}/${encodeObjectKey(sourceKey)}`,
@@ -300,7 +304,11 @@ export async function copyFileInR2(params: {
     })
   );
 
-  return { success: true, newKey: destinationKey };
+  return {
+    success: true,
+    newKey: destinationKey,
+    etag: copied.CopyObjectResult?.ETag ?? null,
+  };
 }
 
 export interface ObjectHead {

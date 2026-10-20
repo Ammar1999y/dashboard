@@ -17,14 +17,16 @@ function ScrollArea({
       data-lenis-prevent
       {...props}
     >
-      {/* `asChild` fuses the viewport with Radix's inner content wrapper, whose
-          inline `display: table` grows to its content; `!block` overrides it
-          so children lay out at the area's width. */}
+      {/* One element is both viewport and content. Without
+          `disableImplicitContentElement`, `asChild` slots onto the caller's
+          child instead. The content's inline `display: table` grows to its
+          children; `!block` keeps them at the area's width. */}
       <ScrollAreaPrimitive.Viewport
         className={cn('!block h-full w-full', viewportClassName)}
         asChild
+        disableImplicitContentElement
       >
-        {children}
+        <ScrollAreaPrimitive.Content>{children}</ScrollAreaPrimitive.Content>
       </ScrollAreaPrimitive.Viewport>
       <ScrollBar className='z-scrollbar' />
       <ScrollAreaPrimitive.Corner />

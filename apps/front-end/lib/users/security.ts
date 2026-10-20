@@ -1,27 +1,23 @@
+import type { BodyOf } from '@/lib/api/client';
 import type { SessionsPage } from '@/types/user';
-import type { RequestBody } from '@app/shared/contract';
 import type { EntityID } from '@app/shared/types';
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { noDataSchema } from '@app/shared/responses/common';
 import {
-  revokedSessionsSchema,
-  sessionsPageSchema,
-} from '@app/shared/responses/users';
-import { apiRequest } from '@/lib/api/fetch';
-import { mutate } from '@/lib/api/mutation';
+  listUserSessions,
+  resetUserTwoFactor,
+  revokeUserSessions,
+} from '@app/shared/api/users';
+import { api, readEndpoint } from '@/lib/api/client';
 
-export type RevokeSessionsBody =
-  RequestBody<'DELETE /api/dash/users/:id/sessions'>;
+export type RevokeSessionsBody = BodyOf<typeof revokeUserSessions>;
 
 type SessionsData = InfiniteData<SessionsPage, string | null>;
 
 const FIRST_PAGE: string | null = null;
 
 export const sessionsKey = (userId: EntityID) => ['user-sessions', userId];
-
-const sessionsHref = (userId: EntityID) => `/api/dash/users/${userId}/sessions`;
 
 /**
  * A user's live sessions, newest first, a page at a time. Never fresh: a list
@@ -32,13 +28,14 @@ export function useUserSessions(userId: EntityID) {
   return useInfiniteQuery({
     queryKey: sessionsKey(userId),
     queryFn: async ({ pageParam, signal }) => {
-      const query = pageParam
-        ? `?${new URLSearchParams({ cursor: pageParam })}`
-        : '';
-      const { data } = await apiRequest(`${sessionsHref(userId)}${query}`, {
-        signal,
-        schema: sessionsPageSchema,
-      });
+      const { data } = await readEndpoint(
+        listUserSessions,
+        {
+          params: { id: userId },
+          ...(pageParam && { query: { cursor: pageParam } }),
+        },
+        { signal }
+      );
       return data;
     },
     initialPageParam: FIRST_PAGE,
@@ -83,14 +80,11 @@ export function revokeSessions(
     });
   };
 
-  return mutate({
-    href: sessionsHref(userId),
-    method: 'DELETE',
-    data: body,
-    schema: revokedSessionsSchema,
-    onSuccess: write,
-    onUnreadAnswer: write,
-  });
+  return api(
+    revokeUserSessions,
+    { params: { id: userId }, body },
+    { onSuccess: write, onUnreadAnswer: write }
+  );
 }
 
 /**
@@ -115,11 +109,9 @@ export function clearCachedSessions(
 export function resetTwoFactor(queryClient: QueryClient, userId: EntityID) {
   const write = () => clearCachedSessions(queryClient, userId);
 
-  return mutate({
-    href: `/api/dash/users/${userId}/two-factor/reset`,
-    method: 'POST',
-    schema: noDataSchema,
-    onSuccess: write,
-    onUnreadAnswer: write,
-  });
+  return api(
+    resetUserTwoFactor,
+    { params: { id: userId } },
+    { onSuccess: write, onUnreadAnswer: write }
+  );
 }

@@ -1,4 +1,3 @@
-import type { ApiResult } from '@/lib/api/fetch';
 import type { DialogControls, DialogStore } from '@/lib/dialogs';
 import type { ReactNode } from 'react';
 
@@ -7,7 +6,7 @@ import { toast } from 'sonner';
 import { useAsyncAction } from '@/hooks/use-async-action';
 import { StoreDialog } from '@/components/dialogs/store-dialog';
 
-const announce = async (write: () => Promise<ApiResult<unknown>>) => {
+const announce = async (write: () => Promise<{ message: string }>) => {
   const result = await write();
   toast.success(result.message);
 };

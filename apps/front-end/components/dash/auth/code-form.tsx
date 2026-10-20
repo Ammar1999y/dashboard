@@ -9,7 +9,6 @@ import { memo, useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { MSG_CODE_SENT_TO } from '@/constants/messages';
-import { withCaptcha } from '@/lib/auth/captcha';
 import { cn } from '@/lib/utils';
 
 import { codeCaptchaFormSchema } from '@/utils/validation/auth';
@@ -24,8 +23,8 @@ import TurnstileWidget from './turnstile';
 interface CodeFormProps {
   /** Said above the field when the form is not under a prompt that names where the code went. */
   destination?: string;
-  /** Takes the code with the captcha header the route verifies. */
-  onVerify: (code: string, headers: Record<string, string>) => Promise<void>;
+  /** Takes the code with the captcha token the route verifies. */
+  onVerify: (code: string, captcha: string) => Promise<void>;
   submitLabel: string;
   pendingLabel: string;
   /** The way back to where a code is asked for, to send one anew. */
@@ -59,10 +58,7 @@ export const CodeForm = memo(
     });
 
     const onSubmit = useCallback(
-      async (values: CodeCaptchaOutput) => {
-        const { data, headers } = withCaptcha(values);
-        await onVerify(data.code, headers);
-      },
+      ({ code, captcha }: CodeCaptchaOutput) => onVerify(code, captcha),
       [onVerify]
     );
 

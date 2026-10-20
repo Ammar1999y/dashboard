@@ -1,18 +1,15 @@
-import type { MediaRefusalData } from '@app/shared/responses/media';
-import type { PaginationMeta } from '@app/shared/types/api';
+import type * as z from 'zod';
 
-import * as z from 'zod';
+import { problemSchema } from '@app/shared/api/wire';
 import { CustomError } from '@app/shared/error-class';
+import { INVALID_RESPONSE_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   MSG_BODY_TOO_LARGE,
   MSG_SERVICE_UNAVAILABLE,
   MSG_TOO_MANY_REQUESTS,
 } from '@app/shared/messages/common';
-import { paginationMetaSchema } from '@app/shared/responses/common';
-import { mediaRefusalDataSchema } from '@app/shared/responses/media';
 import { MSG_OFFLINE, MSG_UNEXPECTED_ERROR } from '@/constants/messages';
-import { API_URL } from '@/lib/env';
 
 const RETRY_AFTER_HEADER = 'Retry-After';
 
@@ -36,36 +33,6 @@ export async function fetchOnline(
     throw new CustomError(MSG_OFFLINE, HTTP_STATUS.SERVICE_UNAVAILABLE);
   }
 }
-
-/** Fetch an API path from the back-end, with its session cookie. */
-function apiFetch(path: string, init: RequestInit = {}) {
-  const normalizedPath = path.startsWith('/') ? path.slice(1) : path;
-  return fetchOnline(new URL(normalizedPath, `${API_URL}/`), {
-    credentials: 'include',
-    ...init,
-  });
-}
-
-/** Every answer the API sends, a refusal included; `data` is the caller's to check. */
-const envelopeSchema = z.object({
-  success: z.boolean(),
-  message: z.string(),
-  code: z.string().optional(),
-  data: z.unknown(),
-  meta: paginationMetaSchema.optional(),
-});
-
-export interface ApiResult<TData> {
-  data: TData;
-  message: string;
-  meta?: PaginationMeta;
-}
-
-/**
- * The `code` of a successful response whose body breaks the contract. The same
- * request answers the same way again, so it is not worth retrying.
- */
-export const INVALID_RESPONSE_CODE = 'invalid_response';
 
 export const invalidResponse = () =>
   new CustomError(
@@ -108,30 +75,37 @@ const STATUS_MESSAGES = new Map<number, string>([
 export const failureMessage = (status: number) =>
   STATUS_MESSAGES.get(status) ?? MSG_UNEXPECTED_ERROR;
 
-/** The ids a refusal names, when its `data` names any. */
-function refusalData(data: unknown): MediaRefusalData | undefined {
-  const parsed = mediaRefusalDataSchema.safeParse(data);
-  if (!parsed.success) return undefined;
-  const { fileIds, folderIds } = parsed.data;
-  return fileIds || folderIds ? parsed.data : undefined;
-}
-
-function failure(
-  message: string,
-  response: Response,
-  code?: string,
-  data?: unknown
-) {
+/**
+ * A refusal as the `CustomError` the app branches on: the problem's `detail`,
+ * `code` and media ids, and the `Retry-After` header. A body that is not a
+ * problem, such as a proxy's error page, gets the status's own text.
+ */
+export function refusalOf(response: Response, body: unknown): CustomError {
+  const problem = problemSchema.safeParse(body);
+  const { detail, code, data } = problem.success ? problem.data : {};
   const error = new CustomError(
-    message,
+    detail || failureMessage(response.status),
     response.status,
     code,
-    refusalData(data)
+    data
   );
   const retryAfter = response.headers.get(RETRY_AFTER_HEADER);
   if (retryAfter !== null)
     error.responseHeaders = { [RETRY_AFTER_HEADER]: retryAfter };
   return error;
+}
+
+/** The answer's JSON; `undefined` when it has none. An abort rethrows as is. */
+export async function readBody(
+  response: Response,
+  signal: AbortSignal | null | undefined
+): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (error) {
+    if (isAbort(error, signal)) throw error;
+    return undefined;
+  }
 }
 
 const DELAY_SECONDS = /^\d+$/;
@@ -148,74 +122,4 @@ export function retryAfterMs(error: unknown): number | undefined {
   if (!HTTP_DATE.test(value)) return undefined;
   const date = Date.parse(value);
   return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
-}
-
-/** What a request may carry beyond `fetch`'s own init. */
-export interface ApiInit extends RequestInit {
-  /**
-   * What the caller reads of the envelope's `data`. A body that does not
-   * match fails as `invalidResponse()`, and `data` is typed as its output.
-   * Write it as a plain `z.object`, which drops the keys it does not name.
-   */
-  schema?: z.ZodType;
-}
-
-/**
- * One request and its envelope. Every failure is a `CustomError` carrying the
- * response status, the envelope's `code` and the `Retry-After` header, except
- * an abort, which rethrows as is for the caller that aborted it.
- *
- * With `schema`, `data` is its output. Without one only the envelope is
- * validated and `data` is the caller's `TData`, unchecked.
- */
-export async function apiRequest<S extends z.ZodType>(
-  path: string,
-  init: ApiInit & { schema: S }
-): Promise<ApiResult<z.output<S>>>;
-export async function apiRequest<TData = unknown>(
-  path: string,
-  init?: RequestInit
-): Promise<ApiResult<TData>>;
-export async function apiRequest(
-  path: string,
-  init?: ApiInit
-): Promise<ApiResult<unknown>>;
-export async function apiRequest(
-  path: string,
-  { schema, ...init }: ApiInit = {}
-): Promise<ApiResult<unknown>> {
-  const response = await apiFetch(path, init);
-
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch (error) {
-    if (isAbort(error, init.signal)) throw error;
-  }
-
-  const envelope = envelopeSchema.safeParse(body);
-  if (!envelope.success) {
-    if (response.ok) {
-      logInvalidResponse(path, envelope.error);
-      throw invalidResponse();
-    }
-    throw failure(failureMessage(response.status), response);
-  }
-
-  const { success, message, code, data, meta } = envelope.data;
-  if (!success || !response.ok)
-    throw failure(
-      message || failureMessage(response.status),
-      response,
-      code,
-      data
-    );
-
-  if (!schema) return { data, message, meta };
-  const parsed = schema.safeParse(data);
-  if (!parsed.success) {
-    logInvalidResponse(path, parsed.error);
-    throw invalidResponse();
-  }
-  return { data: parsed.data, message, meta };
 }

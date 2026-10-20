@@ -13,7 +13,7 @@ class CustomError extends Error {
     public override message: string,
     public status?: number,
     public code?: string,
-    /** The error envelope's `data`: the ids that blocked a media refusal. */
+    /** The problem's `data`: the ids that blocked a media refusal. */
     public data?: MediaRefusalData
   ) {
     super(message);

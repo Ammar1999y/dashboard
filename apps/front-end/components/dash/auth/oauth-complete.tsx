@@ -4,16 +4,16 @@ import { useRouter } from 'next/router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { toast } from 'sonner';
+import { oauthResult } from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_LOGIN_SUCCESS } from '@app/shared/messages/common';
-import { oauthOutcomeSchema } from '@app/shared/responses/better-auth';
 import {
   MSG_BACK_TO_SIGN_IN,
   MSG_OAUTH_FAILED,
   MSG_OAUTH_FINISHING,
 } from '@/constants/messages';
-import { authRequest } from '@/lib/auth/request';
+import { api } from '@/lib/api/client';
 import { errorMessage } from '@/lib/toast-error';
 
 import { Icon } from '@/components/ui/icon';
@@ -59,12 +59,8 @@ export default function OAuthComplete() {
     if (requested.current) return;
     requested.current = true;
 
-    authRequest('/oauth/result', {
-      method: 'GET',
-      plain: true,
-      schema: oauthOutcomeSchema,
-    })
-      .then(({ data }) => {
+    api(oauthResult)
+      .then((data) => {
         if ('twoFactorRedirect' in data) {
           setState({ name: 'challenge', challenge: data });
           return;

@@ -8,13 +8,14 @@
  * before the import, and the unconfigured branch lives in its own file
  * (`cloudflare-purge-unconfigured.test.ts`).
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, spyOn, test } from 'bun:test';
 
 import { egressCallsTo, scriptEgress } from '../helpers/egress';
 
 process.env.CLOUDFLARE_ZONE_ID = 'zone-harness';
 process.env.CLOUDFLARE_CACHE_PURGE_TOKEN = 'token-harness';
 const purge = await import('@/lib/cloudflare/purge');
+const fixedWindow = await import('@/lib/rate-limit/fixed-window');
 
 const HOST = 'api.cloudflare.com';
 
@@ -95,6 +96,85 @@ describe('purgeUrls, configured', () => {
 
     expect(outcome.purged).toBe(purge.PURGE_BATCH_SIZE);
     expect(outcome.failed).toEqual([urls[purge.PURGE_BATCH_SIZE] ?? '']);
+  });
+
+  test('the total budget bounds the call: no attempt starts after it, and the last one is cut to what is left', async () => {
+    // Every attempt runs to its own timeout on a fake clock, which is the
+    // worst case `TOTAL_BUDGET_MS` has to bound.
+    const start = Date.now();
+    setSystemTime(start);
+    const timeouts: number[] = [];
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = spyOn(AbortSignal, 'timeout').mockImplementation(
+      (ms) => {
+        timeouts.push(ms);
+        return realTimeout(ms);
+      }
+    );
+    const startedAt: number[] = [];
+    scriptEgress(HOST, () => {
+      startedAt.push(Date.now() - start);
+      setSystemTime(Date.now() + (timeouts.at(-1) ?? 0));
+      throw new DOMException('The operation timed out.', 'TimeoutError');
+    });
+    const urls = Array.from(
+      { length: purge.PURGE_BATCH_SIZE + 1 },
+      (_, index) => `https://cdn.example.invalid/m/2026/09/${index}.webp`
+    );
+
+    try {
+      const outcome = await purge.purgeUrls(urls);
+
+      expect(outcome).toEqual({
+        attempted: urls.length,
+        purged: 0,
+        failed: urls,
+      });
+      expect(startedAt).toEqual([0, 10_000, 20_000]);
+      expect(timeouts).toEqual([10_000, 10_000, 5000]);
+      expect(Date.now() - start).toBe(25_000);
+    } finally {
+      timeoutSpy.mockRestore();
+      setSystemTime();
+    }
+  });
+
+  test('a reservation that waits past the budget starts no attempt', async () => {
+    // The limiter admission is a SQLite write, which can wait seconds behind a
+    // held writer lock; the second batch's admission is made to outlast the
+    // five seconds the first batch left.
+    const start = Date.now();
+    setSystemTime(start);
+    const realRateLimit = fixedWindow.rateLimit;
+    const reservations = { count: 0 };
+    const reserveSpy = spyOn(fixedWindow, 'rateLimit').mockImplementation(
+      async (options) => {
+        reservations.count += 1;
+        if (reservations.count === 3) setSystemTime(Date.now() + 6000);
+        return realRateLimit(options);
+      }
+    );
+    const startedAt: number[] = [];
+    scriptEgress(HOST, () => {
+      startedAt.push(Date.now() - start);
+      setSystemTime(Date.now() + 10_000);
+      throw new DOMException('The operation timed out.', 'TimeoutError');
+    });
+    const urls = Array.from(
+      { length: purge.PURGE_BATCH_SIZE + 1 },
+      (_, index) => `https://cdn.example.invalid/m/2026/09/${index}.webp`
+    );
+
+    try {
+      const outcome = await purge.purgeUrls(urls);
+
+      expect(outcome.failed).toEqual(urls);
+      expect(reservations.count).toBe(3);
+      expect(startedAt).toEqual([0, 10_000]);
+    } finally {
+      reserveSpy.mockRestore();
+      setSystemTime();
+    }
   });
 
   test('an empty list makes no call', async () => {

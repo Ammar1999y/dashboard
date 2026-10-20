@@ -36,6 +36,7 @@ import {
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
+import { expectAuthError, expectError } from '../helpers/expect-body';
 import { sentMail, settleDelivery } from '../helpers/mailbox';
 import {
   authedRequest,
@@ -125,8 +126,8 @@ function uniqueEmail(prefix: string): string {
 interface ReauthSurface {
   path: string;
   body: (user: SeededUser) => Record<string, unknown>;
-  /** The app's `{ success, message, data }`, or Better Auth's error body. */
-  envelope: boolean;
+  /** A binding's problem, or the prefix's auth problem, which also has `message`. */
+  binding: boolean;
 }
 
 describe('a locked account, re-authenticating with its correct password', () => {
@@ -134,7 +135,7 @@ describe('a locked account, re-authenticating with its correct password', () => 
     {
       path: '/api/dash/auth/reauth',
       body: (user: SeededUser) => ({ password: user.password }),
-      envelope: true,
+      binding: true,
     },
     {
       path: '/api/dash/users/me/change-password',
@@ -142,7 +143,7 @@ describe('a locked account, re-authenticating with its correct password', () => 
         currentPassword: user.password,
         newPassword: 'Harness!Rotated1',
       }),
-      envelope: true,
+      binding: true,
     },
     {
       path: '/api/dash/users/me/change-email',
@@ -150,25 +151,25 @@ describe('a locked account, re-authenticating with its correct password', () => 
         currentPassword: user.password,
         newEmail: uniqueEmail('locked'),
       }),
-      envelope: true,
+      binding: true,
     },
     // `requireReauthPassword`, the app-owned 2FA endpoints.
     {
       path: '/api/auth/two-factor/totp/start',
       body: (user: SeededUser) => ({ password: user.password }),
-      envelope: false,
+      binding: false,
     },
     // `path-policy.ts`, the Better Auth paths that reach `password.verify`.
     {
       path: '/api/auth/two-factor/get-totp-uri',
       body: (user: SeededUser) => ({ password: user.password }),
-      envelope: false,
+      binding: false,
     },
   ];
 
   test.each(surfaces)(
     '$path is told the account is locked, not that the password is wrong',
-    async ({ path, body, envelope }) => {
+    async ({ path, body, binding }) => {
       const user = await seedUser();
       const session = await signIn(user);
       await lockAccount(user.userId);
@@ -181,18 +182,13 @@ describe('a locked account, re-authenticating with its correct password', () => 
       const retryAfter = Number(response.headers.get('retry-after'));
       expect(retryAfter).toBeGreaterThan(0);
       expect(retryAfter).toBeLessThanOrEqual(LOCK_DURATION_SECONDS);
-      expect(await response.json()).toEqual(
-        envelope
-          ? {
-              success: false,
-              message: userMsg.accountTemporarilyLocked,
-              data: null,
-            }
-          : {
-              message: userMsg.accountTemporarilyLocked,
-              code: CUSTOM_AUTH_CODE,
-            }
+      const expectLocked = binding ? expectError : expectAuthError;
+      const problem = await expectLocked(
+        response,
+        HTTP_STATUS.TOO_MANY_REQUESTS,
+        userMsg.accountTemporarilyLocked
       );
+      expect(problem.code).toBe(binding ? undefined : CUSTOM_AUTH_CODE);
 
       // A lock is not a failed attempt, and nothing was written.
       expect(await lockState(user.userId)).toEqual(before);
@@ -284,12 +280,11 @@ test('a change-email that would strand the only second factor is refused before 
     newEmail: uniqueEmail('stranding'),
   });
 
-  expect(response.status).toBe(HTTP_STATUS.CONFLICT);
-  expect(await response.json()).toEqual({
-    success: false,
-    message: twoFactorMsg.contactChangeStrands,
-    data: null,
-  });
+  await expectError(
+    response,
+    HTTP_STATUS.CONFLICT,
+    twoFactorMsg.contactChangeStrands
+  );
   await settleDelivery();
   expect(sentMail()).toEqual([]);
   expect(
@@ -332,12 +327,11 @@ test.if(PHONE_OTP_AVAILABLE)(
       channel: 'sms',
     });
 
-    expect(response.status).toBe(HTTP_STATUS.CONFLICT);
-    expect(await response.json()).toEqual({
-      success: false,
-      message: twoFactorMsg.contactChangeStrands,
-      data: null,
-    });
+    await expectError(
+      response,
+      HTTP_STATUS.CONFLICT,
+      twoFactorMsg.contactChangeStrands
+    );
     expect(
       await db
         .select({ id: verificationSessions.id })

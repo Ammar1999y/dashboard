@@ -1,6 +1,7 @@
 import type { LabRow } from './fake-server';
 import type { NoteFn } from './recorder';
 import type { Mismatch } from './types';
+import type { DataTableFeatures } from '@/components/ui/data-table';
 import type { ColumnStore } from '@/components/ui/data-table/store/column-store';
 import type { QueryClient } from '@tanstack/react-query';
 import type { Table } from '@tanstack/react-table';
@@ -43,7 +44,7 @@ async function waitFor<T>(what: string, probe: () => T | null | undefined) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
-const table = (): Table<LabRow> => {
+const table = (): Table<DataTableFeatures, LabRow> => {
   const current = useLab.getState().table;
   if (!current) throw new Error('table not mounted');
   return current;
@@ -66,8 +67,8 @@ const handlers = (columnId: string) => {
   const { actions } = columnStore().getState();
   return {
     hide: () => actions.setVisible(columnId, false),
-    pinLeft: () => actions.pin(columnId, 'left'),
-    pinRight: () => actions.pin(columnId, 'right'),
+    pinStart: () => actions.pin(columnId, 'start'),
+    pinEnd: () => actions.pin(columnId, 'end'),
     unpin: () => actions.pin(columnId, false),
     moveLeft: () => actions.move(columnId, 'next'),
     moveToFarRight: () => actions.move(columnId, 'first'),
@@ -184,10 +185,14 @@ function checkHeaderOnTop(): Mismatch[] {
       check: 'header on top',
       detail: 'rows did not scroll, so the check could not run',
     });
+  const visible = container.getBoundingClientRect();
   for (const head of container.querySelectorAll<HTMLElement>(
     '[data-slot="table-head"]'
   )) {
     const rect = head.getBoundingClientRect();
+    const centre = rect.left + rect.width / 2;
+    // A cell scrolled out of the container's width is painted by nothing.
+    if (centre < visible.left || centre > visible.right) continue;
     const hit = document.elementFromPoint(
       rect.left + rect.width / 2,
       rect.top + rect.height / 2
@@ -203,20 +208,18 @@ function checkHeaderOnTop(): Mismatch[] {
 }
 
 const gripOf = (item: Element | undefined) =>
-  item?.querySelector('.lucide-grip-vertical')?.parentElement ?? undefined;
+  item?.querySelector<HTMLElement>('[data-slot="sortable-item-handle"]') ??
+  undefined;
 
 // What the header drag's `onDragEnd` calls.
 const dragColumn = (activeId: string, overId: string) =>
   columnStore().getState().actions.drop(activeId, overId);
 
-const SORT_ICONS =
-  '.lucide-arrow-down-up, .lucide-arrow-up, .lucide-arrow-down';
-
 // A stale header may not render the name column at all; the store call then
 // still exercises the data path, with the same asc → desc → asc cycle as
 // `SortButton`.
 function sortByName(note: NoteFn) {
-  const button = headOf('name')?.querySelector(SORT_ICONS)?.closest('button');
+  const button = headOf('name')?.querySelector<HTMLElement>('[data-sort]');
   if (button) {
     button.click();
     return;
@@ -273,14 +276,14 @@ const expectSize = (columnId: string, expected: number): Mismatch[] => {
 interface LayoutSnapshot {
   order: string;
   hidden: string;
-  pinLeft: string;
-  pinRight: string;
+  pinStart: string;
+  pinEnd: string;
   sizes: string;
 }
 
 const snapshotLayout = (): LayoutSnapshot => {
   const t = table();
-  const state = t.getState();
+  const state = t.store.state;
   return {
     order: state.columnOrder.join(','),
     hidden: Object.entries(state.columnVisibility)
@@ -288,8 +291,8 @@ const snapshotLayout = (): LayoutSnapshot => {
       .map(([id]) => id)
       .sort((a, b) => a.localeCompare(b))
       .join(','),
-    pinLeft: (state.columnPinning.left ?? []).join(','),
-    pinRight: (state.columnPinning.right ?? []).join(','),
+    pinStart: state.columnPinning.start.join(','),
+    pinEnd: state.columnPinning.end.join(','),
     sizes: t
       .getAllLeafColumns()
       .map((c) => `${c.id}:${c.getSize()}`)
@@ -368,7 +371,7 @@ function traceLifecycle(note: NoteFn) {
         log(`columnVisibility ← hidden [${hiddenIds(s.columnVisibility)}]`);
       if (s.columnPinning !== previous.columnPinning)
         log(
-          `columnPinning ← L[${(s.columnPinning.left ?? []).join(',')}] R[${(s.columnPinning.right ?? []).join(',')}]`
+          `columnPinning ← start[${s.columnPinning.start.join(',')}] end[${s.columnPinning.end.join(',')}]`
         );
       if (s.columnSizing !== previous.columnSizing)
         log(`columnSizing ← ${JSON.stringify(s.columnSizing)}`);
@@ -383,7 +386,7 @@ function traceLifecycle(note: NoteFn) {
         if (s.store) {
           const { columnOrder, columnPinning } = s.store.getState();
           log(
-            `new column store, first state: order [${columnOrder.join(',')}] · pinned R[${(columnPinning.right ?? []).join(',')}]`
+            `new column store, first state: order [${columnOrder.join(',')}] · pinned end[${columnPinning.end.join(',')}]`
           );
         }
       }
@@ -440,8 +443,8 @@ const isDefaultLayout = () => {
   return (
     state.columnOrder.join(',') === DEFAULT_ORDER.join(',') &&
     hiddenIds(state.columnVisibility) === '' &&
-    (state.columnPinning.left ?? []).length === 0 &&
-    (state.columnPinning.right ?? []).join(',') === LAB_ACTIONS_COLUMN &&
+    state.columnPinning.start.length === 0 &&
+    state.columnPinning.end.join(',') === LAB_ACTIONS_COLUMN &&
     Object.keys(state.columnSizing).length === 0
   );
 };
@@ -457,7 +460,7 @@ function checkSaved(): Mismatch[] {
       ? []
       : [{ check: 'saved layout', detail: 'custom layout was not saved' }];
   const t = table();
-  const state = t.getState();
+  const state = t.store.state;
   const out: Mismatch[] = [];
 
   const order = asStringList(saved.columnOrder);
@@ -500,11 +503,11 @@ function checkDefaultStores(): Mismatch[] {
       check: 'default layout',
       detail: `columnOrder [${columnOrder.join(',')}], expected [${DEFAULT_ORDER.join(',')}]`,
     });
-  const right = (columnPinning.right ?? []).join(',');
-  if (right !== LAB_ACTIONS_COLUMN)
+  const end = columnPinning.end.join(',');
+  if (end !== LAB_ACTIONS_COLUMN)
     out.push({
       check: 'default layout',
-      detail: `right pinning [${right}], expected [${LAB_ACTIONS_COLUMN}]`,
+      detail: `end pinning [${end}], expected [${LAB_ACTIONS_COLUMN}]`,
     });
   if (hiddenIds(columnVisibility) !== '')
     out.push({
@@ -640,7 +643,7 @@ export function createScenarioGroups(
       scenarios: [
         {
           title: 'pin name to start — header menu "يمين"',
-          run: () => handlers('name').pinLeft(),
+          run: () => handlers('name').pinStart(),
         },
         {
           title: 'drop status onto pinned name — joins the pin zone',
@@ -662,7 +665,7 @@ export function createScenarioGroups(
         },
         {
           title: 'pin role to end — header menu "يسار"',
-          run: () => handlers('role').pinRight(),
+          run: () => handlers('role').pinEnd(),
         },
         {
           title: 'hide pinned role',
@@ -764,9 +767,7 @@ export function createScenarioGroups(
           title: 'column filter: type "User 1" into the name filter and apply',
           run: async () => {
             click(
-              headOf('name')
-                ?.querySelector('.lucide-funnel')
-                ?.closest('button'),
+              headOf('name')?.querySelector('[data-column-filter]'),
               'name filter button'
             );
             const input = await waitFor('filter input', () =>
@@ -867,7 +868,7 @@ export function createScenarioGroups(
           title: 'change layout, wait for save, remount — layout must survive',
           run: async (note) => {
             handlers('notes').hide();
-            handlers('email').pinLeft();
+            handlers('email').pinStart();
             handlers('score').moveToFarLeft();
             table().setColumnSizing((old) => ({ ...old, name: 260 }));
             await sleep(PERSIST_WAIT_MS);
@@ -898,7 +899,7 @@ export function createScenarioGroups(
             'page reload with a saved custom layout — header must show the saved layout',
           run: async (note) => {
             handlers('notes').hide();
-            handlers('email').pinLeft();
+            handlers('email').pinStart();
             handlers('score').moveToFarLeft();
             table().setColumnSizing((old) => ({ ...old, name: 260 }));
             await sleep(PERSIST_WAIT_MS);
@@ -931,7 +932,7 @@ export function createScenarioGroups(
         },
         {
           title: '100 rows: pin name to start',
-          run: () => handlers('name').pinRight(),
+          run: () => handlers('name').pinEnd(),
         },
         {
           title: '100 rows: unpin name',
@@ -959,7 +960,7 @@ export function createScenarioGroups(
         {
           title: '100 rows: pin email, then drag-resize it by 80px',
           run: async () => {
-            handlers('email').pinRight();
+            handlers('email').pinEnd();
             await frame();
             resizeStart = table().getColumn('email')?.getSize() ?? 0;
             await dragResize('email', 80);

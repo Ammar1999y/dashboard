@@ -33,7 +33,7 @@ export const FIELD_DOCS_MODULES: Readonly<
   'responses/auth.docs': () => import('@app/shared/responses/auth.docs'),
   'validation/otp.docs': () => import('@app/shared/validation/otp.docs'),
   'data-table/query.docs': () => import('@app/shared/data-table/query.docs'),
-  'response-contract.docs': () => import('@app/shared/response-contract.docs'),
+  'api/wire.docs': () => import('@app/shared/api/wire.docs'),
   'responses/better-auth.docs': () =>
     import('@app/shared/responses/better-auth.docs'),
   'validation/health.docs': () => import('@app/shared/validation/health.docs'),

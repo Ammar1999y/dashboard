@@ -97,9 +97,15 @@ What lives there and why:
 
 - `validation/*` — the Zod schemas the API parses requests with. The front-end
   validates forms against the same schemas.
-- `contract.ts` — `REQUEST_BODIES` and `BETTER_AUTH_BODIES`, keyed
-  `METHOD /path`: the registry the OpenAPI generator publishes and the type
-  source for a client (`RequestBody<'POST /api/dash/users'>`).
+- `api/*` — one `endpoint()` entry per route: method, path, params, query,
+  body, response, refusals and policy. The server binds a handler to it, the
+  front end calls it with `api(entry, …)`, the mocks answer it with
+  `mock(entry, …)`, and the OpenAPI document is generated from it.
+  `api/wire.ts` builds and parses every body: successes, and errors as RFC
+  9457 problems (`application/problem+json`).
+- `contract.ts`, `response-contract.ts` — the Better Auth request and
+  response tables, keyed by the path under `/api/auth`, and the generic
+  field and contract checks.
 - `auth-fields.ts` — the Better Auth `additionalFields`, so the server's
   `betterAuth()` and the client's `inferAdditionalFields()` share one
   declaration.
@@ -132,7 +138,9 @@ The back-end ships as a container built from `apps/back-end/Dockerfile` with the
 live there. Coolify settings, environment, storage, health checks and the
 operational runbook are in `apps/back-end/reports/coolify-deployment.md`.
 
-Whatever hosts the front-end (Coolify, Vercel, Cloudflare) must build from the
+On Coolify the front-end is a second container, from `apps/front-end/Dockerfile`
+with the same build context; the same file has its settings. Whatever hosts the
+front-end (Coolify, Vercel, Cloudflare) must build from the
 repository root with `apps/front-end` as the project directory, and must rebuild
 when `packages/shared` changes: the shared schemas are compiled into both
 deployments, and the `NEXT_PUBLIC_*` configuration they read must be set

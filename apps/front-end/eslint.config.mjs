@@ -9,6 +9,12 @@ const compat = new FlatCompat({
   baseDirectory: import.meta.dirname,
 });
 
+const FIELD_DOCS_IMPORTS = {
+  group: ['**/*.docs', '**/*.docs.ts'],
+  message:
+    'Field docs are the OpenAPI prose the back end loads; they never reach the browser.',
+};
+
 const eslintConfig = [
   {
     ignores: [
@@ -238,13 +244,30 @@ const eslintConfig = [
         {
           paths: [
             {
-              name: '@app/shared/response-contract',
+              name: '@app/shared/api/issues',
               allowTypeImports: true,
               message:
-                'Its registries pull every response schema into the bundle. Import the schema from `@app/shared/responses/<domain>`; only types may come from here.',
+                'A contract check for the mocks and tests: it builds JSON Schema at runtime. `api()` parses answers with the entry itself.',
+            },
+            {
+              name: '@app/shared/api/all',
+              allowTypeImports: true,
+              message:
+                'It pulls every endpoint and schema into the bundle. Import the entry from `@app/shared/api/<domain>`.',
             },
           ],
+          patterns: [FIELD_DOCS_IMPORTS],
         },
+      ],
+    },
+  },
+  {
+    // The mocks may read the registries, but ship to the browser like the app.
+    files: ['mocks/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { patterns: [FIELD_DOCS_IMPORTS] },
       ],
     },
   },

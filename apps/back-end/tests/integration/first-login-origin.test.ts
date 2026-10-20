@@ -36,6 +36,7 @@ import { betterAuthMsg } from '@app/shared/messages/auth';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
+import { expectAuthError } from '../helpers/expect-body';
 import { seedOtpProof } from '../helpers/otp';
 import { baseHeaders, seedUser } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
@@ -203,11 +204,13 @@ describe.each([...PATHS])(
         // password accepted and a session row written.
         const response = await post(path, body(user), headers);
 
-        expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-        expect(await response.json()).toEqual({
-          message: betterAuthMsg.INVALID_ORIGIN,
-          code: CUSTOM_AUTH_CODE,
-        });
+        expect(
+          await expectAuthError(
+            response,
+            HTTP_STATUS.FORBIDDEN,
+            betterAuthMsg.INVALID_ORIGIN
+          )
+        ).toMatchObject({ code: CUSTOM_AUTH_CODE });
         expect(response.headers.getSetCookie()).toEqual([]);
         expect(await credentialState(user.userId)).toEqual(UNTOUCHED);
       }
@@ -272,11 +275,13 @@ describe.each([...PATHS])(
         origin: UNTRUSTED_ORIGIN,
       });
 
-      expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-      expect(await response.json()).toEqual({
-        message: betterAuthMsg.INVALID_ORIGIN,
-        code: CUSTOM_AUTH_CODE,
-      });
+      expect(
+        await expectAuthError(
+          response,
+          HTTP_STATUS.FORBIDDEN,
+          betterAuthMsg.INVALID_ORIGIN
+        )
+      ).toMatchObject({ code: CUSTOM_AUTH_CODE });
       expect(await credentialState(user.userId)).toEqual(UNTOUCHED);
     });
 

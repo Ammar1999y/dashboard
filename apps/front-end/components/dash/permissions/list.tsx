@@ -1,7 +1,5 @@
 import { useMemo } from 'react';
 
-import { permissionRowsSchema } from '@app/shared/responses/permissions';
-
 import { DataTable } from '@/components/ui/data-table';
 
 import { useResourceAccess } from '../shared/access';
@@ -25,10 +23,8 @@ export default function PermissionsList() {
       cta={cta}
       columns={columns}
       queryKey={permissionEntity.keys.list}
-      href={permissionEntity.href}
-      schema={permissionRowsSchema}
+      endpoint={permissionEntity.endpoints.list}
       storageKey='permissions-table'
-      serverSide
     />
   );
 }

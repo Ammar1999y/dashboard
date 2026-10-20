@@ -1,4 +1,4 @@
-import type { ChannelList, OtpContact, SendHref } from './contact-form';
+import type { ChannelList, OtpContact, SendEndpoint } from './contact-form';
 import type { ReactNode } from 'react';
 
 import { useCallback, useState } from 'react';
@@ -14,7 +14,7 @@ type Stage =
   | { name: 'code'; contact: OtpContact };
 
 interface SendThenCodeProps {
-  href: SendHref;
+  endpoint: SendEndpoint;
   channels: ChannelList;
   /** What the first step says; the second always asks for the code that came. */
   intro: string;
@@ -33,7 +33,7 @@ interface SendThenCodeProps {
  * than a button beside the code.
  */
 export function SendThenCode({
-  href,
+  endpoint,
   channels,
   intro,
   initial,
@@ -63,7 +63,7 @@ export function SendThenCode({
       </p>
       {stage.name === 'send' ? (
         <ContactForm
-          href={href}
+          endpoint={endpoint}
           channels={channels}
           initial={stage.contact}
           cooldown={cooldown}

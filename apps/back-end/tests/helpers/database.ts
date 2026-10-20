@@ -7,10 +7,12 @@
  * files that is the difference between a minute of pure provisioning and six
  * seconds of it.
  */
+import type { Tx } from '@/db';
+
 import { getTableName, is, sql } from 'drizzle-orm';
 import { PgTable } from 'drizzle-orm/pg-core';
 
-import { db } from '@/db';
+import { db, withTransaction } from '@/db';
 import * as schema from '@/db/schema';
 
 import { compareCodeUnits } from '@/utils/text';
@@ -113,4 +115,22 @@ export async function waitForUserLock(): Promise<void> {
     await Bun.sleep(10);
   }
   throw new Error('No request reached a blocked users query.');
+}
+
+/** A transaction on its own connection that keeps what `acquire` took until `release`. */
+export function holdUntilReleased(acquire: (tx: Tx) => Promise<unknown>) {
+  const acquired = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const finished = withTransaction(async (tx) => {
+    await acquire(tx);
+    acquired.resolve();
+    await release.promise;
+  });
+  finished.catch(acquired.reject);
+  return {
+    acquired: acquired.promise,
+    release: release.resolve,
+    finished,
+    releaseAfter: (ms: number) => setTimeout(release.resolve, ms),
+  };
 }

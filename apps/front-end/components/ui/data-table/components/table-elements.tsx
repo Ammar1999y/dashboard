@@ -36,7 +36,7 @@ function cellAttributes(columnId: string, pinSide?: PinSide, pinEdge = false) {
     ...(pinSide && {
       'data-pinned': pinSide,
       ...(pinEdge &&
-        (pinSide === 'left'
+        (pinSide === 'start'
           ? { 'data-is-last-pinned': 'true' }
           : { 'data-is-first-pinned': 'true' })),
     }),

@@ -1,8 +1,8 @@
-import type { Entity } from './entity';
+import type { Entity, EntityEndpoints, ItemRead } from './entity';
+import type { DataOf } from '@/lib/api/client';
 import type { EntityID } from '@app/shared/types';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { ComponentType } from 'react';
-import type * as z from 'zod';
 
 import { useRouter } from 'next/router';
 
@@ -10,7 +10,7 @@ import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { validID } from '@app/shared/utils';
 import { MSG_INVALID_LINK } from '@/constants/messages';
-import { useQueryData } from '@/lib/api/query';
+import { useEndpointQuery } from '@/lib/api/query';
 
 import { ErrorState } from '@/components/ui/error-state';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -21,12 +21,13 @@ interface Row {
   id: EntityID;
 }
 
-interface EditRecordProps<TRow> {
-  entity: Entity;
+// `& Row`: the constraint holds for every entry, which a generic cannot see.
+type RecordOf<E extends EntityEndpoints> = DataOf<E['get']> & Row;
+
+interface EditRecordProps<E extends EntityEndpoints> {
+  entity: Entity<E>;
   /** A module-level component, remounted per record. */
-  Form: ComponentType<{ record: TRow }>;
-  /** The record's shape, checked on arrival. */
-  schema: z.ZodType<NoInfer<TRow>>;
+  Form: ComponentType<{ record: RecordOf<E> }>;
 }
 
 /** The route's `[id]`, and whether the router has parsed the URL yet. */
@@ -42,19 +43,24 @@ function useRouteId() {
  * for the parts that read the form once on mount, such as the rich-text editor
  * and the permission matrix.
  */
-export function EditRecord<TRow extends Row>({
+export function EditRecord<E extends EntityEndpoints>({
   entity,
   Form,
-  schema,
-}: EditRecordProps<TRow>) {
+}: EditRecordProps<E>) {
   const { id, isReady } = useRouteId();
-  const query = useQueryData({
-    queryKey: entity.keys.detail(id),
-    href: entity.itemHref(id),
-    enabled: !!id,
-    schema,
-  });
-  return <RecordView id={id} isReady={isReady} query={query} Form={Form} />;
+  const query = useEndpointQuery<ItemRead, RecordOf<E>>(
+    entity.endpoints.get,
+    { params: { id } },
+    { queryKey: entity.keys.detail(id), enabled: !!id }
+  );
+  return (
+    <RecordView<RecordOf<E>>
+      id={id}
+      isReady={isReady}
+      query={query}
+      Form={Form}
+    />
+  );
 }
 
 interface RecordViewProps<TRow> {

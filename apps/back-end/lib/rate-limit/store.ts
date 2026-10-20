@@ -17,7 +17,7 @@ import { lazyStore } from '@/lib/sqlite/store';
 import { sweepInBatches } from '@/lib/sqlite/sweep';
 
 /** Readiness compares the file's `user_version` against this. */
-export const RATE_LIMIT_SCHEMA_VERSION = 2;
+export const RATE_LIMIT_SCHEMA_VERSION = 3;
 
 const MIGRATIONS: readonly Migration[] = [
   (db) => {
@@ -44,6 +44,10 @@ const MIGRATIONS: readonly Migration[] = [
   (db) => {
     db.exec(`DROP TABLE IF EXISTS auth_rate_limit`);
   },
+
+  (db) => {
+    db.exec(`DROP INDEX IF EXISTS rate_limit_expires_at`);
+  },
 ];
 
 if (RATE_LIMIT_SCHEMA_VERSION !== MIGRATIONS.length)
@@ -63,7 +67,8 @@ if (RATE_LIMIT_SCHEMA_VERSION !== MIGRATIONS.length)
  *
  * The `WHERE` on `DO UPDATE` makes it max-aware: a request already at the
  * limit inside the current window writes nothing, so hammering an exhausted
- * key creates no writer-lock contention. A denied request therefore returns NO
+ * key adds no WAL, though the statement still takes the writer lock and waits
+ * on another writer like any admission. A denied request therefore returns NO
  * row, which can only mean the row exists, is in the bound window or the next
  * one, and is at `max`; the caller derives `retryAfter` from the `windowStart`
  * it bound and must not read the row back, which would race a concurrent
@@ -95,10 +100,15 @@ const SQL_CONSUME = `
      OR rate_limit.count + excluded.count <= ?
   RETURNING count, window_start`;
 
-/** Bounded, so a large backlog never holds the sole writer lock for long. */
+/**
+ * Bounded, so a large backlog never holds the sole writer lock for long. A
+ * scan, deliberately: `SQL_CONSUME` sets `expires_at` on every admission, so
+ * an index on it doubled each admission's WAL writes and with them the
+ * auto-checkpoint stalls, to speed up a job that runs every 15 minutes.
+ */
 const SQL_SWEEP_RATE_LIMIT = `DELETE FROM rate_limit WHERE expires_at <= ? LIMIT ?`;
 /**
- * `EXISTS` short-circuits on the `expires_at` index. One row is ALWAYS
+ * `EXISTS` stops the scan at the first expired row. One row is ALWAYS
  * returned, so read `present` rather than testing the row.
  */
 const SQL_ANY_EXPIRED = `

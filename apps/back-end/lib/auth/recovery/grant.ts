@@ -159,22 +159,19 @@ export function spendRecoveryAttempt(token: string): Promise<AttemptSpend> {
 
   return spendAttemptBudget({
     allowed: RECOVERY_ALLOWED_ATTEMPTS,
-    consume: () =>
-      withTransaction(async (tx) => {
-        const [row] = await tx
-          .delete(verifications)
-          .where(eq(verifications.identifier, identifier))
-          .returning({
-            value: verifications.value,
-            expiresAt: verifications.expiresAt,
-          });
-        return row ?? null;
-      }),
+    consume: async () => {
+      const [row] = await db
+        .delete(verifications)
+        .where(eq(verifications.identifier, identifier))
+        .returning({
+          value: verifications.value,
+          expiresAt: verifications.expiresAt,
+        });
+      return row ?? null;
+    },
     rearm: async (value, expiresAt) => {
       await bestEffort('recovery.attempts.rearmFailed', () =>
-        withTransaction((tx) =>
-          tx.insert(verifications).values({ identifier, value, expiresAt })
-        )
+        db.insert(verifications).values({ identifier, value, expiresAt })
       );
     },
     exhaust: () => invalidateRecoveryGrant(token),

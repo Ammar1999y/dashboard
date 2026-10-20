@@ -11,7 +11,7 @@ import type {
 
 import { and, eq } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
+import { db } from '@/db';
 import { users, verificationSessions } from '@/db/schema';
 import { APIError } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
@@ -334,23 +334,20 @@ async function recordChallengeEvent(
   newData: Record<string, unknown>
 ): Promise<void> {
   try {
-    const write = (tx: Tx) =>
-      auditLog(tx, {
-        userId: params.userId,
-        userEmail: params.userEmail,
-        action: 'UPDATE',
-        tableName: 'sessions',
-        recordId: params.session.id,
-        oldData,
-        newData,
-        meta: boundedAuditMeta(
-          params.auditMeta.ip,
-          params.auditMeta.userAgent,
-          params.auditMeta.apiPath
-        ),
-      });
-    if (params.transaction) await write(params.transaction);
-    else await withTransaction(write);
+    await auditLog(params.transaction ?? db, {
+      userId: params.userId,
+      userEmail: params.userEmail,
+      action: 'UPDATE',
+      tableName: 'sessions',
+      recordId: params.session.id,
+      oldData,
+      newData,
+      meta: boundedAuditMeta(
+        params.auditMeta.ip,
+        params.auditMeta.userAgent,
+        params.auditMeta.apiPath
+      ),
+    });
   } catch (error) {
     logSanitized('error', {
       msg: 'twoFactor.challengeAudit.failed',

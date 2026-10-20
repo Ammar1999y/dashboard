@@ -1,3 +1,4 @@
+import type { DataTableFeatures } from '../features';
 import type { PinSide } from '../store/column-store';
 import type {
   Cell,
@@ -6,15 +7,17 @@ import type {
   Header,
   HeaderGroup,
   Row,
+  RowData,
   Table,
 } from '@tanstack/react-table';
 
 import { useMemo } from 'react';
 
-import { getCoreRowModel, useReactTable } from '@tanstack/react-table';
+import { useTable } from '@tanstack/react-table';
 import { useShallow } from 'zustand/shallow';
 
 import { renderDefaultHeader } from '../column-header';
+import { DATA_TABLE_FEATURES } from '../features';
 import { useColumnActions, useColumnStore } from '../store/context';
 
 interface PinPlacement {
@@ -28,8 +31,8 @@ interface PinPlacement {
  * pinning change — never on a resize or new data — so it is the dependency
  * that tells the header its structure changed.
  */
-export interface TableLayout<TData> {
-  headers: Header<TData, unknown>[];
+export interface TableLayout<TData extends RowData> {
+  headers: Header<DataTableFeatures, TData>[];
   columnIds: string[];
   pins: Partial<Record<string, PinPlacement>>;
 }
@@ -42,14 +45,14 @@ export interface ColumnRule {
   pinOffset: number | undefined;
 }
 
-export interface BodyRow<TData> {
-  row: Row<TData>;
-  cells: Cell<TData, unknown>[];
+export interface BodyRow<TData extends RowData> {
+  row: Row<DataTableFeatures, TData>;
+  cells: Cell<DataTableFeatures, TData>[];
 }
 
-// Module-level on purpose: `getCoreRowModel()` inline returns a new function
-// each render, which TanStack treats as a new option and rebuilds rows for.
-const coreRowModel = getCoreRowModel();
+// Every slice this table renders from is controlled by the column store, which
+// already re-renders the frame; subscribing `useTable` too would only repeat it.
+const NO_TABLE_STATE = () => null;
 
 const DEFAULT_COLUMN = {
   minSize: 170,
@@ -61,25 +64,27 @@ const DEFAULT_COLUMN = {
 // Rows are keyed by record id, not by index: a sort or a new page then
 // moves or replaces a record's row instead of rewriting another record's DOM,
 // and the row/cell memo comparators in `body.tsx` stay per record.
-function getRowId<TData>(original: TData, index: number): string {
-  const id: unknown = (original as { id?: unknown } | null)?.id;
+function getRowId<TData extends RowData>(original: TData, index: number) {
+  const id: unknown = Array.isArray(original) ? undefined : original.id;
   return String(typeof id === 'string' || typeof id === 'number' ? id : index);
 }
 
-function placementOf<TData>(column: Column<TData>): PinPlacement | undefined {
+function placementOf<TData extends RowData>(
+  column: Column<DataTableFeatures, TData>
+): PinPlacement | undefined {
   const side = column.getIsPinned();
   if (!side) return undefined;
   return {
     side,
     edge:
-      side === 'left'
-        ? column.getIsLastColumn('left')
-        : column.getIsFirstColumn('right'),
+      side === 'start'
+        ? column.getIsLastColumn('start')
+        : column.getIsFirstColumn('end'),
   };
 }
 
-function buildLayout<TData>(
-  headerGroups: HeaderGroup<TData>[]
+function buildLayout<TData extends RowData>(
+  headerGroups: HeaderGroup<DataTableFeatures, TData>[]
 ): TableLayout<TData> {
   const headers = headerGroups[headerGroups.length - 1]?.headers ?? [];
   const pins: TableLayout<TData>['pins'] = {};
@@ -87,8 +92,8 @@ function buildLayout<TData>(
   return { headers, columnIds: headers.map((h) => h.column.id), pins };
 }
 
-function buildColumnRules<TData>(
-  table: Table<TData>,
+function buildColumnRules<TData extends RowData>(
+  table: Table<DataTableFeatures, TData>,
   layout: TableLayout<TData>
 ): ColumnRule[] {
   // Definition order, never display order (`getAllLeafColumns`): reordering
@@ -105,21 +110,21 @@ function buildColumnRules<TData>(
       pinOffset:
         side === undefined
           ? undefined
-          : side === 'left'
-            ? column.getStart('left')
-            : column.getAfter('right'),
+          : side === 'start'
+            ? column.getStart('start')
+            : column.getAfter('end'),
     };
   });
 }
 
 /**
- * The one owner of the TanStack instance. `table` keeps its identity for the
- * table's lifetime, so a component that renders from it is cached forever by
- * React Compiler; render from the values returned here, whose identities
- * change exactly when what they describe does. `table` is for event handlers.
+ * The one owner of the TanStack instance. Its getters keep their results'
+ * identities until what they describe changes, which is what the memos below
+ * depend on; React Compiler cannot see a read hidden in a getter, so render
+ * from the values returned here. `table` is for event handlers.
  */
-export function useTableInstance<TData>(
-  columns: ColumnDef<TData>[],
+export function useTableInstance<TData extends RowData>(
+  columns: ColumnDef<DataTableFeatures, TData>[],
   data: TData[]
 ) {
   const actions = useColumnActions();
@@ -129,34 +134,31 @@ export function useTableInstance<TData>(
       columnVisibility: s.columnVisibility,
       columnPinning: s.columnPinning,
       columnSizing: s.columnSizing,
-      columnSizingInfo: s.columnSizingInfo,
+      columnResizing: s.columnResizing,
     }))
   );
 
-  // The one suppression in this area, and it is meant: the compiler skips this
-  // hook either way, and everything below is memoized by hand. Never move a
-  // TanStack call that renders into a component instead — that is how the
-  // header and rows used to freeze.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const table = useReactTable<TData>({
-    data,
-    columns,
-    state,
-    onColumnSizingChange: actions.setColumnSizing,
-    onColumnSizingInfoChange: actions.setColumnSizingInfo,
-    getCoreRowModel: coreRowModel,
-    getRowId,
-    defaultColumn: DEFAULT_COLUMN,
-    // Rows arrive already searched, sorted and paged — by the server, or by
-    // `queryRows` for a client-side list; TanStack only lays out columns.
-    manualPagination: true,
-    manualSorting: true,
-    manualFiltering: true,
-    enableColumnResizing: true,
-    columnResizeMode: 'onChange',
-    columnResizeDirection: 'rtl',
-    enableColumnPinning: true,
-  });
+  const table = useTable(
+    {
+      features: DATA_TABLE_FEATURES,
+      data,
+      columns,
+      state,
+      onColumnSizingChange: actions.setColumnSizing,
+      onColumnResizingChange: actions.setColumnResizing,
+      getRowId,
+      defaultColumn: DEFAULT_COLUMN,
+      // Rows arrive already searched, sorted and paged — by the server, or by
+      // `queryRows` for a client-side list; TanStack only lays out columns.
+      manualSorting: true,
+      manualFiltering: true,
+      enableColumnResizing: true,
+      columnResizeMode: 'onChange',
+      columnResizeDirection: 'rtl',
+      enableColumnPinning: true,
+    },
+    NO_TABLE_STATE
+  );
 
   const headerGroups = table.getHeaderGroups();
   const layout = useMemo(() => buildLayout(headerGroups), [headerGroups]);
@@ -167,16 +169,16 @@ export function useTableInstance<TData>(
   // the rest of each row — the global `space-*` utilities are sibling
   // selectors. TanStack memoizes each zone, so these change only on a move or
   // pin, and they are the explicit reason this recomputes.
-  const left = table.getLeftLeafColumns();
+  const start = table.getStartLeafColumns();
   const center = table.getCenterLeafColumns();
-  const right = table.getRightLeafColumns();
+  const end = table.getEndLeafColumns();
   const bodyRows = useMemo<BodyRow<TData>[]>(() => {
-    const columns = [...left, ...center, ...right];
+    const columns = [...start, ...center, ...end];
     return rows.map((row) => {
       const cells = new Map(row.getAllCells().map((c) => [c.column.id, c]));
       return { row, cells: columns.flatMap((c) => cells.get(c.id) ?? []) };
     });
-  }, [rows, left, center, right]);
+  }, [rows, start, center, end]);
 
   return {
     table,

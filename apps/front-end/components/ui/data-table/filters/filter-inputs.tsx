@@ -1,5 +1,7 @@
+import type { DataTableColumnMeta } from '../column-meta';
+import type { DataTableFeatures } from '../features';
 import type { FilterItemSchema } from '@app/shared/data-table/parsers';
-import type { Column, ColumnMeta } from '@tanstack/react-table';
+import type { Column, RowData } from '@tanstack/react-table';
 import type { ChangeEvent } from 'react';
 
 import { useCallback } from 'react';
@@ -19,6 +21,7 @@ import {
 } from '@/components/ui/select';
 
 import { Button } from '../../button';
+import { isValuelessOperator } from '../utils/data-table';
 import { genericMemo } from '../utils/generic-memo';
 import { DataTableRangeFilter } from './data-table-range-filter';
 import {
@@ -32,12 +35,13 @@ import {
   FacetedList,
   FacetedTrigger,
 } from './faceted';
+import { filterField, filterTrigger } from './segments';
 
-interface FilterInputProps<TData> {
+interface FilterInputProps<TData extends RowData> {
   filter: FilterItemSchema;
   inputId: string;
-  column: Column<TData>;
-  columnMeta?: ColumnMeta<TData, unknown>;
+  column: Column<DataTableFeatures, TData>;
+  columnMeta?: DataTableColumnMeta;
   onFilterUpdate: (
     filterId: string,
     updates: Partial<Omit<FilterItemSchema, 'filterId'>>
@@ -46,7 +50,7 @@ interface FilterInputProps<TData> {
   setShowValueSelector?: (value: boolean) => void;
 }
 
-function FilterEmptyStateInner<TData>({
+function FilterEmptyStateInner<TData extends RowData>({
   inputId,
   columnMeta,
   filter,
@@ -65,7 +69,7 @@ function FilterEmptyStateInner<TData>({
 }
 const FilterEmptyState = genericMemo(FilterEmptyStateInner, 'FilterEmptyState');
 
-function FilterTextInputInner<TData>({
+function FilterTextInputInner<TData extends RowData>({
   filter,
   inputId,
   columnMeta,
@@ -87,7 +91,7 @@ function FilterTextInputInner<TData>({
       aria-describedby={`${inputId}-description`}
       inputMode={isNumber ? 'numeric' : undefined}
       placeholder={columnMeta?.placeholder ?? 'أدخل قيمة...'}
-      className='!h-8 w-full rounded bg-transparent text-sm shadow-xs hover:shadow-sm'
+      className={cn(filterField, 'text-sm')}
       // Controlled: switching the row to another column resets the value to
       // '', and an uncontrolled input kept showing — and re-applying — the old text.
       value={typeof filter.value === 'string' ? filter.value : ''}
@@ -97,7 +101,7 @@ function FilterTextInputInner<TData>({
 }
 const FilterTextInput = genericMemo(FilterTextInputInner, 'FilterTextInput');
 
-function FilterBooleanSelectInner<TData>({
+function FilterBooleanSelectInner<TData extends RowData>({
   filter,
   inputId,
   columnMeta,
@@ -126,7 +130,7 @@ function FilterBooleanSelectInner<TData>({
         aria-controls={inputListboxId}
         aria-label={`${columnMeta?.label} boolean filter`}
         size='sm'
-        className='!h-8 w-full rounded shadow-xs hover:shadow-sm'
+        className={filterField}
       >
         <SelectValue placeholder={filter.value ? 'نعم' : 'لا'} />
       </SelectTrigger>
@@ -142,7 +146,7 @@ const FilterBooleanSelect = genericMemo(
   'FilterBooleanSelect'
 );
 
-function FilterFacetedSelectInner<TData>({
+function FilterFacetedSelectInner<TData extends RowData>({
   filter,
   inputId,
   columnMeta,
@@ -182,7 +186,7 @@ function FilterFacetedSelectInner<TData>({
           aria-label={`${columnMeta?.label} filter value${multiple ? 's' : ''}`}
           variant='none'
           size='none'
-          className='h-8 w-full min-w-0 justify-between rounded border bg-transparent px-3 py-1 text-sm font-normal shadow-xs hover:shadow-sm dark:bg-input/30 hover:dark:bg-input/45'
+          className={cn(filterTrigger, 'w-full justify-between')}
         >
           <FacetedBadgeList
             options={columnMeta?.options}
@@ -265,7 +269,7 @@ function fromCalendarDateValue(value: string | undefined): Date | undefined {
   return new Date(year, month - 1, day);
 }
 
-function FilterDateInputInner<TData>({
+function FilterDateInputInner<TData extends RowData>({
   filter,
   onFilterUpdate,
 }: FilterInputProps<TData>) {
@@ -317,7 +321,8 @@ function FilterDateInputInner<TData>({
         align='start'
         placeholder='اختر تاريخ'
         triggerClassName={cn(
-          'h-8 w-full min-w-0 justify-start rounded border bg-transparent px-3 py-1 text-sm font-normal shadow-xs hover:shadow-sm dark:bg-input/30 hover:dark:bg-input/45',
+          filterTrigger,
+          'w-full justify-start',
           !filter.value && 'text-muted-foreground'
         )}
         onChange={onRangeChange}
@@ -335,7 +340,8 @@ function FilterDateInputInner<TData>({
       align='start'
       placeholder='اختر تاريخ'
       triggerClassName={cn(
-        'h-8 w-full min-w-0 justify-start rounded border bg-transparent px-3 py-1 text-sm font-normal shadow-xs hover:shadow-sm dark:bg-input/30 hover:dark:bg-input/45',
+        filterTrigger,
+        'w-full justify-start',
         !filter.value && 'text-muted-foreground'
       )}
       onChange={onDateChange}
@@ -344,10 +350,12 @@ function FilterDateInputInner<TData>({
 }
 const FilterDateInput = genericMemo(FilterDateInputInner, 'FilterDateInput');
 
-function FilterInputInner<TData>(props: FilterInputProps<TData>) {
+function FilterInputInner<TData extends RowData>(
+  props: FilterInputProps<TData>
+) {
   const { filter, inputId, column, onFilterUpdate } = props;
 
-  if (filter.operator === 'isEmpty' || filter.operator === 'isNotEmpty') {
+  if (isValuelessOperator(filter.operator)) {
     return <FilterEmptyState {...props} />;
   }
 

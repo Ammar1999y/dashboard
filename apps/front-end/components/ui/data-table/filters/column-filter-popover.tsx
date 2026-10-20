@@ -1,11 +1,14 @@
+import type { DataTableFeatures } from '../features';
 import type { FilterItemSchema } from '@app/shared/data-table/parsers';
 import type {
   FilterOperator,
   FilterVariant,
 } from '@app/shared/types/data-table';
-import type { Column } from '@tanstack/react-table';
+import type { Column, RowData } from '@tanstack/react-table';
 
 import { useCallback, useId, useState } from 'react';
+
+import { cn } from '@/lib/utils';
 
 import { generateId } from '@/utils/generate-id';
 
@@ -25,16 +28,18 @@ import { LabelTooltip } from '../../tooltip';
 import {
   getDefaultFilterOperator,
   getFilterOperators,
+  isValuelessOperator,
 } from '../utils/data-table';
 import { stopDragStart } from '../utils/events';
 import { genericMemo } from '../utils/generic-memo';
 import { FilterInput } from './filter-inputs';
+import { filterField } from './segments';
 
-interface ColumnFilterPopoverProps<TData> {
-  column: Column<TData>;
+interface ColumnFilterPopoverProps<TData extends RowData> {
+  column: Column<DataTableFeatures, TData>;
 }
 
-function ColumnFilterPopoverInner<TData>({
+function ColumnFilterPopoverInner<TData extends RowData>({
   column,
 }: ColumnFilterPopoverProps<TData>) {
   const inputId = useId();
@@ -88,7 +93,7 @@ function ColumnFilterPopoverInner<TData>({
 
   const onOperatorChange = useCallback((value: FilterOperator) => {
     setDraftOperator(value);
-    if (value === 'isEmpty' || value === 'isNotEmpty') {
+    if (isValuelessOperator(value)) {
       setDraftValue('');
     }
   }, []);
@@ -146,6 +151,7 @@ function ColumnFilterPopoverInner<TData>({
             type='button'
             variant='ghost'
             className='h-7 w-7 shrink-0 rounded bg-accent p-1 text-accent-foreground opacity-0 transition-opacity duration-200 hover:!opacity-100 group-hover/header:opacity-80 touch:opacity-80'
+            data-column-filter
             onPointerDown={stopDragStart}
           >
             <Icon icon='solar:filter-linear' className='size-4' />
@@ -158,10 +164,7 @@ function ColumnFilterPopoverInner<TData>({
         onPointerDown={stopDragStart}
       >
         <Select value={draftOperator} onValueChange={onOperatorChange}>
-          <SelectTrigger
-            size='sm'
-            className='!h-8 w-full rounded bg-transparent lowercase shadow-xs'
-          >
+          <SelectTrigger size='sm' className={cn(filterField, 'lowercase')}>
             <div className='truncate'>
               <SelectValue placeholder={draftOperator} />
             </div>

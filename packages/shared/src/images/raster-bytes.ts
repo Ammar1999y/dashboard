@@ -204,6 +204,12 @@ function isAnimatedWebp(bytes: Uint8Array): boolean {
   return false;
 }
 
+export function isLossyWebp(bytes: Uint8Array): boolean {
+  if (rasterTypeOf(bytes) !== 'image/webp') return false;
+  for (const chunk of webpChunks(bytes)) if (chunk.type === 'VP8 ') return true;
+  return false;
+}
+
 /** A decoder ignores an `acTL` after the first `IDAT`. */
 function isAnimatedPng(bytes: Uint8Array): boolean {
   for (const chunk of pngChunks(bytes)) {

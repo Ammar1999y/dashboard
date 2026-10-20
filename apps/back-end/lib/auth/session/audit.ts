@@ -1,6 +1,6 @@
 import type { AuditMeta } from '@/lib/audit';
 
-import { withTransaction } from '@/db';
+import { db } from '@/db';
 
 import { auditLog } from '@/lib/audit';
 
@@ -18,21 +18,19 @@ export async function recordAbandonedSession(params: {
     | 'result_delivery_failed';
 }): Promise<void> {
   try {
-    await withTransaction((tx) =>
-      auditLog(tx, {
-        userId: params.userId,
-        userEmail: params.userEmail,
-        action: 'DELETE',
-        tableName: 'sessions',
-        recordId: params.sessionId,
-        oldData: { loginSuccess: true },
-        newData: {
-          sessionAbandoned: true,
-          reason: params.reason ?? 'cookie_delivery_failed',
-        },
-        meta: params.auditMeta,
-      })
-    );
+    await auditLog(db, {
+      userId: params.userId,
+      userEmail: params.userEmail,
+      action: 'DELETE',
+      tableName: 'sessions',
+      recordId: params.sessionId,
+      oldData: { loginSuccess: true },
+      newData: {
+        sessionAbandoned: true,
+        reason: params.reason ?? 'cookie_delivery_failed',
+      },
+      meta: params.auditMeta,
+    });
   } catch (error) {
     logSanitized('error', {
       msg: 'auth.abandonedSessionAudit.failed',

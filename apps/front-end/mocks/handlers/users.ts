@@ -4,13 +4,24 @@ import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 import type * as z from 'zod';
 
-import { http } from 'msw';
+import {
+  createUser,
+  deleteUser,
+  getUser,
+  listUsers,
+  updateSelf,
+  updateUser,
+} from '@app/shared/api/users';
 import { PHONE_ENABLED } from '@app/shared/config';
-import { REQUEST_BODIES } from '@app/shared/contract';
 import { USERS_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_DELETED, MSG_UPDATED } from '@app/shared/messages/common';
+import {
+  MSG_CREATED,
+  MSG_DELETED,
+  MSG_FETCHED,
+  MSG_UPDATED,
+} from '@app/shared/messages/common';
 import {
   MSG_CANNOT_DELETE_SELF,
   MSG_CUSTOM_ROLE_NEEDS_PERMISSIONS,
@@ -30,23 +41,15 @@ import {
   resolveActionScope,
   validatePermissionScope,
 } from '@app/shared/permissions/scope';
+import { validID } from '@app/shared/utils';
 import { SESSIONS_PAGE_SIZE } from '@app/shared/validation/sessions';
 
 import { generateEntityId } from '@/utils/generate-id';
 
 import { queryTable } from '../lib/data-table';
 import { now } from '../lib/db';
-import {
-  api,
-  created,
-  notFoundError,
-  ok,
-  okPage,
-  parseOrThrow,
-  readJson,
-  readJsonBody,
-  requireId,
-} from '../lib/http';
+import { mock } from '../lib/endpoint';
+import { notFoundError, parseOrThrow, readJson, requireId } from '../lib/http';
 import {
   assertRoleWithinScope,
   assignableRole,
@@ -58,9 +61,6 @@ import { removeMethodIntent, rotateCredentials } from '../lib/two-factor';
 import { readSessionsPage, revokeUserSessions } from '../lib/user-sessions';
 import { CUSTOM_ROLE_NAME } from '../seed';
 import { roleOf, roleRef, session, toUserClient, users } from '../store';
-
-const adminUpdateBody = REQUEST_BODIES['PUT /api/dash/users/:id'];
-const selfUpdateBody = REQUEST_BODIES['PUT /api/dash/users/me'];
 
 /**
  * The server's `assertTargetUserVisible`: a user with no role, another
@@ -107,12 +107,32 @@ const mintCustomRole = (createdBy: EntityID): MockUserRole => ({
   createdBy,
 });
 
+type ListedUser = MockUser & { roleId: string; role: MockUserRole };
+
+/** The server lists only users with a role. */
+const hasRole = (user: MockUser): user is ListedUser =>
+  user.role !== null && user.roleId !== null;
+
 /** The list row the server selects; the rest comes with the detail. */
-const toListRow = (user: MockUser) => {
-  const { id, name, email, isActive, roleId, role, createdAt, updatedAt } =
-    toUserClient(user);
-  return { id, name, email, isActive, roleId, role, createdAt, updatedAt };
-};
+const toListRow = ({
+  id,
+  name,
+  email,
+  isActive,
+  roleId,
+  role,
+  createdAt,
+  updatedAt,
+}: ListedUser) => ({
+  id,
+  name,
+  email,
+  isActive,
+  roleId,
+  role: { id: role.id, roleName: role.roleName },
+  createdAt,
+  updatedAt,
+});
 
 /**
  * The server shows a user's sessions with the detail to their owner, and to
@@ -190,7 +210,7 @@ function editUserAsAdmin({
   actorPermissions: ActorPermissions;
   editScope: AccessScope;
   targetId: EntityID;
-  input: z.output<typeof adminUpdateBody>;
+  input: z.output<typeof updateUser.body>;
 }) {
   if (input.password) requireReauthWindow();
   const target = users.find(targetId);
@@ -316,15 +336,16 @@ function editUserAsAdmin({
 }
 
 export const usersHandlers = [
-  http.get(api('/api/dash/users'), ({ request }) => {
+  mock(listUsers, ({ request }) => {
     const { userId, scope } = requirePermission('users', 'view');
-    return okPage(
-      queryTable(
+    return {
+      message: MSG_FETCHED,
+      ...queryTable(
         users
           .all()
+          .filter(hasRole)
           .filter(
             (u) =>
-              !!u.role &&
               u.role.scope !== ROLE_SCOPE.SYSTEM &&
               (scope === 'all' || u.createdBy === userId)
           )
@@ -335,11 +356,11 @@ export const usersHandlers = [
           searchableColumns: ['name', 'email'],
           defaultSort: { id: 'createdAt', desc: true },
         }
-      )
-    );
+      ),
+    };
   }),
 
-  http.get<{ id: string }>(api('/api/dash/users/:id'), ({ params }) => {
+  mock(getUser, ({ params }) => {
     const {
       userId,
       scope: viewScope,
@@ -353,17 +374,14 @@ export const usersHandlers = [
     const user = users.find(targetId);
     if (!user) throw notFoundError();
     assertVisible(user, userId, viewScope);
-    return ok(detail(user, userId, permissions));
+    return { message: MSG_FETCHED, data: detail(user, userId, permissions) };
   }),
 
-  http.post(api('/api/dash/users'), async ({ request }) => {
+  mock(createUser, async ({ body }) => {
     const { userId, permissions } = requirePermission('users', 'create', {
       reauth: true,
     });
-    const input = await readJsonBody(
-      request,
-      REQUEST_BODIES['POST /api/dash/users']
-    );
+    const input = await body();
     const isCustomRole = input.roleId === CUSTOM_ROLE_VALUE;
 
     if (
@@ -399,47 +417,46 @@ export const usersHandlers = [
       updatedAt: createdAt,
     });
 
-    return created(user.id);
+    return { message: MSG_CREATED, data: { id: user.id } };
   }),
 
-  http.put(api('/api/dash/users/me'), async ({ request }) => {
+  mock(updateSelf, async ({ body }) => {
     const { userId } = requirePermission('users', 'edit', {
       throwError: false,
     });
-    const { name } = await readJsonBody(request, selfUpdateBody);
+    const { name } = await body();
     const updatedAt = now();
     users.update(userId, { name, updatedAt });
     const current = session.get();
     if (current) session.set({ ...current, user: { ...current.user, name } });
-    return ok({ updatedAt }, MSG_UPDATED);
+    return { message: MSG_UPDATED, data: { updatedAt } };
   }),
 
-  http.put<{ id: string }>(
-    api('/api/dash/users/:id'),
-    async ({ params, request }) => {
-      const {
-        userId,
-        scope: editScope,
-        permissions,
-      } = requirePermission('users', 'edit', { throwError: false });
-      // Ahead of the id, as on the server: a malformed body's 400 precedes a
-      // bad id's 422.
-      const body = await readJson(request);
-      const targetId = requireId(params.id);
+  mock(updateUser, async ({ params, request }) => {
+    const {
+      userId,
+      scope: editScope,
+      permissions,
+    } = requirePermission('users', 'edit', { throwError: false });
+    // The server's gate: no grant, or the caller's own well-formed id, is
+    // refused before the body is read.
+    if (!editScope || validID(params.id) === userId)
+      throw insufficientPermissions();
+    // Then a malformed body's 400 precedes a bad id's 422, which precedes the
+    // body's own.
+    const raw = await readJson(request);
+    const targetId = requireId(params.id);
+    const result = editUserAsAdmin({
+      actorUserId: userId,
+      actorPermissions: permissions,
+      editScope,
+      targetId,
+      input: parseOrThrow(updateUser.body, raw),
+    });
+    return { message: MSG_UPDATED, data: result };
+  }),
 
-      if (!editScope || userId === targetId) throw insufficientPermissions();
-      const result = editUserAsAdmin({
-        actorUserId: userId,
-        actorPermissions: permissions,
-        editScope,
-        targetId,
-        input: parseOrThrow(adminUpdateBody, body),
-      });
-      return ok(result, MSG_UPDATED);
-    }
-  ),
-
-  http.delete<{ id: string }>(api('/api/dash/users/:id'), ({ params }) => {
+  mock(deleteUser, ({ params }) => {
     const { userId, permissions, scope } = requirePermission(
       'users',
       'delete',
@@ -453,6 +470,6 @@ export const usersHandlers = [
     assertVisible(user, userId, scope);
     assertRoleWithinScope(permissions, targetRoleMatrix(user), 'reachability');
     users.remove(user.id);
-    return ok(null, MSG_DELETED);
+    return { message: MSG_DELETED, data: null };
   }),
 ];

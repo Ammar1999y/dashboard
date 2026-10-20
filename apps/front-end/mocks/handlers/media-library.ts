@@ -11,8 +11,24 @@ import type { EntityID } from '@app/shared/types';
 import type { BucketType } from '@app/shared/validation/enums';
 import type { MediaScope } from '@app/shared/validation/media';
 
-import { http } from 'msw';
-import { REQUEST_BODIES } from '@app/shared/contract';
+import {
+  createMediaFolder,
+  deleteMedia,
+  deleteMediaFiles,
+  deleteMediaFolder,
+  getMediaFile,
+  getMediaFolder,
+  getMediaStats,
+  listMedia,
+  moveMedia,
+  moveMediaFiles,
+  previewMediaDelete,
+  publishMediaFile,
+  unpublishMediaFile,
+  updateMediaFile,
+  updateMediaFolder,
+  uploadMediaFile,
+} from '@app/shared/api/media';
 import { MEDIA_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns';
 import { effectiveSearchTerm } from '@app/shared/data-table/parsers';
 import { CustomError } from '@app/shared/error-class';
@@ -30,6 +46,7 @@ import {
   UNPUBLISH_IN_USE_CODE,
 } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_FETCHED } from '@app/shared/messages/common';
 import { mediaMsg } from '@app/shared/messages/media';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 import { resolveActionScope } from '@app/shared/permissions/scope';
@@ -41,29 +58,18 @@ import {
   MEDIA_USAGE_LIST_MAX,
 } from '@app/shared/validation/constants';
 import { BUCKET_TYPES } from '@app/shared/validation/enums';
-import { MEDIA_SCOPES } from '@app/shared/validation/media';
 import {
-  DELETE_PREVIEW_API,
-  FILES_API,
-  FOLDERS_API,
-  MEDIA_API,
-  STATS_API,
-} from '@/lib/media/api';
+  LIBRARY_UPLOAD_FIELD,
+  MEDIA_SCOPES,
+} from '@app/shared/validation/media';
 import { hasInlinePreview } from '@/lib/media/schemas';
-import { LIBRARY_UPLOAD_FIELD } from '@/lib/media/upload';
 
 import { generateEntityId } from '@/utils/generate-id';
 
 import { queryTable } from '../lib/data-table';
 import { now } from '../lib/db';
-import {
-  api,
-  errorResponse,
-  ok,
-  okPage,
-  readJsonBody,
-  requireId,
-} from '../lib/http';
+import { mock } from '../lib/endpoint';
+import { failingAs, requireId } from '../lib/http';
 import { placeholderImage } from '../lib/media';
 import { requirePermission } from '../lib/permissions';
 import {
@@ -236,18 +242,16 @@ function fileInUse(rows: readonly MockMediaFile[], caller: Caller) {
 
 const extensionOf = (name: string) => name.split('.').pop() ?? '';
 
-async function uploadFile(request: Request) {
+async function uploadFile(request: Request, query: URLSearchParams) {
   const caller = requirePermission('media', 'create');
-  const folderId = requireId(new URL(request.url).searchParams.get('folder'));
+  const folderId = requireId(query.get('folder'));
   requireFolder(folderId);
 
   const file = takeSingleFile(
     await readFormData(request),
     LIBRARY_UPLOAD_FIELD
   );
-  if (file instanceof Response) return file;
   const admitted = admitUpload(file);
-  if (admitted instanceof Response) return admitted;
 
   const timestamp = now();
   const stored: MockMediaFile = {
@@ -278,7 +282,7 @@ async function uploadFile(request: Request) {
     settlesAt: null,
   };
   mediaFiles.insert(stored);
-  return ok(toFile(stored), mediaMsg.uploaded, HTTP_STATUS.CREATED);
+  return { message: mediaMsg.uploaded, data: toFile(stored) };
 }
 
 /** The server's `transitionFile`, in its order of checks. */
@@ -711,9 +715,8 @@ function listedFiles(scope: MediaScope, folderId: EntityID | null) {
     : files.filter((file) => file.folderId === folderId);
 }
 
-function listing(request: Request) {
+function listing(url: URL) {
   const { permissions } = requirePermission('media', 'view');
-  const url = new URL(request.url);
   const scope = requireScope(url.searchParams);
   const folderId = requireFolderParam(url.searchParams);
 
@@ -736,7 +739,8 @@ function listing(request: Request) {
   };
   if (scope === 'all') {
     const term = effectiveSearchTerm(tableUrl.searchParams.get('search') ?? '');
-    return okPage({
+    return {
+      message: MSG_FETCHED,
       data: {
         ...common,
         ...(term
@@ -744,21 +748,23 @@ function listing(request: Request) {
           : { folders: [], foldersTruncated: false }),
       },
       meta: page.meta,
-    });
+    };
   }
   if (scope === 'unfiled')
-    return okPage({
+    return {
+      message: MSG_FETCHED,
       data: { ...common, retentionDays: RETENTION_DAYS },
       meta: page.meta,
-    });
-  return okPage({
+    };
+  return {
+    message: MSG_FETCHED,
     data: {
       ...common,
       breadcrumbs: folderId ? trailTo(folderId) : [],
       folders: childrenOf(folderId).map(toFolder),
     },
     meta: page.meta,
-  });
+  };
 }
 
 /**
@@ -776,14 +782,11 @@ function requireRecursive(query: URLSearchParams): boolean {
 // ---- Handlers ------------------------------------------------------------
 
 export const mediaLibraryHandlers = [
-  http.get(api(MEDIA_API), ({ request }) => listing(request)),
+  mock(listMedia, ({ request }) => listing(new URL(request.url))),
 
-  http.put(api(MEDIA_API), async ({ request }) => {
+  mock(moveMedia, async ({ body }) => {
     const caller = requirePermission('media', 'edit');
-    const input = await readJsonBody(
-      request,
-      REQUEST_BODIES['PUT /api/dash/media']
-    );
+    const input = await body();
     const moved = moveSelection(
       {
         fileIds: input.fileIds ?? [],
@@ -792,67 +795,59 @@ export const mediaLibraryHandlers = [
       },
       caller
     );
-    return ok(moved, mediaMsg.updated);
+    return { message: mediaMsg.updated, data: moved };
   }),
 
-  http.delete(api(MEDIA_API), async ({ request }) => {
+  mock(deleteMedia, async ({ body }) => {
     const caller = requirePermission('media', 'delete');
-    const input = await readJsonBody(
-      request,
-      REQUEST_BODIES['DELETE /api/dash/media']
-    );
-    return ok(deleteSelection(selectionOf(input), caller), mediaMsg.deleted);
+    const input = await body();
+    return {
+      message: mediaMsg.deleted,
+      data: deleteSelection(selectionOf(input), caller),
+    };
   }),
 
-  http.post(api(DELETE_PREVIEW_API), async ({ request }) => {
+  mock(previewMediaDelete, async ({ body }) => {
     const caller = requirePermission('media', 'delete');
-    const input = await readJsonBody(
-      request,
-      REQUEST_BODIES['POST /api/dash/media/delete-preview']
-    );
-    return ok(previewDelete(selectionOf(input), caller), mediaMsg.fetched);
+    const input = await body();
+    return {
+      message: mediaMsg.fetched,
+      data: previewDelete(selectionOf(input), caller),
+    };
   }),
 
-  http.get(api(STATS_API), () => {
+  mock(getMediaStats, () => {
     requirePermission('media', 'view');
-    return ok(libraryTotals(), mediaMsg.fetched);
+    return { message: mediaMsg.fetched, data: libraryTotals() };
   }),
 
   // The route's own fallback, which the registration wrapper's POST default is not.
-  http.post(api(FILES_API), ({ request }) =>
-    uploadFile(request).catch((error: unknown) =>
-      errorResponse(error, mediaMsg.uploadFailed)
-    )
+  mock(uploadMediaFile, ({ request, query }) =>
+    uploadFile(request, query).catch(failingAs(mediaMsg.uploadFailed))
   ),
 
   // Deprecated file-only routes, on the selection cores as on the server.
-  http.put(api(FILES_API), async ({ request }) => {
+  mock(moveMediaFiles, async ({ body }) => {
     const caller = requirePermission('media', 'edit');
-    const input = await readJsonBody(
-      request,
-      REQUEST_BODIES['PUT /api/dash/media/files']
-    );
+    const input = await body();
     const { updatedAt } = moveSelection(
       { fileIds: input.ids, folderIds: [], to: input.folderId },
       caller
     );
-    return ok({ unfiledAt: null, updatedAt }, mediaMsg.updated);
+    return { message: mediaMsg.updated, data: { unfiledAt: null, updatedAt } };
   }),
 
-  http.delete(api(FILES_API), async ({ request }) => {
+  mock(deleteMediaFiles, async ({ body }) => {
     const caller = requirePermission('media', 'delete');
-    const input = await readJsonBody(
-      request,
-      REQUEST_BODIES['DELETE /api/dash/media/files']
-    );
+    const input = await body();
     const { deleted, pending } = deleteSelection(
       { fileIds: input.ids, folderIds: [], recursive: false },
       caller
     );
-    return ok({ deleted, pending }, mediaMsg.deleted);
+    return { message: mediaMsg.deleted, data: { deleted, pending } };
   }),
 
-  http.get<{ id: string }>(api(`${FILES_API}/:id`), ({ params }) => {
+  mock(getMediaFile, ({ params }) => {
     const { permissions } = requirePermission('media', 'view');
     const id = pathId(params.id, fileNotFound);
     const row = storedFiles().find((file) => file.id === id);
@@ -860,8 +855,9 @@ export const mediaLibraryHandlers = [
 
     const viewable = viewablePages(permissions);
     const visible = row.usages.filter(({ resource }) => viewable.has(resource));
-    return ok(
-      {
+    return {
+      message: mediaMsg.fetched,
+      data: {
         ...toFile(row),
         downloadUrl: row.url,
         previewUrl: hasInlinePreview(row) ? row.url : null,
@@ -876,72 +872,62 @@ export const mediaLibraryHandlers = [
         visibleUsages: visible.length,
         hiddenUsages: row.usages.length - visible.length,
       },
-      mediaMsg.fetched
-    );
+    };
   }),
 
-  http.put<{ id: string }>(
-    api(`${FILES_API}/:id`),
-    async ({ params, request }) => {
-      const caller = requirePermission('media', 'edit');
-      const id = pathId(params.id, fileNotFound);
-      const input = await readJsonBody(
-        request,
-        REQUEST_BODIES['PUT /api/dash/media/files/:id']
-      );
-      editableFiles([id], caller);
-      if (input.folderId !== undefined) requireFolder(input.folderId);
+  mock(updateMediaFile, async ({ params, body }) => {
+    const caller = requirePermission('media', 'edit');
+    const id = pathId(params.id, fileNotFound);
+    const input = await body();
+    editableFiles([id], caller);
+    if (input.folderId !== undefined) requireFolder(input.folderId);
 
-      const updatedAt = now();
-      const updated = mediaFiles.update(id, {
+    const updatedAt = now();
+    const updated = mediaFiles.update(id, {
+      ...(input.displayName !== undefined && {
+        displayName: input.displayName,
+      }),
+      ...(input.folderId !== undefined && {
+        folderId: input.folderId,
+        unfiledAt: null,
+      }),
+      updatedAt,
+    });
+    if (!updated) throw fileNotFound();
+    return {
+      message: mediaMsg.updated,
+      data: {
         ...(input.displayName !== undefined && {
-          displayName: input.displayName,
+          displayName: updated.displayName,
         }),
-        ...(input.folderId !== undefined && {
-          folderId: input.folderId,
-          unfiledAt: null,
-        }),
+        ...(input.folderId !== undefined && { unfiledAt: null }),
         updatedAt,
-      });
-      if (!updated) throw fileNotFound();
-      return ok(
-        {
-          ...(input.displayName !== undefined && {
-            displayName: updated.displayName,
-          }),
-          ...(input.folderId !== undefined && { unfiledAt: null }),
-          updatedAt,
-        },
-        mediaMsg.updated
-      );
-    }
-  ),
+      },
+    };
+  }),
 
   // `publish` has no `own` variant: whoever holds it changes any file.
-  http.post<{ id: string }>(api(`${FILES_API}/:id/publish`), ({ params }) => {
+  mock(publishMediaFile, ({ params }) => {
     const caller = requirePermission('media', 'publish');
     const id = pathId(params.id, fileNotFound);
-    return ok(
-      toFile(setVisibility(id, 'public', { ...caller, scope: 'all' })),
-      mediaMsg.published
-    );
+    return {
+      message: mediaMsg.published,
+      data: toFile(setVisibility(id, 'public', { ...caller, scope: 'all' })),
+    };
   }),
 
-  http.post<{ id: string }>(api(`${FILES_API}/:id/unpublish`), ({ params }) => {
+  mock(unpublishMediaFile, ({ params }) => {
     const caller = requirePermission('media', 'publish');
     const id = pathId(params.id, fileNotFound);
-    return ok(
-      toFile(setVisibility(id, 'private', { ...caller, scope: 'all' })),
-      mediaMsg.unpublished
-    );
+    return {
+      message: mediaMsg.unpublished,
+      data: toFile(setVisibility(id, 'private', { ...caller, scope: 'all' })),
+    };
   }),
 
-  http.post(api(FOLDERS_API), async ({ request }) => {
+  mock(createMediaFolder, async ({ body }) => {
     const caller = requirePermission('media', 'create');
-    const input = await readJsonBody(
-      request,
-      REQUEST_BODIES['POST /api/dash/media/folders']
-    );
+    const input = await body();
     const parentId = input.parentId ?? null;
     if (parentId === null) assertRoomUnder(null, 1);
     else if (lockParent(parentId) + 1 > FOLDER_MAX_DEPTH) throw folderTooDeep();
@@ -957,80 +943,70 @@ export const mediaLibraryHandlers = [
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    return ok(
-      { id: folder.id, name: folder.name },
-      mediaMsg.folderCreated,
-      HTTP_STATUS.CREATED
-    );
+    return {
+      message: mediaMsg.folderCreated,
+      data: { id: folder.id, name: folder.name },
+    };
   }),
 
-  http.get<{ id: string }>(api(`${FOLDERS_API}/:id`), ({ params }) => {
+  mock(getMediaFolder, ({ params }) => {
     requirePermission('media', 'view');
     const id = pathId(params.id, folderNotFound);
-    return ok(folderDetails(id), mediaMsg.fetched);
+    return { message: mediaMsg.fetched, data: folderDetails(id) };
   }),
 
-  http.put<{ id: string }>(
-    api(`${FOLDERS_API}/:id`),
-    async ({ params, request }) => {
-      const caller = requirePermission('media', 'edit');
-      const folderId = pathId(params.id, folderNotFound);
-      const input = await readJsonBody(
-        request,
-        REQUEST_BODIES['PUT /api/dash/media/folders/:id']
-      );
-      const current = requireOwnFolder(folderId, caller);
-      const name = input.name ?? current.name;
-      const parentId =
-        input.parentId === undefined ? current.parentId : input.parentId;
+  mock(updateMediaFolder, async ({ params, body }) => {
+    const caller = requirePermission('media', 'edit');
+    const folderId = pathId(params.id, folderNotFound);
+    const input = await body();
+    const current = requireOwnFolder(folderId, caller);
+    const name = input.name ?? current.name;
+    const parentId =
+      input.parentId === undefined ? current.parentId : input.parentId;
 
-      // The server's `updateFolder`: a move through the selection's checks,
-      // and a clash only from the unique index, which names this folder.
-      if (input.parentId !== undefined) {
-        const target = input.parentId;
-        if (target !== null) requireFolder(target);
-        if (target !== null && current.parentId !== target) {
-          const trail = trailTo(target);
-          if (trail.some((crumb) => crumb.id === folderId))
-            throw folderCycle([folderId]);
-          if (trail.length + heightOf(folderId) > FOLDER_MAX_DEPTH)
-            throw folderTooDeep([folderId]);
-        }
-        if (current.parentId !== target) assertRoomUnder(target, 1);
+    // The server's `updateFolder`: a move through the selection's checks,
+    // and a clash only from the unique index, which names this folder.
+    if (input.parentId !== undefined) {
+      const target = input.parentId;
+      if (target !== null) requireFolder(target);
+      if (target !== null && current.parentId !== target) {
+        const trail = trailTo(target);
+        if (trail.some((crumb) => crumb.id === folderId))
+          throw folderCycle([folderId]);
+        if (trail.length + heightOf(folderId) > FOLDER_MAX_DEPTH)
+          throw folderTooDeep([folderId]);
       }
-      if (nameTaken(parentId, name, new Set([folderId])))
-        throw folderNameExists([folderId]);
+      if (current.parentId !== target) assertRoomUnder(target, 1);
+    }
+    if (nameTaken(parentId, name, new Set([folderId])))
+      throw folderNameExists([folderId]);
 
-      const updatedAt = now();
-      const updated = folders.update(folderId, {
-        ...(input.name !== undefined && { name: input.name }),
-        ...(input.parentId !== undefined && { parentId }),
+    const updatedAt = now();
+    const updated = folders.update(folderId, {
+      ...(input.name !== undefined && { name: input.name }),
+      ...(input.parentId !== undefined && { parentId }),
+      updatedAt,
+    });
+    if (!updated) throw folderNotFound();
+    return {
+      message: mediaMsg.updated,
+      data: {
+        ...(input.name !== undefined && { name: updated.name }),
         updatedAt,
-      });
-      if (!updated) throw folderNotFound();
-      return ok(
-        {
-          ...(input.name !== undefined && { name: updated.name }),
-          updatedAt,
-        },
-        mediaMsg.updated
-      );
-    }
-  ),
+      },
+    };
+  }),
 
-  http.delete<{ id: string }>(
-    api(`${FOLDERS_API}/:id`),
-    ({ params, request }) => {
-      const caller = requirePermission('media', 'delete');
-      const folderId = pathId(params.id, folderNotFound);
-      const recursive = requireRecursive(new URL(request.url).searchParams);
-      return ok(
-        deleteSelection(
-          { fileIds: [], folderIds: [folderId], recursive },
-          caller
-        ),
-        mediaMsg.deleted
-      );
-    }
-  ),
+  mock(deleteMediaFolder, ({ params, query }) => {
+    const caller = requirePermission('media', 'delete');
+    const folderId = pathId(params.id, folderNotFound);
+    const recursive = requireRecursive(query);
+    return {
+      message: mediaMsg.deleted,
+      data: deleteSelection(
+        { fileIds: [], folderIds: [folderId], recursive },
+        caller
+      ),
+    };
+  }),
 ];

@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
 
 import { clearMockData } from './lib/db';
-import { api, fail } from './lib/http';
+import { api, fail, withApiErrors } from './lib/http';
 
 let latencyMs: number | undefined;
 
@@ -25,14 +25,16 @@ function createControls(worker: SetupWorker) {
       retryAfter?: number
     ) => {
       worker.use(
-        http.all(api(path), () =>
-          fail(
-            status,
-            message,
-            undefined,
-            retryAfter === undefined
-              ? undefined
-              : { 'Retry-After': String(retryAfter) }
+        withApiErrors(
+          http.all(api(path), () =>
+            fail(
+              status,
+              message,
+              undefined,
+              retryAfter === undefined
+                ? undefined
+                : { 'Retry-After': String(retryAfter) }
+            )
           )
         )
       );

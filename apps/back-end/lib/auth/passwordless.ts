@@ -4,6 +4,7 @@ import { db } from '@/db';
 import { users } from '@/db/schema';
 import * as z from 'zod';
 
+import * as contract from '@app/shared/api/better-auth';
 import { PASSWORDLESS_ENABLED } from '@app/shared/config';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
@@ -46,8 +47,8 @@ export const passwordless = () =>
     id: 'passwordless',
     endpoints: {
       passwordlessVerify: pluginEndpoint(
-        '/passwordless/verify',
-        { method: 'POST', body: z.record(z.string(), z.unknown()) },
+        contract.passwordlessVerify,
+        { body: z.record(z.string(), z.unknown()) },
         async (ctx) => {
           const headers = requestHeaders(ctx);
           const floor = timingFloor();

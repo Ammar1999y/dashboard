@@ -3,7 +3,6 @@ import type {
   ChangePhoneInput,
   ChangePhoneOutput,
 } from '@/utils/validation/account';
-import type { RequestBody } from '@app/shared/contract';
 import type { EntityID } from '@app/shared/types';
 import type { PhoneOtpChannel } from '@app/shared/validation/enums';
 import type { QueryClient } from '@tanstack/react-query';
@@ -14,14 +13,13 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { verifiedSchema } from '@app/shared/responses/auth';
-import { contactChangeStartedSchema } from '@app/shared/responses/users';
+import { changePhone, verifyPhoneChange } from '@app/shared/api/users';
 import { PHONE_OTP_CHANNELS } from '@app/shared/validation/enums';
 import { isChannelEnabled } from '@app/shared/validation/otp';
+import { MSG_CURRENT_PASSWORD_OPTIONAL } from '@/constants/messages';
 import { cachePhoneChanged } from '@/lib/account/two-factor';
-import { mutate } from '@/lib/api/mutation';
+import { api } from '@/lib/api/client';
 import { cacheUpdated } from '@/lib/api/query-cache';
-import { withCaptcha } from '@/lib/auth/captcha';
 
 import { changePhoneFormSchema } from '@/utils/validation/account';
 
@@ -34,9 +32,6 @@ import SubmitButton, { SubmitLabel } from '@/components/form/submit-button';
 
 import { FormChannelPicker } from '../shared/channel-picker';
 import { userEntity } from '../users/entity';
-
-const START_HREF = '/api/dash/users/me/change-phone';
-const VERIFY_HREF = '/api/dash/users/me/change-phone/verify';
 
 /** The ways a code can reach a phone here; a deployment offers at least one for this to render. */
 const PHONE_CHANNELS = PHONE_OTP_CHANNELS.filter(isChannelEnabled);
@@ -77,21 +72,12 @@ const PhoneRequestForm = memo(
     });
 
     const onSubmit = useCallback(
-      async (values: ChangePhoneOutput) => {
-        const { data, headers } = withCaptcha(values);
-        const body: RequestBody<'POST /api/dash/users/me/change-phone'> = data;
-        const result = await mutate({
-          href: START_HREF,
-          method: 'POST',
-          data: body,
-          headers,
-          schema: contactChangeStartedSchema,
-        });
+      async ({ captcha, ...body }: ChangePhoneOutput) => {
+        const result = await api(changePhone, { body }, { captcha });
         toast.success(result.message);
-        if ('otpSent' in result.data)
-          onSent(values.newPhoneNumber, values.channel);
+        if ('otpSent' in result.data) onSent(body.newPhoneNumber, body.channel);
         else {
-          cachePhoneCommitted(queryClient, userId, values.newPhoneNumber);
+          cachePhoneCommitted(queryClient, userId, body.newPhoneNumber);
           methods.reset();
           onChanged();
         }
@@ -114,7 +100,7 @@ const PhoneRequestForm = memo(
         <FormPassword
           name='currentPassword'
           label='كلمة المرور الحالية'
-          required
+          tip={MSG_CURRENT_PASSWORD_OPTIONAL}
         />
         <TurnstileWidget />
         <SubmitButton>
@@ -140,22 +126,16 @@ const PhoneCodeStep = memo(
     const queryClient = useQueryClient();
 
     const onVerify = useCallback(
-      async (code: string, headers: Record<string, string>) => {
-        const body: RequestBody<'POST /api/dash/users/me/change-phone/verify'> =
-          { newPhoneNumber: phone, channel, code };
+      async (code: string, captcha: string) => {
         const write = () => {
           cachePhoneCommitted(queryClient, userId, phone);
           onChanged();
         };
-        const result = await mutate({
-          href: VERIFY_HREF,
-          method: 'POST',
-          data: body,
-          headers,
-          schema: verifiedSchema,
-          onSuccess: write,
-          onUnreadAnswer: write,
-        });
+        const result = await api(
+          verifyPhoneChange,
+          { body: { newPhoneNumber: phone, channel, code } },
+          { captcha, onSuccess: write, onUnreadAnswer: write }
+        );
         toast.success(result.message);
       },
       [channel, onChanged, phone, queryClient, userId]

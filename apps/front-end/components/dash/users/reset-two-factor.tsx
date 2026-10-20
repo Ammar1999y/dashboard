@@ -11,7 +11,7 @@ import {
   MSG_TWO_FACTOR_RESET_SELF,
   MSG_TWO_FACTOR_RESET_WARNING,
 } from '@/constants/messages';
-import { refreshSession } from '@/lib/auth/request';
+import { refreshSession } from '@/lib/auth/client';
 import { resetTwoFactor } from '@/lib/users/security';
 
 import { useAsyncAction } from '@/hooks/use-async-action';

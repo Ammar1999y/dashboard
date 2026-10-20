@@ -34,7 +34,10 @@ import {
   revokePendingProofs,
 } from '@/lib/auth/session/rotation';
 import { bind } from '@/lib/http/binding';
-import { insufficientPermissions } from '@/lib/permissions/checker';
+import {
+  insufficientPermissions,
+  refreshSessionCookies,
+} from '@/lib/permissions/checker';
 import { asCurrentPasswordIncorrect } from '@/lib/users/current-password';
 import { renameSelf } from '@/lib/users/edit';
 import { liveUser } from '@/lib/users/filters';
@@ -48,6 +51,7 @@ export const updateSelfBinding = bind(updateSelf, {
     description:
       'Takes `name` alone; any other key is refused 422. Needs no grant, but a caller whose role is missing or inactive is refused 403. The only way to rename yourself: `PUT /api/dash/users/{id}` refuses the caller’s own id.',
     tags: ['Account'],
+    setCookie: 'The session cookie cache is re-minted with the new name.',
   },
   handler: async ({ body, actor, meta }) => {
     const { updatedAt } = await renameSelf(
@@ -58,6 +62,7 @@ export const updateSelfBinding = bind(updateSelf, {
     return {
       message: MSG_UPDATED,
       data: { updatedAt: updatedAt.toISOString() },
+      cookies: await refreshSessionCookies(meta.headers),
     };
   },
 });

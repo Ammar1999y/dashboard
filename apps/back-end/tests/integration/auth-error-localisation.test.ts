@@ -1,9 +1,9 @@
 /**
  * No Better Auth error may reach a client as English.
  *
- * `lib/auth/errors.ts` is a hand-maintained map and `app.ts`'s
- * `localiseAuthError` applies it by `code`. An unmapped code passes through
- * UNTOUCHED, which puts the dependency's own internal text on the wire in an
+ * `lib/auth/errors.ts` is a hand-maintained map and `toAuthProblem`
+ * applies it by `code`. An unmapped code keeps the dependency's own wording
+ * as the problem's `detail`, which puts its internal text on the wire in an
  * Arabic-locale API: measured before this file,
  * `POST /api/auth/passwordless/verify` with a body of `[]` answered
  * `"[body] Invalid input: expected record, received array"` and any malformed

@@ -88,7 +88,7 @@ export const getUserBinding = bind(getUser, {
 
     // The predicate the sessions subresource shares, so parent and child cannot
     // drift.
-    const targetRoleId = assertTargetUserVisible({
+    assertTargetUserVisible({
       isSelf,
       roleId: userData.roleId,
       createdBy: userData.createdBy,
@@ -109,7 +109,10 @@ export const getUserBinding = bind(getUser, {
           userId
         )) &&
       (isSelf ||
-        (await actorCoversTargetRole(actorViewPermissions, targetRoleId, db)));
+        actorCoversTargetRole(
+          actorViewPermissions,
+          userData.role?.rolePermissions ?? []
+        ));
 
     const permissions = userData.role?.rolePermissions
       ? toPagePermissions(userData.role.rolePermissions)

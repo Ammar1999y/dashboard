@@ -193,13 +193,13 @@ export const resetPasswordBinding = bind(resetPassword, {
       onVerified: async (tx, matched) => {
         // Refused, not gated: a second factor on the contact this code
         // arrived on, or one this flow cannot check, proves nothing.
-        if (await recoveryDefeatsTwoFactor(userData.id, contactKind, tx))
+        const state = await readEnrolmentState(userData.id, tx);
+        if (recoveryDefeatsTwoFactor(state, contactKind))
           throw new CustomError(
             otpMsg.recoveryBlockedByTwoFactor,
             HTTP_STATUS.FORBIDDEN
           );
 
-        const state = await readEnrolmentState(userData.id, tx);
         if (state.enabled) {
           const options = recoveryOptions(state, contactKind);
           if (options.length > 0) {

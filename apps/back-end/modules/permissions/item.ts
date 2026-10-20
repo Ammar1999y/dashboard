@@ -1,4 +1,6 @@
+import type { Tx } from '@/db';
 import type { PermissionRows } from '@app/shared/permissions/matrix';
+import type { EntityID } from '@app/shared/types';
 
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 
@@ -34,7 +36,6 @@ import {
 } from '@app/shared/permissions/matrix';
 import { assertStandardRoleName } from '@app/shared/permissions/roles';
 import {
-  assertRowsWithinScope,
   holdsActionOn,
   validatePermissionScope,
 } from '@app/shared/permissions/scope';
@@ -56,12 +57,27 @@ import {
   standardRoleFilter,
   writeRoleMatrix,
 } from '@/lib/permissions/roles';
-import {
-  collapseToNotFound,
-  validateRolePermissionScope,
-} from '@/lib/permissions/scope';
+import { assertRowsReachable } from '@/lib/permissions/scope';
 import { refreshRoleSessions } from '@/lib/permissions/session-refresh';
 import { liveUser } from '@/lib/users/filters';
+
+/**
+ * Takes no lock: every writer of an existing role's matrix holds that role
+ * `FOR UPDATE` first, so under the same lock the rows read here cannot change.
+ */
+function readRoleMatrix(tx: Tx, roleId: EntityID) {
+  return tx
+    .select({
+      pageName: rolePermissions.pageName,
+      permissions: rolePermissions.permissions,
+    })
+    .from(rolePermissions)
+    .where(eq(rolePermissions.roleId, roleId));
+}
+
+function roleHasUsers(): CustomError {
+  return new CustomError(permissionMsg.hasUsers, HTTP_STATUS.BAD_REQUEST);
+}
 
 export const getPermissionBinding = bind(getPermission, {
   permission: { resource: 'permissions', action: 'view' },
@@ -155,15 +171,11 @@ export const updatePermissionBinding = bind(updatePermission, {
         editScope,
         actorUserId
       );
+      const existingPermissions = await readRoleMatrix(tx, roleId);
 
       // Reachability, because this is the role being EDITED: a 403 would tell
       // an actor without `permissions.view` which roles outrank them.
-      await validateRolePermissionScope(
-        actorPermissions,
-        roleId,
-        tx,
-        'reachability'
-      );
+      assertRowsReachable(actorPermissions, existingPermissions);
 
       const canDeactivate = holdsActionOn(
         actorPermissions,
@@ -194,15 +206,6 @@ export const updatePermissionBinding = bind(updatePermission, {
       let permissionsChanged = false;
       if (input.permissions?.length) {
         const submitted = toPermissionRows(input.permissions);
-
-        const existingPermissions = await tx
-          .select({
-            pageName: rolePermissions.pageName,
-            permissions: rolePermissions.permissions,
-          })
-          .from(rolePermissions)
-          .where(eq(rolePermissions.roleId, roleId));
-
         permissionsChanged = !permissionsEqual(existingPermissions, submitted);
 
         if (permissionsChanged) {
@@ -308,31 +311,23 @@ export const deletePermissionBinding = bind(deletePermission, {
 
     await withTransaction(async (tx) => {
       await lockActor(tx, actorUserId);
-      const permissionRows = (lock: boolean) => {
-        const query = tx
-          .select({
-            pageName: rolePermissions.pageName,
-            permissions: rolePermissions.permissions,
-          })
-          .from(rolePermissions)
-          .where(eq(rolePermissions.roleId, roleId));
-        return lock ? query.for('share') : query;
-      };
-      // The reachability question PUT asks through `validateRolePermissionScope`:
-      // a deletion grants nothing, so "this role outranks me" answers 404 like
-      // every unreachable-target gate.
-      const assertReachable = (rows: PermissionRows) => {
-        try {
-          assertRowsWithinScope(actorPermissions, rows);
-        } catch (error) {
-          collapseToNotFound(error);
-        }
-      };
 
       // Unlocked, before the member locks, so a caller the role is out of reach
       // of gets its 404 without holding anyone's row. Repeated under the locks.
+      // A deletion grants nothing, so "this role outranks me" answers 404 like
+      // every unreachable-target gate.
       await assertOwnedStandardRole(tx, roleId, deleteScope, actorUserId);
-      assertReachable(await permissionRows(false));
+      assertRowsReachable(actorPermissions, await readRoleMatrix(tx, roleId));
+
+      // Unlocked too: a live member's lock protects nothing here, and taking it
+      // would queue the refusal behind whatever request holds that member. The
+      // NOT EXISTS below stays the authority.
+      const [liveMember] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(liveUser(eq(users.roleId, roleId)))
+        .limit(1);
+      if (liveMember) throw roleHasUsers();
 
       // Users before the role, the order every writer of a user's role takes
       // (`lockUser`). Held against a restore committing between the unpin and
@@ -354,8 +349,8 @@ export const deletePermissionBinding = bind(deletePermission, {
         actorUserId
       );
 
-      const existingPermissions = await permissionRows(true);
-      assertReachable(existingPermissions);
+      const existingPermissions = await readRoleMatrix(tx, roleId);
+      assertRowsReachable(actorPermissions, existingPermissions);
 
       // With REQUIRE_ROLE_FOR_LOGIN the FK is RESTRICT, so soft-deleted users
       // still pinning `role_id` would block the DELETE; they are unpinned first.
@@ -378,8 +373,7 @@ export const deletePermissionBinding = bind(deletePermission, {
       RETURNING r.id
     `);
 
-      if (deleted.length === 0)
-        throw new CustomError(permissionMsg.hasUsers, HTTP_STATUS.BAD_REQUEST);
+      if (deleted.length === 0) throw roleHasUsers();
 
       await auditLog(tx, {
         userId: actorUserId,

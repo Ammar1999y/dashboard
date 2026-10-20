@@ -4,6 +4,8 @@ import { app } from '@/app';
 import { BINDINGS, REGISTERED_BINDINGS, registeredBindings } from '@/modules';
 import { generateDocument } from '@/server/elysia/openapi';
 
+import { problemBody } from '@app/shared/api/wire';
+import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
 
 import {
@@ -82,20 +84,28 @@ export async function routeReport(): Promise<RouteState[]> {
   return routes;
 }
 
-/** The 404 the handlers' own feature gate gave, frozen with the wire format. */
+/**
+ * A withheld route is the route miss: a problem, which under the Better Auth
+ * prefix repeats `detail` as `message`, because the prefix's handler, not a
+ * binding, answers there.
+ */
 export function expectWithheld(
   report: readonly RouteState[],
   paths: readonly string[]
 ): void {
-  for (const path of paths)
+  for (const path of paths) {
+    const miss = problemBody(HTTP_STATUS.NOT_FOUND, MSG_PAGE_NOT_FOUND);
     expect(report.find((route) => route.path === path)).toEqual({
       path,
       registered: false,
       published: false,
       deployed: false,
-      status: 404,
-      body: { success: false, message: MSG_PAGE_NOT_FOUND, data: null },
+      status: HTTP_STATUS.NOT_FOUND,
+      body: path.startsWith(`${BETTER_AUTH_ROUTE_PREFIX.prefix}/`)
+        ? { ...miss, message: MSG_PAGE_NOT_FOUND }
+        : miss,
     });
+  }
 }
 
 export function expectServed(

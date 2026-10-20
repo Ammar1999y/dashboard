@@ -1,13 +1,14 @@
 import type { LabTableStatus } from './checks';
 import type { LabRow } from './fake-server';
 import type { LabEnvironment, LabEvent } from './types';
+import type { DataTableFeatures } from '@/components/ui/data-table';
 import type { ColumnStore } from '@/components/ui/data-table/store/column-store';
 import type { Table } from '@tanstack/react-table';
 
 import { create } from 'zustand';
 
 interface LabState {
-  table: Table<LabRow> | null;
+  table: Table<DataTableFeatures, LabRow> | null;
   store: ColumnStore | null;
   root: HTMLElement | null;
   status: LabTableStatus;

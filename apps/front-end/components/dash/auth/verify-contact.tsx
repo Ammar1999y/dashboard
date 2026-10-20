@@ -1,12 +1,11 @@
 import type { OtpContact } from './contact-form';
-import type { RequestBody } from '@app/shared/contract';
 import type { ContactKind } from '@app/shared/validation/enums';
 
 import { memo, useCallback } from 'react';
 
 import { toast } from 'sonner';
+import { sendOtp, verifyOtp } from '@app/shared/api/auth';
 import { OTP_AUTO_VERIFY } from '@app/shared/config';
-import { verifiedSchema } from '@app/shared/responses/auth';
 import { isPhoneChannel } from '@app/shared/validation/enums';
 import { ENABLED_OTP_CHANNELS } from '@app/shared/validation/otp';
 import {
@@ -14,7 +13,7 @@ import {
   MSG_VERIFY_CONTACT_EMAIL_INTRO,
   MSG_VERIFY_CONTACT_PHONE_INTRO,
 } from '@/constants/messages';
-import { mutate } from '@/lib/api/mutation';
+import { api } from '@/lib/api/client';
 
 import { Notice } from '@/components/ui/notice';
 
@@ -36,18 +35,12 @@ interface VerifyCodeFormProps {
 const VerifyCodeForm = memo(
   ({ contact, onVerified, onResend }: VerifyCodeFormProps) => {
     const onVerify = useCallback(
-      async (code: string, headers: Record<string, string>) => {
-        const body: RequestBody<'POST /api/auth/otp/verify'> = {
-          ...contact,
-          code,
-        };
-        const { message } = await mutate({
-          href: '/api/auth/otp/verify',
-          method: 'POST',
-          data: body,
-          headers,
-          schema: verifiedSchema,
-        });
+      async (code: string, captcha: string) => {
+        const { message } = await api(
+          verifyOtp,
+          { body: { ...contact, code } },
+          { captcha }
+        );
         toast.success(message);
         onVerified();
       },
@@ -99,7 +92,7 @@ export default function VerifyContact({
     <>
       <Notice className='mt-4 rounded-lg'>{message}</Notice>
       <SendThenCode
-        href='/api/auth/otp/send'
+        endpoint={sendOtp}
         channels={channels}
         initial={initial}
         intro={

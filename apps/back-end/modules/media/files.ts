@@ -9,6 +9,7 @@ import {
 } from '@app/shared/api/media';
 import { mediaMsg } from '@app/shared/messages/media';
 import { MEDIA_USAGE_LIST_MAX } from '@app/shared/validation/constants';
+import { LIBRARY_UPLOAD_FIELD } from '@app/shared/validation/media';
 
 import { bind, refusalOf } from '@/lib/http/binding';
 import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
@@ -70,7 +71,7 @@ export const uploadMediaFileBinding = bind(uploadMediaFile, {
       meta,
       requestActor(meta, actor),
       {
-        field: 'file',
+        field: LIBRARY_UPLOAD_FIELD,
         visibility: LIBRARY_UPLOAD_VISIBILITY,
         kinds: DEFAULT_UPLOAD_PURPOSE.kinds,
         folderId: query.folder,

@@ -16,7 +16,7 @@
  * deterministically, and no file can be surprised by another file's mock.
  */
 
-import { drainAfterResponse } from '@/lib/http/after-response';
+import { settleDeferredWork } from './deferred-work';
 
 /** One captured message, in the shape `sendMail` was called with. */
 export interface SentMail {
@@ -98,10 +98,8 @@ export function nodemailerStub(): Record<string, unknown> {
  *
  * Named for the mailbox because that is the only thing a test observes through
  * it today; it drains the whole queue, which is what makes it correct rather
- * than a sleep.
+ * than a sleep, and fails the test when the queue does not settle.
  */
 export async function settleDelivery(): Promise<void> {
-  await drainAfterResponse(SETTLE_TIMEOUT_MS);
+  await settleDeferredWork();
 }
-
-const SETTLE_TIMEOUT_MS = 5000;

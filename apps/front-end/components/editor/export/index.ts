@@ -142,10 +142,10 @@ export async function printEditorDocument(
   printWindow.addEventListener('load', () => printWindow.print());
 }
 
-const CAPTURE_WIDTH = 800;
+export const CAPTURE_WIDTH = 800;
 
 /** Draws the exported page, laid out off-screen, so it matches the HTML export. */
-async function captureDocument(value: Value, options?: ExportOptions) {
+export async function captureDocument(value: Value, options?: ExportOptions) {
   const html = await buildEditorDocument(value, options);
   const frame = document.createElement('iframe');
   frame.setAttribute('aria-hidden', 'true');
@@ -172,10 +172,19 @@ async function captureDocument(value: Value, options?: ExportOptions) {
     const height = page.documentElement.scrollHeight;
     frame.style.height = `${height}px`;
     const { default: html2canvas } = await import('html2canvas-pro');
-    return await html2canvas(page.body, {
+    const drawn = await html2canvas(page.body, {
       windowHeight: height,
       windowWidth: CAPTURE_WIDTH,
     });
+    // html2canvas allocates the canvas in the captured document, and a canvas
+    // whose document leaves with the frame below is lost: copy it out first.
+    const canvas = document.createElement('canvas');
+    canvas.width = drawn.width;
+    canvas.height = drawn.height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('the export canvas has no 2D context');
+    context.drawImage(drawn, 0, 0);
+    return canvas;
   } finally {
     frame.remove();
   }

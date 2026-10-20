@@ -1,5 +1,5 @@
 import type { HandlerCookieOptions } from './cookies';
-import type { MediaRefusalData } from '@app/shared/responses/media';
+import type { Problem } from '@app/shared/api/wire';
 
 /**
  * What a route is allowed to read from the request body — declared per route,
@@ -62,23 +62,15 @@ export interface HandlerCookie {
 }
 
 interface SuccessBody<T> {
-  success: true;
   message: string;
   data: T;
 }
 
-interface ErrorBody {
-  success: false;
-  message: string;
-  code?: string;
-  data: MediaRefusalData | null;
-}
-
 /**
- * For the few endpoints whose body shape an external consumer fixes and which
- * therefore cannot be the envelope: the Coolify health check and the OpenAPI
- * document. A separate output rather than `body: unknown`, so only a raw
- * contract entry's answer can carry a shape the envelope forbids.
+ * For the few endpoints whose body shape an external consumer fixes: the
+ * Coolify health check and the OpenAPI document. A separate output rather than
+ * `body: unknown`, so only a raw contract entry's answer can carry a shape no
+ * success or problem has.
  */
 interface RawBody {
   raw: unknown;
@@ -98,7 +90,7 @@ interface HandlerSuccess<
 }
 
 export interface HandlerError extends OutputFields {
-  body: ErrorBody;
+  body: Problem;
 }
 
 export interface HandlerRaw extends OutputFields {
@@ -112,6 +104,10 @@ export type SuccessOutput<T> = HandlerSuccess<SuccessBody<T>>;
 function isRawBody(body: HandlerOutput['body']): body is RawBody {
   return 'raw' in body;
 }
+
+export const isProblemOutput = (
+  output: HandlerOutput
+): output is HandlerError => 'detail' in output.body;
 
 /** The value an adapter should JSON-serialise for a given output. */
 export function responsePayload(body: HandlerOutput['body']): unknown {

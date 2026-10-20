@@ -1,17 +1,14 @@
-import type {
-  HandlerError,
-  HandlerOutput,
-  HandlerRaw,
-  SuccessOutput,
-} from './contract';
+import type { HandlerError, HandlerOutput, HandlerRaw } from './contract';
 import type { MediaRefusalData } from '@app/shared/responses/media';
-import type { PaginationMeta } from '@app/shared/types/api';
+import type * as z from 'zod';
 
 import { isDatabaseContention, isInvalidTextEncoding } from '@/db/errors';
 import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import { isAPIError } from 'better-auth/api';
 
+import { PROBLEM_MEDIA_TYPE, problemBody } from '@app/shared/api/wire';
 import { CustomError } from '@app/shared/error-class';
+import { INVALID_RESPONSE_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   MSG_INTERNAL_ERROR,
@@ -26,7 +23,7 @@ import {
   logServerErrorResponse,
 } from '@/utils/log';
 
-import { responsePayload } from './contract';
+import { isProblemOutput, responsePayload } from './contract';
 import { serializeSetCookie } from './cookies';
 import { DEFAULT_CACHE_CONTROL } from './response-policy';
 
@@ -38,33 +35,10 @@ interface ApiErrorOptions {
   headers?: Record<string, string>;
 }
 
-/** Every success envelope: the one place the wire format changes when it does. */
-export function successBody<T, M = PaginationMeta>(
-  message: string,
-  data: T,
-  meta?: M
-): SuccessOutput<T>['body'] & { meta?: M } {
-  return {
-    success: true,
-    message,
-    data,
-    ...(meta !== undefined && { meta }),
-  };
-}
-
-/** Every error envelope; key order is part of the frozen wire format. */
-function errorBody(
-  message: string,
-  code?: string,
-  data?: MediaRefusalData
-): HandlerError['body'] {
-  return { success: false, message, data: data ?? null, ...(code && { code }) };
-}
-
 /**
- * Response whose body is NOT the standard envelope, for a shape fixed outside
- * this codebase: the Coolify health check reads top-level fields, and an
- * OpenAPI document's shape is the spec's. Everything else goes through
+ * Response whose body is neither a success nor a problem, for a shape fixed
+ * outside this codebase: the Coolify health check reads top-level fields, and
+ * an OpenAPI document's shape is the spec's. Everything else goes through
  * `successBody`/`apiError`.
  */
 export function apiRaw({
@@ -83,6 +57,29 @@ export function apiRaw({
   };
 }
 
+/**
+ * A raw body serialised once, for a large one that never changes: it goes out
+ * as these bytes, without the per-request validation and serialisation a value
+ * answer gets. Built only through `of`, which validates against the entry's
+ * schema and serialises what that returns, as a value answer would be.
+ */
+export class SerializedJson<S extends z.ZodType = z.ZodType> {
+  static of<S extends z.ZodType>(
+    schema: S,
+    value: z.input<S>
+  ): SerializedJson<S> {
+    return new SerializedJson(schema, JSON.stringify(schema.parse(value)));
+  }
+
+  private constructor(
+    readonly schema: S,
+    readonly text: string
+  ) {}
+}
+
+/** What `Response.json` writes, so a serialised body carries the same type. */
+const JSON_MEDIA_TYPE = 'application/json;charset=utf-8';
+
 export function apiError({
   message,
   code,
@@ -92,13 +89,13 @@ export function apiError({
 }: ApiErrorOptions): HandlerError {
   return {
     status,
-    body: errorBody(message, code, data),
+    body: problemBody(status, message, code, data),
     ...(headers && { headers }),
   };
 }
 
 /**
- * Maps a caught error to the error envelope. `extraHeaders` carries headers
+ * Maps a caught error to a problem. `extraHeaders` carries headers
  * (Retry-After, ...) from an original error that a catch block rewrote into a
  * new `CustomError`.
  */
@@ -164,6 +161,18 @@ export function handleApiError(
   });
 }
 
+/**
+ * A success that failed its own schema. Coded, so a client never retries a
+ * write that has committed; a refusal that breaks its contract stays a plain
+ * 500, as nothing was done.
+ */
+export const invalidResponse = (): HandlerError =>
+  apiError({
+    message: MSG_INTERNAL_ERROR,
+    status: HTTP_STATUS.INTERNAL_ERROR,
+    code: INVALID_RESPONSE_CODE,
+  });
+
 /** A 500 carrying the fault as `cause`, which `handleApiError` logs with it. */
 export function serverFault(message: string, cause: unknown): CustomError {
   const failure = new CustomError(message, HTTP_STATUS.INTERNAL_ERROR);
@@ -187,11 +196,14 @@ export function toWebResponse(output: HandlerOutput): Response {
   // After the handler's own headers, so an explicit opt-out wins.
   if (!headers.has('cache-control'))
     headers.set('cache-control', DEFAULT_CACHE_CONTROL);
+  if (isProblemOutput(output)) headers.set('content-type', PROBLEM_MEDIA_TYPE);
 
-  return Response.json(responsePayload(output.body), {
-    status: output.status,
-    headers,
-  });
+  const payload = responsePayload(output.body);
+  if (payload instanceof SerializedJson) {
+    headers.set('content-type', JSON_MEDIA_TYPE);
+    return new Response(payload.text, { status: output.status, headers });
+  }
+  return Response.json(payload, { status: output.status, headers });
 }
 
 /**

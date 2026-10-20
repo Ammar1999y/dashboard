@@ -19,7 +19,7 @@ import { SQL } from 'bun';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { MAX_POOL_CONNECTIONS } from '@/db/limits';
+import { DATA_TABLE_POOL_CONNECTIONS, MAX_POOL_CONNECTIONS } from '@/db/limits';
 
 import { compareCodeUnits } from '@/utils/text';
 
@@ -134,11 +134,13 @@ async function schemaFingerprint(): Promise<string> {
   return hasher.digest('hex');
 }
 
+const WORKER_CONNECTIONS = MAX_POOL_CONNECTIONS + DATA_TABLE_POOL_CONNECTIONS;
+
 /**
  * `--parallel` ceiling, computed from the server rather than from the CPU count.
  *
- * Each worker constructs the application's pool, so N workers can demand
- * N × `MAX_POOL_CONNECTIONS` backends. Exceeding `max_connections` does not
+ * Each worker constructs the application's pools, so N workers can demand
+ * N × `WORKER_CONNECTIONS` backends. Exceeding `max_connections` does not
  * surface as a connection error — it surfaces as Bun's 30-second
  * `connectionTimeout`, which reads as an unrelated hang in whichever test
  * happened to be running.
@@ -153,12 +155,12 @@ export async function maxWorkers(client: SQL): Promise<number> {
     throw new Error('could not read max_connections from pg_settings');
 
   const budget = Math.floor(
-    (maxConnections - CONNECTION_RESERVE) / MAX_POOL_CONNECTIONS
+    (maxConnections - CONNECTION_RESERVE) / WORKER_CONNECTIONS
   );
   if (budget < 1)
     throw new Error(
       `max_connections is ${maxConnections}, which leaves no room for a worker ` +
-        `pool of ${MAX_POOL_CONNECTIONS} plus ${CONNECTION_RESERVE} reserved connections`
+        `pool of ${WORKER_CONNECTIONS} plus ${CONNECTION_RESERVE} reserved connections`
     );
 
   return budget;

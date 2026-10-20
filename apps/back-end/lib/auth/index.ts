@@ -18,7 +18,7 @@ import { logSanitized } from '@/utils/log';
 import { localiseAuthErrors } from './errors';
 import { oauth } from './oauth/plugin';
 import { hashPassword } from './password/hash';
-import { consumePasswordProof } from './password/proof';
+import { consumePasswordProof, PROOF_LENGTH } from './password/proof';
 import { passwordless } from './passwordless';
 import { enforcePathPolicy } from './path-policy';
 import { reauthentication } from './reauth/plugin';
@@ -53,6 +53,8 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     autoSignIn: false,
+    // The handler sees the proof, not the password; see `PROOF_LENGTH`.
+    maxPasswordLength: PROOF_LENGTH,
     password: {
       hash: hashPassword,
       // NOT a password check: it confirms the `before` hook ran the real one
@@ -139,6 +141,10 @@ export const auth = betterAuth({
   // Must equal the `db/schema.ts` export name: the adapter resolves `schema[modelName]`.
   verification: {
     modelName: 'verifications',
+    // Otherwise every lookup sweeps all expired rows, inside our locking
+    // transactions too. ⚠️ So every reader checks `expiresAt` itself, and
+    // `runDatabaseSweep` reclaims the rows.
+    disableCleanup: true,
   },
 
   plugins: [

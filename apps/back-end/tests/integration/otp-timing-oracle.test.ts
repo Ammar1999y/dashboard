@@ -18,7 +18,6 @@ import { TransactionDeadlineError } from '@/db/transaction';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
-import { contactKindOf } from '@app/shared/validation/enums';
 
 import { credentialAccountOf } from '@/lib/auth/credential-account';
 import { lockUser } from '@/lib/auth/user-eligibility';
@@ -31,7 +30,7 @@ import { getRateLimitStore } from '@/lib/rate-limit/store';
 import { BUSY_TIMEOUT_MS } from '@/lib/sqlite/database';
 import * as contact from '@/lib/users/contact';
 
-import { resetTables } from '../helpers/database';
+import { holdUntilReleased, resetTables } from '../helpers/database';
 import {
   delayMail,
   failNextMail,
@@ -349,12 +348,7 @@ describe('PostgreSQL contention on the known branch', () => {
           route.body('nobody-baseline@gmail.com')
         );
 
-        const kind = contactKindOf('email');
-        const hold = holdLock((tx) =>
-          tx.execute(
-            sql`select pg_advisory_xact_lock(hashtext(${user.userId}), hashtext(${kind} || ':' || ${route.purpose}))`
-          )
-        );
+        const hold = holdLock((tx) => lockUser(tx, user.userId));
         await hold.acquired;
 
         const [known, unknown] = await Promise.all([
@@ -424,7 +418,7 @@ describe('PostgreSQL contention on the known branch', () => {
         expect(known.status).toBe(HTTP_STATUS.BAD_REQUEST);
         expect(known.status).toBe(unknown.status);
         expect(known.body).toEqual(unknown.body);
-        expect(known.body).toMatchObject({ message: otpMsg.invalidOrExpired });
+        expect(known.body).toMatchObject({ detail: otpMsg.invalidOrExpired });
         expect(known.retryAfter).toBe(unknown.retryAfter);
         for (const { sinceLookup } of [known, unknown]) {
           expect(sinceLookup).toBeGreaterThanOrEqual(FLOOR_MS - FLOOR_SLACK_MS);
@@ -625,7 +619,7 @@ describe('a verify queued behind sends for the same user', () => {
         expect(known.status).toBe(HTTP_STATUS.BAD_REQUEST);
         expect(known.status).toBe(unknown.status);
         expect(known.body).toEqual(unknown.body);
-        expect(known.body).toMatchObject({ message: otpMsg.invalidOrExpired });
+        expect(known.body).toMatchObject({ detail: otpMsg.invalidOrExpired });
         expect(known.retryAfter).toBe(unknown.retryAfter);
       }
       for (const { elapsed } of [knownFirst, knownSecond, unknown]) {
@@ -667,24 +661,6 @@ describe('a verify queued behind sends for the same user', () => {
     }
   }, 60_000);
 });
-
-/** A transaction on its own connection that keeps what `acquire` took until `release`. */
-function holdUntilReleased(acquire: (tx: Tx) => Promise<unknown>) {
-  const acquired = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const finished = withTransaction(async (tx) => {
-    await acquire(tx);
-    acquired.resolve();
-    await release.promise;
-  });
-  finished.catch(acquired.reject);
-  return {
-    acquired: acquired.promise,
-    release: release.resolve,
-    finished,
-    releaseAfter: (ms: number) => setTimeout(release.resolve, ms),
-  };
-}
 
 function lockUserRow(userId: string) {
   return holdUntilReleased((tx) => lockUser(tx, userId));
@@ -903,7 +879,7 @@ describe('a verify against other writers of its proof rows', () => {
           expect(known.status).toBe(unknown.status);
           expect(known.body).toEqual(unknown.body);
           expect(known.body).toMatchObject({
-            message: otpMsg.invalidOrExpired,
+            detail: otpMsg.invalidOrExpired,
           });
           expect(known.retryAfter).toBe(unknown.retryAfter);
           for (const { sinceLookup } of [known, unknown]) {
@@ -915,8 +891,10 @@ describe('a verify against other writers of its proof rows', () => {
             );
           }
           // Both owners are still locked here: the sweep left their proofs for
-          // its next run instead of queueing on them.
+          // its next run instead of queueing on them, and says it did.
           expect(sweepDone).toBe(true);
+          const swept = await sweep;
+          expect(swept.removed.verificationSessions.hasMore).toBe(true);
         } finally {
           for (const timer of timers) clearTimeout(timer);
           userHold.release();

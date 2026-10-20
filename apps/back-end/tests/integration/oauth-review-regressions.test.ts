@@ -1,4 +1,4 @@
-import { beforeEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import crypto from 'node:crypto';
 
 import { and, eq, like, notLike } from 'drizzle-orm';
@@ -26,7 +26,10 @@ import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
 import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
 
 import { auth } from '@/lib/auth';
-import { verifyGoogleIdToken } from '@/lib/auth/oauth/id-token';
+import {
+  forgetGoogleSigningKeys,
+  verifyGoogleIdToken,
+} from '@/lib/auth/oauth/id-token';
 import { TOKEN_EXCHANGE_TIMEOUT_MS } from '@/lib/auth/oauth/token-exchange';
 import * as passkeyAssertion from '@/lib/auth/passkey-assertion';
 import * as adminReauth from '@/lib/auth/reauth/window';
@@ -37,7 +40,8 @@ import { PUBLIC_ORIGIN } from '@/lib/env';
 import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
-import { scriptEgress } from '../helpers/egress';
+import { egressCallsTo, scriptEgress } from '../helpers/egress';
+import { expectAuthError, expectError } from '../helpers/expect-body';
 import { failVerificationWrites } from '../helpers/faults';
 import { startGoogle } from '../helpers/google';
 import { dropMockedClockWindows, resetRateLimits } from '../helpers/rate-limit';
@@ -52,6 +56,8 @@ import { syntheticAuthenticator } from '../helpers/webauthn';
 
 beforeEach(resetTables);
 beforeEach(resetRateLimits);
+// A key set a case served must not answer a later file's callbacks.
+afterEach(forgetGoogleSigningKeys);
 
 function call(path: string, cookie: string, body?: object) {
   return app.handle(
@@ -540,11 +546,11 @@ test.each([
     const owner = await seedUser();
     const { cookie } = await signIn(owner);
     const response = await call(path, cookie, body);
-    expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({
-      message: MSG_REAUTH_REQUIRED,
-      code: REAUTH_REQUIRED_CODE,
-    });
+    const expectRefusal = path.startsWith('/api/auth/')
+      ? expectAuthError
+      : expectError;
+    const problem = await expectRefusal(response, 401, MSG_REAUTH_REQUIRED);
+    expect(problem.code).toBe(REAUTH_REQUIRED_CODE);
   }
 );
 
@@ -579,11 +585,8 @@ test('administrative reauthentication-required errors retain their machine code 
       headers: baseHeaders({ cookie, origin: PUBLIC_ORIGIN }),
     })
   );
-  expect(response.status).toBe(401);
-  expect(await response.json()).toMatchObject({
-    message: MSG_REAUTH_REQUIRED,
-    code: REAUTH_REQUIRED_CODE,
-  });
+  const problem = await expectError(response, 401, MSG_REAUTH_REQUIRED);
+  expect(problem.code).toBe(REAUTH_REQUIRED_CODE);
 });
 
 test('a token without exp is refused, by the verifier and through the callback', async () => {
@@ -1031,7 +1034,10 @@ function answerTokenEndpoint(answer: Answer) {
 }
 
 function answerKeySet(answer: Answer) {
-  return () => scriptEgress('www.googleapis.com', answer);
+  return () => {
+    forgetGoogleSigningKeys();
+    scriptEgress('www.googleapis.com', answer);
+  };
 }
 
 function unreachable(): never {
@@ -1279,6 +1285,33 @@ test.each([
       reason: 'id_token_invalid',
     })
 );
+
+test('callbacks share one key set fetch', async () => {
+  forgetGoogleSigningKeys();
+  for (let index = 0; index < 3; index++) {
+    const flow = await startGoogle({
+      sub: `shared-keys-${index}`,
+      email: `shared-keys-${index}@gmail.com`,
+    });
+    await expect(flow.callback()).resolves.toHaveProperty('status', 401);
+  }
+  expect(egressCallsTo('www.googleapis.com')).toHaveLength(1);
+});
+
+test('an empty key set held in the cache is still a provider fault', async () => {
+  let flows = 0;
+  await expectProviderFault(
+    {
+      arrange: () => {
+        if (flows++ === 0) answerKeySet(() => Response.json({ keys: [] }))();
+        // The second flow must meet the cached set, never this answer.
+        else scriptEgress('www.googleapis.com', unreachable);
+      },
+    },
+    { stage: 'token_verification', reason: 'signing_keys_unavailable' }
+  );
+  expect(egressCallsTo('www.googleapis.com')).toHaveLength(1);
+});
 
 test('a key set holding only another key refuses the token instead of faulting', () =>
   expectRefusal(

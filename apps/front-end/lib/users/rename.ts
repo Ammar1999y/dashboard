@@ -1,11 +1,10 @@
 import type { EntityKeys } from '@/lib/api/query-cache';
 import type { UserDetail } from '@/types/user';
-import type { RequestBody } from '@app/shared/contract';
 import type { EntityID } from '@app/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 
-import { updatedAtSchema } from '@app/shared/responses/common';
-import { mutate } from '@/lib/api/mutation';
+import { updateSelf } from '@app/shared/api/users';
+import { api } from '@/lib/api/client';
 import { cacheUpdated } from '@/lib/api/query-cache';
 import { authClient } from '@/lib/auth/client';
 
@@ -40,18 +39,17 @@ export function renameSelf(
   id: EntityID,
   name: string
 ) {
-  const body: RequestBody<'PUT /api/dash/users/me'> = { name };
   const write = (updatedAt: string) => {
     cacheUpdated<UserDetail>(queryClient, entity.keys, id, { name, updatedAt });
     patchSessionUsername(name);
   };
 
-  return mutate({
-    href: '/api/dash/users/me',
-    method: 'PUT',
-    data: body,
-    schema: updatedAtSchema,
-    onSuccess: ({ updatedAt }) => write(updatedAt),
-    onUnreadAnswer: () => write(new Date().toISOString()),
-  });
+  return api(
+    updateSelf,
+    { body: { name } },
+    {
+      onSuccess: ({ updatedAt }) => write(updatedAt),
+      onUnreadAnswer: () => write(new Date().toISOString()),
+    }
+  );
 }

@@ -1,7 +1,7 @@
 /**
  * The generated document, finished from what the framework's generator cannot
  * see: request bodies read by the gate's `parse` hook, the `required` keys of
- * a preprocessed field, header parameters, refusal wording, envelopes and
+ * a preprocessed field, header parameters, refusal wording, problems and
  * response headers, the success rules `.meta()` cannot carry, and the
  * operations Better Auth serves.
  * Works on plain objects, so it stays core.
@@ -16,10 +16,12 @@ import * as z from 'zod';
 
 import { isRawResponse } from '@app/shared/api/endpoint';
 import {
-  errorEnvelopeSchema,
-  plainErrorEnvelopeSchema,
-  refusalEnvelopeOf,
-} from '@app/shared/response-contract';
+  authProblemSchema,
+  plainProblemSchema,
+  PROBLEM_MEDIA_TYPE,
+  problemSchema,
+  problemSchemaOf,
+} from '@app/shared/api/wire';
 import { OPENAPI_VERSION } from '@app/shared/responses/openapi';
 import {
   USER_DETAIL_SESSION_KEYS,
@@ -71,17 +73,21 @@ export const CAPTCHA_HEADER_PARAMETER: JsonSchema = {
 };
 
 /** Published once each under `components`; every refusal references one. */
-const REFUSAL_ENVELOPES = {
-  ErrorEnvelope: plainErrorEnvelopeSchema,
-  MediaRefusalEnvelope: errorEnvelopeSchema,
+const PROBLEMS = {
+  Problem: plainProblemSchema,
+  MediaRefusalProblem: problemSchema,
+  AuthProblem: authProblemSchema,
 } as const;
 
-export function envelopeRef(schema: z.ZodType): JsonSchema {
-  const name = Object.entries(REFUSAL_ENVELOPES).find(
-    ([, envelope]) => envelope === schema
+/** A refusal's content: `schema` by reference. */
+export function problemContent(schema: z.ZodType): JsonSchema {
+  const name = Object.entries(PROBLEMS).find(
+    ([, problem]) => problem === schema
   )?.[0];
-  if (name === undefined) throw new Error('Not a published refusal envelope.');
-  return { $ref: `#/components/schemas/${name}` };
+  if (name === undefined) throw new Error('Not a published problem.');
+  return {
+    [PROBLEM_MEDIA_TYPE]: { schema: { $ref: `#/components/schemas/${name}` } },
+  };
 }
 
 /** `get_api_dash_users__id`: the identifiers the document has always published. */
@@ -269,11 +275,7 @@ function finishOperation(operation: JsonSchema, binding: AnyBinding): void {
   for (const { status, description, headers } of refusalsOf(binding)) {
     const response = describe(status, description, headers);
     if (!Object.hasOwn(raw, status))
-      response.content = {
-        'application/json': {
-          schema: envelopeRef(refusalEnvelopeOf(entry, status)),
-        },
-      };
+      response.content = problemContent(problemSchemaOf(entry, status));
   }
 }
 
@@ -321,7 +323,7 @@ export function finalizeDocument(
       generated.components.schemas),
     ...merged.schemas,
     ...Object.fromEntries(
-      Object.entries(REFUSAL_ENVELOPES).map(([name, schema]) => [
+      Object.entries(PROBLEMS).map(([name, schema]) => [
         name,
         publishedSchema(schema),
       ])

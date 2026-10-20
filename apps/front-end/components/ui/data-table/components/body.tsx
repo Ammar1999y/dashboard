@@ -1,6 +1,7 @@
+import type { DataTableFeatures } from '../features';
 import type { BodyRow, TableLayout } from '../hooks/use-table-instance';
 import type { PinSide } from '../store/column-store';
-import type { Cell } from '@tanstack/react-table';
+import type { Cell, RowData } from '@tanstack/react-table';
 
 import { flexRender } from '@tanstack/react-table';
 
@@ -10,13 +11,13 @@ import { DataTableEmptyState } from './data-table-empty-state';
 import { DataTableErrorState } from './data-table-error-state';
 import { cellAttributes, TableCell, TableRow } from './table-elements';
 
-interface BodyCellProps<TData> {
-  cell: Cell<TData, unknown>;
+interface BodyCellProps<TData extends RowData> {
+  cell: Cell<DataTableFeatures, TData>;
   pinSide: PinSide | undefined;
   pinEdge: boolean;
 }
 
-const BodyCellInner = <TData,>({
+const BodyCellInner = <TData extends RowData>({
   cell,
   pinSide,
   pinEdge,
@@ -41,12 +42,15 @@ const BodyCell = genericMemo(
     prev.pinEdge === next.pinEdge
 );
 
-interface BodyRowProps<TData> {
+interface BodyRowProps<TData extends RowData> {
   bodyRow: BodyRow<TData>;
   layout: TableLayout<TData>;
 }
 
-const BodyRowInner = <TData,>({ bodyRow, layout }: BodyRowProps<TData>) => (
+const BodyRowInner = <TData extends RowData>({
+  bodyRow,
+  layout,
+}: BodyRowProps<TData>) => (
   <TableRow className='group/row transition-colors duration-300 even:bg-muted/50 hover:bg-muted/70'>
     {bodyRow.cells.map((cell) => {
       const pin = layout.pins[cell.column.id];
@@ -70,7 +74,10 @@ const BodyRowInner = <TData,>({ bodyRow, layout }: BodyRowProps<TData>) => (
 // the column at a position, or a pin placement; hiding a column changes
 // neither (its cells stay, hidden by CSS). Cell renderers must therefore read
 // from the row, never from outside state.
-function sameRow<TData>(prev: BodyRowProps<TData>, next: BodyRowProps<TData>) {
+function sameRow<TData extends RowData>(
+  prev: BodyRowProps<TData>,
+  next: BodyRowProps<TData>
+) {
   const before = prev.bodyRow.cells;
   const after = next.bodyRow.cells;
   if (
@@ -91,7 +98,7 @@ function sameRow<TData>(prev: BodyRowProps<TData>, next: BodyRowProps<TData>) {
 
 const BodyRowView = genericMemo(BodyRowInner, 'DataTableBodyRow', sameRow);
 
-interface DataTableBodyProps<TData> {
+interface DataTableBodyProps<TData extends RowData> {
   bodyRows: BodyRow<TData>[];
   layout: TableLayout<TData>;
   isLoading: boolean;
@@ -99,7 +106,7 @@ interface DataTableBodyProps<TData> {
   refetch: () => void;
 }
 
-const DataTableBodyInner = <TData,>({
+const DataTableBodyInner = <TData extends RowData>({
   bodyRows,
   layout,
   isLoading,

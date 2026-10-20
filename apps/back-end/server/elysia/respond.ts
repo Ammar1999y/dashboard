@@ -11,6 +11,9 @@ import type { HandlerCookie, HandlerOutput } from '@/lib/http/contract';
 
 import { Elysia, status } from 'elysia';
 
+import { HTTP_STATUS } from '@app/shared/http-status';
+
+import { toAuthProblem } from '@/lib/auth/errors';
 import { runAfterResponse } from '@/lib/http/after-response';
 import { responsePayload } from '@/lib/http/contract';
 import {
@@ -154,41 +157,54 @@ export function withdrawValue(request: Request, set: HeaderBag): void {
   queueResponseCookies(request.headers, answered.queued);
 }
 
-export const exitStep = new Elysia({ name: 'exit-step' })
-  // After everything Elysia does, so a HEAD's answer is its GET's in every
-  // branch — validated, refused, mapped or unrouted — with the body dropped.
-  .wrap(
-    (fetch) =>
-      async (request: Request, ...rest: unknown[]): Promise<Response> => {
-        const response = await fetch(request, ...rest);
-        return request.method === 'HEAD' ? toHeadResponse(response) : response;
-      }
-  )
-  // In addition to the `request` hook, not instead of it: a header on a
-  // native `Response` wins over `set.headers`, so this runs last and
-  // overwrites. See `lib/http/response-policy.ts`.
-  .mapResponse(({ responseValue, request, set }) => {
-    if (preflights.has(request)) return;
-    if (responseValue instanceof Response)
-      return finish(request, responseValue) as never;
-    applyResponsePolicyToBag(set.headers, { durationMs: elapsed(request) });
-  })
-  .afterResponse(({ request, set, path, responseValue }) => {
-    if (preflights.has(request)) return;
-    const started = startedAt.get(request);
-    startedAt.delete(request);
-    runAfterResponse(request, {
-      method: request.method,
-      path: earlyLogPath.get(request) ?? path,
-      status:
-        finalStatus.get(request) ??
-        (responseValue instanceof Response
-          ? responseValue.status
-          : typeof set.status === 'number'
-            ? set.status
-            : 200),
-      durationMs: started === undefined ? 0 : performance.now() - started,
-    });
-    finalStatus.delete(request);
-  })
-  .as('global');
+/**
+ * `servedByPrefix` names the paths Better Auth owns, whose every refusal
+ * carries `message` for its client: the library's own, and the ones this
+ * server gives before, around or instead of it.
+ */
+export const exitStep = (servedByPrefix: (pathname: string) => boolean) =>
+  new Elysia({ name: 'exit-step' })
+    // After everything Elysia does, so a HEAD's answer is its GET's in every
+    // branch — validated, refused, mapped or unrouted — with the body dropped.
+    .wrap(
+      (fetch) =>
+        async (request: Request, ...rest: unknown[]): Promise<Response> => {
+          let response = await fetch(request, ...rest);
+          if (response.status >= HTTP_STATUS.BAD_REQUEST) {
+            const pathname = URL.parse(request.url)?.pathname;
+            if (pathname !== undefined && servedByPrefix(pathname))
+              response = await toAuthProblem(response);
+          }
+          return request.method === 'HEAD'
+            ? toHeadResponse(response)
+            : response;
+        }
+    )
+    // In addition to the `request` hook, not instead of it: a header on a
+    // native `Response` wins over `set.headers`, so this runs last and
+    // overwrites. See `lib/http/response-policy.ts`.
+    .mapResponse(({ responseValue, request, set }) => {
+      if (preflights.has(request)) return;
+      if (responseValue instanceof Response)
+        return finish(request, responseValue) as never;
+      applyResponsePolicyToBag(set.headers, { durationMs: elapsed(request) });
+    })
+    .afterResponse(({ request, set, path, responseValue }) => {
+      if (preflights.has(request)) return;
+      const started = startedAt.get(request);
+      startedAt.delete(request);
+      runAfterResponse(request, {
+        method: request.method,
+        path: earlyLogPath.get(request) ?? path,
+        status:
+          finalStatus.get(request) ??
+          (responseValue instanceof Response
+            ? responseValue.status
+            : typeof set.status === 'number'
+              ? set.status
+              : 200),
+        durationMs: started === undefined ? 0 : performance.now() - started,
+      });
+      finalStatus.delete(request);
+    })
+    .as('global');

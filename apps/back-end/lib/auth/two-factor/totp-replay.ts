@@ -116,5 +116,12 @@ export async function readVerifiedTotpSecret(
     .where(eq(twoFactorCredentials.userId, userId))
     .limit(1);
   if (!credential?.verified) return null;
-  return symmetricDecrypt({ key, data: credential.secret }).catch(() => null);
+  return decryptTotpSecret(credential.secret, key);
+}
+
+export function decryptTotpSecret(
+  encrypted: string,
+  key: SymmetricDecryptOptions['key']
+): Promise<string | null> {
+  return symmetricDecrypt({ key, data: encrypted }).catch(() => null);
 }

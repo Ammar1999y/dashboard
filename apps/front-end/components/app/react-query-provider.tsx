@@ -4,7 +4,8 @@ import { useState } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CustomError } from '@app/shared/error-class';
-import { INVALID_RESPONSE_CODE, retryAfterMs } from '@/lib/api/fetch';
+import { INVALID_RESPONSE_CODE } from '@app/shared/error-codes';
+import { retryAfterMs } from '@/lib/api/fetch';
 
 const MAX_RETRIES = 5;
 const MAX_RETRY_DELAY_MS = 7000;

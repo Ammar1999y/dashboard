@@ -63,15 +63,15 @@ function post(path: string, body: unknown): Promise<Response> {
 interface Observed {
   status: number;
   retryAfter: string | null;
-  message: string;
+  detail: string;
 }
 
 async function observe(response: Response): Promise<Observed> {
-  const body = (await response.json()) as { message?: string };
+  const body = (await response.json()) as { detail?: string };
   return {
     status: response.status,
     retryAfter: response.headers.get('retry-after'),
-    message: body.message ?? '',
+    detail: body.detail ?? '',
   };
 }
 

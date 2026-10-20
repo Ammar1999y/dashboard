@@ -1,6 +1,6 @@
 import { and, count, eq, isNull } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
+import { dataTableDb, db, withTransaction } from '@/db';
 import { roles, users } from '@/db/schema';
 
 import { createUser, listUsers } from '@app/shared/api/users';
@@ -74,7 +74,7 @@ export const listUsersBinding = bind(listUsers, {
     );
 
     const [dashboardUsers, [totalRow]] = await Promise.all([
-      db
+      dataTableDb
         .select({
           id: users.id,
           name: users.name,
@@ -96,7 +96,7 @@ export const listUsersBinding = bind(listUsers, {
         .orderBy(...orderBy)
         .limit(limit)
         .offset(offset),
-      db
+      dataTableDb
         .select({ total: count() })
         .from(users)
         .innerJoin(roles, eq(users.roleId, roles.id))

@@ -1,4 +1,5 @@
-import type { ColumnDef } from '@tanstack/react-table';
+import type { DataTableFeatures } from './features';
+import type { ColumnDef, RowData } from '@tanstack/react-table';
 import type { ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -11,7 +12,7 @@ import { tableFormatDate } from '@/components/ui/date/utils';
 
 export const ACTIONS_COLUMN = 'actions';
 
-type StringKey<TData> = Extract<keyof TData, string>;
+type StringKey<TData extends RowData> = Extract<keyof TData, string>;
 
 const textOf = (value: unknown) =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
@@ -25,11 +26,11 @@ interface TextColumnOptions {
 }
 
 /** A searchable, filterable text column. */
-export function textColumn<TData>(
+export function textColumn<TData extends RowData>(
   id: StringKey<TData>,
   label: string,
   { size, cellClassName, dir }: TextColumnOptions = {}
-): ColumnDef<TData> {
+): ColumnDef<DataTableFeatures, TData> {
   const className = cn(
     'truncate',
     dir && 'bidi-isolate',
@@ -55,10 +56,10 @@ const STATUS_OPTIONS = [
 ];
 
 /** The `isActive` badge column, filterable by either state. */
-export function statusColumn<TData>(
+export function statusColumn<TData extends RowData>(
   label = 'الحالة',
   { size }: { size?: number } = {}
-): ColumnDef<TData> {
+): ColumnDef<DataTableFeatures, TData> {
   return {
     id: 'isActive',
     accessorKey: 'isActive',
@@ -82,10 +83,10 @@ export function statusColumn<TData>(
 }
 
 /** A filterable date column, shown in the table's date format. */
-export function dateColumn<TData>(
+export function dateColumn<TData extends RowData>(
   id: StringKey<TData>,
   label: string
-): ColumnDef<TData> {
+): ColumnDef<DataTableFeatures, TData> {
   return {
     id,
     accessorKey: id,
@@ -114,9 +115,9 @@ const renderActionsHeader = () => (
  * The row-actions column. Its id is what the table pins to the end by
  * default; it can be neither hidden, sorted nor filtered.
  */
-export function actionsColumn<TData>(
+export function actionsColumn<TData extends RowData>(
   render: (row: TData) => ReactNode
-): ColumnDef<TData> {
+): ColumnDef<DataTableFeatures, TData> {
   return {
     id: ACTIONS_COLUMN,
     header: renderActionsHeader,

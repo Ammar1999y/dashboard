@@ -11,7 +11,7 @@ const COLUMN_SLICES = [
   'columnVisibility',
   'columnPinning',
   'columnSizing',
-  'columnSizingInfo',
+  'columnResizing',
 ] as const;
 
 const TABLE_URL_KEYS = [

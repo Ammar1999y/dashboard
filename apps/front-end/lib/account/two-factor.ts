@@ -3,38 +3,28 @@ import type { EntityID } from '@app/shared/types';
 import type { OtpChannel } from '@app/shared/validation/enums';
 import type { QueryClient } from '@tanstack/react-query';
 
+import * as contract from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
-import { ladderOtpSentSchema } from '@app/shared/responses/auth';
 import {
-  backupCodesSchema,
-  defaultMethodSchema,
-  deviceRevokedSchema,
   otpEnabledSchema,
-  passkeyDeletedSchema,
-  removedMethodSchema,
-  totpEnabledSchema,
-  totpStartedSchema,
+  pluginBodyWithMessage,
 } from '@app/shared/responses/better-auth';
 import {
   contactKindOf,
   TWO_FACTOR_METHODS,
 } from '@app/shared/validation/enums';
+import { api } from '@/lib/api/client';
+import { useEndpointQuery } from '@/lib/api/query';
+import { listPasskeys } from '@/lib/auth/library-endpoints';
 import { registerPasskey, requestPasskeyGrant } from '@/lib/auth/passkey';
-import { useAuthQuery } from '@/lib/auth/query';
-import { authRequest } from '@/lib/auth/request';
 
-import {
-  devicesSchema,
-  messageOnlySchema,
-  methodsSchema,
-  passkeysSchema,
-} from './schemas';
+import { devicesSchema, methodsSchema } from './schemas';
 
 /*
  * The signed-in user's second-factor management, one function per write. Each
  * patches the cache from what was sent once the server has committed, and also
  * when the answer was lost; the proof the server asks for is prompted by
- * `authRequest`, so none is passed here.
+ * `api()`, so none is passed here.
  */
 
 export const accountKeys = {
@@ -44,27 +34,22 @@ export const accountKeys = {
 } as const;
 
 export const useMethods = (enabled = true) =>
-  useAuthQuery({
+  useEndpointQuery(contract.listTwoFactorMethods, undefined, {
     queryKey: accountKeys.methods,
-    path: '/two-factor/methods',
-    schema: methodsSchema,
+    narrow: methodsSchema,
     enabled,
   });
 
 export const usePasskeys = (enabled = true) =>
-  useAuthQuery({
+  useEndpointQuery(listPasskeys, undefined, {
     queryKey: accountKeys.passkeys,
-    path: '/passkey/list-user-passkeys',
-    schema: passkeysSchema,
-    plain: true,
     enabled,
   });
 
 export const useTrustedDevices = (enabled = true) =>
-  useAuthQuery({
+  useEndpointQuery(contract.listTrustedDevices, undefined, {
     queryKey: accountKeys.devices,
-    path: '/two-factor/trusted-devices',
-    schema: devicesSchema,
+    narrow: devicesSchema,
     enabled,
   });
 
@@ -159,11 +144,7 @@ export function totpSecretOf(totpURI: string) {
 }
 
 export async function startTotp() {
-  const { data } = await authRequest('/two-factor/totp/start', {
-    method: 'POST',
-    data: {},
-    schema: totpStartedSchema,
-  });
+  const { data } = await api(contract.startTotpEnrolment, { body: {} });
   return data.totpURI;
 }
 
@@ -173,22 +154,19 @@ export function confirmTotp(queryClient: QueryClient, code: string) {
       withMethod(methods, { method: 'totp', channel: null, contactKind: null })
     );
 
-  return authRequest('/two-factor/totp/confirm', {
-    method: 'POST',
-    data: { code },
-    schema: totpEnabledSchema,
-    onSuccess: patch,
-    onUnreadAnswer: patch,
-  });
+  return api(
+    contract.confirmTotpEnrolment,
+    { body: { code } },
+    { onSuccess: patch, onUnreadAnswer: patch }
+  );
 }
 
 export function sendEnrolmentCode(channel: OtpChannel) {
-  return authRequest('/two-factor/otp/send', {
-    method: 'POST',
-    data: { channel },
-    schema: ladderOtpSentSchema,
-  });
+  return api(contract.twoFactorOtpSend, { body: { channel } });
 }
+
+/** The answer a session gets: an enrolment, never a sign-in. */
+const enrolled = pluginBodyWithMessage(otpEnabledSchema);
 
 export function confirmEnrolmentCode(
   queryClient: QueryClient,
@@ -204,21 +182,15 @@ export function confirmEnrolmentCode(
       })
     );
 
-  return authRequest('/two-factor/otp/verify', {
-    method: 'POST',
-    data: { channel, code },
-    schema: otpEnabledSchema,
-    onSuccess: patch,
-    onUnreadAnswer: patch,
-  });
+  return api(
+    contract.twoFactorOtpVerify,
+    { body: { channel, code } },
+    { narrow: enrolled, onSuccess: patch, onUnreadAnswer: patch }
+  );
 }
 
 export async function generateBackupCodes() {
-  const { data } = await authRequest('/two-factor/generate-backup-codes', {
-    method: 'POST',
-    data: {},
-    schema: backupCodesSchema,
-  });
+  const { data } = await api(contract.generateBackupCodes, { body: {} });
   return data;
 }
 
@@ -235,16 +207,11 @@ export async function acknowledgeBackupCodes(
       })
     );
 
-  const { data } = await authRequest('/two-factor/backup-codes/acknowledge', {
-    method: 'POST',
-    data: { setId },
-    schema: messageOnlySchema,
-    plain: true,
-    onSuccess: patch,
-    onUnreadAnswer: patch,
-  });
-  // Read whole, so the message is in `data`, not where callers look for it.
-  return { data, message: data.message };
+  return api(
+    contract.acknowledgeBackupCodes,
+    { body: { setId } },
+    { onSuccess: patch, onUnreadAnswer: patch }
+  );
 }
 
 export function setDefaultMethod(
@@ -254,13 +221,11 @@ export function setDefaultMethod(
   const patch = () =>
     cacheMethods(queryClient, (methods) => withDefault(methods, target));
 
-  return authRequest('/two-factor/methods/default', {
-    method: 'POST',
-    data: bodyOf(target),
-    schema: defaultMethodSchema,
-    onSuccess: patch,
-    onUnreadAnswer: patch,
-  });
+  return api(
+    contract.setDefaultTwoFactorMethod,
+    { body: bodyOf(target) },
+    { onSuccess: patch, onUnreadAnswer: patch }
+  );
 }
 
 export function removeMethod(queryClient: QueryClient, target: MethodTarget) {
@@ -269,30 +234,24 @@ export function removeMethod(queryClient: QueryClient, target: MethodTarget) {
     cacheDevicesCleared(queryClient);
   };
 
-  return authRequest('/two-factor/methods/disable', {
-    method: 'POST',
-    data: bodyOf(target),
-    schema: removedMethodSchema,
-    onSuccess: patch,
-    onUnreadAnswer: patch,
-  });
+  return api(
+    contract.disableTwoFactorMethod,
+    { body: bodyOf(target) },
+    { onSuccess: patch, onUnreadAnswer: patch }
+  );
 }
 
-export async function disableTwoFactor(queryClient: QueryClient) {
+export function disableTwoFactor(queryClient: QueryClient) {
   const patch = () => {
     cacheMethods(queryClient, () => []);
     cacheDevicesCleared(queryClient);
   };
 
-  const { data } = await authRequest('/two-factor/disable', {
-    method: 'POST',
-    data: {},
-    schema: messageOnlySchema,
-    plain: true,
-    onSuccess: patch,
-    onUnreadAnswer: patch,
-  });
-  return { data, message: data.message };
+  return api(
+    contract.disableTwoFactor,
+    { body: {} },
+    { onSuccess: patch, onUnreadAnswer: patch }
+  );
 }
 
 /** A refusal that leaves the credential stored while no factor was recorded for it. */
@@ -354,13 +313,11 @@ export async function deletePasskey(queryClient: QueryClient, id: EntityID) {
   const grant = await requestPasskeyGrant();
   const patch = () => cachePasskeyDeleted(queryClient, id);
 
-  return authRequest('/passkey/delete-passkey', {
-    method: 'POST',
-    data: { id, grant },
-    schema: passkeyDeletedSchema,
-    onSuccess: patch,
-    onUnreadAnswer: patch,
-  });
+  return api(
+    contract.deletePasskey,
+    { body: { id, grant } },
+    { onSuccess: patch, onUnreadAnswer: patch }
+  );
 }
 
 export function revokeTrustedDevice(queryClient: QueryClient, id: EntityID) {
@@ -369,11 +326,9 @@ export function revokeTrustedDevice(queryClient: QueryClient, id: EntityID) {
       devices.filter((device) => device.id !== id)
     );
 
-  return authRequest('/two-factor/trusted-devices/revoke', {
-    method: 'POST',
-    data: { id },
-    schema: deviceRevokedSchema,
-    onSuccess: patch,
-    onUnreadAnswer: patch,
-  });
+  return api(
+    contract.revokeTrustedDevice,
+    { body: { id } },
+    { onSuccess: patch, onUnreadAnswer: patch }
+  );
 }

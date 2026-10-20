@@ -5,7 +5,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { users } from '@/db/schema';
 import * as z from 'zod';
 
-import { REQUEST_BODIES } from '@app/shared/contract';
+import { ENDPOINTS } from '@app/shared/api/all';
 import {
   isTrigramIndexable,
   parseSearchParams,
@@ -27,8 +27,6 @@ import {
 
 import { filterColumns } from '@/lib/data-table/filter-columns';
 import { parseDataTableParams } from '@/lib/data-table/params';
-
-import { compareCodeUnits } from '@/utils/text';
 
 const ID = '01a02581-a7ee-723b-8000-000000000000';
 
@@ -291,9 +289,8 @@ describe('no client-facing validation message is Zod ASCII', () => {
    * every union, `"Invalid input: expected boolean, received undefined"` from a
    * `PUT /api/dash/users/:id` missing `isActive`.
    *
-   * `REQUEST_BODIES` is the complete registry of schemas a client can reach, so
-   * this covers a new route the moment it is added rather than when someone
-   * remembers to test it.
+   * `ENDPOINTS` lists every entry a client can reach, so this covers a new
+   * route the moment it is added rather than when someone remembers to test it.
    */
   const HOSTILE_BODIES: readonly unknown[] = [
     {},
@@ -309,25 +306,9 @@ describe('no client-facing validation message is Zod ASCII', () => {
     { id: 1, roleId: 1, name: 1, email: 1, isActive: 'yes' },
   ];
 
-  const entries = Object.entries(REQUEST_BODIES).flatMap(([route, schemas]) =>
-    (Array.isArray(schemas) ? schemas : [schemas]).map(
-      (schema, index) => [`${route} [${index}]`, schema] as const
-    )
+  const entries = ENDPOINTS.flatMap(({ method, path, body, bodyKind }) =>
+    bodyKind === 'json' && body ? [[`${method} ${path}`, body] as const] : []
   );
-
-  test('every schema in REQUEST_BODIES is reachable from this sweep', () => {
-    // Per KEY, not a count. `entries.length >= keys.length` cannot fail for the
-    // reason it names — every key contributing at least one entry is what makes
-    // it true — while a route registered as `[]` contributes none and is silently
-    // uncovered, which a second key with two schemas then hides.
-    const covered = new Set(
-      entries.map(([label]) => label.slice(0, label.lastIndexOf(' [')))
-    );
-
-    expect([...covered].toSorted(compareCodeUnits)).toEqual(
-      Object.keys(REQUEST_BODIES).toSorted(compareCodeUnits)
-    );
-  });
 
   test.each(entries)(
     '%s answers in Arabic for every hostile body',

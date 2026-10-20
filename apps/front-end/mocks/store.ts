@@ -1,7 +1,8 @@
 import type { LibraryFile, LibraryFolder } from '@/lib/media/schemas';
 import type { PagePermission } from '@/types/permission';
 import type { SettingsClient } from '@/types/settings';
-import type { UserClient } from '@/types/user';
+import type { UserDetail } from '@/types/user';
+import type { oauthResult as oauthResultEntry } from '@app/shared/api/better-auth';
 import type { DashboardPage } from '@app/shared/permissions/constants';
 import type { EntityID } from '@app/shared/types';
 import type {
@@ -12,6 +13,7 @@ import type {
 } from '@app/shared/validation/enums';
 import type { StoredPreferences } from '@app/shared/validation/preferences';
 import type { ReauthMethod } from '@app/shared/validation/reauth';
+import type * as z from 'zod';
 
 import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 
@@ -56,8 +58,25 @@ export interface MockUserRole {
   createdBy: EntityID | null;
 }
 
-export interface MockUser extends Omit<UserClient, 'role'> {
+/** What the `users` row holds: every field the detail answers, none optional. */
+type StoredUser = Pick<
+  UserDetail,
+  | 'id'
+  | 'name'
+  | 'email'
+  | 'emailVerified'
+  | 'phoneNumber'
+  | 'phoneNumberVerified'
+  | 'isActive'
+  | 'roleId'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+export interface MockUser extends StoredUser {
   role: MockUserRole | null;
+  /** A custom role's matrix, held on its one user. */
+  permissions?: PagePermission[];
   createdBy: EntityID | null;
   password: string;
 }
@@ -270,7 +289,7 @@ export const recoveryGrants = table<MockRecoveryGrant>(
  * once. `body` is what that answers (`null` for a refused sign-in).
  */
 export interface MockOAuthResult {
-  body: Record<string, unknown> | null;
+  body: z.input<typeof oauthResultEntry.response.raw> | null;
   expiresAt: string;
 }
 
@@ -311,7 +330,7 @@ export const toUserClient = ({
   createdBy: __,
   role,
   ...user
-}: MockUser): UserClient => ({
+}: MockUser) => ({
   ...user,
   role: role && { id: role.id, roleName: role.roleName },
 });

@@ -6,34 +6,29 @@
  * transforms valid input differently, would otherwise be trusted.
  */
 import { describe, expect, test } from 'bun:test';
-import type { RequestRoute } from '@app/shared/contract';
-import type {
-  BetterAuthResponseRoute,
-  ResponseRoute,
-} from '@app/shared/response-contract';
+import type { PluginPath } from '@app/shared/api/all';
 
 import { BINDINGS } from '@/modules';
 import * as z from 'zod';
 
-import { isRawResponse } from '@app/shared/api/endpoint';
-import { REQUEST_BODIES } from '@app/shared/contract';
-import { MSG_FETCHED } from '@app/shared/messages/common';
+import { PLUGIN_ENDPOINTS } from '@app/shared/api/all';
+import { isPagedResponse, isRawResponse } from '@app/shared/api/endpoint';
 import {
-  BETTER_AUTH_RESPONSES,
-  errorEnvelopeSchema,
-  isPaginatedRoute,
-  plainErrorEnvelopeSchema,
-  RESPONSE_DATA,
-} from '@app/shared/response-contract';
+  authProblemSchema,
+  plainProblemSchema,
+  problemSchema,
+  successSchemaOf,
+} from '@app/shared/api/wire';
+import { MSG_FETCHED } from '@app/shared/messages/common';
 import { isChannelEnabled } from '@app/shared/validation/otp';
 import { DEFAULT_PREFERENCES } from '@app/shared/validation/preferences';
 
-import { successSchemaOf } from '@/lib/http/binding';
 import { isJsonSchema } from '@/lib/http/openapi/json-schema';
 import { generateUuidV7 } from '@/lib/id';
 
 import { compareCodeUnits } from '@/utils/text';
 
+import { entryAt } from '../helpers/entries';
 import {
   mediaFileWire,
   mediaFolderWire,
@@ -42,6 +37,21 @@ import {
 } from '../helpers/response-fixtures';
 
 type Named = readonly [name: string, schema: z.ZodType, io: 'input' | 'output'];
+
+/** A success's `data` on its own, which the fast path may treat apart from its body. */
+function dataOf({
+  key,
+  entry: { response },
+}: (typeof BINDINGS)[number]): Named[] {
+  if (isRawResponse(response)) return [];
+  return [
+    [
+      `${key} data`,
+      isPagedResponse(response) ? response.data : response,
+      'output',
+    ],
+  ];
+}
 
 const contractSchemas: Named[] = [
   ...BINDINGS.flatMap((binding): Named[] => [
@@ -55,6 +65,7 @@ const contractSchemas: Named[] = [
       ? [[`${binding.key} body`, binding.entry.body, 'input'] as const]
       : []),
     [`${binding.key} success`, successSchemaOf(binding.entry), 'output'],
+    ...dataOf(binding),
     ...(isRawResponse(binding.entry.response)
       ? Object.entries(binding.entry.response.refusals ?? {}).map(
           ([status, schema]): Named => [
@@ -65,21 +76,12 @@ const contractSchemas: Named[] = [
         )
       : []),
   ]),
-  ['error envelope', errorEnvelopeSchema, 'output'],
-  ['plain error envelope', plainErrorEnvelopeSchema, 'output'],
-  ...Object.entries(REQUEST_BODIES).map(([key, schema]): Named => [
-    `${key} request`,
-    schema,
-    'input',
-  ]),
-  ...Object.entries(RESPONSE_DATA).map(([key, schema]): Named => [
-    `${key} data`,
-    schema,
-    'output',
-  ]),
-  ...Object.entries(BETTER_AUTH_RESPONSES).map(([key, schema]): Named => [
+  ['problem', problemSchema, 'output'],
+  ['plain problem', plainProblemSchema, 'output'],
+  ['auth problem', authProblemSchema, 'output'],
+  ...[...PLUGIN_ENDPOINTS].map(([key, entry]): Named => [
     `Better Auth ${key}`,
-    schema,
+    entry.response.raw,
     'output',
   ]),
 ];
@@ -229,8 +231,8 @@ const CONTACTS = [
 /** A send refuses a channel this deployment has not enabled. */
 const SENDABLE = CONTACTS.filter(({ channel }) => isChannelEnabled(channel));
 
-/** Shared by each binding's body and its `REQUEST_BODIES` entry. */
-const BODIES: Record<RequestRoute, readonly unknown[]> = {
+/** Each JSON body, by its binding's key. */
+const BODIES: Record<string, readonly unknown[]> = {
   'POST /api/auth/forgot-password/reset': CONTACTS.map((contact) => ({
     ...contact,
     code: CODE,
@@ -338,7 +340,7 @@ const SECOND_FACTOR = {
 };
 
 /** Each route's `data`; its success fixture wraps them. */
-const DATA: Record<ResponseRoute, readonly unknown[]> = {
+const DATA: Record<string, readonly unknown[]> = {
   'POST /api/auth/forgot-password/reset': [
     { reset: true },
     {
@@ -520,7 +522,7 @@ const TWO_FACTOR_REDIRECT = {
 };
 const LOGGED_IN = { data: { loggedIn: true } };
 
-const BETTER_AUTH: Record<BetterAuthResponseRoute, readonly unknown[]> = {
+const BETTER_AUTH: Record<PluginPath, readonly unknown[]> = {
   '/capabilities': [{ data: { oauthProviders: ['google'] } }],
   '/reauth/methods': [{ data: { methods: ['password', 'passkey'] } }],
   '/reauth/passkey/options': [PASSKEY_OPTIONS],
@@ -617,16 +619,18 @@ const UPLOAD = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'a.png', {
  * one or one without a schema.
  */
 const FIXTURES = new Map<string, readonly unknown[]>([
-  ...Object.entries(BODIES).flatMap(([key, valid]) => [
-    [`${key} body`, valid] as const,
-    [`${key} request`, valid] as const,
-  ]),
+  ...Object.entries(BODIES).map(
+    ([key, valid]) => [`${key} body`, valid] as const
+  ),
   ...Object.entries(DATA).flatMap(([key, valid]) => [
     [`${key} data`, valid] as const,
     [
       `${key} success`,
       valid.map((data) =>
-        successEnvelope(data, isPaginatedRoute(key) ? { meta: PAGE_META } : {})
+        successEnvelope(
+          data,
+          isPagedResponse(entryAt(key).response) ? { meta: PAGE_META } : {}
+        )
       ),
     ] as const,
   ]),
@@ -675,26 +679,42 @@ const FIXTURES = new Map<string, readonly unknown[]>([
     ],
   ],
   [
-    'error envelope',
+    'problem',
     [
-      { success: false, message: MSG_FETCHED, data: null },
+      { type: 'about:blank', status: 500, detail: MSG_FETCHED },
       {
-        success: false,
-        message: MSG_FETCHED,
+        type: 'about:blank',
+        title: 'Conflict',
+        status: 409,
+        detail: MSG_FETCHED,
         data: { fileIds: [file.id] },
         code: 'MEDIA_IN_USE',
       },
     ],
   ],
   [
-    'plain error envelope',
+    'plain problem',
     [
-      { success: false, message: MSG_FETCHED, data: null },
+      { type: 'about:blank', status: 500, detail: MSG_FETCHED },
       {
-        success: false,
-        message: MSG_FETCHED,
-        data: null,
+        type: 'about:blank',
+        title: 'Unauthorized',
+        status: 401,
+        detail: MSG_FETCHED,
         code: 'REAUTH_REQUIRED',
+      },
+    ],
+  ],
+  [
+    'auth problem',
+    [
+      {
+        type: 'about:blank',
+        title: 'Unauthorized',
+        status: 401,
+        detail: MSG_FETCHED,
+        code: 'REAUTH_REQUIRED',
+        message: MSG_FETCHED,
       },
     ],
   ],

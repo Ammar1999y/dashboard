@@ -13,6 +13,7 @@ import { VERIFICATION_IDENTIFIER_MAX } from '@/db/limits';
 import { isAPIError } from 'better-auth/api';
 import * as z from 'zod';
 
+import * as contract from '@app/shared/api/better-auth';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { twoFactorPasskeyVerifySchema } from '@app/shared/validation/two-factor';
@@ -54,8 +55,8 @@ export const twoFactorPasskey = () =>
     id: 'two-factor-passkey',
     endpoints: {
       twoFactorPasskeyOptions: pluginEndpoint(
-        '/two-factor/passkey/options',
-        { method: 'POST' },
+        contract.twoFactorPasskeyOptions,
+        {},
         async (ctx) => {
           const challenge = await requireTwoFactorChallenge(ctx, {
             method: 'passkey',
@@ -83,8 +84,8 @@ export const twoFactorPasskey = () =>
       ),
 
       twoFactorPasskeyVerify: pluginEndpoint(
-        '/two-factor/passkey/verify',
-        { method: 'POST', body: z.record(z.string(), z.unknown()) },
+        contract.twoFactorPasskeyVerify,
+        { body: z.record(z.string(), z.unknown()) },
         async (ctx) => {
           const challenge = await requireTwoFactorChallenge(ctx, {
             method: 'passkey',

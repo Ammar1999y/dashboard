@@ -1,14 +1,15 @@
 import type { Entity } from './entity';
+import type { DataTableFeatures } from '@/components/ui/data-table';
 import type { EntityID } from '@app/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 
+import { useRouter } from 'next/router';
 import { memo, useCallback } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { noDataSchema } from '@app/shared/responses/common';
 import { MSG_CONFIRM_DELETE } from '@/constants/messages';
-import { mutate } from '@/lib/api/mutation';
+import { api } from '@/lib/api/client';
 import { cacheRemoved } from '@/lib/api/query-cache';
 
 import { Button } from '@/components/ui/button';
@@ -35,9 +36,10 @@ interface RowActionsOptions {
   /**
    * The rows are user accounts. The signed-in user's own row is editable
    * without the edit grant, and never deletable: the server refuses both.
-   * Its edit link goes to this page, where an account is edited by its owner.
+   * Its edit link goes to the page this builds from the list's own URL, where
+   * an account is edited by its owner and which returns to the list.
    */
-  ownAccountHref?: string;
+  ownAccountHref?: (from: string) => string;
   /**
    * The rows are roles. The signed-in user's own role opens read only and is
    * never deletable: the server refuses an edit, and a delete while the role
@@ -56,7 +58,7 @@ export function rowActionsColumn<TRow extends { id: EntityID }>(
   getName: (row: TRow) => string,
   afterDelete?: AfterDelete,
   { ownAccountHref, ownRole }: RowActionsOptions = {}
-): ColumnDef<TRow> {
+): ColumnDef<DataTableFeatures, TRow> {
   return actionsColumn<TRow>((row) => (
     <RowActions
       entity={entity}
@@ -86,22 +88,16 @@ const RowActions = memo(
 
     return (
       <div className='flex items-center justify-end gap-1 text-muted-foreground'>
-        {canEdit && (
-          <LabelTooltip label={`${isOwnRole ? 'عرض' : 'تعديل'} ${entity.noun}`}>
-            <Link
-              href={isOwnAccount ? ownAccountHref : entity.editRoute(id)}
-              variant='defaultGhost'
-              size='icon'
-            >
-              <Icon
-                icon={
-                  isOwnRole ? 'solar:eye-linear' : 'solar:pen-new-square-linear'
-                }
-                className='size-4'
-              />
-            </Link>
-          </LabelTooltip>
-        )}
+        {canEdit &&
+          (isOwnAccount ? (
+            <OwnAccountAction noun={entity.noun} toAccount={ownAccountHref} />
+          ) : (
+            <EditAction
+              href={entity.editRoute(id)}
+              noun={entity.noun}
+              readOnly={isOwnRole}
+            />
+          ))}
         {canDelete && <DeleteAction entity={entity} id={id} {...deleteProps} />}
       </div>
     );
@@ -109,6 +105,38 @@ const RowActions = memo(
 );
 
 RowActions.displayName = 'RowActions';
+
+interface EditActionProps {
+  href: string;
+  noun: string;
+  readOnly?: boolean;
+}
+
+const EditAction = memo(({ href, noun, readOnly = false }: EditActionProps) => (
+  <LabelTooltip label={`${readOnly ? 'عرض' : 'تعديل'} ${noun}`}>
+    <Link href={href} variant='defaultGhost' size='icon'>
+      <Icon
+        icon={readOnly ? 'solar:eye-linear' : 'solar:pen-new-square-linear'}
+        className='size-4'
+      />
+    </Link>
+  </LabelTooltip>
+));
+
+EditAction.displayName = 'EditAction';
+
+interface OwnAccountActionProps {
+  noun: string;
+  toAccount: (from: string) => string;
+}
+
+/** The one row that reads the list's URL, so no other row renders when it changes. */
+const OwnAccountAction = memo(({ noun, toAccount }: OwnAccountActionProps) => {
+  const { asPath } = useRouter();
+  return <EditAction href={toAccount(asPath)} noun={noun} />;
+});
+
+OwnAccountAction.displayName = 'OwnAccountAction';
 
 const DeleteAction = memo(
   ({ entity, id, name, afterDelete }: RowActionsProps) => {
@@ -120,13 +148,11 @@ const DeleteAction = memo(
         afterDelete?.(queryClient, id);
         cacheRemoved(queryClient, entity.keys, id);
       };
-      return mutate({
-        href: entity.itemHref(id),
-        method: 'DELETE',
-        schema: noDataSchema,
-        onSuccess: write,
-        onUnreadAnswer: write,
-      });
+      return api(
+        entity.endpoints.remove,
+        { params: { id } },
+        { onSuccess: write, onUnreadAnswer: write }
+      );
     }, [entity, id, queryClient, afterDelete]);
 
     return (

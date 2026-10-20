@@ -1,4 +1,3 @@
-import type { ApiResult } from '@/lib/api/fetch';
 import type { ItemKey } from '@/lib/media/keys';
 import type { SelectionColumn } from '@/lib/media/selection';
 import type { EntityID } from '@app/shared/types';
@@ -16,7 +15,7 @@ export interface ConfirmRequest {
   confirmLabel: string;
   pendingLabel: string;
   destructive?: boolean;
-  run: () => Promise<ApiResult<unknown>>;
+  run: () => Promise<{ message: string }>;
   onDone?: () => void;
 }
 

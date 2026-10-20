@@ -1,6 +1,7 @@
 /**
- * The PostgreSQL client: one pooled `Bun.SQL` connection pool for the process,
- * and the transaction helper that runs on it.
+ * The PostgreSQL clients: the application's `Bun.SQL` connection pool and the
+ * transaction helper that runs on it, the data-table list pool, and the
+ * readiness probe's pool.
  *
  * The driver has to hold real TCP sessions: `FOR UPDATE` across statements and
  * `pg_advisory_xact_lock` both assume a transaction runs on one backend
@@ -13,22 +14,23 @@ import { drizzle } from 'drizzle-orm/bun-sql';
 
 import { DATABASE_URL } from '@/lib/env.server';
 
-import { MAX_POOL_CONNECTIONS } from './limits';
+import { DATA_TABLE_POOL_CONNECTIONS, MAX_POOL_CONNECTIONS } from './limits';
 import * as schema from './schema';
 import { transactionRunner } from './transaction';
 
 export type { Tx } from './transaction';
 
 /**
- * Module-private on purpose: one pool per process, reachable only through `db`,
- * `withTransaction` and `closeDatabase`, so nothing can open a second one.
+ * Module-private on purpose: one pool of each kind per process, reachable only
+ * through `db`, `dataTableDb`, `withTransaction` and `closeDatabase`, so nothing
+ * can open another.
  *
  * No pool-wide `statement_timeout`, deliberately: a ceiling below a real query's duration
  * turns a slow request into a failed one, and no query here has been profiled
  * against the target host. Add one only with a measured p99 for the slowest
  * legitimate query — the data-table routes under an `allowScanOnly` filter —
- * and set it well above that. Until then a runaway query holds one of
- * `MAX_POOL_CONNECTIONS` until it finishes or the client disconnects.
+ * and set it well above that. Until then a runaway query holds a connection
+ * until it finishes or the client disconnects.
  * Transactions given a deadline apply a transaction-local limit per statement.
  *
  * `idle_in_transaction_session_timeout` does have a value: a request has been
@@ -56,6 +58,27 @@ export type Executor = typeof db | Tx;
  * sites, and answers 503 once no connection frees up in time.
  */
 export const withTransaction = transactionRunner(client);
+
+/**
+ * A data-table list's statement text follows the client's filters and sorts,
+ * and every distinct text on a preparing connection stays a server-side
+ * prepared statement until the connection closes: backend memory without bound.
+ * This pool prepares nothing, at the price of planning each list statement;
+ * the fixed statements on `client` stay prepared, where planning would about
+ * double a short lookup.
+ *
+ * Read-only for the session: unprepared, `bun:sql` types a parameter from its
+ * JavaScript value, so the `jsonb` column type in `./schema.ts` would store an
+ * object as `[object Object]`. A write here fails instead.
+ */
+const dataTableClient = new SQL(DATABASE_URL, {
+  max: DATA_TABLE_POOL_CONNECTIONS,
+  prepare: false,
+  connection: { default_transaction_read_only: 'on' },
+});
+
+/** The rows and count reads of a `parseDataTableParams` list, and nothing else. */
+export const dataTableDb = drizzle({ client: dataTableClient });
 
 /**
  * The readiness probe's own pool: one connection, with the deadline enforced
@@ -122,7 +145,7 @@ export function pingDatabase(): Promise<boolean> {
 }
 
 /**
- * ⚠️ Whether the application pool still hands out working connections, which
+ * ⚠️ Whether an application pool still hands out working connections, which
  * `pingDatabase` cannot see from its own pool. Bun's pool can wedge when
  * connections die while it reconnects (a PostgreSQL restart or failover):
  * every query then fails at once, for good, with a plain `Error` rather than
@@ -131,33 +154,44 @@ export function pingDatabase(): Promise<boolean> {
  * a busy pool is not a fault. Single-flight, so a saturated pool queues at
  * most one `select 1` however often readiness is polled.
  */
-const poolCheck: { inFlight: Promise<boolean> | null; wedged: boolean } = {
-  inFlight: null,
-  wedged: false,
-};
+interface PoolCheck {
+  pool: SQL;
+  inFlight: Promise<boolean> | null;
+  wedged: boolean;
+}
 
-export function applicationPoolUsable(): Promise<boolean> {
-  poolCheck.inFlight ??= client`select 1`
+const poolChecks: readonly PoolCheck[] = [client, dataTableClient].map(
+  (pool) => ({ pool, inFlight: null, wedged: false })
+);
+
+function poolUsable(check: PoolCheck): Promise<boolean> {
+  check.inFlight ??= check.pool`select 1`
     .execute()
     .then(
       () => true,
       (error: unknown) => error instanceof SQL.SQLError
     )
     .then((usable) => {
-      poolCheck.wedged = !usable;
+      check.wedged = !usable;
       return usable;
     })
     .finally(() => {
-      poolCheck.inFlight = null;
+      check.inFlight = null;
     });
   return Promise.race([
-    poolCheck.inFlight,
+    check.inFlight,
     Bun.sleep(PROBE_TIMEOUT_MS).then(() => true),
   ]);
 }
 
+/** `false` when either application pool has wedged. */
+export async function applicationPoolUsable(): Promise<boolean> {
+  const usable = await Promise.all(poolChecks.map(poolUsable));
+  return usable.every(Boolean);
+}
+
 /**
- * Closes both pools on shutdown. `close()` waits for in-flight queries; the
+ * Closes every pool on shutdown. `close()` waits for in-flight queries; the
  * shutdown path in `server.ts` is already bounded by its own forced-exit timer,
  * so this needs no timeout of its own.
  *
@@ -167,7 +201,9 @@ export function applicationPoolUsable(): Promise<boolean> {
  */
 export async function closeDatabase(): Promise<void> {
   await Promise.all([
-    poolCheck.wedged ? undefined : client.close(),
+    ...poolChecks.map((check) =>
+      check.wedged ? undefined : check.pool.close()
+    ),
     probeClient.close(),
   ]);
 }

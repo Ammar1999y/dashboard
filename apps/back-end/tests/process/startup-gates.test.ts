@@ -175,6 +175,19 @@ function rejectionReason(output: string): string | null {
   return null;
 }
 
+/** The `msg` of a JSON log line; nothing for any other line. */
+function logMessage(line: string): string[] {
+  if (!line.trimStart().startsWith('{')) return [];
+  try {
+    const parsed: unknown = JSON.parse(line);
+    return typeof parsed === 'object' && parsed !== null && 'msg' in parsed
+      ? [String(parsed.msg)]
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Boots `baseEnv` plus `overrides` on `port` and kills it once it listens. A
  * listening boot has passed every module-load gate; what it then serves is not
@@ -565,6 +578,46 @@ describe('a production-posture boot serves the production header set', () => {
       });
       expect(dev.status).toBe(404);
       expect(dev.headers.get('allow')).toBeNull();
+    } finally {
+      child.kill();
+      await child.exited;
+    }
+  }, 90_000);
+
+  test('the served document is generated after listening, before any request asks for it', async () => {
+    // The generation is one synchronous block of a few hundred milliseconds;
+    // left to the first authorised request, every request in flight waits on it.
+    const child = Bun.spawn(['bun', '--no-env-file', SERVER], {
+      cwd: REPO_ROOT,
+      env: { ...productionEnv(tempSqliteDir()), PORT: String(BOOT_PORT + 9) },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const messages: string[] = [];
+    const prepared = (async () => {
+      const decoder = new TextDecoder();
+      let pending = '';
+      for await (const chunk of child.stdout) {
+        pending += decoder.decode(chunk, { stream: true });
+        const lines = pending.split('\n');
+        pending = lines.pop() ?? '';
+        messages.push(...lines.flatMap(logMessage));
+        if (messages.includes('openapi document prepared')) return true;
+      }
+      return false;
+    })();
+
+    try {
+      const outcome = await Promise.race([
+        prepared,
+        Bun.sleep(60_000).then(() => false),
+      ]);
+      expect(outcome).toBe(true);
+      expect(messages.indexOf('server started')).toBeGreaterThanOrEqual(0);
+      expect(messages.indexOf('server started')).toBeLessThan(
+        messages.indexOf('openapi document prepared')
+      );
+      expect(messages).not.toContain('request');
     } finally {
       child.kill();
       await child.exited;

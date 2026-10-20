@@ -1,20 +1,25 @@
+import type { DataOf } from '@/lib/api/client';
 import type { Bookkeeping } from '@/lib/api/mutation';
 import type { passkeyRequestOptionsSchema } from '@app/shared/responses/better-auth';
 import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/browser';
+import type * as z from 'zod';
 
-import * as z from 'zod';
+import { passkeyEnrolmentGrant } from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
 import { twoFactorMsg } from '@app/shared/messages/auth';
-import { passkeyGrantedSchema } from '@app/shared/responses/better-auth';
 import {
   MSG_BROWSER_UNSUPPORTED,
   MSG_PASSKEY_ALREADY_REGISTERED,
   MSG_PASSKEY_CANCELLED,
   MSG_PASSKEY_FAILED,
 } from '@/constants/messages';
-import { invalidResponse } from '@/lib/api/fetch';
+import { api } from '@/lib/api/client';
 
-import { authRequest } from './request';
+import {
+  passkeyCreationOptionsSchema,
+  passkeyRegistrationOptions,
+  verifyPasskeyRegistration,
+} from './library-endpoints';
 
 /** The `code` of each failure a ceremony can end in, for `hasErrorCode`. */
 export const PASSKEY_ERROR = {
@@ -82,24 +87,6 @@ function ceremonyError(error: unknown, library: BrowserLibrary): CustomError {
 }
 
 /**
- * The library's options are handed to the browser as they came; only what the
- * ceremony cannot start without is checked here, and the browser rejects a
- * malformed rest.
- */
-const creationOptionsSchema = z.looseObject({
-  challenge: z.string().min(1),
-  rp: z.looseObject({ name: z.string() }),
-  user: z.looseObject({
-    id: z.string(),
-    name: z.string(),
-    displayName: z.string(),
-  }),
-  pubKeyCredParams: z.array(
-    z.looseObject({ type: z.literal('public-key'), alg: z.number() })
-  ),
-});
-
-/**
  * A passkey assertion for `options`, as an options endpoint answered them, in
  * the shape the verify endpoints take as `response`. Rejects with a
  * `CustomError` coded by `PASSKEY_ERROR`.
@@ -123,10 +110,10 @@ export async function authenticateWithPasskey(
  * `PublicKeyCredentialCreationOptionsJSON`, the result goes to
  * `/passkey/verify-registration` as `response`.
  */
-export async function registerWithPasskey(options: unknown) {
-  const parsed = creationOptionsSchema.safeParse(options);
-  if (!parsed.success) throw invalidResponse();
-  const optionsJSON: PublicKeyCredentialCreationOptionsJSON = parsed.data;
+export async function registerWithPasskey(
+  options: z.output<typeof passkeyCreationOptionsSchema>
+) {
+  const optionsJSON: PublicKeyCredentialCreationOptionsJSON = options;
   const library = await loadSupportedLibrary();
   try {
     const { clientExtensionResults: _, ...response } =
@@ -137,24 +124,20 @@ export async function registerWithPasskey(options: unknown) {
   }
 }
 
-const storedPasskeySchema = z.object({ id: z.string() });
-
 /**
  * A single-use grant for a passkey write, a registration or a deletion. Without
- * `password` it needs the re-authentication window, which `authRequest` asks
+ * `password` it needs the re-authentication window, which `api()` asks
  * for when it is closed.
  */
 export async function requestPasskeyGrant(password?: string) {
-  const { data } = await authRequest('/two-factor/passkey/grant', {
-    method: 'POST',
-    data: password === undefined ? {} : { password },
-    schema: passkeyGrantedSchema,
+  const { data } = await api(passkeyEnrolmentGrant, {
+    body: password === undefined ? {} : { password },
   });
   return data.grant;
 }
 
 interface RegisterPasskeyOptions extends Bookkeeping<
-  z.output<typeof storedPasskeySchema>
+  DataOf<typeof verifyPasskeyRegistration>
 > {
   password?: string;
   name?: string;
@@ -168,7 +151,7 @@ interface RegisterPasskeyOptions extends Bookkeeping<
  * Without `password` the grant needs the re-authentication window, so the
  * prompt opens first and not in the middle of the ceremony. The server refuses a
  * session older than a day with a 403 whose message asks for a new sign-in,
- * which `authRequest` rethrows as is. The bookkeeping belongs to the last
+ * which `api()` rethrows as is. The bookkeeping belongs to the last
  * request, the one that commits.
  */
 export async function registerPasskey({
@@ -178,22 +161,14 @@ export async function registerPasskey({
   onUnreadAnswer,
 }: RegisterPasskeyOptions = {}): Promise<string> {
   const grant = await requestPasskeyGrant(password);
-  const { data: options } = await authRequest(
-    '/passkey/generate-register-options',
-    {
-      method: 'GET',
-      query: name === undefined ? undefined : { name },
-      plain: true,
-    }
-  );
-  const response = await registerWithPasskey(options);
-  const { data: stored } = await authRequest('/passkey/verify-registration', {
-    method: 'POST',
-    data: { response, name, grant },
-    schema: storedPasskeySchema,
-    plain: true,
-    onSuccess,
-    onUnreadAnswer,
+  const options = await api(passkeyRegistrationOptions, {
+    query: name === undefined ? undefined : { name },
   });
+  const response = await registerWithPasskey(options);
+  const stored = await api(
+    verifyPasskeyRegistration,
+    { body: { response, name, grant } },
+    { onSuccess, onUnreadAnswer }
+  );
   return stored.id;
 }

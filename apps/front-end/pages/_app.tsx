@@ -1,3 +1,5 @@
+// Before anything that builds a zod schema: it sets `jitless`.
+import '@/lib/zod-locale';
 // import 'lenis/dist/lenis.css';
 import '@/styles/theme-tokens.css';
 import '@/styles/base.css';
@@ -7,7 +9,6 @@ import '@/styles/app-style.css';
 import '@/styles/icons.css';
 import '@/styles/table.css';
 import '@/styles/editor-content.css';
-import '@/lib/zod-locale';
 import '@/lib/icons-bundle.generated';
 
 import type { Page } from '@/types/page';

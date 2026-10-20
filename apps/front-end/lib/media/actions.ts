@@ -1,19 +1,20 @@
 import type { Breadcrumb } from './schemas';
-import type { RequestBody } from '@app/shared/contract';
+import type { BodyOf } from '@/lib/api/client';
 import type { EntityID } from '@app/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 
 import {
-  createdFolderSchema,
-  deletedFolderSchema,
-  mediaFileSchema,
-  movedSelectionSchema,
-  updatedFileSchema,
-  updatedFolderSchema,
-} from '@app/shared/responses/media';
-import { mutate } from '@/lib/api/mutation';
+  createMediaFolder,
+  deleteMedia,
+  moveMedia,
+  publishMediaFile,
+  unpublishMediaFile,
+  updateMediaFile,
+  updateMediaFolder,
+} from '@app/shared/api/media';
+import { api } from '@/lib/api/client';
 
-import { fileHref, folderHref, FOLDERS_API, MEDIA_API, mediaKeys } from './api';
+import { mediaKeys } from './api';
 import {
   cacheFilePatched,
   cacheFilesMoved,
@@ -49,21 +50,20 @@ export function renameFile(
   id: EntityID,
   displayName: string
 ) {
-  const data: RequestBody<'PUT /api/dash/media/files/:id'> = { displayName };
   const write = (name: string, updatedAt: string) => {
     cacheFilePatched(queryClient, id, { displayName: name, updatedAt });
     refreshDetail(queryClient, id);
   };
-  return mutate({
-    href: fileHref(id),
-    method: 'PUT',
-    data,
-    schema: updatedFileSchema,
-    onSuccess: (updated) => {
-      write(updated.displayName ?? displayName, updated.updatedAt);
-    },
-    onUnreadAnswer: () => write(displayName, now()),
-  });
+  return api(
+    updateMediaFile,
+    { params: { id }, body: { displayName } },
+    {
+      onSuccess: (updated) => {
+        write(updated.displayName ?? displayName, updated.updatedAt);
+      },
+      onUnreadAnswer: () => write(displayName, now()),
+    }
+  );
 }
 
 /** Files and folders of one request; the server takes them together. */
@@ -89,10 +89,7 @@ export function moveSelection(
   destination: Breadcrumb[]
 ) {
   const to = destination.at(-1)?.id ?? null;
-  const data: RequestBody<'PUT /api/dash/media'> = {
-    ...selectionBody(selection),
-    to,
-  };
+  const body: BodyOf<typeof moveMedia> = { ...selectionBody(selection), to };
   const place = (
     fileIds: readonly EntityID[],
     folderIds: readonly EntityID[],
@@ -106,15 +103,16 @@ export function moveSelection(
     if (fileIds.length + folderIds.length > 0)
       markTotalsStale(queryClient, { stats: false });
   };
-  return mutate({
-    href: MEDIA_API,
-    method: 'PUT',
-    data,
-    schema: movedSelectionSchema,
-    onSuccess: (moved) =>
-      place(moved.fileIds, moved.folderIds, moved.updatedAt),
-    onUnreadAnswer: () => place(selection.fileIds, selection.folderIds, now()),
-  });
+  return api(
+    moveMedia,
+    { body },
+    {
+      onSuccess: (moved) =>
+        place(moved.fileIds, moved.folderIds, moved.updatedAt),
+      onUnreadAnswer: () =>
+        place(selection.fileIds, selection.folderIds, now()),
+    }
+  );
 }
 
 /**
@@ -127,7 +125,7 @@ export function deleteSelection(
   selection: MediaSelection,
   { recursive }: { recursive: boolean }
 ) {
-  const data: RequestBody<'DELETE /api/dash/media'> = {
+  const body: BodyOf<typeof deleteMedia> = {
     ...selectionBody(selection),
     ...(recursive && { recursive: true }),
   };
@@ -139,19 +137,19 @@ export function deleteSelection(
     for (const id of folderIds) cacheFolderRemoved(queryClient, id);
     markTotalsStale(queryClient);
   };
-  return mutate({
-    href: MEDIA_API,
-    method: 'DELETE',
-    data,
-    schema: deletedFolderSchema,
-    onSuccess: ({ folderIds, deleted, pending }) =>
-      drop([...deleted, ...pending], folderIds),
-    // What a tree held is not in what was sent.
-    onUnreadAnswer: () =>
-      recursive && selection.folderIds.length > 0
-        ? refetchAll(queryClient)
-        : drop(selection.fileIds, selection.folderIds),
-  });
+  return api(
+    deleteMedia,
+    { body },
+    {
+      onSuccess: ({ folderIds, deleted, pending }) =>
+        drop([...deleted, ...pending], folderIds),
+      // What a tree held is not in what was sent.
+      onUnreadAnswer: () =>
+        recursive && selection.folderIds.length > 0
+          ? refetchAll(queryClient)
+          : drop(selection.fileIds, selection.folderIds),
+    }
+  );
 }
 
 /** Publishes or unpublishes: the answer is the file in its new state. */
@@ -160,16 +158,17 @@ export function setFileVisibility(
   id: EntityID,
   to: 'public' | 'private'
 ) {
-  return mutate({
-    href: `${fileHref(id)}/${to === 'public' ? 'publish' : 'unpublish'}`,
-    method: 'POST',
-    schema: mediaFileSchema,
-    onSuccess: (file) => {
-      cacheFilePatched(queryClient, id, file);
-      refreshDetail(queryClient, id);
-    },
-    onUnreadAnswer: () => refetchAll(queryClient),
-  });
+  return api(
+    to === 'public' ? publishMediaFile : unpublishMediaFile,
+    { params: { id } },
+    {
+      onSuccess: (file) => {
+        cacheFilePatched(queryClient, id, file);
+        refreshDetail(queryClient, id);
+      },
+      onUnreadAnswer: () => refetchAll(queryClient),
+    }
+  );
 }
 
 export function createFolder(
@@ -186,29 +185,28 @@ export function createFolder(
     createdByName: string;
   }
 ) {
-  const data: RequestBody<'POST /api/dash/media/folders'> = { parentId, name };
-  return mutate({
-    href: FOLDERS_API,
-    method: 'POST',
-    data,
-    schema: createdFolderSchema,
-    onSuccess: (created) => {
-      const timestamp = now();
-      cacheFolderCreated(queryClient, {
-        id: created.id,
-        name: created.name,
-        parentId,
-        createdBy,
-        createdByName,
-        subfolderCount: 0,
-        fileCount: 0,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      });
-    },
-    // The id came with the lost answer.
-    onUnreadAnswer: () => refetchAll(queryClient),
-  });
+  return api(
+    createMediaFolder,
+    { body: { parentId, name } },
+    {
+      onSuccess: (created) => {
+        const timestamp = now();
+        cacheFolderCreated(queryClient, {
+          id: created.id,
+          name: created.name,
+          parentId,
+          createdBy,
+          createdByName,
+          subfolderCount: 0,
+          fileCount: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+      },
+      // The id came with the lost answer.
+      onUnreadAnswer: () => refetchAll(queryClient),
+    }
+  );
 }
 
 export function renameFolder(
@@ -216,20 +214,19 @@ export function renameFolder(
   id: EntityID,
   name: string
 ) {
-  const data: RequestBody<'PUT /api/dash/media/folders/:id'> = { name };
-  return mutate({
-    href: folderHref(id),
-    method: 'PUT',
-    data,
-    schema: updatedFolderSchema,
-    onSuccess: (updated) => {
-      cacheFolderRenamed(
-        queryClient,
-        id,
-        updated.name ?? name,
-        updated.updatedAt
-      );
-    },
-    onUnreadAnswer: () => cacheFolderRenamed(queryClient, id, name, now()),
-  });
+  return api(
+    updateMediaFolder,
+    { params: { id }, body: { name } },
+    {
+      onSuccess: (updated) => {
+        cacheFolderRenamed(
+          queryClient,
+          id,
+          updated.name ?? name,
+          updated.updatedAt
+        );
+      },
+      onUnreadAnswer: () => cacheFolderRenamed(queryClient, id, name, now()),
+    }
+  );
 }

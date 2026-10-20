@@ -30,6 +30,7 @@ import { resetTables } from '../helpers/database';
 import { sentMail, settleDelivery } from '../helpers/mailbox';
 import { seedOtpProof } from '../helpers/otp';
 import { seedUser } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 
 /** Satisfies `passwordSchema`, so every attempt reaches the comparison. */
 const WRONG_PASSWORD = 'Harness!Wr0ngPass';
@@ -115,20 +116,23 @@ describe('one correct code presented by six requests at once', () => {
 });
 
 describe('two first sends for one identifier at once', () => {
-  test('serialise on the advisory lock: one row, one code, one message, one throttle', async () => {
+  /** A first send for `user`'s address. */
+  const firstSend = (user: { userId: string; email: string }) =>
+    processOtpSend({
+      userId: user.userId,
+      identifier: user.email,
+      channel: 'email',
+      purpose: 'verify_contact',
+      sendTo: user.email,
+      entityName: CONTACT_LABEL.email,
+    });
+
+  test("serialise on the user's row lock: one row, one code, one message, one throttle", async () => {
     // A FIRST send: no row exists yet, so `FOR UPDATE` has nothing to lock and
-    // only the advisory lock stands between two concurrent INSERTs — without it
+    // only the user row lock stands between two concurrent INSERTs — without it
     // the second one dies on the unique index as a 500.
     const user = await seedUser({ emailVerified: false });
-    const send = () =>
-      processOtpSend({
-        userId: user.userId,
-        identifier: user.email,
-        channel: 'email',
-        purpose: 'verify_contact',
-        sendTo: user.email,
-        entityName: CONTACT_LABEL.email,
-      });
+    const send = () => firstSend(user);
 
     const outcomes = await Promise.allSettled([send(), send()]);
 
@@ -148,6 +152,21 @@ describe('two first sends for one identifier at once', () => {
 
     await settleDelivery();
     expect(sentMail()).toHaveLength(1);
+  });
+
+  test('take that lock and no other before reading the proof row', async () => {
+    const user = await seedUser({ emailVerified: false });
+    const recorder = recordStatements();
+    await firstSend(user).finally(recorder.stop);
+    await settleDelivery();
+
+    const sent = recorder.statements.map(({ sql }) => sql);
+    const proofRead = sent.findIndex((text) =>
+      text.includes('from "verification_sessions"')
+    );
+    expect(sent.slice(0, proofRead)).toEqual([
+      expect.stringMatching(/from "users" .* for no key update$/),
+    ]);
   });
 });
 

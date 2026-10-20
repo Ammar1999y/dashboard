@@ -1,5 +1,5 @@
 import type { ThemeMode } from './types';
-import type { Attribute } from 'next-themes';
+import type { ThemeProviderProps } from 'next-themes';
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 
@@ -10,12 +10,18 @@ import {
 import { flushSync } from 'react-dom';
 
 import { useEditorStore } from './store';
-import { NEXT_THEME_STORAGE_KEY, saveThemeSnapshot } from './theme-snapshot';
+import { NEXT_THEME_ATTRIBUTES, NEXT_THEME_STORAGE_KEY } from './theme-script';
+import { saveThemeSnapshot } from './theme-snapshot';
 import { applyCssVars, computeRootVars, computeThemeVars } from './theme-vars';
 
 type Point = { x: number; y: number };
 
-const NEXT_THEME_ATTRIBUTES: Attribute[] = ['class', 'data-theme'];
+// `THEME_SCRIPT` in `_document` does this script's work under a CSP hash. A
+// data-block type keeps the browser from running next-themes' copy, whose
+// bundled text has no stable hash.
+const INERT_SCRIPT_PROPS: ThemeProviderProps['scriptProps'] = {
+  type: 'text/plain',
+};
 
 const isThemeMode = (value: string | undefined): value is ThemeMode =>
   value === 'light' || value === 'dark';
@@ -62,6 +68,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     <NextThemeProvider
       attribute={NEXT_THEME_ATTRIBUTES}
       storageKey={NEXT_THEME_STORAGE_KEY}
+      scriptProps={INERT_SCRIPT_PROPS}
     >
       <ThemeStyleSync />
       {children}

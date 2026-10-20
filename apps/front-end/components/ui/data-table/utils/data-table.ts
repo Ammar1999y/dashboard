@@ -27,3 +27,7 @@ export function getDefaultFilterOperator(filterVariant: FilterVariant) {
 
   return operators[0]?.value ?? (filterVariant === 'text' ? 'iLike' : 'eq');
 }
+
+export function isValuelessOperator(operator: FilterOperator) {
+  return operator === 'isEmpty' || operator === 'isNotEmpty';
+}

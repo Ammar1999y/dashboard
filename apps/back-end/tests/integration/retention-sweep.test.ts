@@ -32,6 +32,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { StoreOp } from '../helpers/object-store';
+import type { Tx } from '@/db';
 import type { DatabaseSweepResult } from '@/lib/maintenance/database';
 
 import { eq, sql } from 'drizzle-orm';
@@ -50,6 +51,7 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
+import { lockUser } from '@/lib/auth/user-eligibility';
 import { runDatabaseSweep } from '@/lib/maintenance/database';
 import { startSchedule } from '@/lib/maintenance/schedule';
 import { ORPHAN_DRAIN_BATCH } from '@/lib/media/orphaned-objects';
@@ -57,7 +59,7 @@ import { TRANSITION_RETRY_BATCH } from '@/lib/media/visibility';
 
 import { compareCodeUnits } from '@/utils/text';
 
-import { resetTables } from '../helpers/database';
+import { holdUntilReleased, resetTables } from '../helpers/database';
 import {
   failObjectStore,
   failObjectStoreKey,
@@ -758,28 +760,93 @@ describe('the scheduled job in front of it', () => {
     // The other half: with nothing in flight the drain resolves true rather
     // than waiting out its budget.
     expect(await handle.stopAndDrain(5000)).toBe(true);
-  });
-
-  test('a sweep that throws is contained, logged by class, and does not reject', async () => {
-    const failing = async () => {
-      throw new Error('sweep exploded');
-    };
-
-    let escaped: unknown = null;
-    try {
-      await (async () => {
-        try {
-          await failing();
-        } catch {}
-      })();
-    } catch (error) {
-      escaped = error;
-    }
-
-    expect(escaped).toBeNull();
-
+    // Registering runs nothing: the first sweep waits for its firing.
     expect(await survivingSessionTokens()).toEqual([TOKEN.pastGrace]);
     expect(storeOps()).toEqual([]);
+  });
+});
+
+/**
+ * A row another transaction holds is skipped rather than waited for, and the
+ * pass still reports it: `hasMore` is the backlog signal operators alert on.
+ */
+describe('a pass that skips a held row', () => {
+  beforeAll(async () => {
+    await resetTables();
+  });
+
+  async function sweepWhileHeld(
+    acquire: (tx: Tx) => Promise<unknown>
+  ): Promise<DatabaseSweepResult> {
+    const hold = holdUntilReleased(acquire);
+    await hold.acquired;
+    try {
+      return await runDatabaseSweep();
+    } finally {
+      hold.release();
+      await hold.finished;
+    }
+  }
+
+  test('an expired session another transaction holds stays, and is reported as left over', async () => {
+    const { userId } = await seedUser();
+    const [held] = await db
+      .insert(sessions)
+      .values({
+        userId,
+        token: TOKEN.pastGrace,
+        expiresAt: sql`now() - interval '31 days'`,
+      })
+      .returning({ id: sessions.id });
+    if (!held) throw new Error('no session inserted');
+
+    const swept = await sweepWhileHeld((tx) =>
+      tx
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.id, held.id))
+        .for('update')
+    );
+
+    expect(swept.removed.sessions).toEqual({ removed: 0, hasMore: true });
+    expect(swept.hasMore).toBe(true);
+    expect(await survivingSessionTokens()).toContain(TOKEN.pastGrace);
+
+    const next = await runDatabaseSweep();
+    expect(next.removed.sessions).toEqual({ removed: 1, hasMore: false });
+    expect(next.hasMore).toBe(false);
+  });
+
+  test('a spent proof whose owner another transaction holds stays, and is reported as left over', async () => {
+    const { userId } = await seedUser();
+    const [proof] = await db
+      .insert(verificationSessions)
+      .values({
+        userId,
+        channel: 'email',
+        identifier: 'sweep.held-owner@gmail.com',
+        purpose: 'verify_contact',
+        verifiedAt: sql`now()`,
+        consumedAt: sql`now()`,
+      })
+      .returning({ id: verificationSessions.id });
+    if (!proof) throw new Error('no proof inserted');
+
+    const swept = await sweepWhileHeld((tx) => lockUser(tx, userId));
+
+    expect(swept.removed.verificationSessions).toEqual({
+      removed: 0,
+      hasMore: true,
+    });
+    expect(swept.hasMore).toBe(true);
+    expect(await proofExists(proof.id)).toBe(true);
+
+    const next = await runDatabaseSweep();
+    expect(next.removed.verificationSessions).toEqual({
+      removed: 1,
+      hasMore: false,
+    });
+    expect(next.hasMore).toBe(false);
   });
 });
 

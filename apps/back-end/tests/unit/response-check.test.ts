@@ -16,14 +16,18 @@ import {
   test,
 } from 'bun:test';
 import type { createApp as CreateApp } from '@/app';
-import type { ResponseRoute } from '@app/shared/response-contract';
 import type { PaginationMeta } from '@app/shared/types/api';
 
 import * as z from 'zod';
 
 import { endpoint } from '@app/shared/api/endpoint';
+import { successBody } from '@app/shared/api/wire';
 import { CustomError } from '@app/shared/error-class';
-import { FILE_BUSY_CODE, FILE_IN_USE_CODE } from '@app/shared/error-codes';
+import {
+  FILE_BUSY_CODE,
+  FILE_IN_USE_CODE,
+  INVALID_RESPONSE_CODE,
+} from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   MSG_FETCHED,
@@ -33,7 +37,6 @@ import {
 import { createdIdSchema } from '@app/shared/responses/common';
 
 import { bind } from '@/lib/http/binding';
-import { successBody } from '@/lib/http/response';
 import {
   checkBetterAuthResponse,
   checkSuccess,
@@ -46,12 +49,15 @@ import {
 import { takeResponseMismatches } from '@/lib/http/response-mismatches';
 import { generateUuidV7 } from '@/lib/id';
 
+import { entryAt } from '../helpers/entries';
 import { expectError } from '../helpers/expect-body';
 import { mediaFileWire, PAGE_META } from '../helpers/response-fixtures';
 
 /** The body `run()` builds for a binding's success. */
 const success = (data: unknown, meta?: PaginationMeta) =>
   successBody(MSG_FETCHED, data, meta);
+
+const at = (key: string) => ({ entry: entryAt(key), key });
 
 const logged = spyOn(console, 'error').mockImplementation(() => {});
 beforeEach(() => {
@@ -66,7 +72,7 @@ describe('under the runner', () => {
     expect(
       checkSuccess(
         'enforce',
-        'POST /api/dash/media/files',
+        at('POST /api/dash/media/files'),
         success(mediaFileWire())
       )
     ).toBe(true);
@@ -75,7 +81,7 @@ describe('under the runner', () => {
   });
 
   const id = generateUuidV7();
-  const cases: readonly [string, ResponseRoute, unknown, string][] = [
+  const cases: readonly [string, string, unknown, string][] = [
     [
       'a key the contract does not name',
       'POST /api/upload/file',
@@ -136,7 +142,7 @@ describe('under the runner', () => {
   test.each(cases)(
     '%s is refused and recorded',
     (_name, key, body, problem) => {
-      expect(checkSuccess('enforce', key, body)).toBe(false);
+      expect(checkSuccess('enforce', at(key), body)).toBe(false);
       const [recorded, ...rest] = takeResponseMismatches();
       expect(rest).toEqual([]);
       expect(recorded).toStartWith(`${key}: `);
@@ -148,7 +154,7 @@ describe('under the runner', () => {
     const secret = 'not-an-id-but-a-secret';
     checkSuccess(
       'enforce',
-      'POST /api/dash/media/files',
+      at('POST /api/dash/media/files'),
       success({ ...mediaFileWire(), id: secret })
     );
     takeResponseMismatches();
@@ -163,7 +169,7 @@ describe('under the runner', () => {
     expect(
       checkSuccess(
         'enforce',
-        'GET /api/dash/permissions',
+        at('GET /api/dash/permissions'),
         success([], { ...PAGE_META, page: 0 })
       )
     ).toBe(false);
@@ -178,7 +184,7 @@ describe('in development', () => {
     expect(
       checkSuccess(
         'log',
-        'POST /api/dash/media/files',
+        at('POST /api/dash/media/files'),
         success({ ...mediaFileWire(), id: 'x' })
       )
     ).toBe(true);
@@ -368,7 +374,12 @@ describe('at the Better Auth prefix route', () => {
         response()
       );
       expect(answer.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
-      expect(await answer.json()).toMatchObject({ success: false, data: null });
+      const refusal = await expectError(
+        answer,
+        HTTP_STATUS.INTERNAL_ERROR,
+        MSG_INTERNAL_ERROR
+      );
+      expect(refusal.code).toBe(INVALID_RESPONSE_CODE);
       const [recorded, ...rest] = takeResponseMismatches();
       expect(rest).toEqual([]);
       expect(recorded).toStartWith(`Better Auth ${route}: `);
@@ -521,16 +532,19 @@ describe('a binding under the runner', () => {
       404
     );
     expect(declared.code).toBe('DECLARED');
+    expect(declared).not.toHaveProperty('data');
     const named = await expectError(
       await post(new CustomError('x', 409, FILE_BUSY_CODE, { fileIds: [ID] })),
       409
     );
     expect(named.data).toEqual({ fileIds: [ID] });
     // Its referrer can be gone by the time it is looked up.
-    await expectError(
-      await post(new CustomError('x', 409, FILE_IN_USE_CODE)),
-      409
-    );
+    expect(
+      await expectError(
+        await post(new CustomError('x', 409, FILE_IN_USE_CODE)),
+        409
+      )
+    ).not.toHaveProperty('data');
     await expectError(await post(new CustomError('x', 409, 'PLAIN')), 409);
     // A 400 of the input, not the handler's: published without `errors[400]`.
     await expectError(
@@ -542,8 +556,19 @@ describe('a binding under the runner', () => {
     expect(takeResponseMismatches()).toEqual([]);
   });
 
+  test('a success outside its contract answers 500 invalid_response and is recorded', async () => {
+    const problem = await expectError(
+      await post('extra'),
+      500,
+      MSG_INTERNAL_ERROR
+    );
+    expect(problem.code).toBe(INVALID_RESPONSE_CODE);
+    expect(takeResponseMismatches()).toEqual([
+      `${KEY}: data: unrecognized_keys`,
+    ]);
+  });
+
   test.each([
-    ['a success outside its contract', 'extra', 'data: unrecognized_keys'],
     [
       'an undeclared code',
       new CustomError('x', 404, 'UNDECLARED'),
@@ -582,7 +607,12 @@ describe('a binding under the runner', () => {
   ] as const)(
     '%s answers 500 and is recorded',
     async (_name, answer, problem) => {
-      await expectError(await post(answer), 500, MSG_INTERNAL_ERROR);
+      const refusal = await expectError(
+        await post(answer),
+        500,
+        MSG_INTERNAL_ERROR
+      );
+      expect(refusal.code).toBeUndefined();
       expect(takeResponseMismatches()).toEqual([`${KEY}: ${problem}`]);
     }
   );

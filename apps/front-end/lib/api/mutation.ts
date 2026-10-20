@@ -1,13 +1,8 @@
-import type { ApiResult } from './fetch';
-import type * as z from 'zod';
-
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_ENCODE_FAILED, MSG_SAVED_NOT_SHOWN } from '@/constants/messages';
-import { carriesCaptcha } from '@/lib/auth/captcha';
-import { withReauth } from '@/lib/auth/reauth';
+import { MSG_SAVED_NOT_SHOWN } from '@/constants/messages';
 
-import { apiRequest, hasErrorCode, INVALID_RESPONSE_CODE } from './fetch';
+import { hasErrorCode } from './fetch';
 
 /**
  * The `code` of a failure after the server committed the write. It must never
@@ -36,21 +31,6 @@ export interface Bookkeeping<TData> {
   onUnreadAnswer?: () => void | Promise<void>;
 }
 
-interface MutationOptions<TData, TVariables> extends Bookkeeping<TData> {
-  href: string;
-  method: 'POST' | 'PUT' | 'DELETE';
-  /** Sent as JSON, or as multipart when it is `FormData`. */
-  data?: TVariables;
-  /** Sent with the request, such as the captcha token (`withCaptcha`). */
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-  /**
-   * What the caller reads of the answer's `data`, typed as its output. A body
-   * that does not match is a committed write with an unreadable answer.
-   */
-  schema?: z.ZodType;
-}
-
 /** False when the bookkeeping threw: the write stands, the view may not. */
 async function settle(bookkeeping: () => void | Promise<void>) {
   try {
@@ -63,14 +43,15 @@ async function settle(bookkeeping: () => void | Promise<void>) {
 }
 
 /**
- * Awaits `write`, then the caller's bookkeeping: `onSuccess` from its answer, or
- * `onUnreadAnswer` when it rejects as committed. Bookkeeping that throws leaves
- * the write standing and the view stale, so that rejects as committed too. The
- * one place both request layers (`mutate`, `authRequest`) share this.
+ * Awaits `write`, then the caller's bookkeeping: `onSuccess` from what
+ * `dataOf` reads of its answer, or `onUnreadAnswer` when it rejects as
+ * committed. Bookkeeping that throws leaves the write standing and the view
+ * stale, so that rejects as committed too.
  */
-export async function withBookkeeping<TResult extends { data: unknown }>(
+export async function withBookkeeping<TResult, TData>(
   write: Promise<TResult>,
-  { onSuccess, onUnreadAnswer }: Bookkeeping<TResult['data']>
+  { onSuccess, onUnreadAnswer }: Bookkeeping<TData>,
+  dataOf: (result: TResult) => TData
 ): Promise<TResult> {
   let result: TResult;
   try {
@@ -80,69 +61,8 @@ export async function withBookkeeping<TResult extends { data: unknown }>(
     throw error;
   }
 
-  if (onSuccess && !(await settle(() => onSuccess(result.data))))
+  if (onSuccess && !(await settle(() => onSuccess(dataOf(result)))))
     throw committedError();
 
   return result;
-}
-
-function encode(data: unknown): Pick<RequestInit, 'body' | 'headers'> {
-  if (data === undefined) return {};
-  if (data instanceof FormData) return { body: data };
-  try {
-    return {
-      body: JSON.stringify(data),
-      headers: { 'Content-Type': 'application/json' },
-    };
-  } catch {
-    // A BigInt or a cycle: a caller bug, not a connectivity problem.
-    throw new CustomError(MSG_ENCODE_FAILED, HTTP_STATUS.BAD_REQUEST);
-  }
-}
-
-/**
- * A write and what follows it. When the server answers `REAUTH_REQUIRED` the
- * re-authentication prompt opens and the same request is sent once more after
- * a proof (`withReauth`); the body is encoded once, so a retry sends what the
- * first attempt did.
- */
-export async function mutate<S extends z.ZodType, TVariables = unknown>(
-  options: MutationOptions<z.output<S>, TVariables> & { schema: S }
-): Promise<ApiResult<z.output<S>>>;
-export async function mutate<TData = unknown, TVariables = unknown>(
-  options: MutationOptions<TData, TVariables> & { schema?: undefined }
-): Promise<ApiResult<TData>>;
-export async function mutate({
-  href,
-  method,
-  data,
-  headers,
-  onSuccess,
-  onUnreadAnswer,
-  signal,
-  schema,
-}: MutationOptions<unknown, unknown>): Promise<ApiResult<unknown>> {
-  const encoded = encode(data);
-  const init: RequestInit = {
-    method,
-    signal,
-    ...encoded,
-    headers: { ...encoded.headers, ...headers },
-  };
-
-  const write = async () => {
-    try {
-      return await withReauth(() => apiRequest(href, { ...init, schema }), {
-        signal,
-        singleUse: carriesCaptcha(headers),
-      });
-    } catch (error) {
-      // Only a 2xx carries this code, which `apiRequest` has logged: the
-      // write landed, its answer did not.
-      if (hasErrorCode(error, INVALID_RESPONSE_CODE)) throw committedError();
-      throw error;
-    }
-  };
-
-  return withBookkeeping(write(), { onSuccess, onUnreadAnswer });
 }

@@ -16,13 +16,18 @@ import { InvalidCookie, ParseError } from 'elysia';
 import * as z from 'zod';
 
 import { endpoint } from '@app/shared/api/endpoint';
+import { PROBLEM_MEDIA_TYPE, problemBody } from '@app/shared/api/wire';
 import { CustomError } from '@app/shared/error-class';
-import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
+import {
+  INVALID_RESPONSE_CODE,
+  REAUTH_REQUIRED_CODE,
+} from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   MSG_INTERNAL_ERROR,
   MSG_INVALID_INPUT,
   MSG_NOT_FOUND,
+  MSG_PAGE_NOT_FOUND,
 } from '@app/shared/messages/common';
 import { MSG_UNRECOGNIZED_KEYS } from '@app/shared/messages/validation';
 import { createdIdSchema } from '@app/shared/responses/common';
@@ -31,6 +36,8 @@ import { idSchema, issueCodeMessage } from '@app/shared/validation/rules';
 
 import { bind } from '@/lib/http/binding';
 import { queueResponseCookies } from '@/lib/http/cookies';
+import { MAX_JSON_BODY_BYTES } from '@/lib/http/request';
+import { apiError } from '@/lib/http/response';
 import { SECURITY_HEADERS } from '@/lib/http/security-headers';
 import { MINIMUM_RESPONSE_MS } from '@/lib/http/timing-floor';
 import { generateUuidV7 } from '@/lib/id';
@@ -94,10 +101,7 @@ const bindings: AnyBinding[] = [
     detail,
     mapError: (error) =>
       error instanceof RangeError
-        ? {
-            status: 409,
-            body: { success: false, message: 'mapped', data: null },
-          }
+        ? apiError({ message: 'mapped', status: 409 })
         : undefined,
     handler: async ({ body, meta }) => {
       if (control.mode === 'throw')
@@ -186,7 +190,8 @@ describe('the declared success', () => {
     const response = await post({ name: 'ab' });
     expect(response.status).toBe(HTTP_STATUS.CREATED);
     const body: unknown = await response.json();
-    expect(body).toMatchObject({ success: true, message: 'ab' });
+    expect(body).toMatchObject({ message: 'ab' });
+    expect(body).not.toHaveProperty('success');
     expect(body).not.toHaveProperty('data.secret');
   });
 
@@ -197,7 +202,12 @@ describe('the declared success', () => {
     const lines = logged.mock.calls.map((call) => String(call[0]));
     logged.mockRestore();
 
-    await expectError(response, HTTP_STATUS.INTERNAL_ERROR, MSG_INTERNAL_ERROR);
+    const problem = await expectError(
+      response,
+      HTTP_STATUS.INTERNAL_ERROR,
+      MSG_INTERNAL_ERROR
+    );
+    expect(problem.code).toBe(INVALID_RESPONSE_CODE);
     const failure = lines.find((line) =>
       line.includes('response.validation.failed')
     );
@@ -245,13 +255,9 @@ describe('refusals', () => {
   test('a throw the binding maps is its answer', async () => {
     control.mode = 'throw';
     const response = await post({ name: 'ab' });
-    expect(response.status).toBe(409);
-    const body: unknown = await response.json();
-    expect(body).toEqual({
-      success: false,
-      message: 'mapped',
-      data: null,
-    });
+    expect(await expectError(response, 409, 'mapped')).toEqual(
+      problemBody(409, 'mapped')
+    );
   });
 
   test('an unexpected throw is a 500 with the binding’s failure message, never the error’s', async () => {
@@ -259,14 +265,83 @@ describe('refusals', () => {
     const logged = spyOn(console, 'error').mockImplementation(() => {});
     const response = await post({ name: 'ab' });
     logged.mockRestore();
-    const { message } = await expectError(response, 500);
-    expect(message).toBe('فشل الإنشاء');
+    const { detail } = await expectError(response, 500);
+    expect(detail).toBe('فشل الإنشاء');
   });
 
   test('a refusal carries the security headers', async () => {
     const response = await post({ name: 'a' });
     for (const [name, value] of Object.entries(SECURITY_HEADERS))
       expect(response.headers.get(name)).toBe(value);
+  });
+});
+
+describe('every refusal is a problem, whoever raises it', () => {
+  test('a binding’s own refusal', async () => {
+    control.mode = 'cookies';
+    const response = await handle(`/api/dash/permissions/${id()}`);
+    expect(await expectError(response, 404, MSG_NOT_FOUND)).toEqual({
+      type: 'about:blank',
+      title: 'Not Found',
+      status: 404,
+      detail: MSG_NOT_FOUND,
+    });
+  });
+
+  test('a validation failure, carrying no member beyond the problem’s', async () => {
+    const response = await post({ name: 'a' });
+    expect(response.status).toBe(HTTP_STATUS.UNPROCESSABLE);
+    expect(response.headers.get('content-type')).toBe(PROBLEM_MEDIA_TYPE);
+    expect(await response.json()).toEqual({
+      type: 'about:blank',
+      title: 'Unprocessable Content',
+      status: 422,
+      detail: SHORT,
+    });
+  });
+
+  test('a refusal override keeps its status and message in the problem', async () => {
+    const problem = await expectError(
+      await post({ name: 'ab' }, '?a=1&a=2'),
+      404,
+      MSG_NOT_FOUND
+    );
+    expect(problem.title).toBe('Not Found');
+  });
+
+  test('a body Elysia cannot parse', async () => {
+    const problem = await expectError(
+      await handle('/api/dash/permissions', { method: 'POST', body: '{' }),
+      400,
+      MSG_INVALID_INPUT
+    );
+    expect(problem.title).toBe('Bad Request');
+  });
+
+  test('a route miss', async () => {
+    const problem = await expectError(
+      await handle('/api/dash/nothing-here'),
+      404,
+      MSG_PAGE_NOT_FOUND
+    );
+    expect(problem.title).toBe('Not Found');
+  });
+
+  test('a wrong method keeps its Allow header', async () => {
+    const response = await handle('/api/dash/permissions', { method: 'PUT' });
+    const problem = await expectError(response, 405);
+    expect(problem.title).toBe('Method Not Allowed');
+    expect(response.headers.get('allow')).toContain('POST');
+  });
+
+  test('the request hook’s declared-length refusal', async () => {
+    const response = await handle('/api/dash/permissions', {
+      method: 'POST',
+      headers: { 'content-length': String(MAX_JSON_BODY_BYTES + 1) },
+      body: JSON.stringify({ name: 'ab' }),
+    });
+    const problem = await expectError(response, HTTP_STATUS.CONTENT_TOO_LARGE);
+    expect(problem.title).toBe('Content Too Large');
   });
 });
 
@@ -344,7 +419,12 @@ describe('HEAD on a GET binding', () => {
     logged.mockRestore();
     const { byteLength: length } = await get.clone().arrayBuffer();
 
-    await expectError(get, HTTP_STATUS.INTERNAL_ERROR, MSG_INTERNAL_ERROR);
+    const problem = await expectError(
+      get.clone(),
+      HTTP_STATUS.INTERNAL_ERROR,
+      MSG_INTERNAL_ERROR
+    );
+    expect(problem.code).toBe(INVALID_RESPONSE_CODE);
     expect(get.headers.get('x-handler')).toBeNull();
     expect(get.headers.get('cache-control')).toBe('no-store');
     expect(get.headers.getSetCookie()).toEqual(['queued=1']);
@@ -485,8 +565,8 @@ describe('a multipart binding with a deferred limiter', () => {
     const logged = spyOn(console, 'error').mockImplementation(() => {});
     const response = await app.handle(formRequest('?field=x'));
     logged.mockRestore();
-    const { message } = await expectError(response, 500);
-    expect(message).toBe('فشل الرفع');
+    const { detail } = await expectError(response, 500);
+    expect(detail).toBe('فشل الرفع');
   });
 });
 

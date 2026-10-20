@@ -6,7 +6,7 @@ import { inflateSync } from 'node:zlib';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { iccProfileChunk } from '@app/shared/images/raster-bytes';
+import { iccProfileChunk, isLossyWebp } from '@app/shared/images/raster-bytes';
 import { uploadMsg } from '@app/shared/messages/media';
 import {
   MAX_IMAGE_EDGE,
@@ -20,6 +20,7 @@ import { serverFault } from '@/lib/http/response';
 import { logLine } from '@/utils/log';
 
 import { contentRefused, imageNotCompressible, imageTooLarge } from '../errors';
+import { createAdmission } from './admission';
 import { boundedImage } from './bounded';
 
 const UNDECODABLE_CODES = new Set([
@@ -157,6 +158,110 @@ function buildLadder(opts: LadderOptions): Rung[] {
   return rungs;
 }
 
+/**
+ * libwebp's size per quality point, fitted to photos: steep above the knee,
+ * nearly flat below it. It only chooses which rung to probe; the bracket in
+ * `searchLadder` alone decides which rung is returned.
+ */
+const RATE_MODEL = {
+  kneeQuality: 75,
+  logRatioAboveKnee: Math.log(0.78) / 5,
+  logRatioBelowKnee: Math.log(0.94) / 5,
+};
+
+/** Relative to `first`; the pixel count follows the width squared. */
+function modelLogSize(rung: Rung, first: Rung): number {
+  const knee = RATE_MODEL.kneeQuality;
+  const dropAbove =
+    Math.max(first.quality, knee) - Math.max(rung.quality, knee);
+  const dropBelow =
+    Math.min(first.quality, knee) - Math.min(rung.quality, knee);
+  return (
+    dropAbove * RATE_MODEL.logRatioAboveKnee +
+    dropBelow * RATE_MODEL.logRatioBelowKnee +
+    2 * Math.log(rung.width / first.width)
+  );
+}
+
+type Attempt = Awaited<ReturnType<typeof encodeAttempt>>;
+
+interface SizePoint {
+  index: number;
+  logSize: number;
+}
+
+/**
+ * The EARLIEST rung that fits, assuming size falls along the ladder, as the
+ * walk it replaces did: every probe lands strictly between the highest rung
+ * known over the target and the lowest known to fit. The model aims probes
+ * from those two; an aimed probe that fails to halve the bracket is followed by
+ * a bisection, which keeps the encodes within `MAX_ENCODE_ATTEMPTS` for any
+ * ladder up to `MAX_LADDER_RUNGS`.
+ *
+ * `estimate` aims the first probe without an encode; `null` probes rung 0.
+ */
+async function searchLadder(
+  ladder: readonly Rung[],
+  targetSize: number,
+  measure: (index: number) => Promise<Attempt>,
+  estimate: SizePoint | null
+): Promise<{ fitting: Attempt | null; best: Attempt }> {
+  const [first] = ladder;
+  if (!first) throw new Error('optimizeImage: empty ladder');
+  const model = ladder.map((rung) => modelLogSize(rung, first));
+  const logTarget = Math.log(targetSize);
+
+  const modelAt = (index: number) => {
+    const value = model[index];
+    if (value === undefined) throw new Error('ladder index out of range');
+    return value;
+  };
+  const aim = (lo: number, hi: number, anchors: SizePoint[]): number => {
+    const [a, b] = anchors;
+    if (!a) return (lo + hi) >> 1;
+    const spread = b ? modelAt(b.index) - modelAt(a.index) : 0;
+    const slope = b && spread !== 0 ? (b.logSize - a.logSize) / spread : 1;
+    const offset = a.logSize - slope * modelAt(a.index);
+    for (let index = lo + 1; index < hi; index++)
+      if (offset + slope * modelAt(index) <= logTarget) return index;
+    return hi - 1;
+  };
+
+  let lo = -1;
+  let hi = ladder.length;
+  let over: SizePoint | null = null;
+  let fits: SizePoint | null = null;
+  let fitting: Attempt | null = null;
+  let best: Attempt | null = null;
+  let index = estimate ? aim(lo, hi, [estimate]) : 0;
+  let aimed = estimate !== null;
+
+  for (;;) {
+    const before = hi - lo;
+    const attempt = await measure(index);
+    if (!best || attempt.size < best.size) best = attempt;
+    const point = { index, logSize: Math.log(attempt.size) };
+    if (attempt.size <= targetSize) {
+      hi = index;
+      fits = point;
+      fitting = attempt;
+    } else {
+      lo = index;
+      over = point;
+    }
+    if (hi - lo <= 1) return { fitting, best };
+
+    aimed = !aimed || hi - lo <= Math.ceil(before / 2);
+    index = aimed
+      ? aim(
+          lo,
+          hi,
+          [over, fits].filter((anchor) => anchor !== null)
+        )
+      : (lo + hi) >> 1;
+  }
+}
+
 async function optimizeImageWithinSlot(
   input: Buffer,
   options: OptimizeImageOptions = {}
@@ -171,6 +276,7 @@ async function optimizeImageWithinSlot(
     widthStep = 100,
   } = options;
 
+  const startedAt = performance.now();
   try {
     const metadata = await boundedImage(input).metadata();
     // `MAX_IMAGE_PIXELS` bounds area, not a side the output format cannot hold.
@@ -204,33 +310,24 @@ async function optimizeImageWithinSlot(
       return encodeAttempt(input, rung.width, rung.quality);
     };
 
-    let best = await measure(0);
-    let fitting = best.size <= targetSize ? best : null;
-    const remember = (attempt: typeof best) => {
-      if (attempt.size < best.size) best = attempt;
-      return attempt;
-    };
-
-    if (!fitting && ladder.length > 1) {
-      // The floor first settles an unreachable target in two encodes; when it
-      // fits, the search still returns the EARLIEST fitting rung.
-      const floor = remember(await measure(ladder.length - 1));
-      if (floor.size <= targetSize) {
-        fitting = floor;
-        let lo = 1;
-        let hi = ladder.length - 2;
-        while (lo <= hi) {
-          const mid = (lo + hi) >> 1;
-          const attempt = remember(await measure(mid));
-          if (attempt.size <= targetSize) {
-            fitting = attempt;
-            hi = mid - 1;
-          } else {
-            lo = mid + 1;
-          }
+    // A lossy input re-encoded near its own quality comes out near its own
+    // size, so the first probe is aimed from that instead of paying for rung 0.
+    // A lossless input is often several times the target and still fits at
+    // rung 0, so that rung goes first.
+    const estimate = isLossyWebp(input)
+      ? {
+          index: 0,
+          logSize:
+            Math.log(input.length) + 2 * Math.log(startWidth / originalWidth),
         }
-      }
-    }
+      : null;
+    const { fitting, best } = await searchLadder(
+      ladder,
+      targetSize,
+      measure,
+      estimate
+    );
+    const durationMs = Math.round(performance.now() - startedAt);
 
     if (!fitting) {
       // The target is a goal, not the contract: a dense high-detail image that
@@ -243,13 +340,22 @@ async function optimizeImageWithinSlot(
         ceilingBytes: ceiling,
         accepted: best.size <= ceiling,
         iterations,
+        durationMs,
       });
       if (best.size > ceiling)
         throw imageNotCompressible(uploadMsg.targetUnreachable);
-      fitting = best;
     }
 
-    const chosen = fitting;
+    const chosen = fitting ?? best;
+    logLine('log', {
+      msg: 'image.optimize',
+      iterations,
+      durationMs,
+      inputBytes: input.length,
+      outputBytes: chosen.size,
+      width: chosen.width,
+      height: chosen.height,
+    });
     return {
       buffer: chosen.buffer,
       width: chosen.width,
@@ -264,30 +370,7 @@ async function optimizeImageWithinSlot(
   }
 }
 
-const IMAGE_ENCODER_QUEUE_LIMIT = 4;
-const encoderAdmission = {
-  active: false,
-  waiters: [] as Array<() => void>,
-};
-
-async function acquireEncoder(): Promise<() => void> {
-  if (encoderAdmission.active) {
-    if (encoderAdmission.waiters.length >= IMAGE_ENCODER_QUEUE_LIMIT)
-      throw new CustomError(
-        uploadMsg.processingBusy,
-        HTTP_STATUS.SERVICE_UNAVAILABLE
-      );
-    await new Promise<void>((resolve) => {
-      encoderAdmission.waiters.push(resolve);
-    });
-  }
-  encoderAdmission.active = true;
-  return () => {
-    const next = encoderAdmission.waiters.shift();
-    if (next) next();
-    else encoderAdmission.active = false;
-  };
-}
+const acquireEncoder = createAdmission(4);
 
 /**
  * The one input metadata `Bun.Image` carries into its output. Above ordinary

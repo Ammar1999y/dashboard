@@ -3,25 +3,26 @@
   z-index: 10;
 }
 
-[data-pinned='left'] {
+/* The table is right to left: its start is the right edge. */
+[data-pinned='start'] {
   right: var(--pinned-position);
 }
 
-[data-pinned='right'] {
+[data-pinned='end'] {
   left: var(--pinned-position);
 }
 
-[data-pinned='left'][data-is-last-pinned='true'] {
+[data-pinned='start'][data-is-last-pinned='true'] {
   box-shadow: -5px 0 8px -2px rgba(0, 0, 0, 0.1);
 }
 
-[data-pinned='right'][data-is-first-pinned='true'] {
+[data-pinned='end'][data-is-first-pinned='true'] {
   box-shadow: 5px 0 8px -2px rgba(0, 0, 0, 0.1);
 }
 .resize-handler {
   left: 4px;
 }
-/* [data-pinned='right'] .resize-handler {
+/* [data-pinned='end'] .resize-handler {
   right: 4px;
 } */
 
@@ -44,11 +45,11 @@
   background-color: hsl(var(--muted));
 }
 
-[data-pinned='left'] {
+[data-pinned='start'] {
   isolation: isolate;
 }
 
-[data-pinned='right'] {
+[data-pinned='end'] {
   isolation: isolate;
 }
 

@@ -140,12 +140,11 @@ describe('every site that reads it', () => {
       })
     );
     const body = (await response.json()) as {
-      success?: boolean;
       data?: { updatedAt?: unknown };
     };
 
     expect(response.status).toBe(200);
-    expect(body.success).toBe(true);
+    expect(body).not.toHaveProperty('success');
     expect(typeof body.data?.updatedAt).toBe('string');
   });
 });
@@ -210,12 +209,11 @@ describe('DELETE /api/dash/users/:id/sessions authorises before it answers', () 
       sessionIds: [own],
     });
     const body = (await response.json()) as {
-      success?: boolean;
       data?: { revoked?: string[] };
     };
 
     expect(response.status).toBe(HTTP_STATUS.OK);
-    expect(body.success).toBe(true);
+    expect(body).not.toHaveProperty('success');
     expect(body.data?.revoked).toEqual([]);
 
     // And the session is still usable, which is what makes the empty list the

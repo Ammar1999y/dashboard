@@ -1,8 +1,8 @@
 /**
  * The email-verification login gate, which the integration tier cannot reach:
  * `REQUIRE_EMAIL_VERIFICATION` is a source constant read at module load, and the
- * shipped value is `false`. Prints ONE line of JSON: the sign-in answer and
- * every error-level log line it produced.
+ * shipped value is `false`. Prints ONE line of JSON: the sign-in answer, with
+ * its content type, and every error-level log line it produced.
  */
 import { mock, spyOn } from 'bun:test';
 
@@ -42,4 +42,11 @@ const body: unknown = await response.json();
 errors.mockRestore();
 
 await closeDatabase();
-console.log(JSON.stringify({ status: response.status, body, logged }));
+console.log(
+  JSON.stringify({
+    status: response.status,
+    contentType: response.headers.get('content-type'),
+    body,
+    logged,
+  })
+);

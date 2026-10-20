@@ -190,7 +190,7 @@ function createBase(routing: Routing) {
           exposeHeaders: [...CORS_POLICY.exposeHeaders],
         })
       )
-      .use(exitStep)
+      .use(exitStep(routing.servedByPrefix))
       .use(
         errorMapping((request) => {
           const url = new URL(request.url);

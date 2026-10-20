@@ -24,7 +24,7 @@ import {
 } from '@app/shared/permissions/scope';
 
 import { currentUser, roleOf, roles } from '../store';
-import { errorResponse, notFoundError } from './http';
+import { notFoundError } from './http';
 import { requireReauthWindow } from './reauth';
 
 export const insufficientPermissions = () =>
@@ -112,21 +112,17 @@ export function requirePermission(
  * The server's `requireAnyPermission`, answered as a response: the request is
  * refused unless the caller holds one of `actions` on `page`.
  */
-export function denied(
+export function requireAnyAction(
   page: DashboardPage,
   actions: readonly PermissionAction[]
-): Response | undefined {
-  try {
-    const { permissions } = liveGrants();
-    if (
-      !actions.some(
-        (action) => resolveActionScope(permissions, page, action).allowed
-      )
+) {
+  const { permissions } = liveGrants();
+  if (
+    !actions.some(
+      (action) => resolveActionScope(permissions, page, action).allowed
     )
-      throw insufficientPermissions();
-  } catch (error) {
-    return errorResponse(error);
-  }
+  )
+    throw insufficientPermissions();
 }
 
 /**

@@ -1,9 +1,9 @@
 /**
  * Every success a binding answers, held to its published contract
- * (`responseIssues`); its status is the entry's by construction. Its refusals
+ * (`endpointIssues`); its status is the entry's by construction. Its refusals
  * are held to the statuses and codes the entry publishes in `run.ts`. The Better
- * Auth prefix route holds this project's own plugin endpoints to
- * `BETTER_AUTH_RESPONSES` the same way, and a two-factor challenge from any
+ * Auth prefix route holds this project's own plugin endpoints to their
+ * entries the same way, and a two-factor challenge from any
  * path to the challenge schema. Under the test runner a mismatch
  * answers 500 and fails the test that caused it; in development it is only
  * logged, because the write behind the answer has already committed and a 500
@@ -13,24 +13,20 @@
  * untouched; the database tiers hold those, with everything else, to the
  * generated document (`tests/helpers/document-check.ts`).
  */
-import type {
-  ResponseIssue,
-  ResponseRoute,
-} from '@app/shared/response-contract';
+import type { AnyBinding } from './binding';
+import type { ResponseIssue } from '@app/shared/api/issues';
 
-import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
+import { PLUGIN_ENDPOINTS } from '@app/shared/api/all';
 import {
-  betterAuthResponseIssues,
-  isBetterAuthResponseRoute,
-  responseIssues,
+  endpointIssues,
   twoFactorChallengeIssues,
-} from '@app/shared/response-contract';
+} from '@app/shared/api/issues';
+import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { logLine } from '@/utils/log';
 
 import { REDIRECTING_PLUGIN_PATHS } from './openapi/better-auth-tables';
-import { apiError, toWebResponse } from './response';
+import { invalidResponse, toWebResponse } from './response';
 import {
   challengeCoverageId,
   pluginCoverageId,
@@ -79,14 +75,9 @@ export function refused<T>(
   return replacement();
 }
 
-const internalError = () =>
-  apiError({
-    message: MSG_INTERNAL_ERROR,
-    status: HTTP_STATUS.INTERNAL_ERROR,
-  });
-
 /**
- * One success answer held to the contract of `key`: true when it may go out.
+ * One success answer held to the contract of `binding`'s entry: true when it
+ * may go out.
  * A pass counts towards the coverage gate; a mismatch is logged and, under the
  * runner, recorded and answered 500.
  *
@@ -95,12 +86,12 @@ const internalError = () =>
  */
 export function checkSuccess(
   mode: ResponseCheckMode,
-  key: ResponseRoute,
+  { entry, key }: Pick<AnyBinding, 'entry' | 'key'>,
   body: unknown
 ): boolean {
-  const problems = described(responseIssues(key, body));
+  const problems = described(endpointIssues(entry, body));
   if (problems.length === 0) {
-    recordResponseCoverage(responseCoverageId(key, body));
+    recordResponseCoverage(responseCoverageId(entry, body));
     return true;
   }
   return refused(mode, key, problems, true, () => false);
@@ -140,11 +131,12 @@ export async function checkBetterAuthResponse(
       return response;
     }
     return refused(mode, name, problems, response, () =>
-      toWebResponse(internalError())
+      toWebResponse(invalidResponse())
     );
   };
 
-  if (!isBetterAuthResponseRoute(route)) {
+  const entry = PLUGIN_ENDPOINTS.get(route);
+  if (!entry) {
     // The library's own bodies are its shapes; only the challenge this
     // project's hook answers in their place is ours to hold.
     if (response.status !== HTTP_STATUS.OK) return response;
@@ -180,7 +172,7 @@ export async function checkBetterAuthResponse(
       ...(response.status === HTTP_STATUS.OK
         ? []
         : [`status ${response.status}, expected ${HTTP_STATUS.OK}`]),
-      ...described(betterAuthResponseIssues(route, json.body)),
+      ...described(endpointIssues(entry, json.body)),
     ],
     pluginCoverageId(route, json.body)
   );

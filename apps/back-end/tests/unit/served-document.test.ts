@@ -2,12 +2,15 @@
  * The served document is generated once, on the first request, and a failed
  * generation is kept rather than repeated on every authorised request.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import path from 'node:path';
 import type * as Serve from '@/lib/http/openapi/serve';
 import type { OpenApiDocument } from '@app/shared/responses/openapi';
 
-import { OPENAPI_VERSION } from '@app/shared/responses/openapi';
+import {
+  OPENAPI_VERSION,
+  openApiDocumentSchema,
+} from '@app/shared/responses/openapi';
 
 const SERVE = path.join(
   import.meta.dir,
@@ -71,6 +74,64 @@ describe('the served document', () => {
       'conversion failed',
       'conversion failed',
     ]);
+  });
+
+  test('its body is serialised once, as a value answer would carry it', async () => {
+    const serve = await freshServe('body');
+    let calls = 0;
+    serve.provideDocument(async () => {
+      calls++;
+      return emptyDocument();
+    });
+
+    const first = serve.servedDocumentBody();
+    for (let i = 0; i < 5; i++) expect(serve.servedDocumentBody()).toBe(first);
+    const body = await first;
+    expect(body.text).toBe(
+      JSON.stringify(openApiDocumentSchema.parse(emptyDocument()))
+    );
+    expect(calls).toBe(1);
+  });
+
+  test('can be generated ahead of any request, which then reuses it', async () => {
+    const serve = await freshServe('prepare');
+    let calls = 0;
+    serve.provideDocument(async () => {
+      calls++;
+      return emptyDocument();
+    });
+    const logged = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      serve.prepareServedDocument();
+      expect(calls).toBe(1);
+      await serve.servedDocumentBody();
+      expect(calls).toBe(1);
+      expect(String(logged.mock.calls.at(-1)?.[0])).toContain(
+        '"msg":"openapi document prepared"'
+      );
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  test('a generation ahead of any request that fails is logged by class', async () => {
+    const serve = await freshServe('prepare-failure');
+    serve.provideDocument(async () => {
+      throw new TypeError('conversion failed');
+    });
+    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      serve.prepareServedDocument();
+      await serve.servedDocumentBody().catch(() => {});
+      expect(logged.mock.calls.map(([line]) => String(line))).toEqual([
+        JSON.stringify({
+          msg: 'openapi document generation failed',
+          errorClass: 'TypeError',
+        }),
+      ]);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   test('refuses a second source, and a request before any source', async () => {

@@ -1,9 +1,11 @@
+import type { DataTableFeatures } from './features';
 import type { ColumnStore } from './store/column-store';
 import type { DropAnimation, MeasuringConfiguration } from '@dnd-kit/core';
 import type {
   ColumnDef,
   ColumnPinningState,
   ColumnSort,
+  RowData,
   Table,
 } from '@tanstack/react-table';
 import type { Ref } from 'react';
@@ -75,13 +77,13 @@ const DROP_ANIMATION: DropAnimation = {
 const NO_ROWS: never[] = [];
 
 /** Exposes the instance and its column store, for diagnostics. */
-export interface DataTableHandle<TData> {
-  table: Table<TData>;
+export interface DataTableHandle<TData extends RowData> {
+  table: Table<DataTableFeatures, TData>;
   store: ColumnStore;
 }
 
-interface DataTableViewProps<TData> {
-  columns: ColumnDef<TData>[];
+interface DataTableViewProps<TData extends RowData> {
+  columns: ColumnDef<DataTableFeatures, TData>[];
   /** The current page of rows; `undefined` until the first response. */
   data: TData[] | undefined;
   pageCount: number;
@@ -113,7 +115,7 @@ const DragLabel = ({ label }: { label: string }) => (
   </div>
 );
 
-const TableFrameInner = <TData,>({
+const TableFrameInner = <TData extends RowData>({
   columns,
   data,
   pageCount,
@@ -228,7 +230,9 @@ const TableFrame = genericMemo(TableFrameInner, 'DataTableFrame');
  * The table for rows the caller already has. Owns one column store for its
  * lifetime: remount it (a `key`) to switch to another table's layout.
  */
-function DataTableView<TData>(props: DataTableViewProps<TData>) {
+function DataTableView<TData extends RowData>(
+  props: DataTableViewProps<TData>
+) {
   const { columns, storageKey, defaultPinning } = props;
   // A store per mounted table, created in a `useState` initializer: not a
   // module singleton (one table's unmount used to wipe the next table's
@@ -240,8 +244,8 @@ function DataTableView<TData>(props: DataTableViewProps<TData>) {
       columnOrder: columnIds,
       columnVisibility: {},
       columnPinning: defaultPinning ?? {
-        left: [],
-        right: columnIds.includes(ACTIONS_COLUMN) ? [ACTIONS_COLUMN] : [],
+        start: [],
+        end: columnIds.includes(ACTIONS_COLUMN) ? [ACTIONS_COLUMN] : [],
       },
       columnSizing: {},
     };

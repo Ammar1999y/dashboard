@@ -14,16 +14,12 @@ import { getTableColumns } from 'drizzle-orm';
 import { passkeys, roleScope, sessions, users } from '@/db/schema';
 import * as z from 'zod';
 
-import { BETTER_AUTH_BODIES } from '@app/shared/contract';
+import { isPluginPath, PLUGIN_ENDPOINTS } from '@app/shared/api/all';
+import { authProblemSchema } from '@app/shared/api/wire';
 import {
   DEFAULT_PAGE_PERMISSIONS,
   PERMISSION_ACTION_NAMES,
 } from '@app/shared/permissions/constants';
-import {
-  BETTER_AUTH_RESPONSES,
-  isBetterAuthResponseRoute,
-  plainErrorEnvelopeSchema,
-} from '@app/shared/response-contract';
 import { twoFactorChallengeSchema } from '@app/shared/responses/better-auth';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
 import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
@@ -45,7 +41,6 @@ import {
 import { bodyPolicyCeiling } from '../request';
 import {
   BETTER_AUTH_CREDENTIAL_LOCKOUT_PATHS,
-  BETTER_AUTH_DATABASE_FAULT_PATHS,
   BETTER_AUTH_LOCAL_THROTTLE_PATHS,
   BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
   BETTER_AUTH_PATH_STATUSES,
@@ -54,6 +49,7 @@ import {
   BETTER_AUTH_STATUS_DESCRIPTIONS,
   BETTER_AUTH_SUMMARIES,
   CHALLENGE_INSTEAD,
+  LIBRARY_REQUEST_BODIES,
   LIBRARY_SUCCESS_PROPERTIES,
   LIBRARY_VERIFIER_DESCRIPTIONS,
   REDIRECTING_PLUGIN_PATHS,
@@ -61,24 +57,25 @@ import {
 } from './better-auth-tables';
 import {
   CAPTCHA_HEADER_PARAMETER,
-  envelopeRef,
   operationIdOf,
+  problemContent,
   publishedSchema,
   requestBody,
   RESPONSE_HEADERS,
 } from './finalize';
 import { isJsonSchema, normalizeOpenApi31 } from './json-schema';
 
-// The library never answers a media refusal.
-const ERROR_ENVELOPE = envelopeRef(plainErrorEnvelopeSchema);
-
-const errorResponse = (description: string, headers?: JsonSchema) => ({
+/** Every refusal under the prefix, the library's and the route's own alike. */
+const errorResponse = (
+  description: string,
+  headers?: JsonSchema
+): JsonSchema => ({
   description,
   ...(headers && { headers }),
-  content: { 'application/json': { schema: ERROR_ENVELOPE } },
+  content: problemContent(authProblemSchema),
 });
 
-/** The wildcard's own admission limiter answers these on every path, in the envelope. */
+/** The wildcard's own admission limiter answers these on every path. */
 const PRE_AUTH_RESPONSES: JsonSchema = {
   '429': errorResponse('Per-IP admission limit. See `Retry-After`.', {
     'Retry-After': RESPONSE_HEADERS['Retry-After'],
@@ -89,16 +86,6 @@ const PRE_AUTH_RESPONSES: JsonSchema = {
     'The admission limiter store is unavailable and fails closed.',
     { 'Retry-After': RESPONSE_HEADERS['Retry-After'] }
   ),
-};
-
-/**
- * What an `APIError` serialises to, so every refusal from inside the library.
- * `code` is not required — the shape is the dependency's. Open, so the
- * envelope of a refusal from outside the library matches it too.
- */
-const BETTER_AUTH_ERROR = 'BetterAuthError';
-const BETTER_AUTH_ERROR_SCHEMA: JsonSchema = {
-  $ref: `#/components/schemas/${BETTER_AUTH_ERROR}`,
 };
 
 /**
@@ -127,17 +114,26 @@ const STATUS_DETAILS: Record<string, Partial<Record<string, string>>> = {
 
 const REAUTH_REQUIRED_DETAIL = `With code \`REAUTH_REQUIRED\` no \`password\` was sent and the re-authentication window is closed: send \`password\`, or ${REAUTH_REQUIRED_REMEDY}`;
 
-const betterAuthBodies: Readonly<Record<string, z.ZodType>> =
-  BETTER_AUTH_BODIES;
+const libraryBodies: Readonly<Record<string, z.ZodType>> =
+  LIBRARY_REQUEST_BODIES;
+
+/** The body a client sends to `path`, where this project publishes one. */
+const publishedBodyOf = (path: string): z.ZodType | undefined =>
+  PLUGIN_ENDPOINTS.get(path)?.body ?? libraryBodies[path];
 
 const sentence = (...parts: unknown[]) =>
   parts.filter((part) => typeof part === 'string' && part !== '').join(' ');
 
-/**
- * A second JSON body beside the declared one. `anyOf`, never `oneOf`: the
- * envelope satisfies Better Call's error shape, and exactly-one would fail on
- * the body actually sent.
- */
+/** One more reason the same refusal is answered. */
+const withReason = (response: unknown, detail: string): JsonSchema => ({
+  ...(isJsonSchema(response) && response),
+  description: sentence(
+    isJsonSchema(response) ? response.description : undefined,
+    detail
+  ),
+});
+
+/** A second JSON body beside the declared one. */
 function withAlternative(
   response: unknown,
   extra: JsonSchema,
@@ -224,12 +220,13 @@ function successResponse(
   library: Library,
   path: string
 ): JsonSchema | undefined {
-  if (isBetterAuthResponseRoute(path))
+  const entry = PLUGIN_ENDPOINTS.get(path);
+  if (entry && isPluginPath(path))
     return {
       description: BETTER_AUTH_RESPONSE_DESCRIPTIONS[path],
       content: {
         'application/json': {
-          schema: publishedSchema(BETTER_AUTH_RESPONSES[path]),
+          schema: publishedSchema(entry.response.raw),
         },
       },
     };
@@ -249,11 +246,14 @@ function librarySuccess(
   method: HttpMethod
 ): JsonSchema {
   const generated = libraryOperation(library, path, method)?.responses;
-  const answer = isJsonSchema(generated) ? generated['200'] : undefined;
-  if (!isJsonSchema(answer))
+  const generatedAnswer = isJsonSchema(generated)
+    ? generated['200']
+    : undefined;
+  if (!isJsonSchema(generatedAnswer))
     throw new Error(
       `Better Auth's document no longer answers ${method} ${path} 200.`
     );
+  const answer = storedRequired(library, generatedAnswer);
   const corrections = LIBRARY_SUCCESS_PROPERTIES[path];
   if (!corrections) return answer;
   const content = isJsonSchema(answer.content) ? answer.content : {};
@@ -292,42 +292,28 @@ function responsesOf(
   const credentialLockout = BETTER_AUTH_CREDENTIAL_LOCKOUT_PATHS.has(path);
 
   if (throttled || lockout || credentialLockout)
-    responses['429'] = withAlternative(
+    responses['429'] = withReason(
       responses['429'],
-      BETTER_AUTH_ERROR_SCHEMA,
       sentence(
         throttled &&
-          'The endpoint’s own per-destination verify quota answers here too, in Better Auth’s error shape.',
+          'The endpoint’s own per-destination verify quota answers here too.',
         lockout &&
-          'So does an account temporarily locked after failed password attempts, in Better Auth’s error shape; `Retry-After` is the time left.',
+          'So does an account temporarily locked after failed password attempts; `Retry-After` is the time left.',
         credentialLockout &&
-          'So does a second-factor credential temporarily locked after repeated failed verifications, in Better Auth’s error shape.'
+          'So does a second-factor credential temporarily locked after repeated failed verifications.'
       )
     );
   const database = `${DATABASE_UNAVAILABLE}; ${
     BETTER_AUTH_SPENT_INPUT_REMEDIES[path] ?? 'retry after `Retry-After`.'
   }`;
-  // A path that maps a failure itself (`asAuthError`) answers in Better Auth's
-  // shape; every other path's database 503 reaches the envelope.
-  responses['503'] =
-    throttled || lockout || BETTER_AUTH_DATABASE_FAULT_PATHS.has(path)
-      ? withAlternative(
-          responses['503'],
-          BETTER_AUTH_ERROR_SCHEMA,
-          sentence(
-            throttled &&
-              'That quota is fail-closed, so a degraded limiter store refuses here in Better Auth’s error shape.',
-            database,
-            'Either may come in the envelope or in Better Auth’s error shape.'
-          )
-        )
-      : errorResponse(
-          sentence(
-            'The admission limiter store is unavailable and fails closed.',
-            database
-          ),
-          { 'Retry-After': RESPONSE_HEADERS['Retry-After'] }
-        );
+  responses['503'] = errorResponse(
+    sentence(
+      'The admission limiter store is unavailable and fails closed.',
+      throttled && 'The endpoint’s own verify quota fails closed too.',
+      database
+    ),
+    { 'Retry-After': RESPONSE_HEADERS['Retry-After'] }
+  );
 
   responses['200'] =
     successResponse(library, path) ?? librarySuccess(library, path, method);
@@ -337,14 +323,13 @@ function responsesOf(
     '500',
     ...(BETTER_AUTH_PATH_STATUSES[path] ?? []),
   ] as const)
-    responses[status] = {
-      description: sentence(
+    responses[status] = errorResponse(
+      sentence(
         BETTER_AUTH_STATUS_DESCRIPTIONS[status],
         STATUS_DETAILS[path]?.[status],
         status === '401' && lockout && REAUTH_REQUIRED_DETAIL
-      ),
-      content: { 'application/json': { schema: BETTER_AUTH_ERROR_SCHEMA } },
-    };
+      )
+    );
 
   // The request hook refuses these before the library is called.
   responses['413'] = errorResponse(
@@ -427,7 +412,7 @@ function parametersOf(
  * library's; registration also takes the `grant` `path-policy.ts` spends.
  */
 function requestBodyOf(library: Library, path: string): JsonSchema | undefined {
-  const schema = betterAuthBodies[path];
+  const schema = publishedBodyOf(path);
   if (schema) return requestBody(schema, 'json');
   const body = libraryOperation(library, path, 'POST')?.requestBody;
   if (path !== '/passkey/verify-registration' || !isJsonSchema(body))
@@ -549,6 +534,43 @@ function asStored(
 }
 
 /**
+ * A `required` list the generator puts beside a model `$ref`, cut to the
+ * fields `asStored` keeps: the passkey list names `updatedAt`, which the
+ * library's `Passkey` model, and so the adapter's output, lacks.
+ */
+function storedRequired(library: Library, schema: JsonSchema): JsonSchema {
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(visit);
+    if (!isJsonSchema(value)) return value;
+    const visited = Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, visit(child)])
+    );
+    const name =
+      typeof value.$ref === 'string'
+        ? /^#\/components\/schemas\/(.+)$/.exec(value.$ref)?.[1]
+        : undefined;
+    const model = name === undefined ? undefined : library.schemas[name];
+    if (
+      name === undefined ||
+      !isJsonSchema(model) ||
+      !Array.isArray(value.required)
+    )
+      return visited;
+    const stored = asStored(name, model).properties;
+    return {
+      ...visited,
+      required: value.required.filter(
+        (field) =>
+          typeof field === 'string' &&
+          isJsonSchema(stored) &&
+          Object.hasOwn(stored, field)
+      ),
+    };
+  };
+  return visit(schema) as JsonSchema;
+}
+
+/**
  * The page-keyed matrix session metadata carries, not the role's row list. An
  * action the page does not offer is `false` (`sanitizePermissions`), or
  * absent from the copy `db/migrations/003_grant_media_to_system_roles.sql`
@@ -646,29 +668,31 @@ export async function mergeBetterAuth(): Promise<MergedPaths> {
       pathItem(library, endpoint),
     ])
   );
+  // Published only when an operation requires it: Redocly's `minimal` set
+  // warns on an unused scheme, which two-factor switched off leaves.
+  const challenged = BETTER_AUTH_ENDPOINTS.some((endpoint) =>
+    SECURITY_FOR_SESSION[endpoint.session].some((entry) =>
+      Object.hasOwn(entry, 'twoFactorChallengeCookie')
+    )
+  );
   return {
     paths,
-    schemas: {
-      ...referencedLibrarySchemas(library, paths),
-      [BETTER_AUTH_ERROR]: {
-        type: 'object',
-        properties: { message: { type: 'string' }, code: { type: 'string' } },
-        required: ['message'],
-      },
-    },
+    schemas: referencedLibrarySchemas(library, paths),
     securitySchemes: {
       sessionCookie: {
         type: 'apiKey',
         in: 'cookie',
         name: library.sessionCookie,
       },
-      twoFactorChallengeCookie: {
-        type: 'apiKey',
-        in: 'cookie',
-        name: library.challengeCookie,
-        description:
-          'Issued by a first factor that needs a second one, and required by every operation that completes the challenge.',
-      },
+      ...(challenged && {
+        twoFactorChallengeCookie: {
+          type: 'apiKey',
+          in: 'cookie',
+          name: library.challengeCookie,
+          description:
+            'Issued by a first factor that needs a second one, and required by every operation that completes the challenge.',
+        },
+      }),
     },
   };
 }

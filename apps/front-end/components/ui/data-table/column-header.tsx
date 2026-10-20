@@ -1,4 +1,5 @@
-import type { HeaderContext } from '@tanstack/react-table';
+import type { DataTableFeatures } from './features';
+import type { HeaderContext, RowData } from '@tanstack/react-table';
 
 import { memo } from 'react';
 
@@ -18,7 +19,9 @@ const DataTableColumnHeader = memo(
 DataTableColumnHeader.displayName = 'DataTableColumnHeader';
 
 /** Every column's header unless it sets its own: its `meta.label`. */
-function renderDefaultHeader<TData>({ column }: HeaderContext<TData, unknown>) {
+function renderDefaultHeader<TData extends RowData>({
+  column,
+}: HeaderContext<DataTableFeatures, TData>) {
   return (
     <DataTableColumnHeader title={column.columnDef.meta?.label ?? column.id} />
   );

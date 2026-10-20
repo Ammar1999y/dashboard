@@ -259,6 +259,29 @@ describe('the OTP channel union', () => {
   });
 });
 
+describe('a binding under the Better Auth prefix', () => {
+  test('answers a plain problem, which unlike the prefix’s own refusals has no `message`', async () => {
+    const response = await app.handle(
+      post('/api/auth/otp/verify', {
+        channel: 'email',
+        email: uniqueEmail(),
+        code: '123456',
+      })
+    );
+    expect(await response.clone().json()).toEqual({
+      type: 'about:blank',
+      title: 'Bad Request',
+      status: HTTP_STATUS.BAD_REQUEST,
+      detail: otpMsg.invalidOrExpired,
+    });
+    await expectError(
+      response,
+      HTTP_STATUS.BAD_REQUEST,
+      otpMsg.invalidOrExpired
+    );
+  });
+});
+
 describe('POST /api/dash/auth/reauth', () => {
   test('a malformed body is answered like a wrong password', async () => {
     const session = await signedInUser();

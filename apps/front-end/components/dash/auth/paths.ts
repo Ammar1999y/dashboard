@@ -2,9 +2,25 @@ import type { NextRouter } from 'next/router';
 
 import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
 
+import { validateRedirectPath } from '@/utils/validate-redirect-path';
+
 export const SIGN_IN_PATH = '/dash/sign-in';
 export const ACCOUNT_PATH = '/dash/account';
 export const FORGOT_PASSWORD_PATH = '/dash/forgot-password';
+const FROM_PARAM = 'from';
+
+/** The account page, opened from `from`, which it returns to once the user is done. */
+export const accountPath = (from: string) =>
+  `${ACCOUNT_PATH}?${new URLSearchParams({ [FROM_PARAM]: from })}`;
+
+/** The page the account page was opened from, when it names a safe one. */
+export function accountReturnPath(query: NextRouter['query']): string | null {
+  const from = query[FROM_PARAM];
+  return typeof from === 'string'
+    ? validateRedirectPath(from, '') || null
+    : null;
+}
+
 /** Where Google's callback lands; the server resolves it against its own origin. */
 export const OAUTH_COMPLETE_PATH = '/dash/oauth-complete';
 

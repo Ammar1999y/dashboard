@@ -1,5 +1,8 @@
 import type { useResendCooldown } from '@/hooks/use-resend-cooldown';
-import type { RequestBody } from '@app/shared/contract';
+import type {
+  sendPasswordlessCode,
+  sendPasswordResetCode,
+} from '@app/shared/api/auth';
 import type { OtpChannel } from '@app/shared/validation/enums';
 
 import { memo, useCallback } from 'react';
@@ -8,11 +11,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import * as z from 'zod';
-import { REQUEST_BODIES } from '@app/shared/contract';
-import { anonymousOtpSentSchema } from '@app/shared/responses/auth';
+import { sendOtp } from '@app/shared/api/auth';
 import { MSG_RESEND_IN } from '@/constants/messages';
-import { mutate } from '@/lib/api/mutation';
-import { withCaptcha } from '@/lib/auth/captcha';
+import { api } from '@/lib/api/client';
 
 import { captchaField } from '@/utils/validation/auth';
 
@@ -23,20 +24,17 @@ import SubmitButton, { SubmitLabel } from '@/components/form/submit-button';
 import { FormChannelPicker } from '../shared/channel-picker';
 import TurnstileWidget from './turnstile';
 
-const sendSchema = REQUEST_BODIES['POST /api/auth/otp/send'];
-const contactFormSchema = sendSchema.and(z.object(captchaField));
+const contactFormSchema = sendOtp.body.and(z.object(captchaField));
 
 type ContactInput = z.input<typeof contactFormSchema>;
 type ContactOutput = z.output<typeof contactFormSchema>;
 
 /** Where a code is sent: the schema every anonymous send takes, as the server reads it. */
-export type OtpContact = z.output<typeof sendSchema>;
+export type OtpContact = z.output<typeof sendOtp.body>;
 
 /** The anonymous sends, which all take this body and answer `nextAllowedIn`. */
-export type SendHref =
-  | '/api/auth/otp/send'
-  | '/api/auth/passwordless/send'
-  | '/api/auth/forgot-password/send';
+export type SendEndpoint =
+  typeof sendOtp | typeof sendPasswordlessCode | typeof sendPasswordResetCode;
 
 const ContactField = memo(() => {
   const channel: unknown = useWatch({ name: 'channel' });
@@ -77,7 +75,7 @@ export function channelList(
 }
 
 interface ContactFormProps {
-  href: SendHref;
+  endpoint: SendEndpoint;
   /** What the deployment can send over, in the order offered. */
   channels: ChannelList;
   /** Seeds the form: the address already known, or the one a code was just sent to. */
@@ -95,7 +93,7 @@ interface ContactFormProps {
  */
 export const ContactForm = memo(
   ({
-    href,
+    endpoint,
     channels,
     initial,
     cooldown,
@@ -118,15 +116,12 @@ export const ContactForm = memo(
     const { start, startFromError } = cooldown;
     const onSubmit = useCallback(
       async ({ captcha, ...contact }: ContactOutput) => {
-        const body: RequestBody<'POST /api/auth/otp/send'> = contact;
         try {
-          const { data, message } = await mutate({
-            href,
-            method: 'POST',
-            data: body,
-            headers: withCaptcha({ captcha }).headers,
-            schema: anonymousOtpSentSchema,
-          });
+          const { data, message } = await api(
+            endpoint,
+            { body: contact },
+            { captcha }
+          );
           start(data.nextAllowedIn);
           toast.success(message);
           onSent(contact);
@@ -135,7 +130,7 @@ export const ContactForm = memo(
           throw error;
         }
       },
-      [href, start, startFromError, onSent]
+      [endpoint, start, startFromError, onSent]
     );
 
     return (

@@ -1,9 +1,9 @@
 import type { PermissionRows } from '@app/shared/permissions/matrix';
 
-import { and, count, eq, sql } from 'drizzle-orm';
+import { and, count, eq } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
-import { rolePermissions, roles } from '@/db/schema';
+import { dataTableDb, withTransaction } from '@/db';
+import { rolePermissions, roles, users } from '@/db/schema';
 
 import { createPermission, listPermissions } from '@app/shared/api/permissions';
 import { PERMISSIONS_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns';
@@ -30,6 +30,7 @@ import { bind } from '@/lib/http/binding';
 import { handlePermissionUniqueViolation } from '@/lib/http/constraint-errors';
 import { PERMISSION_AUDIT_VERSION } from '@/lib/permissions/audit';
 import { standardScopeFilter } from '@/lib/permissions/roles';
+import { liveUser } from '@/lib/users/filters';
 
 export const listPermissionsBinding = bind(listPermissions, {
   permission: { resource: 'permissions', action: 'view' },
@@ -62,7 +63,7 @@ export const listPermissionsBinding = bind(listPermissions, {
     );
 
     const [rolesWithCounts, [totalRow]] = await Promise.all([
-      db
+      dataTableDb
         .select({
           id: roles.id,
           roleName: roles.roleName,
@@ -70,17 +71,17 @@ export const listPermissionsBinding = bind(listPermissions, {
           isActive: roles.isActive,
           createdAt: roles.createdAt,
           updatedAt: roles.updatedAt,
-          usersCount: sql<number>`(
-          SELECT COUNT(*) FROM users
-          WHERE role_id = ${roles.id} AND deleted_at IS NULL
-        )`.mapWith(Number),
+          usersCount: dataTableDb.$count(
+            users,
+            liveUser(eq(users.roleId, roles.id))
+          ),
         })
         .from(roles)
         .where(baseFilter)
         .orderBy(...orderBy)
         .limit(limit)
         .offset(offset),
-      db.select({ total: count() }).from(roles).where(baseFilter),
+      dataTableDb.select({ total: count() }).from(roles).where(baseFilter),
     ]);
 
     return {

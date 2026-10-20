@@ -7,19 +7,27 @@ import {
   selfUpdateUserBodySchema,
 } from '@app/shared/validation/auth';
 import { NAME_MAX } from '@app/shared/validation/constants';
-import { passwordSchema } from '@app/shared/validation/rules';
+import { reauthPasswordSchema } from '@app/shared/validation/rules';
 
 import { captchaField } from './auth';
 
-// The server's own body schemas, with what a form adds: the current password
-// is asked for in full, because the captcha token in the same request is
-// spent by the first attempt and cannot ride a retry after a re-authentication
-// prompt; and a captcha field wherever the route verifies one.
+// The server's own body schemas, with what a form adds: a captcha field
+// wherever the route verifies one, and an empty current password read as none.
 
 export type RenameInput = z.input<typeof selfUpdateUserBodySchema>;
 export type RenameOutput = z.output<typeof selfUpdateUserBodySchema>;
 
-const proof = { currentPassword: passwordSchema, ...captchaField };
+/**
+ * The server takes the current password or an open re-authentication window.
+ * Left empty, a closed window opens the prompt, and the captcha the attempt
+ * spent makes the form ask for a second submit.
+ */
+const currentPassword = z.preprocess(
+  (value: string) => (value === '' ? undefined : value),
+  reauthPasswordSchema
+);
+
+const proof = { currentPassword, ...captchaField };
 
 export const changeEmailFormSchema = changeEmailSchema.extend(proof);
 export type ChangeEmailInput = z.input<typeof changeEmailFormSchema>;

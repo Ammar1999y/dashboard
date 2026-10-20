@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
 
+import { PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
 
@@ -29,10 +30,12 @@ describe('Host-independent route extraction', () => {
       });
 
       expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
+      expect(response.headers.get('content-type')).toBe(PROBLEM_MEDIA_TYPE);
       expect(await response.json()).toEqual({
-        success: false,
-        message: MSG_PAGE_NOT_FOUND,
-        data: null,
+        type: 'about:blank',
+        title: 'Not Found',
+        status: 404,
+        detail: MSG_PAGE_NOT_FOUND,
       });
     }
   );

@@ -14,6 +14,17 @@ const GOOGLE_CERTS_URL = new URL('https://www.googleapis.com/oauth2/v3/certs');
 const ID_TOKEN_ALGORITHMS = ['RS256'];
 
 /**
+ * Shared, so jose's cache and its de-duplication of concurrent fetches apply:
+ * it refetches when stale or on an unknown `kid` outside its cooldown.
+ */
+const signingKeys = { resolver: createRemoteJWKSet(GOOGLE_CERTS_URL) };
+
+/** For tests that serve their own key set: the next verification fetches it. */
+export function forgetGoogleSigningKeys(): void {
+  signingKeys.resolver = createRemoteJWKSet(GOOGLE_CERTS_URL);
+}
+
+/**
  * A fault in what Google answered or in reaching it, as opposed to a token
  * that fails verification. It says nothing about the person signing in, so the
  * callback answers it as a server failure and never as a refused sign-in.
@@ -77,15 +88,7 @@ export async function verifyGoogleIdToken(params: {
   )
     throw denied();
 
-  const keys = createRemoteJWKSet(GOOGLE_CERTS_URL);
-  try {
-    await keys.reload();
-  } catch (cause) {
-    throw new GoogleProviderFault('signing_keys_unavailable', { cause });
-  }
-  if (!keys.jwks()?.keys.length)
-    throw new GoogleProviderFault('signing_keys_unavailable');
-
+  const keys = signingKeys.resolver;
   let claims: JWTPayload;
   try {
     ({ payload: claims } = await jwtVerify(params.token, keys, {
@@ -95,7 +98,10 @@ export async function verifyGoogleIdToken(params: {
       maxTokenAge: '1h',
     }));
   } catch (cause) {
-    throw isTokenFailure(cause)
+    // An empty set answers every token as one no key matches.
+    const keySetEmpty =
+      cause instanceof errors.JWKSNoMatchingKey && !keys.jwks()?.keys.length;
+    throw !keySetEmpty && isTokenFailure(cause)
       ? denied()
       : new GoogleProviderFault('signing_keys_unavailable', { cause });
   }

@@ -3,11 +3,10 @@ import { useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
+import { googleStart } from '@app/shared/api/better-auth';
 import { HONOUR_REMEMBER_ME } from '@app/shared/config';
-import { oauthStartedSchema } from '@app/shared/responses/better-auth';
 import { MSG_BACK_TO_SIGN_IN } from '@/constants/messages';
-import { withCaptcha } from '@/lib/auth/captcha';
-import { authRequest } from '@/lib/auth/request';
+import { api } from '@/lib/api/client';
 
 import { captchaField } from '@/utils/validation/auth';
 
@@ -41,16 +40,17 @@ export default function GoogleStart({ rememberMe, onBack }: GoogleStartProps) {
 
   const onSubmit = useCallback(
     async ({ captcha }: StartOutput) => {
-      const { data } = await authRequest('/oauth/google/start', {
-        method: 'POST',
-        data: {
-          mode: 'sign_in',
-          callbackURL: OAUTH_COMPLETE_PATH,
-          ...(HONOUR_REMEMBER_ME && { rememberMe }),
+      const { data } = await api(
+        googleStart,
+        {
+          body: {
+            mode: 'sign_in',
+            callbackURL: OAUTH_COMPLETE_PATH,
+            ...(HONOUR_REMEMBER_ME && { rememberMe }),
+          },
         },
-        headers: withCaptcha({ captcha }).headers,
-        schema: oauthStartedSchema,
-      });
+        { captcha }
+      );
       location.assign(data.url);
     },
     [rememberMe]

@@ -1,8 +1,14 @@
 import type { ReservedSQL, SavepointSQL, SQL, TransactionSQL } from 'bun';
+import type { ExtractTablesWithRelations } from 'drizzle-orm';
 import type { BunSQLDatabase } from 'drizzle-orm/bun-sql';
 import type { PgTransactionConfig } from 'drizzle-orm/pg-core';
 
-import { drizzle } from 'drizzle-orm/bun-sql';
+import {
+  createTableRelationsHelpers,
+  extractTablesRelationalConfig,
+} from 'drizzle-orm';
+import { BunSQLSession } from 'drizzle-orm/bun-sql/session';
+import { PgDialect } from 'drizzle-orm/pg-core';
 
 import { ConnectionTimeoutError, isStatementTimeout } from './errors';
 import { POOL_ACQUIRE_TIMEOUT_MS } from './limits';
@@ -11,6 +17,37 @@ import * as schema from './schema';
 export type Tx = Parameters<
   Parameters<BunSQLDatabase<typeof schema>['transaction']>[0]
 >[0];
+
+type Relations = ExtractTablesWithRelations<typeof schema>;
+
+/**
+ * What `drizzle({ client, schema })` builds, built once per process: extracting
+ * the relational config walks every schema export, which costs as much as a
+ * short transaction's own round trips. Keep the dialect's options in step with
+ * `db` in `./index.ts`.
+ */
+const dialect = new PgDialect();
+const relations = extractTablesRelationalConfig<Relations>(
+  schema,
+  createTableRelationsHelpers
+);
+const relationalSchema = {
+  fullSchema: schema,
+  schema: relations.tables,
+  tableNamesMap: relations.tableNamesMap,
+};
+
+function transactionOn<T>(
+  client: SQL,
+  fn: (tx: Tx) => Promise<T>,
+  config?: PgTransactionConfig
+): Promise<T> {
+  return new BunSQLSession<SQL, typeof schema, Relations>(
+    client,
+    dialect,
+    relationalSchema
+  ).transaction(fn, config);
+}
 
 /**
  * A transaction given a `deadline` gave up waiting for a connection, or ran
@@ -162,7 +199,7 @@ async function runWithinDeadline<T>(
   });
   try {
     if (deadline <= Date.now()) throw new TransactionDeadlineError();
-    return await drizzle({ client, schema }).transaction(async (tx) => {
+    return await transactionOn(client, async (tx) => {
       const result = await fn(tx);
       if (cut.error) throw cut.error;
       if (deadline <= Date.now()) throw new TransactionDeadlineError();
@@ -219,7 +256,7 @@ export function transactionRunner(
     );
     try {
       return deadline === undefined
-        ? await drizzle({ client: reserved, schema }).transaction(fn, config)
+        ? await transactionOn(reserved, fn, config)
         : await runWithinDeadline(reserved, deadline, fn);
     } finally {
       reserved.release();

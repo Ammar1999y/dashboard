@@ -8,11 +8,13 @@ import type { PermissionRows } from '@app/shared/permissions/matrix';
 import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { rolePermissions, roles, sessions, users } from '@/db/schema';
-import { parseCookies } from 'better-auth/cookies';
+import { createAuthMiddleware, isAPIError } from 'better-auth/api';
+import { deleteSessionCookie, parseCookies } from 'better-auth/cookies';
+import { kAPIErrorHeaderSymbol } from 'better-call';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -26,6 +28,7 @@ import { resolveActionScope } from '@app/shared/permissions/scope';
 import { validID } from '@app/shared/utils';
 
 import { auth } from '@/lib/auth';
+import { liveSessionCondition } from '@/lib/auth/session/live';
 import {
   parseSetCookieHeaders,
   queueResponseCookies,
@@ -48,6 +51,19 @@ export function insufficientPermissions(): CustomError {
 }
 
 /**
+ * The expiries `getSession` set before throwing its 401 (the row deleted during
+ * its daily slide). better-call keeps them off `headers`.
+ */
+function refusedReadCookies(error: unknown): HandlerCookie[] | undefined {
+  if (!isAPIError(error) || error.statusCode !== HTTP_STATUS.UNAUTHORIZED)
+    return undefined;
+  const set: unknown = Reflect.get(error, kAPIErrorHeaderSymbol);
+  return set instanceof Headers
+    ? parseSetCookieHeaders(set.getSetCookie())
+    : [];
+}
+
+/**
  * Better Auth's view of the caller, possibly from the cookie cache. The cookies
  * the read sets (a re-minted cache, its expiry, the sliding refresh) are queued
  * for the response, the 401 below included.
@@ -55,14 +71,20 @@ export function insufficientPermissions(): CustomError {
 export async function authenticatedSession(
   headers: Headers
 ): Promise<{ session: AuthSession; userId: EntityID }> {
-  const { headers: setCookies, response: session } = await auth.api.getSession({
-    headers,
-    returnHeaders: true,
-  });
+  let read;
+  try {
+    read = await auth.api.getSession({ headers, returnHeaders: true });
+  } catch (error) {
+    const expiries = refusedReadCookies(error);
+    if (!expiries) throw error;
+    queueResponseCookies(headers, expiries);
+    throw loginRequired();
+  }
   queueResponseCookies(
     headers,
-    parseSetCookieHeaders(setCookies.getSetCookie())
+    parseSetCookieHeaders(read.headers.getSetCookie())
   );
+  const session = read.response;
   const userId = validID(session?.user.id);
   if (!session || !userId) throw loginRequired();
   return { session, userId };
@@ -73,18 +95,41 @@ export async function authenticatedSession(
 export async function refreshSessionCookies(
   headers: Headers
 ): Promise<HandlerCookie[] | undefined> {
+  let cookies: HandlerCookie[];
   try {
     const refreshed = await auth.api.getSession({
       headers,
       query: { disableCookieCache: true },
       returnHeaders: true,
     });
-    const cookies = parseSetCookieHeaders(refreshed.headers.getSetCookie());
-    return cookies.length > 0 ? cookies : undefined;
+    cookies = parseSetCookieHeaders(refreshed.headers.getSetCookie());
   } catch (e) {
-    logSanitized('error', { msg: 'session.cookieRefresh failed', error: e });
-    return undefined;
+    const expiries = refusedReadCookies(e);
+    if (!expiries) {
+      logSanitized('error', { msg: 'session.cookieRefresh failed', error: e });
+      return undefined;
+    }
+    cookies = expiries;
   }
+  return cookies.length > 0 ? cookies : undefined;
+}
+
+const expireSessionCookies = createAuthMiddleware(async (ctx) => {
+  deleteSessionCookie(ctx);
+  return ctx.responseHeaders.getSetCookie();
+});
+
+/**
+ * The 401 for a session the database refused, with Better Auth's sign-out
+ * expiries queued. Not a refresh: `getSession` knows nothing of `is_active`,
+ * so it would re-mint the cache of a suspended user.
+ */
+async function sessionRefused(headers: Headers): Promise<CustomError> {
+  // How the library invokes its hooks; the input type omits `context`.
+  const input = { headers, context: await auth.$context };
+  const expiries = await expireSessionCookies(input);
+  queueResponseCookies(headers, parseSetCookieHeaders(expiries));
+  return loginRequired();
 }
 
 async function queueRefreshedSessionCookies(headers: Headers): Promise<void> {
@@ -221,16 +266,16 @@ async function resyncSession(headers: Headers, userId: EntityID) {
 }
 
 /**
- * The caller's grants as the database holds them now. The session ROW is
- * verified too: `getSession` may answer from Better Auth's cookie cache, which
- * outlives a deleted row, and every revocation deletes rows. A stale row is
- * rewritten; a cookie cache stale behind a current row is only re-minted.
+ * The session ROW, read with its user's liveness and its grants: `getSession`
+ * may answer from Better Auth's cookie cache, which outlives a deleted row, and
+ * every revocation deletes rows. One read, so a session route whose handler
+ * then checks a grant verifies the row once.
  */
-async function liveGrants(
+export async function readLiveSession(
   headers: Headers,
   session: AuthSession,
   userId: EntityID
-): Promise<Grants> {
+) {
   const sessionId = sessionIdOf(session);
 
   const rows = await db
@@ -247,22 +292,27 @@ async function liveGrants(
     .innerJoin(users, eq(sessions.userId, users.id))
     .leftJoin(roles, eq(users.roleId, roles.id))
     .leftJoin(rolePermissions, eq(roles.id, rolePermissions.roleId))
-    .where(
-      and(
-        eq(sessions.id, sessionId),
-        eq(sessions.userId, userId),
-        gt(sessions.expiresAt, sql`now()`),
-        isNull(users.deletedAt),
-        eq(users.isActive, true)
-      )
-    );
+    .where(liveSessionCondition(sessionId, userId));
 
-  // Covers both "user is gone/inactive" and "this session was revoked".
   const [sessionRow] = rows;
-  if (!sessionRow) {
-    await queueRefreshedSessionCookies(headers);
-    throw loginRequired();
-  }
+  if (!sessionRow) throw await sessionRefused(headers);
+  return { sessionId, sessionRow, rows };
+}
+
+type LiveSession = Awaited<ReturnType<typeof readLiveSession>>;
+
+/**
+ * The caller's grants as the database holds them now. A stale row is
+ * rewritten; a cookie cache stale behind a current row is only re-minted.
+ */
+async function liveGrants(
+  headers: Headers,
+  session: AuthSession,
+  userId: EntityID,
+  read?: LiveSession
+): Promise<Grants> {
+  const { sessionId, sessionRow, rows } =
+    read ?? (await readLiveSession(headers, session, userId));
 
   const roleId = sessionRow.roleId;
   if (!roleId || !sessionRow.roleIsActive) throw insufficientPermissions();
@@ -302,6 +352,7 @@ async function resolveGrants(params: {
   userId: EntityID;
   actions: readonly PermissionAction[];
   forceDB: boolean;
+  live?: LiveSession;
 }): Promise<Grants> {
   const cacheable =
     !params.forceDB &&
@@ -310,7 +361,7 @@ async function resolveGrants(params: {
 
   return cacheable
     ? cachedGrants(params.session)
-    : liveGrants(params.headers, params.session, params.userId);
+    : liveGrants(params.headers, params.session, params.userId, params.live);
 }
 
 export async function checkUserPermission(params: {
@@ -356,8 +407,8 @@ export async function checkMultiplePermissions(params: {
   headers: Headers;
   checks: Array<{ resource: DashboardPage; action: PermissionAction }>;
   forceDB?: boolean;
-  /** The caller's session, already read for this request. */
-  signedIn?: { session: AuthSession; userId: EntityID };
+  /** The caller's session, and its row when already read for this request. */
+  signedIn?: { session: AuthSession; userId: EntityID; live?: LiveSession };
 }): Promise<{
   permissions: Record<string, boolean>;
   session: AuthSession;
@@ -366,7 +417,7 @@ export async function checkMultiplePermissions(params: {
 }> {
   const { headers, checks, forceDB = false } = params;
 
-  const { session, userId } =
+  const { session, userId, live }: NonNullable<typeof params.signedIn> =
     params.signedIn ?? (await authenticatedSession(headers));
   const { sessionId, permissions: allPermissions } = await resolveGrants({
     headers,
@@ -374,6 +425,7 @@ export async function checkMultiplePermissions(params: {
     userId,
     actions: checks.map((check) => check.action),
     forceDB,
+    live,
   });
 
   const permissions = checks.reduce(

@@ -1,6 +1,5 @@
 import type { OtpContact } from './contact-form';
 import type { FactorOption } from './second-factor/options';
-import type { RequestBody } from '@app/shared/contract';
 import type * as z from 'zod';
 
 import { useRouter } from 'next/router';
@@ -9,12 +8,13 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { otpMsg } from '@app/shared/messages/otp';
 import {
-  ladderOtpSentSchema,
-  recoveryResultSchema,
-  resetDoneSchema,
-} from '@app/shared/responses/auth';
+  completePasswordReset,
+  resetPassword,
+  sendPasswordResetCode,
+  sendRecoverySecondFactorCode,
+} from '@app/shared/api/auth';
+import { otpMsg } from '@app/shared/messages/otp';
 import { ENABLED_OTP_CHANNELS } from '@app/shared/validation/otp';
 import { passwordSchema } from '@app/shared/validation/rules';
 import {
@@ -22,8 +22,7 @@ import {
   MSG_FORGOT_PASSWORD_INTRO,
   MSG_RESEND_CODE,
 } from '@/constants/messages';
-import { mutate } from '@/lib/api/mutation';
-import { withCaptcha } from '@/lib/auth/captcha';
+import { api } from '@/lib/api/client';
 
 import { codeCaptchaFormSchema } from '@/utils/validation/auth';
 
@@ -79,18 +78,11 @@ const ResetForm = memo(
 
     const onSubmit = useCallback(
       async ({ code, newPassword, captcha }: ResetOutput) => {
-        const body: RequestBody<'POST /api/auth/forgot-password/reset'> = {
-          ...contact,
-          code,
-          newPassword,
-        };
-        const { data, message } = await mutate({
-          href: '/api/auth/forgot-password/reset',
-          method: 'POST',
-          data: body,
-          headers: withCaptcha({ captcha }).headers,
-          schema: recoveryResultSchema,
-        });
+        const { data, message } = await api(
+          resetPassword,
+          { body: { ...contact, code, newPassword } },
+          { captcha }
+        );
         if (data.reset) {
           toast.success(message);
           void replace(SIGN_IN_PATH);
@@ -160,12 +152,10 @@ const RecoverySecondFactor = memo(
 
     const sendCode = useCallback(
       async (option: FactorOption) => {
-        const { data, message: sent } = await mutate({
-          href: '/api/auth/forgot-password/second-factor/send',
-          method: 'POST',
-          data: { grant, option: option.id },
-          schema: ladderOtpSentSchema,
-        });
+        const { data, message: sent } = await api(
+          sendRecoverySecondFactorCode,
+          { body: { grant, option: option.id } }
+        );
         toast.success(sent);
         return data.nextAllowedIn;
       },
@@ -174,17 +164,8 @@ const RecoverySecondFactor = memo(
 
     const verifyCode = useCallback(
       async (option: FactorOption, code: string) => {
-        const body: RequestBody<'POST /api/auth/forgot-password/complete'> = {
-          grant,
-          option: option.id,
-          code,
-          newPassword,
-        };
-        const { message: done } = await mutate({
-          href: '/api/auth/forgot-password/complete',
-          method: 'POST',
-          data: body,
-          schema: resetDoneSchema,
+        const { message: done } = await api(completePasswordReset, {
+          body: { grant, option: option.id, code, newPassword },
         });
         toast.success(done);
         void replace(SIGN_IN_PATH);
@@ -238,7 +219,7 @@ export default function ForgotPassword() {
       ) : (
         CHANNELS && (
           <SendThenCode
-            href='/api/auth/forgot-password/send'
+            endpoint={sendPasswordResetCode}
             channels={CHANNELS}
             intro={MSG_FORGOT_PASSWORD_INTRO}
           >

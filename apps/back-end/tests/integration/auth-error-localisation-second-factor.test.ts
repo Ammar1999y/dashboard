@@ -34,6 +34,7 @@ import { generateUuidV7 } from '@/lib/id';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { expectAuthError } from '../helpers/expect-body';
 import { baseHeaders, seedUser } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 import { buildRegistrationResponse } from '../helpers/webauthn';
@@ -90,18 +91,14 @@ async function signIn(user: SeededUser): Promise<string> {
   return cookieHeader(response.headers.getSetCookie());
 }
 
-/** What a client receives: Arabic text, under the project's own code. */
-function arabic(message: string): { message: string; code: string } {
-  return { message, code: CUSTOM_AUTH_CODE };
-}
-
+/** What a client receives: Arabic text, as an auth problem under the project's own code. */
 async function expectAnswer(
   response: Response,
   status: number,
   message: string
 ): Promise<void> {
-  expect(response.status).toBe(status);
-  expect(await response.json()).toEqual(arabic(message));
+  const problem = await expectAuthError(response, status, message);
+  expect(problem.code).toBe(CUSTOM_AUTH_CODE);
 }
 
 beforeAll(async () => {
@@ -355,7 +352,7 @@ describe('the passkey endpoints answer a refusal in Arabic', () => {
       HTTP_STATUS.BAD_REQUEST,
       HTTP_STATUS.INTERNAL_ERROR,
     ]);
-    expect(await answer.json()).toEqual(arabic(twoFactorMsg.passkeyNotSaved));
+    await expectAnswer(answer, answer.status, twoFactorMsg.passkeyNotSaved);
   });
 });
 

@@ -1,3 +1,4 @@
+import type { DataTableFeatures } from '@/components/ui/data-table';
 import type { UserClient } from '@/types/user';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -10,12 +11,12 @@ import {
   textColumn,
 } from '@/components/ui/data-table';
 
-import { ACCOUNT_PATH } from '../auth/paths';
+import { accountPath } from '../auth/paths';
 import { cacheRoleUsersCount } from '../permissions/cache';
 import { rowActionsColumn } from '../shared/row-actions';
 import { userEntity } from './entity';
 
-export const columns: ColumnDef<UserClient>[] = [
+export const columns: ColumnDef<DataTableFeatures, UserClient>[] = [
   textColumn('name', 'الاسم'),
   textColumn('email', 'البريد الإلكتروني', {
     size: 220,
@@ -51,6 +52,6 @@ export const columns: ColumnDef<UserClient>[] = [
         findCached<UserClient>(queryClient, userEntity.keys, id)?.roleId,
         -1
       ),
-    { ownAccountHref: ACCOUNT_PATH }
+    { ownAccountHref: accountPath }
   ),
 ];

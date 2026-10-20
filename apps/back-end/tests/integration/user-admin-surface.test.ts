@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { SeededUser, SignedInSession } from '../helpers/session';
 
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db, withTransaction } from '@/db';
@@ -23,6 +23,7 @@ import {
   signedInUser,
   signIn,
 } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 
 interface Fixture {
   admin: SignedInSession;
@@ -288,6 +289,84 @@ describe('rewriting a custom role with its unchanged matrix', () => {
   });
 });
 
+describe('PUT /api/dash/permissions/:id with a matrix', () => {
+  test('reads the stored matrix once, for the scope check, the diff and the audit', async () => {
+    const member = await seedUser({ permissions: { users: { view: true } } });
+    const [role] = await db
+      .select({ roleName: roles.roleName })
+      .from(roles)
+      .where(eq(roles.id, member.roleId));
+    if (!role) throw new Error('no role seeded');
+
+    const recorder = recordStatements();
+    const response = await app
+      .handle(
+        authedRequest(fx().admin, `/api/dash/permissions/${member.roleId}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            roleName: role.roleName,
+            isActive: true,
+            permissions: [
+              { name: 'users', permissions: { view: true, edit: true } },
+            ],
+          }),
+        })
+      )
+      .finally(recorder.stop);
+
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    expect(
+      recorder.matching(/^select .* from "role_permissions"/)
+    ).toHaveLength(1);
+    const [audit] = await db.execute<{ old_data: unknown; new_data: unknown }>(
+      sql`select old_data, new_data from audit_logs
+        where record_id = ${member.roleId} and action = 'UPDATE'`
+    );
+    expect(audit?.old_data).toMatchObject({
+      permissions: [{ pageName: 'users', permissions: { view: true } }],
+    });
+    expect(audit?.new_data).toMatchObject({
+      permissions: [
+        { pageName: 'users', permissions: { view: true, edit: true } },
+      ],
+    });
+  });
+});
+
+describe('GET /api/dash/permissions', () => {
+  test("counts each role's live members, not its soft-deleted ones", async () => {
+    const holder = await seedUser({ permissions: { users: { view: true } } });
+    const joining = [await seedUser(), await seedUser()];
+    const departed = await seedUser();
+    await db
+      .update(users)
+      .set({ roleId: holder.roleId })
+      .where(
+        inArray(
+          users.id,
+          [...joining, departed].map(({ userId }) => userId)
+        )
+      );
+    await db
+      .update(users)
+      .set({ deletedAt: new Date(), isActive: false })
+      .where(eq(users.id, departed.userId));
+
+    const response = await app.handle(
+      authedRequest(fx().admin, '/api/dash/permissions?perPage=100')
+    );
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    const { data } = (await response.json()) as {
+      data: { id: string; usersCount: number }[];
+    };
+    const countOf = (roleId: string) =>
+      data.find(({ id }) => id === roleId)?.usersCount;
+    expect(countOf(holder.roleId)).toBe(3);
+    expect(countOf(departed.roleId)).toBe(0);
+  });
+});
+
 /** Resolves once `count` other backends wait on a row lock. */
 async function waitForLockWaiters(count: number): Promise<void> {
   const deadline = performance.now() + 5000;
@@ -301,11 +380,23 @@ async function waitForLockWaiters(count: number): Promise<void> {
   throw new Error(`fewer than ${count} requests reached a row lock`);
 }
 
-describe("a user DELETE racing a DELETE of that user's role", () => {
-  // The user DELETE queues on the user row first, so it takes the role row
-  // after it: a role DELETE holding the role while it waits for that user is
-  // the cycle PostgreSQL breaks with 40P01.
-  test('both commit when the user DELETE queues first', async () => {
+/** `answer`'s status, or `'waiting'` while it is still pending after `ms`. */
+async function statusWithin(
+  answer: Promise<Response>,
+  ms = 2000
+): Promise<number | 'waiting'> {
+  const settled = await Promise.race([
+    answer,
+    Bun.sleep(ms).then(() => 'waiting' as const),
+  ]);
+  return settled === 'waiting' ? settled : settled.status;
+}
+
+describe("a role DELETE while a member's row is locked", () => {
+  // A live member is refused on an unlocked read, so the DELETE never queues
+  // on the member: the user DELETE queued there commits after it, and the role
+  // can then go.
+  test('refuses the occupied role at once, and both commit in turn', async () => {
     const target = await seedUser({ permissions: { users: { view: true } } });
     const gate: { release?: () => void; locked?: () => void } = {};
     const locked = new Promise<void>((resolve) => {
@@ -331,29 +422,26 @@ describe("a user DELETE racing a DELETE of that user's role", () => {
       })
     );
     await waitForLockWaiters(1);
-    const roleDelete = app.handle(
-      authedRequest(fx().admin, `/api/dash/permissions/${target.roleId}`, {
-        method: 'DELETE',
-      })
-    );
-    await waitForLockWaiters(2);
+    const deleteRole = () =>
+      app.handle(
+        authedRequest(fx().admin, `/api/dash/permissions/${target.roleId}`, {
+          method: 'DELETE',
+        })
+      );
+    const early = await statusWithin(deleteRole());
     gate.release?.();
     await holder;
 
-    const [userAnswer, roleAnswer] = await Promise.all([
-      userDelete,
-      roleDelete,
-    ]);
+    expect(early).toBe(HTTP_STATUS.BAD_REQUEST);
+    const userAnswer = await userDelete;
     expect(userAnswer.status).toBe(HTTP_STATUS.OK);
-    expect(roleAnswer.status).toBe(HTTP_STATUS.OK);
+    const emptied = await deleteRole();
+    expect(emptied.status).toBe(HTTP_STATUS.OK);
   }, 30_000);
 });
 
-describe("a role DELETE racing a member's audited write on that role", () => {
-  // The member's audit row takes a key-share lock on the member through its
-  // foreign key while the write holds the role; the DELETE holds the member
-  // and waits for the role. A full `UPDATE` lock on the member is that cycle.
-  test('the write commits and the DELETE then refuses the occupied role', async () => {
+describe('a role DELETE while a write holds the role', () => {
+  test('refuses the occupied role without waiting, and the write commits', async () => {
     const member = await seedUser({ permissions: { users: { view: true } } });
     const gate: { locked?: () => void; release?: () => void } = {};
     const locked = new Promise<void>((resolve) => {
@@ -383,17 +471,17 @@ describe("a role DELETE racing a member's audited write on that role", () => {
     });
     await locked;
 
-    const roleDelete = app.handle(
-      authedRequest(fx().admin, `/api/dash/permissions/${member.roleId}`, {
-        method: 'DELETE',
-      })
+    const early = await statusWithin(
+      app.handle(
+        authedRequest(fx().admin, `/api/dash/permissions/${member.roleId}`, {
+          method: 'DELETE',
+        })
+      )
     );
-    await waitForLockWaiters(1);
     gate.release?.();
-
     await write;
-    const answer = await roleDelete;
-    expect(answer.status).toBe(HTTP_STATUS.BAD_REQUEST);
+
+    expect(early).toBe(HTTP_STATUS.BAD_REQUEST);
   }, 30_000);
 });
 

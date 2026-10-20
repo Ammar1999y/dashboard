@@ -61,7 +61,12 @@ describe('pool acquisition bound', () => {
       expect(waited).toBeLessThan(BOUND_MS + 2000);
       expect(handleApiError(caught)).toEqual({
         status: HTTP_STATUS.SERVICE_UNAVAILABLE,
-        body: { success: false, message: MSG_SERVICE_UNAVAILABLE, data: null },
+        body: {
+          type: 'about:blank',
+          title: 'Service Unavailable',
+          status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+          detail: MSG_SERVICE_UNAVAILABLE,
+        },
         headers: { 'Retry-After': String(DATABASE_RETRY_AFTER_S) },
       });
       expect(logged).toHaveBeenCalledTimes(1);
@@ -104,5 +109,30 @@ describe('pool acquisition bound', () => {
     const [probe] =
       await pool`select to_regclass('pg_temp.pool_probe') is null as gone`;
     expect(probe).toEqual({ gone: true });
+  });
+});
+
+describe("Drizzle's relational config", () => {
+  // Building it walks every schema export, which was about half of a short
+  // transaction's fixed cost when it ran per transaction.
+  test('is built once and shared by every transaction, with or without a deadline', async () => {
+    const seen = new Set<unknown>();
+    const read = (deadline?: number) =>
+      withTransaction(
+        async (tx) => {
+          seen.add(tx._.schema);
+          return tx.query.users.findFirst({ columns: { id: true } });
+        },
+        undefined,
+        deadline
+      );
+
+    await read();
+    await read();
+    await read(Date.now() + 5000);
+    await read(Date.now() + 5000);
+
+    expect(seen.size).toBe(1);
+    expect([...seen][0]).toBeDefined();
   });
 });

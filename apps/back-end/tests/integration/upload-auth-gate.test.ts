@@ -38,7 +38,7 @@ import {
   FILE_CONTENT_REFUSED_CODE,
   FILE_TYPE_NOT_ALLOWED_CODE,
 } from '@app/shared/error-codes';
-import { HTTP_STATUS } from '@app/shared/http-status';
+import { HTTP_STATUS, HTTP_STATUS_TITLES } from '@app/shared/http-status';
 import { MSG_LOGIN_REQUIRED } from '@app/shared/messages/auth';
 import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
 import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
@@ -138,7 +138,7 @@ function watchBody(request: Request): readonly string[] {
 
 interface UploadAttempt {
   status: number;
-  /** Parsed envelope, left `unknown` so every assertion goes through `toEqual`. */
+  /** Parsed body, left `unknown` so every assertion goes through `toEqual`. */
   body: unknown;
   /** The raw text, for the "does the failure leak anything" assertions. */
   text: string;
@@ -185,8 +185,15 @@ async function attempt(options: {
   return { status: response.status, body, text, reads };
 }
 
-function failure(message: string, code?: string) {
-  return { success: false, message, data: null, ...(code && { code }) };
+/** A refusal exactly: nothing beyond the problem's own members. */
+function failure(status: number, message: string, code?: string) {
+  return {
+    type: 'about:blank',
+    title: HTTP_STATUS_TITLES[status],
+    status,
+    detail: message,
+    ...(code && { code }),
+  };
 }
 
 /**
@@ -273,7 +280,9 @@ describe('the gate admits the callers it should', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(uploadMsg.noFiles));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
+    );
     expect(result.reads).toEqual(['formData']);
     expect(storeOps()).toEqual([]);
   });
@@ -287,7 +296,9 @@ describe('the gate admits the callers it should', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(uploadMsg.noFiles));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
+    );
     expect(result.reads).toEqual(['formData']);
   });
 
@@ -304,7 +315,9 @@ describe('the gate admits the callers it should', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(uploadMsg.noFiles));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
+    );
   });
 
   test('a granted upload lands PRIVATE and PENDING, attributed to the session user, and answers with the row not the key', async () => {
@@ -356,7 +369,6 @@ describe('the gate admits the callers it should', () => {
     // The response carries the row's id and a URL — never the object key, which
     // is an implementation detail no client is given.
     expect(result.body).toMatchObject({
-      success: true,
       message: mediaMsg.uploaded,
       data: [
         {
@@ -402,7 +414,11 @@ describe('the gate admits the callers it should', () => {
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
     expect(result.body).toEqual(
-      failure(mediaMsg.typeNotAllowed('setup'), FILE_TYPE_NOT_ALLOWED_CODE)
+      failure(
+        HTTP_STATUS.BAD_REQUEST,
+        mediaMsg.typeNotAllowed('setup'),
+        FILE_TYPE_NOT_ALLOWED_CODE
+      )
     );
     expect(storeOps()).toEqual([]);
   });
@@ -417,7 +433,11 @@ describe('the gate admits the callers it should', () => {
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
     expect(result.body).toEqual(
-      failure(mediaMsg.refused('fake', 'signature'), FILE_CONTENT_REFUSED_CODE)
+      failure(
+        HTTP_STATUS.BAD_REQUEST,
+        mediaMsg.refused('fake', 'signature'),
+        FILE_CONTENT_REFUSED_CODE
+      )
     );
     expect(storeOps()).toEqual([]);
   });
@@ -428,7 +448,9 @@ describe('the gate refuses everyone else', () => {
     const result = await attempt({ body: imageForm() });
 
     expect(result.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(result.body).toEqual(failure(MSG_LOGIN_REQUIRED));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED)
+    );
     // The property `preAuth: 'ip-limit'` plus a lazy body exists for: an
     // unauthenticated caller's multipart payload is never buffered.
     expect(result.reads).toEqual([]);
@@ -440,7 +462,9 @@ describe('the gate refuses everyone else', () => {
     const result = await attempt({ session, body: imageForm() });
 
     expect(result.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(result.body).toEqual(failure(MSG_INSUFFICIENT_PERMISSIONS));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.FORBIDDEN, MSG_INSUFFICIENT_PERMISSIONS)
+    );
     expect(result.reads).toEqual([]);
 
     // The refusal says nothing about who asked or what they would have needed.
@@ -462,7 +486,9 @@ describe('the gate refuses everyone else', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(result.body).toEqual(failure(MSG_INSUFFICIENT_PERMISSIONS));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.FORBIDDEN, MSG_INSUFFICIENT_PERMISSIONS)
+    );
     expect(result.reads).toEqual([]);
   });
 
@@ -477,7 +503,9 @@ describe('the gate refuses everyone else', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(result.body).toEqual(failure(MSG_INSUFFICIENT_PERMISSIONS));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.FORBIDDEN, MSG_INSUFFICIENT_PERMISSIONS)
+    );
   });
 
   test('a repeated resource parameter is refused, whichever copy comes first', async () => {
@@ -495,7 +523,9 @@ describe('the gate refuses everyone else', () => {
         body: imageForm(),
       });
       expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-      expect(result.body).toEqual(failure(MSG_INVALID_INPUT));
+      expect(result.body).toEqual(
+        failure(HTTP_STATUS.BAD_REQUEST, MSG_INVALID_INPUT)
+      );
       expect(result.reads).toEqual([]);
     }
   });
@@ -510,7 +540,9 @@ describe('the gate refuses everyone else', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(mediaMsg.invalidPurpose));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, mediaMsg.invalidPurpose)
+    );
     expect(result.reads).toEqual([]);
 
     const anonymous = await attempt({
@@ -545,7 +577,9 @@ describe('cookies that must not authenticate', () => {
     // delete would prove nothing — a cookie that never worked answers 401 too.
     const before = await attempt({ session, body: new FormData() });
     expect(before.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(before.body).toEqual(failure(uploadMsg.noFiles));
+    expect(before.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
+    );
 
     const deleted = await db
       .delete(sessions)
@@ -559,7 +593,9 @@ describe('cookies that must not authenticate', () => {
     // rather than the 400 the identical request got a moment ago.
     const after = await attempt({ session, body: imageForm() });
     expect(after.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(after.body).toEqual(failure(MSG_LOGIN_REQUIRED));
+    expect(after.body).toEqual(
+      failure(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED)
+    );
     expect(after.reads).toEqual([]);
     expect(storeOps()).toEqual([]);
   });
@@ -574,7 +610,9 @@ describe('cookies that must not authenticate', () => {
     const result = await attempt({ cookie, body: imageForm() });
 
     expect(result.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(result.body).toEqual(failure(MSG_LOGIN_REQUIRED));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED)
+    );
     expect(result.reads).toEqual([]);
   });
 
@@ -592,7 +630,9 @@ describe('cookies that must not authenticate', () => {
     const result = await attempt({ cookie, body: imageForm() });
 
     expect(result.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(result.body).toEqual(failure(MSG_LOGIN_REQUIRED));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED)
+    );
     expect(result.reads).toEqual([]);
   });
 });
@@ -624,7 +664,9 @@ describe('the resource parameter is checked before the body is parsed', () => {
       });
 
       expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-      expect(result.body).toEqual(failure(uploadMsg.invalidResource));
+      expect(result.body).toEqual(
+        failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.invalidResource)
+      );
       expect(result.reads).toEqual([]);
       expect(storeOps()).toEqual([]);
     }
@@ -638,7 +680,9 @@ describe('the resource parameter is checked before the body is parsed', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(uploadMsg.invalidResource));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.invalidResource)
+    );
     expect(result.text).not.toContain('script');
   });
 
@@ -656,7 +700,9 @@ describe('the resource parameter is checked before the body is parsed', () => {
 
     expect(unknown.status).toBe(HTTP_STATUS.UNAUTHORIZED);
     expect(real.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(unknown.body).toEqual(failure(MSG_LOGIN_REQUIRED));
+    expect(unknown.body).toEqual(
+      failure(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED)
+    );
     expect(real.body).toEqual(unknown.body);
 
     expect(unknown.reads).toEqual([]);
@@ -666,7 +712,9 @@ describe('the resource parameter is checked before the body is parsed', () => {
   test('a missing resource is also indistinguishable to an anonymous caller', () =>
     attempt({ body: imageForm() }).then((result) => {
       expect(result.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-      expect(result.body).toEqual(failure(MSG_LOGIN_REQUIRED));
+      expect(result.body).toEqual(
+        failure(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED)
+      );
     }));
 });
 
@@ -684,7 +732,9 @@ describe('the body policy on the way past the gate', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(uploadMsg.noFiles));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
+    );
     expect(result.reads).toEqual([]);
     expect(storeOps()).toEqual([]);
   });
@@ -699,7 +749,9 @@ describe('the body policy on the way past the gate', () => {
     });
 
     expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(result.body).toEqual(failure(uploadMsg.noFiles));
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
+    );
     // It tried, and `safeReadFormData` turned the throw into "no form".
     expect(result.reads).toEqual(['formData']);
     expect(result.text).not.toContain('boundary');

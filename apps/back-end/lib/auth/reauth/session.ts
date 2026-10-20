@@ -1,22 +1,19 @@
 import type { AuthContext } from '../context';
 import type { EntityID } from '@app/shared/types';
 
-import { db } from '@/db';
-
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
 import { authenticationDenied } from '../errors';
 import { resolveRequestSession } from '../session/request';
-import { roleAllowsLogin } from '../user-eligibility';
 
+/**
+ * Liveness is the path policy's (`LIVE_SESSION_PATHS`), and deactivating a role
+ * revokes its members' sessions. What a proof mints re-checks role eligibility
+ * under the user lock (`lockSessionOwner`).
+ */
 export async function requireReauthSession(ctx: AuthContext) {
   const session = await resolveRequestSession(ctx);
   if (!session) throw authenticationDenied();
-  const user = await db.query.users.findFirst({
-    where: (users, { eq }) => eq(users.id, session.userId),
-    with: { role: true },
-  });
-  if (!user || !roleAllowsLogin(user.role)) throw authenticationDenied();
   return session;
 }
 

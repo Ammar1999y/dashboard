@@ -1,3 +1,4 @@
+import type { ClientEndpoint } from '@/lib/api/client';
 import type { EntityID } from '@app/shared/types';
 import type { ReactNode } from 'react';
 import type * as z from 'zod';
@@ -6,7 +7,7 @@ import { memo, useCallback, useId, useMemo, useState } from 'react';
 
 import { useController } from 'react-hook-form';
 import { MSG_LOADING, MSG_NO_RESULTS } from '@/constants/messages';
-import { useQueryData } from '@/lib/api/query';
+import { useEndpointQuery } from '@/lib/api/query';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
@@ -28,6 +29,13 @@ import {
 
 import FormField from './form-field';
 
+/** A read of every option at once. */
+type OptionsRead<T> = ClientEndpoint & {
+  readonly method: 'GET';
+  readonly bodyKind: 'none';
+  readonly response: z.ZodType<T[]>;
+};
+
 export interface ComboboxOption {
   id: EntityID;
   label: string;
@@ -42,9 +50,8 @@ interface FormComboboxProps<T> {
   placeholder: string;
   searchPlaceholder: string;
   queryKey: EntityID[];
-  href: string;
-  /** The options' array schema, which the response is checked against. */
-  schema: z.ZodType<NoInfer<T>[]>;
+  /** The options' read, which types and checks them. */
+  endpoint: OptionsRead<NoInfer<T>>;
   /** A module-level function: it is a memo dependency. */
   toOption: (item: T) => ComboboxOption;
   /** Offered after the server's options — a module constant. */
@@ -65,8 +72,7 @@ function FormCombobox<T>({
   placeholder,
   searchPlaceholder,
   queryKey,
-  href,
-  schema,
+  endpoint,
   toOption,
   extraOptions = NO_OPTIONS,
   footer,
@@ -78,11 +84,10 @@ function FormCombobox<T>({
   } = useController({ name });
   const [open, setOpen] = useState(false);
 
-  const { data, isFetching, error, refetch } = useQueryData({
-    queryKey,
-    href,
-    schema,
-  });
+  const { data, isFetching, error, refetch } = useEndpointQuery<
+    OptionsRead<T>,
+    T[]
+  >(endpoint, undefined, { queryKey });
   const options = useMemo(
     () => [...(data?.map(toOption) ?? []), ...extraOptions],
     [data, toOption, extraOptions]

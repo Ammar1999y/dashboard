@@ -60,6 +60,7 @@ import {
   signIn,
   TEST_IP,
 } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 
 interface Fixture {
   /** Every action on every page — and therefore `view` AND `viewOwn` at once. */
@@ -133,11 +134,12 @@ beforeAll(async () => {
   };
 }, 30_000);
 
-/** The not-found envelope, which is what a scoped refusal has to be. */
+/** The not-found problem, which is what a scoped refusal has to be. */
 const NOT_FOUND_BODY = {
-  success: false,
-  message: MSG_NOT_FOUND,
-  data: null,
+  type: 'about:blank',
+  title: 'Not Found',
+  status: 404,
+  detail: MSG_NOT_FOUND,
 };
 
 /**
@@ -236,7 +238,7 @@ describe('`own` scope on GET /api/dash/users/:id', () => {
     );
 
     expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
-    // Exactly the standard envelope: no id, no email, no role, nothing that
+    // Exactly the standard problem: no id, no email, no role, nothing that
     // confirms the row is there to be refused.
     expect(await response.json()).toEqual(NOT_FOUND_BODY);
   });
@@ -333,6 +335,29 @@ describe('a target whose role outranks the caller', () => {
 
     expect(outranking.status).toBe(HTTP_STATUS.NOT_FOUND);
     expect(await outranking.json()).toEqual(NOT_FOUND_BODY);
+  });
+
+  test('GET omits its sessions, on the one read of its role permissions', async () => {
+    const read = async (targetId: string) => {
+      const recorder = recordStatements();
+      const response = await app
+        .handle(authedRequest(fx().usersEditAll, `/api/dash/users/${targetId}`))
+        .finally(recorder.stop);
+      expect(response.status).toBe(HTTP_STATUS.OK);
+      const { data } = (await response.json()) as { data: object };
+      return {
+        data,
+        permissionReads: recorder.matching(/"role_permissions"/).length,
+      };
+    };
+
+    const outranking = await read(fx().admin.user.userId);
+    expect(outranking.data).not.toHaveProperty('sessions');
+    expect(outranking.permissionReads).toBe(1);
+
+    const covered = await read(fx().rowOfAdmin.userId);
+    expect(covered.data).toHaveProperty('sessions');
+    expect(covered.permissionReads).toBe(1);
   });
 });
 
@@ -514,7 +539,6 @@ describe('`own` scope on GET /api/dash/permissions', () => {
     );
     expect(own.status).toBe(HTTP_STATUS.OK);
     expect(await own.json()).toMatchObject({
-      success: true,
       data: { id: roleIds.ofOwnActor },
     });
 
@@ -676,7 +700,6 @@ describe('an audit row written by an actual route mutation', () => {
   test('the create route answered 201 carrying only the new id', () => {
     expect(created.status).toBe(HTTP_STATUS.CREATED);
     expect(created.body).toEqual({
-      success: true,
       message: MSG_CREATED,
       data: { id: created.userId },
     });

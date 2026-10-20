@@ -2,15 +2,11 @@ import type { PrepareOptions } from './prepare';
 import type { DashboardPage } from '@app/shared/permissions/constants';
 
 import * as z from 'zod';
+import { uploadRecordFile } from '@app/shared/api/media';
 import { mediaFileSchema } from '@app/shared/responses/media';
-import { mutate } from '@/lib/api/mutation';
+import { api } from '@/lib/api/client';
 
 import { prepareFile } from './prepare';
-
-/** `POST /api/upload/file` in the back-end's route table. */
-export const UPLOAD_PATH = '/api/upload/file';
-/** The one multipart field the route reads; any other field is refused. */
-export const UPLOAD_FIELD = 'files';
 
 /** The fields of the server's `MediaFile` this client reads; an upload's `url` must be there. */
 const uploadedFileSchema = mediaFileSchema
@@ -45,18 +41,14 @@ export async function uploadFile(
 ): Promise<MediaFile> {
   const prepared = await prepareFile(file, { signal, kinds, onConverted });
 
-  const body = new FormData();
-  body.append(UPLOAD_FIELD, prepared);
-  const query = new URLSearchParams({ resource });
-  if (purpose) query.set('purpose', purpose);
-
-  const { data } = await mutate({
-    href: `${UPLOAD_PATH}?${query}`,
-    method: 'POST',
-    data: body,
-    signal,
-    schema: uploadResponseSchema,
-  });
+  const { data } = await api(
+    uploadRecordFile,
+    {
+      query: { resource, ...(purpose && { purpose }) },
+      body: { files: prepared },
+    },
+    { signal, narrow: uploadResponseSchema }
+  );
 
   return data[0];
 }

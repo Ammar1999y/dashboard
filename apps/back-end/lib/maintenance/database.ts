@@ -4,7 +4,7 @@
  * Separate module and separate schedule, not an extension of the SQLite sweep,
  * for two reasons that both matter operationally:
  *
- * 1. **Cadence.** The limiter/cache sweep reclaims disk from rows that expire in
+ * 1. **Cadence.** The limiter sweep reclaims disk from rows that expire in
  *    minutes and wants to run often. This is retention over days, and running it
  *    every few minutes would be almost entirely wasted queries against the one
  *    database serving real traffic.
@@ -37,6 +37,7 @@ import {
   verifications,
   verificationSessions,
 } from '@/db/schema';
+import * as z from 'zod';
 
 import { sweepFiles } from '@/lib/media/lifecycle';
 import { sweepOrphanedObjects } from '@/lib/media/orphaned-objects';
@@ -80,9 +81,9 @@ const MAX_BATCHES = 40;
 interface SweepCount {
   removed: number;
   /**
-   * True when the per-run ceiling was reached and rows almost certainly remain.
-   * False means nothing more was deletable now, not that nothing remains: a row
-   * another transaction holds is skipped, and the next scheduled run takes it.
+   * True when a row already due when the run began is still there: the per-run
+   * ceiling was reached, or another transaction held the row and the sweep
+   * skipped it. The next scheduled run takes either.
    */
   hasMore: boolean;
 }
@@ -152,20 +153,47 @@ export interface DatabaseSweepResult {
  * removed. Conservative in the same direction as the SQLite sweep: a final batch
  * that was exactly full reports `hasMore: true` even if it happened to take the
  * last row. One wasted run beats a hidden backlog.
+ *
+ * A short batch proves only that nothing more was DELETABLE, because the
+ * batches skip locked rows; `anyLeft` looks for what they skipped.
  */
 async function sweepBatched(
-  deleteBatch: () => Promise<number>
+  deleteBatch: () => Promise<number>,
+  anyLeft: () => Promise<boolean>
 ): Promise<SweepCount> {
   let removed = 0;
 
   for (let batch = 0; batch < MAX_BATCHES; batch++) {
     const deleted = await deleteBatch();
     removed += deleted;
-    if (deleted < BATCH_SIZE) return { removed, hasMore: false };
+    if (deleted < BATCH_SIZE) return { removed, hasMore: await anyLeft() };
     await yieldToEventLoop();
   }
 
   return { removed, hasMore: true };
+}
+
+const clockRowSchema = z.object({ now: z.string() });
+
+/**
+ * PostgreSQL's clock when the run began, for the leftover checks. Against a
+ * fresh `now()` they would also count rows that came due during the run, which
+ * on `verifications` under traffic is nearly always true and so means nothing.
+ */
+async function runClock(): Promise<SQL> {
+  const [row] = await db.execute(sql`select now()::text as now`);
+  return sql`${clockRowSchema.parse(row).now}::timestamptz`;
+}
+
+/**
+ * `query` selects one row at most and locks none: it must never wait on the
+ * transaction holding the row it looks for.
+ */
+async function anyRow(
+  query: PromiseLike<readonly unknown[]>
+): Promise<boolean> {
+  const rows = await query;
+  return rows.length > 0;
 }
 
 type ExpiringTable =
@@ -174,8 +202,11 @@ type ExpiringTable =
   | typeof verificationCodes
   | typeof verifications;
 
+/** No grace: the row goes once `expires_at` has passed. */
+const atClock = (clock: SQL): SQL => clock;
+
 /**
- * Rows whose `expires_at` is before `cutoff`.
+ * Rows whose `expires_at` is before `cutoff` at the given clock.
  *
  * Only `verifications` and `trusted_devices` have an index leading with
  * `expires_at`; on `sessions` (`idx_sessions_user_expires_created` leads with
@@ -186,25 +217,39 @@ type ExpiringTable =
  * large table — the fix is a partial index per predicate, not a bigger
  * `BATCH_SIZE`.
  */
-function sweepExpired(table: ExpiringTable, cutoff: SQL): Promise<SweepCount> {
-  return sweepBatched(async () => {
-    // Locked here, so a row another transaction holds is left for the next run:
-    // waiting on it while holding the batch's earlier rows queues that
-    // transaction's peers behind this sweep.
-    const doomed = db
-      .select({ id: table.id })
-      .from(table)
-      .where(lt(table.expiresAt, cutoff))
-      .limit(BATCH_SIZE)
-      .for('update', { skipLocked: true });
+function sweepExpired(
+  table: ExpiringTable,
+  cutoff: (clock: SQL) => SQL,
+  runStart: SQL
+): Promise<SweepCount> {
+  return sweepBatched(
+    async () => {
+      // Locked here, so a row another transaction holds is left for the next
+      // run: waiting on it while holding the batch's earlier rows queues that
+      // transaction's peers behind this sweep.
+      const doomed = db
+        .select({ id: table.id })
+        .from(table)
+        .where(lt(table.expiresAt, cutoff(sql`now()`)))
+        .limit(BATCH_SIZE)
+        .for('update', { skipLocked: true });
 
-    const deleted = await db
-      .delete(table)
-      .where(inArray(table.id, doomed))
-      .returning({ id: table.id });
+      const deleted = await db
+        .delete(table)
+        .where(inArray(table.id, doomed))
+        .returning({ id: table.id });
 
-    return deleted.length;
-  });
+      return deleted.length;
+    },
+    () =>
+      anyRow(
+        db
+          .select({ id: table.id })
+          .from(table)
+          .where(lt(table.expiresAt, cutoff(runStart)))
+          .limit(1)
+      )
+  );
 }
 
 /**
@@ -227,7 +272,7 @@ function sweepExpired(table: ExpiringTable, cutoff: SQL): Promise<SweepCount> {
  * The OTP proof tables have no index on the columns filtered here; the
  * trade-off is the one `sweepExpired` states.
  */
-function sweepVerificationSessions(): Promise<SweepCount> {
+function sweepVerificationSessions(runStart: SQL): Promise<SweepCount> {
   /**
    * Abandoned, judged from the row's LAST activity rather than its birth.
    *
@@ -242,8 +287,8 @@ function sweepVerificationSessions(): Promise<SweepCount> {
    * among them — the send path reaches this row through `onConflictDoUpdate`,
    * where Drizzle's `$onUpdate` does not fire.
    */
-  const abandoned = sql`
-    ${verificationSessions.consumedAt} IS NOT NULL
+  const abandonedAt = (clock: SQL) => sql`
+    ${verificationSessions.consumedAt} <= ${clock}
     OR (
       greatest(
         ${verificationSessions.createdAt},
@@ -251,52 +296,62 @@ function sweepVerificationSessions(): Promise<SweepCount> {
         coalesce(${verificationSessions.nextAllowedAt}, ${verificationSessions.createdAt}),
         coalesce(${verificationSessions.blockedUntil}, ${verificationSessions.createdAt}),
         ${verificationSessions.verifyAttemptWindowStart}
-      ) < now() - ${VERIFICATION_SESSION_TTL}::interval
+      ) < ${clock} - ${VERIFICATION_SESSION_TTL}::interval
       AND NOT EXISTS (
         SELECT 1 FROM ${verificationCodes}
         WHERE ${verificationCodes.sessionId} = ${verificationSessions.id}
-          AND ${verificationCodes.expiresAt} > now()
+          AND ${verificationCodes.expiresAt} > ${clock}
       )
     )
   `;
+  const abandoned = abandonedAt(sql`now()`);
 
-  return sweepBatched(() =>
-    withTransaction(async (tx) => {
-      // ⚠️ The owners are locked first and never waited for, as every other
-      // writer of these rows takes the user before them. Locking the proof rows
-      // alone would hold one while the delete waits on another's code, and
-      // that wait is a verify's, queued behind a row it never asked for.
-      const doomed = await tx
-        .select({ id: verificationSessions.id })
-        .from(verificationSessions)
-        .innerJoin(users, eq(users.id, verificationSessions.userId))
-        .where(abandoned)
-        .limit(BATCH_SIZE)
-        .for('no key update', { of: users, skipLocked: true });
+  return sweepBatched(
+    () =>
+      withTransaction(async (tx) => {
+        // ⚠️ The owners are locked first and never waited for, as every other
+        // writer of these rows takes the user before them. Locking the proof rows
+        // alone would hold one while the delete waits on another's code, and
+        // that wait is a verify's, queued behind a row it never asked for.
+        const doomed = await tx
+          .select({ id: verificationSessions.id })
+          .from(verificationSessions)
+          .innerJoin(users, eq(users.id, verificationSessions.userId))
+          .where(abandoned)
+          .limit(BATCH_SIZE)
+          .for('no key update', { of: users, skipLocked: true });
 
-      if (doomed.length === 0) return 0;
+        if (doomed.length === 0) return 0;
 
-      // The predicate is repeated on the DELETE, not only used to pick ids.
-      // Selecting candidates and deleting by id is a check and a write with a
-      // gap between them, and `processOtpSend` fills exactly that gap: a row
-      // can become active before this statement runs. Repeating the predicate
-      // makes PostgreSQL evaluate it against the row it deletes, so a row that
-      // woke up is skipped instead of deleted.
-      const deleted = await tx
-        .delete(verificationSessions)
-        .where(
-          and(
-            inArray(
-              verificationSessions.id,
-              doomed.map(({ id }) => id)
-            ),
-            sql`(${abandoned})`
+        // The predicate is repeated on the DELETE, not only used to pick ids.
+        // Selecting candidates and deleting by id is a check and a write with a
+        // gap between them, and `processOtpSend` fills exactly that gap: a row
+        // can become active before this statement runs. Repeating the predicate
+        // makes PostgreSQL evaluate it against the row it deletes, so a row that
+        // woke up is skipped instead of deleted.
+        const deleted = await tx
+          .delete(verificationSessions)
+          .where(
+            and(
+              inArray(
+                verificationSessions.id,
+                doomed.map(({ id }) => id)
+              ),
+              sql`(${abandoned})`
+            )
           )
-        )
-        .returning({ id: verificationSessions.id });
+          .returning({ id: verificationSessions.id });
 
-      return deleted.length;
-    })
+        return deleted.length;
+      }),
+    () =>
+      anyRow(
+        db
+          .select({ id: verificationSessions.id })
+          .from(verificationSessions)
+          .where(abandonedAt(runStart))
+          .limit(1)
+      )
   );
 }
 
@@ -318,24 +373,26 @@ function sweepVerificationSessions(): Promise<SweepCount> {
 export async function runDatabaseSweep(
   startedAt = Date.now()
 ): Promise<DatabaseSweepResult> {
+  const runStart = await runClock();
   const removed = {
     // Verification sessions first: the cascade removes their codes, so the code
     // sweep that follows has less to look at.
-    verificationSessions: await sweepVerificationSessions(),
+    verificationSessions: await sweepVerificationSessions(runStart),
     // Codes that expired while their session stays live, which the cascade
     // above leaves behind. `processOtpVerify` filters on `expires_at`, so this
     // only reclaims rows.
-    verificationCodes: await sweepExpired(verificationCodes, sql`now()`),
+    verificationCodes: await sweepExpired(verificationCodes, atClock, runStart),
     // `consumeVerificationValue` deletes a row past its `expiresAt` and returns
     // null, so an unswept row can never be redeemed; this reclaims disk on the
     // fastest-growing table here.
-    verifications: await sweepExpired(verifications, sql`now()`),
+    verifications: await sweepExpired(verifications, atClock, runStart),
     // The sign-in check filters on `expiresAt`; this keeps the user-visible
     // settings list free of devices that already stopped working.
-    trustedDevices: await sweepExpired(trustedDevices, sql`now()`),
+    trustedDevices: await sweepExpired(trustedDevices, atClock, runStart),
     sessions: await sweepExpired(
       sessions,
-      sql`now() - ${SESSION_GRACE}::interval`
+      (clock) => sql`${clock} - ${SESSION_GRACE}::interval`,
+      runStart
     ),
     files: await guarded('files', sweepFiles, {
       removed: 0,

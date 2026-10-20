@@ -1,5 +1,4 @@
-import { userDetailSchema } from '@app/shared/responses/users';
-import { useQueryData } from '@/lib/api/query';
+import { useEndpointQuery } from '@/lib/api/query';
 import { useSession } from '@/lib/auth/use-session';
 
 import { userEntity } from '../users/entity';
@@ -11,10 +10,9 @@ import { userEntity } from '../users/entity';
  */
 export function useAccount() {
   const userId = useSession().data?.user.id ?? '';
-  return useQueryData({
-    queryKey: userEntity.keys.detail(userId),
-    href: userEntity.itemHref(userId),
-    enabled: !!userId,
-    schema: userDetailSchema,
-  });
+  return useEndpointQuery(
+    userEntity.endpoints.get,
+    { params: { id: userId } },
+    { queryKey: userEntity.keys.detail(userId), enabled: !!userId }
+  );
 }

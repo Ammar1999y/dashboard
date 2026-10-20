@@ -30,6 +30,7 @@ import { USER_AGENT_MAX } from '@/lib/audit/constants';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
+import { expectAuthError } from '../helpers/expect-body';
 import { baseHeaders, seedUser, signIn, TEST_IP } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -91,12 +92,11 @@ describe('a database fault on a Better Auth route', () => {
     try {
       const response = await signInWith(user);
 
-      expect(response.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
-      expect(await response.json()).toEqual({
-        success: false,
-        message: MSG_INTERNAL_ERROR,
-        data: null,
-      });
+      await expectAuthError(
+        response,
+        HTTP_STATUS.INTERNAL_ERROR,
+        MSG_INTERNAL_ERROR
+      );
 
       expect(logged).toHaveBeenCalledTimes(1);
       const line = JSON.stringify(logged.mock.calls);
@@ -209,12 +209,11 @@ describe('a session delete fault on /sign-out', () => {
     try {
       const response = await signOut(cookie);
 
-      expect(response.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
-      expect(await response.json()).toEqual({
-        success: false,
-        message: MSG_INTERNAL_ERROR,
-        data: null,
-      });
+      await expectAuthError(
+        response,
+        HTTP_STATUS.INTERNAL_ERROR,
+        MSG_INTERNAL_ERROR
+      );
       // Cleared, the browser could not retry the revocation it was told failed.
       expect(clearedCookies(response)).toEqual([]);
       expect(await sessionIds(user.userId)).toEqual(before);

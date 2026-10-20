@@ -90,15 +90,15 @@ const PinningOptions = memo(({ columnId }: ColumnOptionProps) => {
   // A new selector each render is fine: zustand runs it per snapshot and
   // compares the primitive it returns, so this re-renders only on a change.
   const pinned = useColumnStore(selectPinSide(columnId));
-  const isPinnedStart = pinned === 'left';
-  const isPinnedEnd = pinned === 'right';
+  const isPinnedStart = pinned === 'start';
+  const isPinnedEnd = pinned === 'end';
 
   const pinTo = useCallback(
     (side: PinSide | false) => actions.pin(columnId, side),
     [actions, columnId]
   );
-  const handlePinStart = useCallback(() => pinTo('left'), [pinTo]);
-  const handlePinEnd = useCallback(() => pinTo('right'), [pinTo]);
+  const handlePinStart = useCallback(() => pinTo('start'), [pinTo]);
+  const handlePinEnd = useCallback(() => pinTo('end'), [pinTo]);
   const handleUnpin = useCallback(() => pinTo(false), [pinTo]);
 
   return (

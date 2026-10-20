@@ -274,6 +274,14 @@ const uploadedFile = () =>
     .max(MAX_DOCUMENT_SIZE_MB * MIB)
     .meta({ 'x-allowed-content-types': [...ALLOWED_MIME_TYPES] });
 
-export const libraryUploadFormSchema = z.strictObject({ file: uploadedFile() });
+/** The one multipart field each upload reads; the handler refuses any other. */
+export const LIBRARY_UPLOAD_FIELD = 'file';
+export const RECORD_UPLOAD_FIELD = 'files';
 
-export const recordUploadFormSchema = z.strictObject({ files: uploadedFile() });
+export const libraryUploadFormSchema = z.strictObject({
+  [LIBRARY_UPLOAD_FIELD]: uploadedFile(),
+});
+
+export const recordUploadFormSchema = z.strictObject({
+  [RECORD_UPLOAD_FIELD]: uploadedFile(),
+});

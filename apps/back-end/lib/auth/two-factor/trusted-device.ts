@@ -12,12 +12,13 @@ import type { BetterAuthPlugin } from 'better-auth';
 
 import { and, desc, eq, gt } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
+import { db } from '@/db';
 import { trustedDevices } from '@/db/schema';
 import { createHMAC } from '@better-auth/utils/hmac';
 import { sessionMiddleware } from 'better-auth/api';
 import { expireCookie } from 'better-auth/cookies';
 
+import * as contract from '@app/shared/api/better-auth';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { MSG_INVALID_INPUT, MSG_NOT_FOUND } from '@app/shared/messages/common';
@@ -35,7 +36,7 @@ import {
   trustDeviceKey,
   twoFactorProofKey,
 } from '../verifications';
-import { sessionGetOptions, sessionPostOptions } from './session-endpoint';
+import { sessionBodyOptions, sessionOptions } from './session-endpoint';
 
 const TRUST_COOKIE_NAME = 'trust_device';
 
@@ -207,11 +208,10 @@ async function listTrustedDevices(userId: EntityID) {
 }
 
 async function revokeTrustedDevice(
-  tx: Tx,
   userId: EntityID,
   deviceId: string
 ): Promise<boolean> {
-  const [removed] = await tx
+  const [removed] = await db
     .delete(trustedDevices)
     .where(
       and(eq(trustedDevices.id, deviceId), eq(trustedDevices.userId, userId))
@@ -240,8 +240,8 @@ export const trustedDevice = () =>
     id: 'trusted-device',
     endpoints: {
       trustCurrentDevice: pluginEndpoint(
-        '/two-factor/trust-device',
-        { method: 'POST', use: [sessionMiddleware] },
+        contract.trustCurrentDevice,
+        { use: [sessionMiddleware] },
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
           const sessionId = validID(ctx.context.session?.session.id);
@@ -253,8 +253,8 @@ export const trustedDevice = () =>
       ),
 
       listTrustedDevices: pluginEndpoint(
-        '/two-factor/trusted-devices',
-        sessionGetOptions(),
+        contract.listTrustedDevices,
+        sessionOptions(),
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
           return ctx.json({
@@ -264,8 +264,8 @@ export const trustedDevice = () =>
       ),
 
       revokeTrustedDevice: pluginEndpoint(
-        '/two-factor/trusted-devices/revoke',
-        sessionPostOptions(),
+        contract.revokeTrustedDevice,
+        sessionBodyOptions(),
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
 
@@ -273,9 +273,7 @@ export const trustedDevice = () =>
           if (!deviceId)
             throw authError(HTTP_STATUS.UNPROCESSABLE, MSG_INVALID_INPUT);
 
-          const removed = await withTransaction((tx) =>
-            revokeTrustedDevice(tx, userId, deviceId)
-          );
+          const removed = await revokeTrustedDevice(userId, deviceId);
           // Another user's device and a missing one answer identically.
           if (!removed) throw authError(HTTP_STATUS.NOT_FOUND, MSG_NOT_FOUND);
 

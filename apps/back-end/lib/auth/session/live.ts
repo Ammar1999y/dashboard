@@ -13,6 +13,17 @@ import { validID } from '@app/shared/utils';
 
 import { lockEligibleAuthUser } from '../user-eligibility';
 
+/** For a query joining `users` on `sessions.user_id`. */
+export function liveSessionCondition(sessionId: EntityID, userId: EntityID) {
+  return and(
+    eq(sessions.id, sessionId),
+    eq(sessions.userId, userId),
+    gt(sessions.expiresAt, sql`now()`),
+    isNull(users.deletedAt),
+    eq(users.isActive, true)
+  );
+}
+
 /**
  * ⚠️ `auth.api.getSession` answers from the cookie cache, which outlives the
  * row and ignores `is_active` / `deleted_at`; an entry point skipping this
@@ -30,15 +41,7 @@ export async function assertLiveSession(
     .select({ id: sessions.id })
     .from(sessions)
     .innerJoin(users, eq(sessions.userId, users.id))
-    .where(
-      and(
-        eq(sessions.id, validSessionId),
-        eq(sessions.userId, userId),
-        gt(sessions.expiresAt, sql`now()`),
-        isNull(users.deletedAt),
-        eq(users.isActive, true)
-      )
-    );
+    .where(liveSessionCondition(validSessionId, userId));
 
   if (!row) throw new CustomError(MSG_LOGIN_REQUIRED, HTTP_STATUS.UNAUTHORIZED);
   return validSessionId;

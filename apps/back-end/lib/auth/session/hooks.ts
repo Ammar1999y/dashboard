@@ -1,8 +1,9 @@
+import type { GenericEndpointContext } from '@better-auth/core';
 import type { BetterAuthOptions } from 'better-auth';
 
 import { eq } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
+import { db } from '@/db';
 import { users } from '@/db/schema';
 import { APIError } from 'better-auth/api';
 
@@ -48,10 +49,20 @@ const SESSION_METHOD_BY_PATH: Readonly<Record<string, string>> = {
   '/two-factor/passkey/verify': 'two_factor',
 };
 
+/**
+ * The `create.before` read, for the `create.after` of the same creation: Better
+ * Auth hands both hooks one endpoint context. The user id is kept too, so a
+ * second creation in the request never takes another user's email.
+ */
+const creatorEmails = new WeakMap<
+  GenericEndpointContext,
+  { userId: string; email: string }
+>();
+
 export const sessionDatabaseHooks = {
   create: {
     // Fail-closed: any error here must block session creation.
-    before: async (session) => {
+    before: async (session, context) => {
       const userId = validID(session.userId);
       if (!userId)
         throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
@@ -60,6 +71,7 @@ export const sessionDatabaseHooks = {
         where: (users, { eq, and, isNull }) =>
           and(eq(users.id, userId), isNull(users.deletedAt)),
         columns: {
+          email: true,
           isActive: true,
           roleId: true,
           emailVerified: true,
@@ -111,6 +123,9 @@ export const sessionDatabaseHooks = {
         });
       }
 
+      if (context)
+        creatorEmails.set(context, { userId, email: userData.email });
+
       // Better Auth copies the header verbatim.
       const userAgent = boundedUserAgent(session.userAgent);
 
@@ -147,35 +162,29 @@ export const sessionDatabaseHooks = {
         const userId = validID(session.userId);
         if (!userId) return;
 
-        const [user] = await db
-          .select({ email: users.email })
-          .from(users)
-          .where(eq(users.id, userId))
-          .limit(1);
+        const userEmail = await creatorEmail(context, userId);
         // `audit_logs.user_email` is NOT NULL.
-        if (!user) return;
+        if (userEmail === null) return;
 
         const path = context?.path ?? null;
-        await withTransaction((tx) =>
-          auditLog(tx, {
-            userId,
-            userEmail: user.email,
-            action: 'INSERT',
-            tableName: 'sessions',
-            recordId: session.id,
-            oldData: null,
-            newData: {
-              loginSuccess: true,
-              method: SESSION_METHOD_BY_PATH[path ?? ''] ?? 'unknown',
-              authPath: path,
-            },
-            meta: boundedAuditMeta(
-              session.ipAddress ?? null,
-              session.userAgent,
-              path ?? 'session.create'
-            ),
-          })
-        );
+        await auditLog(db, {
+          userId,
+          userEmail,
+          action: 'INSERT',
+          tableName: 'sessions',
+          recordId: session.id,
+          oldData: null,
+          newData: {
+            loginSuccess: true,
+            method: SESSION_METHOD_BY_PATH[path ?? ''] ?? 'unknown',
+            authPath: path,
+          },
+          meta: boundedAuditMeta(
+            session.ipAddress ?? null,
+            session.userAgent,
+            path ?? 'session.create'
+          ),
+        });
       } catch (error) {
         logSanitized('error', { msg: 'session.loginAudit.failed', error });
       }
@@ -199,3 +208,18 @@ export const sessionDatabaseHooks = {
 } satisfies NonNullable<
   NonNullable<BetterAuthOptions['databaseHooks']>['session']
 >;
+
+// Read only for a creation outside an endpoint, where no context carries it.
+async function creatorEmail(
+  context: GenericEndpointContext | null,
+  userId: string
+): Promise<string | null> {
+  const stashed = context ? creatorEmails.get(context) : undefined;
+  if (stashed?.userId === userId) return stashed.email;
+  const [user] = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return user?.email ?? null;
+}

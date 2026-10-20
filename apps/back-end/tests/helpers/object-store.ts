@@ -20,7 +20,8 @@
  * deleting a missing key succeeds, `DeleteObjects` refuses more than 1000 keys
  * with `MalformedXML`, `CopyObject` copies headers unless `REPLACE` is given, a
  * SHA-256 checksum is kept on the object that was written with it and is NOT
- * carried by a copy, and the ETag of a copy equals its source's.
+ * carried by a copy, and the ETag of a copy, in its result and on a later
+ * `HeadObject`, is the MD5 of the bytes it wrote.
  *
  * Command inputs are the SDK's own exported types, so a production call that
  * omits a required field or names one the SDK does not have fails type checking here as
@@ -415,8 +416,7 @@ export function s3ClientStub(): Record<string, unknown> {
             : existing.body;
           state.corruptNextCopy = false;
           // The checksum stays with the source either way (measured).
-          objects.set(
-            objectId(cmd.input.Bucket, cmd.input.Key),
+          const target: StoredObject =
             cmd.input.MetadataDirective === 'REPLACE'
               ? {
                   body: copied,
@@ -426,9 +426,10 @@ export function s3ClientStub(): Record<string, unknown> {
                   contentDisposition: cmd.input.ContentDisposition,
                   metadata: cmd.input.Metadata,
                 }
-              : { ...existing, body: copied, checksumSha256: undefined }
-          );
-          return { CopyObjectResult: { ETag: etagOf(existing) } };
+              : { ...existing, body: copied, checksumSha256: undefined };
+          objects.set(objectId(cmd.input.Bucket, cmd.input.Key), target);
+          // The new object's, as R2 answers it (measured).
+          return { CopyObjectResult: { ETag: etagOf(target) } };
         }
         case 'HeadObject': {
           const existing = objects.get(

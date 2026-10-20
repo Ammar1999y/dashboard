@@ -3,17 +3,22 @@ import { CAPTCHA_HEADER } from '@app/shared/validation/auth';
 /** Tokens a request was built with: the server spends each one on sight. */
 const sentTokens = new Set<string>();
 
+/** The header a captcha token travels in; from here on it counts as sent. */
+export function captchaHeaders(token: string) {
+  sentTokens.add(token);
+  return { [CAPTCHA_HEADER]: token };
+}
+
 /**
- * Splits a captcha form's values into what the request sends: the token goes in
- * its header, never the body, which the server's schemas do not list. Spread
- * the result into `mutate` or `authRequest`.
+ * Splits a captcha form's values into what the auth client sends: the token
+ * goes in its header, never the body, which the server's schemas do not list.
+ * `api()` takes the token as its `captcha` option instead.
  */
 export function withCaptcha<T extends { captcha: string }>({
   captcha,
   ...data
 }: T) {
-  sentTokens.add(captcha);
-  return { data, headers: { [CAPTCHA_HEADER]: captcha } };
+  return { data, headers: captchaHeaders(captcha) };
 }
 
 /**
@@ -22,7 +27,3 @@ export function withCaptcha<T extends { captcha: string }>({
  * that failed client-side validation never sent the token it still holds.
  */
 export const takeSentCaptcha = (token: string) => sentTokens.delete(token);
-
-/** Whether a request's headers carry a captcha token. */
-export const carriesCaptcha = (headers: Record<string, string> | undefined) =>
-  headers !== undefined && CAPTCHA_HEADER in headers;

@@ -17,6 +17,7 @@ import {
   test,
 } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
+import type { StatementRecorder } from '../helpers/statements';
 
 import { eq, sql } from 'drizzle-orm';
 
@@ -51,6 +52,7 @@ import { scriptEgress } from '../helpers/egress';
 import { dropMockedClockWindows } from '../helpers/rate-limit';
 import { baseHeaders, mergeCookies, seedUser } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
+import { recordStatements } from '../helpers/statements';
 
 /** The key the plugin encrypts the TOTP secret under. */
 const BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET ?? '';
@@ -954,5 +956,88 @@ describe('signing in with no second factor', () => {
     expect(remembered.status).toBe(HTTP_STATUS.OK);
     expect(remembered.cookie).toContain('session_token');
     expect(remembered.cookie).not.toContain('dont_remember');
+  });
+
+  test('costs one enrolment read and only the login guard transaction', async () => {
+    const user = await seedUser();
+    const recorder = recordStatements();
+    const signedIn = await signInRaw(user).finally(recorder.stop);
+    expect(signedIn.status).toBe(HTTP_STATUS.OK);
+    expect(recorder.matching(ENROLMENT_TABLES)).toHaveLength(1);
+    expect(recorder.transactions()).toBe(1);
+  });
+});
+
+/** Each step of one password + TOTP sign-in, recorded on its own. */
+async function recordTotpSignIn(): Promise<{
+  challenge: StatementRecorder;
+  verify: StatementRecorder;
+}> {
+  const code = await freshTotpCode(enrolled().secret);
+
+  const challenge = recordStatements();
+  const attempt = await signInRaw(enrolled().user).finally(challenge.stop);
+  expect(attempt.body).toMatchObject({ twoFactorRedirect: true });
+
+  const verify = recordStatements();
+  const response = await post(
+    'http://localhost/api/auth/two-factor/verify-totp',
+    { code },
+    attempt.cookie
+  ).finally(verify.stop);
+  expect(response.status).toBe(HTTP_STATUS.OK);
+
+  return { challenge, verify };
+}
+
+const ENROLMENT_TABLES =
+  /"two_factor_methods"|"two_factor_credentials"|"passkeys"/;
+
+describe('what a TOTP sign-in costs', () => {
+  test('neither step sweeps expired verification rows', async () => {
+    // The library's sweep ran on every lookup, partly inside the challenge
+    // transaction, so a lock on any user's expired row stalled this one.
+    const { challenge, verify } = await recordTotpSignIn();
+    const sweeps = [...challenge.statements, ...verify.statements].filter(
+      ({ sql: text }) => /"verifications"\."expires_at" </.test(text)
+    );
+    expect(sweeps).toEqual([]);
+  });
+
+  test('the challenge is resolved once per request, though checked twice', async () => {
+    const { verify } = await recordTotpSignIn();
+    // The issued state, read by `findVerificationValue`'s newest-first lookup.
+    const stateReads = verify
+      .binding('2fa-state-')
+      .filter(({ sql: text }) =>
+        /order by "verifications"\."created_at"/.test(text)
+      );
+    expect(stateReads).toHaveLength(1);
+    expect(verify.matching(/"two_factor_methods"/)).toHaveLength(1);
+  });
+
+  test('the TOTP credential is read for the challenge and by the library, nowhere else', async () => {
+    const { verify } = await recordTotpSignIn();
+    expect(
+      verify.matching(/^select\b[\s\S]*"two_factor_credentials"/)
+    ).toHaveLength(2);
+  });
+
+  test('the first step reads the enrolment state in one statement', async () => {
+    const { challenge } = await recordTotpSignIn();
+    expect(challenge.matching(ENROLMENT_TABLES)).toHaveLength(1);
+  });
+
+  test('audit rows written outside a mutation open no transaction of their own', async () => {
+    // Step one keeps the login guard's; step two keeps the challenge's.
+    const { challenge, verify } = await recordTotpSignIn();
+    expect(challenge.transactions()).toBe(1);
+    expect(verify.transactions()).toBe(1);
+  });
+
+  test('the login audit takes the email from the session hook, not a second read', async () => {
+    const { challenge, verify } = await recordTotpSignIn();
+    for (const recorder of [challenge, verify])
+      expect(recorder.matching(/^select "email" from "users"/)).toEqual([]);
   });
 });

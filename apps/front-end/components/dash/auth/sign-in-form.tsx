@@ -14,6 +14,7 @@ import { loginSchema } from '@app/shared/validation/auth';
 import { invalidResponse } from '@/lib/api/fetch';
 import { withCaptcha } from '@/lib/auth/captcha';
 import { authClient, toAuthError } from '@/lib/auth/client';
+import { signedInSchema } from '@/lib/auth/library-endpoints';
 import { errorMessage, toastError } from '@/lib/toast-error';
 
 import { Form } from '@/components/form/form';
@@ -27,7 +28,6 @@ import {
   twoFactorUnavailableMessage,
   unverifiedContactKind,
 } from './finish-sign-in';
-import { signedInSchema } from './schemas';
 import TurnstileWidget from './turnstile';
 
 interface SignInFormProps {

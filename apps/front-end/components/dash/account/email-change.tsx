@@ -2,36 +2,32 @@ import type {
   ChangeEmailInput,
   ChangeEmailOutput,
 } from '@/utils/validation/account';
-import type { RequestBody } from '@app/shared/contract';
 
 import { memo, useCallback, useState } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { verifiedSchema } from '@app/shared/responses/auth';
-import { contactChangeStartedSchema } from '@app/shared/responses/users';
-import { mutate } from '@/lib/api/mutation';
-import { withCaptcha } from '@/lib/auth/captcha';
+import { changeEmail, verifyEmailChange } from '@app/shared/api/users';
+import { MSG_CURRENT_PASSWORD_OPTIONAL } from '@/constants/messages';
+import { api } from '@/lib/api/client';
 import { authClient, toAuthError } from '@/lib/auth/client';
 
 import { changeEmailFormSchema } from '@/utils/validation/account';
 
 import { CodeForm } from '@/components/dash/auth/code-form';
 import { EMAIL_CHANGED_SIGN_IN_PATH } from '@/components/dash/auth/paths';
+import { saveRedirectPath } from '@/components/dash/auth/redirect-path';
 import TurnstileWidget from '@/components/dash/auth/turnstile';
 import { Form } from '@/components/form/form';
 import FormInput from '@/components/form/form-input';
 import FormPassword from '@/components/form/form-password';
 import SubmitButton, { SubmitLabel } from '@/components/form/submit-button';
 
-const START_HREF = '/api/dash/users/me/change-email';
-const VERIFY_HREF = '/api/dash/users/me/change-email/verify';
-
 /**
  * The commit revokes every session, this one included. A full load leaves
- * the page for sign-in, which says why, and drops what the cache still holds
- * of the old identity; the sign-out only clears the cookie.
+ * the page for sign-in, which says why and comes back here, and drops what the
+ * cache still holds of the old identity; the sign-out only clears the cookie.
  */
 async function sessionsEnded() {
   try {
@@ -40,6 +36,7 @@ async function sessionsEnded() {
   } catch (error) {
     console.error(error);
   }
+  saveRedirectPath(`${location.pathname}${location.search}`);
   location.replace(EMAIL_CHANGED_SIGN_IN_PATH);
 }
 
@@ -59,19 +56,11 @@ const EmailRequestForm = memo(({ defaultEmail, onSent }: RequestFormProps) => {
   });
 
   const onSubmit = useCallback(
-    async (values: ChangeEmailOutput) => {
-      const { data, headers } = withCaptcha(values);
-      const body: RequestBody<'POST /api/dash/users/me/change-email'> = data;
-      const result = await mutate({
-        href: START_HREF,
-        method: 'POST',
-        data: body,
-        headers,
-        schema: contactChangeStartedSchema,
-      });
+    async ({ captcha, ...body }: ChangeEmailOutput) => {
+      const result = await api(changeEmail, { body }, { captcha });
       if ('otpSent' in result.data) {
         toast.success(result.message);
-        onSent(values.newEmail);
+        onSent(body.newEmail);
       } else await sessionsEnded();
     },
     [onSent]
@@ -89,7 +78,7 @@ const EmailRequestForm = memo(({ defaultEmail, onSent }: RequestFormProps) => {
       <FormPassword
         name='currentPassword'
         label='كلمة المرور الحالية'
-        required
+        tip={MSG_CURRENT_PASSWORD_OPTIONAL}
       />
       <TurnstileWidget />
       <SubmitButton>
@@ -108,20 +97,12 @@ interface EmailCodeStepProps {
 
 const EmailCodeStep = memo(({ newEmail, onBack }: EmailCodeStepProps) => {
   const onVerify = useCallback(
-    async (code: string, headers: Record<string, string>) => {
-      const body: RequestBody<'POST /api/dash/users/me/change-email/verify'> = {
-        newEmail,
-        code,
-      };
-      await mutate({
-        href: VERIFY_HREF,
-        method: 'POST',
-        data: body,
-        headers,
-        schema: verifiedSchema,
-        onSuccess: sessionsEnded,
-        onUnreadAnswer: sessionsEnded,
-      });
+    async (code: string, captcha: string) => {
+      await api(
+        verifyEmailChange,
+        { body: { newEmail, code } },
+        { captcha, onSuccess: sessionsEnded, onUnreadAnswer: sessionsEnded }
+      );
     },
     [newEmail]
   );

@@ -19,7 +19,7 @@ import {
   validatePermissionScope,
 } from '@app/shared/permissions/scope';
 
-import { collapseToNotFound } from '@/lib/permissions/scope';
+import { assertRowsReachable } from '@/lib/permissions/scope';
 
 /**
  * `resolveActionScope` — the two cases its own comment records as previously
@@ -160,7 +160,7 @@ describe('the reachability collapse both role write paths must give', () => {
    * decision — it called `validatePermissionScope` directly, to avoid re-reading
    * `role_permissions` it already held `FOR SHARE` — so a deletion, which grants
    * nothing, answered 403 where the neighbouring PUT on the same role answered
-   * 404. `collapseToNotFound` is the extracted collapse both now share.
+   * 404. `assertRowsReachable` is the collapse both now share.
    */
   const outranking = [
     {
@@ -197,7 +197,11 @@ describe('the reachability collapse both role write paths must give', () => {
   });
 
   test('collapsed, it is indistinguishable from a nonexistent role', () => {
-    expect(() => collapseToNotFound(scopeError())).toThrow(
+    const rows = outranking.map(({ name, permissions }) => ({
+      pageName: name,
+      permissions,
+    }));
+    expect(() => assertRowsReachable(actor, rows)).toThrow(
       expect.objectContaining({
         status: HTTP_STATUS.NOT_FOUND,
         message: MSG_NOT_FOUND,
@@ -209,6 +213,14 @@ describe('the reachability collapse both role write paths must give', () => {
     // Collapsing an unexpected fault would hide a real bug behind a routine
     // "not found".
     const bug = new TypeError('unrelated');
-    expect(() => collapseToNotFound(bug)).toThrow(bug);
+    const rows = [
+      {
+        pageName: 'users',
+        get permissions(): unknown {
+          throw bug;
+        },
+      },
+    ];
+    expect(() => assertRowsReachable(actor, rows)).toThrow(bug);
   });
 });

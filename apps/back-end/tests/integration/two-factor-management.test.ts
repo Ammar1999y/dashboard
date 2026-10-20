@@ -41,6 +41,7 @@ import { flooredBudget } from '../helpers/otp';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
+import { recordStatements } from '../helpers/statements';
 
 const TURNSTILE_HOST = 'challenges.cloudflare.com';
 const RIGHT_CODE = '515151';
@@ -820,6 +821,27 @@ describe('password recovery against a second factor', () => {
         password: user.password,
       });
       expect(stillOld.status).toBe(HTTP_STATUS.OK);
+    },
+    flooredBudget(2)
+  );
+
+  test(
+    'reads the enrolment state once, under the user lock',
+    async () => {
+      const user = await seedUser({
+        phoneNumber: uniquePhone(),
+        phoneNumberVerified: true,
+      });
+      await enrol(user.userId, 'otp', 'sms');
+
+      const recorder = recordStatements();
+      const response = await attemptReset(user).finally(recorder.stop);
+      expect(response.status).toBe(HTTP_STATUS.OK);
+      expect(
+        recorder.matching(
+          /"two_factor_methods"|"two_factor_credentials"|"passkeys"/
+        )
+      ).toHaveLength(1);
     },
     flooredBudget(2)
   );

@@ -13,6 +13,7 @@ import {
   describe,
   expect,
   setSystemTime,
+  spyOn,
   test,
 } from 'bun:test';
 import type { SignedInSession } from '../helpers/session';
@@ -22,7 +23,7 @@ import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import { sessions } from '@/db/schema';
+import { sessions, users } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 
@@ -31,15 +32,18 @@ import { PUBLIC_ORIGIN } from '@/lib/env';
 import { parseSetCookieHeaders } from '@/lib/http/cookies';
 
 import { resetTables } from '../helpers/database';
+import { resetRateLimits } from '../helpers/rate-limit';
 import {
   authedRequest,
   mergeCookies,
   seedUser,
   signIn,
 } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 
 const GRANTS = { users: { view: true, create: true } } as const;
 const READ_URL = '/api/dash/users?perPage=5';
+const PREFERENCES_URL = '/api/dash/users/me/preferences';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const context = await auth.$context;
@@ -113,6 +117,27 @@ function expectExpired(response: Response, name: string): void {
   expect(cookie?.options?.maxAge).toBe(0);
 }
 
+/** A 401 that expires every session cookie once and sets nothing else. */
+function expectSessionCleared(response: Response): void {
+  expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+  const names = cookiesOf(response).map((cookie) => cookie.name);
+  expect(names).toHaveLength(3);
+  expect(new Set(names)).toEqual(new Set([TOKEN, CACHE, MARKER]));
+  for (const name of [TOKEN, CACHE, MARKER]) expectExpired(response, name);
+}
+
+/** The browser that applied `response` holds no session any more. */
+async function expectSignedOutAfter(
+  session: SignedInSession,
+  response: Response
+): Promise<void> {
+  const jar = after(session, response);
+  const table = await read(jar);
+  expect(table.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+  const own = await app.handle(authedRequest(jar, '/api/auth/get-session'));
+  expect(await own.json()).toBeNull();
+}
+
 async function deleteSessionRows(session: SignedInSession): Promise<void> {
   await db.delete(sessions).where(eq(sessions.userId, session.user.userId));
 }
@@ -156,6 +181,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   setSystemTime();
+  resetRateLimits();
 });
 
 describe('a dashboard read delivers the cookies its session read sets', () => {
@@ -198,7 +224,7 @@ describe('a dashboard read delivers the cookies its session read sets', () => {
     expect(await sessionExpiry(session)).toBeGreaterThan(before + DAY_MS / 2);
   });
 
-  test('the upload route reads the session twice and emits each cookie once', async () => {
+  test('the upload route emits each cookie once', async () => {
     const session = withoutCookie(await remembered(), CACHE);
     await ageSessionPastUpdateAge(session);
 
@@ -214,6 +240,24 @@ describe('a dashboard read delivers the cookies its session read sets', () => {
     expect(names).toContain(CACHE);
     expect(names).toContain(TOKEN);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+/** The gate verifies the row and the handler's grant check reuses that read. */
+describe('a session route that checks a grant reads the session row once', () => {
+  test.each([
+    ['POST', '/api/upload/file?resource=users'],
+    ['GET', '/openapi.json'],
+  ] as const)('%s %s', async (method, path) => {
+    const session = await remembered();
+
+    const recorder = recordStatements();
+    const response = await app
+      .handle(authedRequest(session, path, { method }))
+      .finally(recorder.stop);
+    expect(response.status).not.toBe(HTTP_STATUS.UNAUTHORIZED);
+    expect(response.status).not.toBe(HTTP_STATUS.FORBIDDEN);
+    expect(recorder.matching(/from "sessions"/)).toHaveLength(1);
   });
 });
 
@@ -257,6 +301,123 @@ describe('a Better Auth route whose hook reads the session delivers its cookies'
     expect(named(response, CACHE)).toHaveLength(1);
     const names = cookiesOf(response).map((cookie) => cookie.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+/**
+ * The routes that verify the session ROW behind a valid cache: a session-only
+ * route, the document, a permission write, and Better Auth's live paths.
+ */
+const LIVE_ROUTES = [
+  ['GET', PREFERENCES_URL],
+  ['GET', '/openapi.json'],
+  ['PUT', `/api/dash/users/${crypto.randomUUID()}`],
+  ['GET', '/api/auth/two-factor/methods'],
+  ['GET', '/api/auth/reauth/methods'],
+] as const;
+
+function liveRequest(
+  session: SignedInSession,
+  method: string,
+  path: string
+): Promise<Response> {
+  return app.handle(
+    authedRequest(session, path, {
+      method,
+      ...(method === 'PUT' && {
+        body: '{}',
+        headers: { 'content-type': 'application/json', origin: PUBLIC_ORIGIN },
+      }),
+    })
+  );
+}
+
+describe('a session the database refuses behind a valid cache is cleared', () => {
+  test.each(LIVE_ROUTES)('revoked row: %s %s', async (method, path) => {
+    const session = await remembered();
+    await deleteSessionRows(session);
+
+    const response = await liveRequest(session, method, path);
+    expectSessionCleared(response);
+    await expectSignedOutAfter(session, response);
+  });
+
+  test.each(LIVE_ROUTES)('suspended user: %s %s', async (method, path) => {
+    const session = await remembered();
+    await db
+      .update(users)
+      .set({ isActive: false })
+      .where(eq(users.id, session.user.userId));
+
+    const response = await liveRequest(session, method, path);
+    expectSessionCleared(response);
+    await expectSignedOutAfter(session, response);
+  });
+
+  // The read re-mints the cache and slides the token before the row check
+  // refuses, so the response must not carry those beside the expiries.
+  test.each(LIVE_ROUTES)(
+    'suspended user, read from the row past `updateAge`: %s %s',
+    async (method, path) => {
+      const session = await remembered();
+      await ageSessionPastUpdateAge(session);
+      await db
+        .update(users)
+        .set({ isActive: false })
+        .where(eq(users.id, session.user.userId));
+      setSystemTime(new Date(Date.now() + (CACHE_MAX_AGE_S + 1) * 1000));
+
+      const response = await liveRequest(session, method, path);
+      expectSessionCleared(response);
+    }
+  );
+});
+
+/**
+ * The row deleted between Better Auth's read and its daily slide: the library
+ * expires the cookies and throws a 401 carrying them.
+ */
+describe('a session that vanishes mid-refresh is cleared', () => {
+  test.each([
+    ['a permission read', READ_URL],
+    ['a session-only route', PREFERENCES_URL],
+    ['a Better Auth live path', '/api/auth/two-factor/methods'],
+  ] as const)('%s', async (_label, path) => {
+    const session = withoutCookie(await remembered(), CACHE);
+    await ageSessionPastUpdateAge(session);
+    const update = spyOn(
+      context.internalAdapter,
+      'updateSession'
+    ).mockResolvedValue(null);
+    try {
+      const response = await app.handle(authedRequest(session, path));
+      expect(update).toHaveBeenCalled();
+      expectSessionCleared(response);
+    } finally {
+      update.mockRestore();
+    }
+  });
+});
+
+describe('renaming yourself', () => {
+  test('re-mints the cache, so the session carries the new name at once', async () => {
+    const session = await remembered();
+
+    const response = await app.handle(
+      authedRequest(session, '/api/dash/users/me', {
+        method: 'PUT',
+        body: JSON.stringify({ name: 'Renamed Person' }),
+        headers: { 'content-type': 'application/json', origin: PUBLIC_ORIGIN },
+      })
+    );
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    expectFullCache(named(response, CACHE)[0], Date.now());
+
+    const own = await app.handle(
+      authedRequest(after(session, response), '/api/auth/get-session')
+    );
+    const body: unknown = await own.json();
+    expect(body).toMatchObject({ user: { name: 'Renamed Person' } });
   });
 });
 

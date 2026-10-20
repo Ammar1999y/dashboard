@@ -7,9 +7,9 @@
  * ITSELF and says nothing about a callback still running when the process is
  * asked to stop; `handle.stop()` only prevents FUTURE firings.
  *
- * Both modes are spawned together so they share one wait for the minute
- * boundary, which is the whole cost of this file: `Bun.cron` has no manual
- * trigger and its finest granularity is one minute.
+ * Every mode is spawned together so they share the waits for the minute
+ * boundary, which are the whole cost of this file: `Bun.cron` has no manual
+ * trigger and its finest granularity is one minute. `throws` waits for two.
  */
 import { describe, expect, test } from 'bun:test';
 import path from 'node:path';
@@ -47,7 +47,9 @@ const LOAD_TIME_NOTICES: ReadonlySet<string> = new Set([
   'media.usage-registry is empty',
 ]);
 
-function runChild(mode: 'drain' | 'timeout' | 'elected'): Promise<Outcome> {
+function runChild(
+  mode: 'drain' | 'timeout' | 'elected' | 'throws'
+): Promise<Outcome> {
   const child = Bun.spawn(['bun', '--no-env-file', CHILD, mode], {
     cwd: path.join(import.meta.dir, '..', '..'),
     env: { ...process.env, NODE_ENV: 'development' },
@@ -91,14 +93,17 @@ function runChild(mode: 'drain' | 'timeout' | 'elected'): Promise<Outcome> {
 }
 
 describe('shutdown while a scheduled sweep is running', () => {
-  const both = Promise.all([
-    runChild('drain'),
-    runChild('timeout'),
-    runChild('elected'),
-  ]);
+  // Started together; each test awaits only its own, so the two-minute
+  // `throws` child does not count against the others' timeouts.
+  const runs = {
+    drain: runChild('drain'),
+    timeout: runChild('timeout'),
+    elected: runChild('elected'),
+    throws: runChild('throws'),
+  };
 
   test('a sweep inside the deadline finishes before the stores close', async () => {
-    const [outcome] = await both;
+    const outcome = await runs.drain;
 
     expect(outcome.exitCode).toBe(0);
     expect(outcome.messages).toEqual([
@@ -114,7 +119,7 @@ describe('shutdown while a scheduled sweep is running', () => {
   }, 120_000);
 
   test('a sweep past the deadline is reported rather than waited on forever', async () => {
-    const [, outcome] = await both;
+    const outcome = await runs.timeout;
 
     expect(outcome.exitCode).toBe(0);
     // The drain gives up and says so. `probe finished` never arrives, which is
@@ -140,8 +145,7 @@ describe('shutdown while a scheduled sweep is running', () => {
   }, 120_000);
 
   test('a shared job fired twice at once runs once and is skipped once', async () => {
-    const outcomes = await both;
-    const outcome = outcomes[2];
+    const outcome = await runs.elected;
     const count = (msg: string) =>
       outcome.messages.filter((m) => m === msg).length;
 
@@ -152,4 +156,33 @@ describe('shutdown while a scheduled sweep is running', () => {
     expect(outcome.messages).not.toContain('scheduled sweep failed');
     expect(outcome.messages.at(-1)).toBe('stores closed');
   }, 120_000);
+
+  test('a sweep that throws is logged by class, and the next firing still runs', async () => {
+    const outcome = await runs.throws;
+
+    expect(outcome.exitCode).toBe(0);
+    expect(
+      outcome.lines.filter((line) => line.msg === 'scheduled sweep failed')
+    ).toEqual([
+      {
+        msg: 'scheduled sweep failed',
+        job: 'drain-probe',
+        errorClass: 'ProbeSweepError',
+      },
+    ]);
+    // The second firing is a minute after the first, so it ran only because
+    // the failure was contained in the callback that `Bun.cron` awaits.
+    expect(
+      outcome.messages.filter((m) => m !== 'scheduled sweep failed')
+    ).toEqual([
+      'maintenance schedule started',
+      'probe started',
+      'probe started',
+      'waiting for in-flight sweep',
+      'probe finished',
+      'scheduled sweep completed',
+      'drain returned',
+      'stores closed',
+    ]);
+  }, 180_000);
 });

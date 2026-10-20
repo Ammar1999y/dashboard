@@ -14,13 +14,11 @@ const DEADLINE_MS = 10_000;
 const ATTEMPTS = 2;
 
 /**
- * The wall clock ONE call may spend, however many batches it was handed.
- *
- * Worst case per batch is `DEADLINE_MS * ATTEMPTS`, and a recursive folder
- * delete hands this up to `FOLDER_RECURSIVE_DELETE_MAX / PURGE_BATCH_SIZE`
- * batches, which must not outlast the route's connection ceiling. A batch not
- * STARTED before this passes is reported in `failed`, which every caller treats
- * as "the row keeps its `deleting` marker"; `sweepFiles` retries it.
+ * The wall clock ONE call may spend, however many batches it was handed, so it
+ * must stay under the route's connection ceiling. No attempt starts after it
+ * and each is cut to what is left of it. A URL it leaves unconfirmed is
+ * reported in `failed`, which every caller treats as "the row keeps its
+ * marker"; the sweeps retry it.
  */
 const TOTAL_BUDGET_MS = 25_000;
 
@@ -51,7 +49,7 @@ async function reserveApiCall(): Promise<boolean> {
   if (!success)
     logLine('error', {
       msg: 'media.cache-purge budget exhausted',
-      effect: 'batch deferred to the sweep; rows keep their deleting marker',
+      effect: 'batch deferred to the sweeps; callers keep their markers',
       budget: API_CALL_BUDGET,
       windowSeconds: API_CALL_WINDOW_S,
     });
@@ -67,10 +65,20 @@ interface PurgeOutcome {
   failed: string[];
 }
 
-async function purgeBatch(urls: readonly string[]): Promise<boolean> {
+type BatchOutcome = 'purged' | 'failed' | 'out of time';
+
+async function purgeBatch(
+  urls: readonly string[],
+  giveUpAt: number
+): Promise<BatchOutcome> {
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    if (giveUpAt <= Date.now()) return 'out of time';
     // Charged per outbound call, retries included: the provider counts them.
-    if (!(await reserveApiCall())) return false;
+    if (!(await reserveApiCall())) return 'failed';
+    // Measured after the admission, which can wait behind a held SQLite
+    // writer for seconds.
+    const left = giveUpAt - Date.now();
+    if (left <= 0) return 'out of time';
     try {
       const response = await fetch(
         `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/purge_cache`,
@@ -81,10 +89,10 @@ async function purgeBatch(urls: readonly string[]): Promise<boolean> {
             'content-type': 'application/json',
           },
           body: JSON.stringify({ files: urls }),
-          signal: AbortSignal.timeout(DEADLINE_MS),
+          signal: AbortSignal.timeout(Math.min(DEADLINE_MS, left)),
         }
       );
-      if (response.ok) return true;
+      if (response.ok) return 'purged';
       // A 4xx is a configuration problem a retry cannot fix; a 5xx may pass.
       if (attempt === ATTEMPTS || response.status < 500) {
         logLine('error', {
@@ -92,7 +100,7 @@ async function purgeBatch(urls: readonly string[]): Promise<boolean> {
           status: response.status,
           count: urls.length,
         });
-        return false;
+        return 'failed';
       }
     } catch (error) {
       if (attempt === ATTEMPTS) {
@@ -103,11 +111,11 @@ async function purgeBatch(urls: readonly string[]): Promise<boolean> {
           errorClass: errorTypeOf(error),
           count: urls.length,
         });
-        return false;
+        return 'failed';
       }
     }
   }
-  return false;
+  return 'failed';
 }
 
 /**
@@ -132,15 +140,15 @@ export async function purgeUrls(
   const failed: string[] = [];
   for (let start = 0; start < urls.length; start += PURGE_BATCH_SIZE) {
     const batch = urls.slice(start, start + PURGE_BATCH_SIZE);
-    const expired = Date.now() >= giveUpAt;
-    if (expired) abandoned += batch.length;
-    if (!expired && (await purgeBatch(batch))) purged += batch.length;
+    const outcome = await purgeBatch(batch, giveUpAt);
+    if (outcome === 'purged') purged += batch.length;
     else failed.push(...batch);
+    if (outcome === 'out of time') abandoned += batch.length;
   }
   if (abandoned > 0)
     logLine('error', {
       msg: 'media.cache-purge deadline reached',
-      effect: 'rows keep their deleting marker; the sweep retries them',
+      effect: 'callers keep their markers; the sweeps retry them',
       abandoned,
       budgetMs: TOTAL_BUDGET_MS,
     });

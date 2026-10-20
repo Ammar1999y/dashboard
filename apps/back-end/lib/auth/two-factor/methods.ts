@@ -108,58 +108,88 @@ export async function listEnrolledMethods(
   }));
 }
 
-// ⚠️ A caller inside a transaction must pass it as `executor`, or a second pooled
-// connection is taken and the pool can deadlock.
+export interface Enrolment {
+  state: EnrolmentState;
+  /** Still encrypted; set only while `capability.totpVerified`. */
+  totpSecret: string | null;
+}
+
+/**
+ * One statement: it runs on every sign-in, with or without a second factor.
+ *
+ * ⚠️ A caller inside a transaction must pass it as `executor`, or a second
+ * pooled connection is taken and the pool can deadlock.
+ */
+export async function readEnrolment(
+  userId: EntityID,
+  executor: Executor = db
+): Promise<Enrolment> {
+  // One row per intent row, or one with the intent columns null.
+  const rows = await executor
+    .select({
+      twoFactorEnabled: users.twoFactorEnabled,
+      emailVerified: users.emailVerified,
+      phoneNumberVerified: users.phoneNumberVerified,
+      secret: twoFactorCredentials.secret,
+      verified: twoFactorCredentials.verified,
+      acknowledgedSetId: twoFactorCredentials.backupCodesAcknowledgedSetId,
+      setId: twoFactorCredentials.backupCodesSetId,
+      remaining: twoFactorCredentials.backupCodesRemaining,
+      hasPasskey:
+        sql`exists (select 1 from ${passkeys} where ${passkeys.userId} = ${users.id})`.mapWith(
+          Boolean
+        ),
+      method: twoFactorMethods.method,
+      channel: twoFactorMethods.channel,
+      contactKind: twoFactorMethods.contactKind,
+      isDefault: twoFactorMethods.isDefault,
+    })
+    .from(users)
+    .leftJoin(twoFactorCredentials, eq(twoFactorCredentials.userId, users.id))
+    .leftJoin(twoFactorMethods, eq(twoFactorMethods.userId, users.id))
+    .where(eq(users.id, userId))
+    // Deterministic: clients offer methods in response order.
+    .orderBy(twoFactorMethods.method, twoFactorMethods.contactKind);
+
+  const [first] = rows;
+  const intent: EnrolledMethod[] = [];
+  for (const row of rows)
+    if (row.method)
+      intent.push({
+        method: row.method,
+        channel: row.channel,
+        contactKind: asContactKind(row.contactKind),
+        isDefault: row.isDefault === true,
+      });
+  const totpSecret = (first?.verified === true && first.secret) || null;
+
+  return {
+    state: {
+      enabled: first?.twoFactorEnabled === true,
+      intent,
+      capability: {
+        totpVerified: totpSecret !== null,
+        // ⚠️ Dropping any condition advertises codes the user does not have. The
+        // null check matters: a row with no set has both ids NULL.
+        backupCodesReady:
+          first?.acknowledgedSetId != null &&
+          first.acknowledgedSetId === first.setId &&
+          (first.remaining ?? 0) > 0,
+        hasPasskey: first?.hasPasskey === true,
+        emailVerified: first?.emailVerified === true,
+        phoneVerified: first?.phoneNumberVerified === true,
+      },
+    },
+    totpSecret,
+  };
+}
+
 export async function readEnrolmentState(
   userId: EntityID,
   executor: Executor = db
 ): Promise<EnrolmentState> {
-  const [intent, [credential], [passkeyRow], [user]] = await Promise.all([
-    listEnrolledMethods(userId, executor),
-    executor
-      .select({
-        secret: twoFactorCredentials.secret,
-        verified: twoFactorCredentials.verified,
-        acknowledgedSetId: twoFactorCredentials.backupCodesAcknowledgedSetId,
-        setId: twoFactorCredentials.backupCodesSetId,
-        remaining: twoFactorCredentials.backupCodesRemaining,
-      })
-      .from(twoFactorCredentials)
-      .where(eq(twoFactorCredentials.userId, userId))
-      .limit(1),
-    executor
-      .select({ id: passkeys.id })
-      .from(passkeys)
-      .where(eq(passkeys.userId, userId))
-      .limit(1),
-    executor
-      .select({
-        twoFactorEnabled: users.twoFactorEnabled,
-        emailVerified: users.emailVerified,
-        phoneNumberVerified: users.phoneNumberVerified,
-      })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1),
-  ]);
-
-  return {
-    enabled: user?.twoFactorEnabled === true,
-    intent,
-    capability: {
-      totpVerified:
-        Boolean(credential?.secret) && credential?.verified === true,
-      // ⚠️ Dropping any condition advertises codes the user does not have. The
-      // null check matters: a row with no set has both ids NULL.
-      backupCodesReady:
-        credential?.acknowledgedSetId != null &&
-        credential.acknowledgedSetId === credential.setId &&
-        credential.remaining > 0,
-      hasPasskey: passkeyRow != null,
-      emailVerified: user?.emailVerified === true,
-      phoneVerified: user?.phoneNumberVerified === true,
-    },
-  };
+  const { state } = await readEnrolment(userId, executor);
+  return state;
 }
 
 /**
@@ -241,12 +271,10 @@ export function recoveryOptions(
 }
 
 // True means the reset is refused; the route back is the administrative reset.
-export async function recoveryDefeatsTwoFactor(
-  userId: EntityID,
-  contactKind: ContactKind,
-  executor: Executor = db
-): Promise<boolean> {
-  const state = await readEnrolmentState(userId, executor);
+export function recoveryDefeatsTwoFactor(
+  state: EnrolmentState,
+  contactKind: ContactKind
+): boolean {
   // A user with no capability is already refused at sign-in; refusing recovery
   // too would leave no route at all.
   if (!state.enabled || offeredMethods(state).length === 0) return false;

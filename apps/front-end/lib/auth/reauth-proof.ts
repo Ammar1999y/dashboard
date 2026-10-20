@@ -1,22 +1,18 @@
-import type { RequestBody } from '@app/shared/contract';
-
-import { reauthGrantSchema } from '@app/shared/responses/auth';
+import { reauthenticate } from '@app/shared/api/auth';
 import {
-  passkeyRequestOptionsSchema,
-  reauthMethodsSchema,
-} from '@app/shared/responses/better-auth';
-import { apiRequest } from '@/lib/api/fetch';
+  reauthMethods,
+  reauthPasskeyOptions,
+  reauthPasskeyVerify,
+} from '@app/shared/api/better-auth';
+import { api } from '@/lib/api/client';
 
 import { authenticateWithPasskey } from './passkey';
-import { authFetch } from './request';
+
+// None of these entries has `policy.reauth`, so a proof never prompts for a proof.
 
 /** Every proof the account can open the window with, as the server offers them. */
 export async function fetchReauthMethods(signal?: AbortSignal) {
-  const { data } = await authFetch('/reauth/methods', {
-    method: 'GET',
-    signal,
-    schema: reauthMethodsSchema,
-  });
+  const { data } = await api(reauthMethods, undefined, { signal });
   return data.methods;
 }
 
@@ -26,13 +22,7 @@ export async function fetchReauthMethods(signal?: AbortSignal) {
  * account's lockout, which answers its own message until it lapses.
  */
 export async function proveWithPassword(password: string) {
-  const body: RequestBody<'POST /api/dash/auth/reauth'> = { password };
-  await apiRequest('/api/dash/auth/reauth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    schema: reauthGrantSchema,
-  });
+  await api(reauthenticate, { body: { password } });
 }
 
 /**
@@ -41,15 +31,7 @@ export async function proveWithPassword(password: string) {
  * ceremony does not complete.
  */
 export async function proveWithPasskey() {
-  const { data: options } = await authFetch('/reauth/passkey/options', {
-    method: 'POST',
-    data: {},
-    schema: passkeyRequestOptionsSchema,
-  });
+  const { data: options } = await api(reauthPasskeyOptions);
   const response = await authenticateWithPasskey(options);
-  await authFetch('/reauth/passkey/verify', {
-    method: 'POST',
-    data: { response },
-    schema: reauthGrantSchema,
-  });
+  await api(reauthPasskeyVerify, { body: { response } });
 }

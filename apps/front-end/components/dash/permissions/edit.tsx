@@ -1,16 +1,15 @@
+import type { BodyOf } from '@/lib/api/client';
 import type { PermissionClient, PermissionDetail } from '@/types/permission';
 import type {
   UpdatePermissionInput,
   UpdatePermissionOutput,
 } from '@/utils/validation/permissions';
-import type { RequestBody } from '@app/shared/contract';
 
 import { memo, useCallback } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
-import { permissionDetailSchema } from '@app/shared/responses/permissions';
 import { adminUpdatePermissionBodySchema } from '@app/shared/validation/permissions';
 
 import { toPermissionForm } from '@/utils/validation/permissions';
@@ -26,16 +25,12 @@ import { cacheRoleChanged, cacheRoleOption } from './cache';
 import { permissionEntity } from './entity';
 import { PermissionFields } from './fields';
 
-type Payload = RequestBody<'PUT /api/dash/permissions/:id'>;
+type Payload = BodyOf<typeof permissionEntity.endpoints.update>;
 
 export default function EditPermission() {
   return (
     <RequireGrant resource='permissions' action='edit'>
-      <EditRecord
-        entity={permissionEntity}
-        schema={permissionDetailSchema}
-        Form={PermissionEditForm}
-      />
+      <EditRecord entity={permissionEntity} Form={PermissionEditForm} />
     </RequireGrant>
   );
 }

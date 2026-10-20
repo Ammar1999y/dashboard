@@ -29,7 +29,7 @@ describe('validationFailure reads only the issue fields it checked', () => {
       { code: 'unrecognized_keys', keys, path: ['nested'], message: OMITTED },
     ]);
     expect(result.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(result.body.message).toBe(
+    expect(result.body.detail).toBe(
       issueCodeMessage('unrecognized_keys', ['nested'])
     );
   });
@@ -39,14 +39,14 @@ describe('validationFailure reads only the issue fields it checked', () => {
       { code: 'unrecognized_keys', keys: OMITTED, path: [], message: 'x' },
       { code: 'custom', path: ['name'], message: SHORT },
     ]);
-    expect(result.body.message).toBe(UNNAMED_ROOT);
+    expect(result.body.detail).toBe(UNNAMED_ROOT);
   });
 
   test('an authored message replaced by the placeholder is not authored', () => {
     const result = answer([
       { code: 'too_small', path: ['name'], message: OMITTED },
     ]);
-    expect(result.body.message).toBe(issueCodeMessage('too_small', ['name']));
+    expect(result.body.detail).toBe(issueCodeMessage('too_small', ['name']));
   });
 
   test('an entry without a usable code, path or message is passed over', () => {
@@ -59,9 +59,9 @@ describe('validationFailure reads only the issue fields it checked', () => {
         { code: 'custom', path: [{}], message: SHORT },
         { code: 'custom', path: [], message: 42 },
         { code: 'custom', path: ['name'], message: SHORT },
-      ]).body.message
+      ]).body.detail
     ).toBe(SHORT);
-    expect(answer([{ code: OMITTED }]).body.message).toBe(MSG_INVALID_INPUT);
+    expect(answer([{ code: OMITTED }]).body.detail).toBe(MSG_INVALID_INPUT);
   });
 
   test('an intact issue keeps its own wording', () => {
@@ -73,11 +73,11 @@ describe('validationFailure reads only the issue fields it checked', () => {
           path: [],
           message: 'Unrecognized keys',
         },
-      ]).body.message
+      ]).body.detail
     ).toBe(MSG_UNRECOGNIZED_KEYS(['a', 'b'], 0));
     expect(
       answer([{ code: 'too_small', path: ['name'], message: SHORT }]).body
-        .message
+        .detail
     ).toBe(SHORT);
   });
 });

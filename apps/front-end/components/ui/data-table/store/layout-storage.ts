@@ -60,9 +60,10 @@ export function loadLayout(
   return {
     columnOrder: [...order, ...columnIds.filter((id) => !order.includes(id))],
     columnVisibility: readVisibility(saved.columnVisibility, known),
+    // Layouts saved before TanStack Table 9 name the zones `left` and `right`.
     columnPinning: {
-      left: knownIdList(pinning.left, known),
-      right: knownIdList(pinning.right, known),
+      start: knownIdList(pinning.start ?? pinning.left, known),
+      end: knownIdList(pinning.end ?? pinning.right, known),
     },
     columnSizing: readSizing(saved.columnSizing, known),
   };

@@ -22,6 +22,7 @@ import { MSG_UNTRUSTED_ORIGIN } from '@app/shared/messages/common';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
+import { expectAuthError, expectError } from '../helpers/expect-body';
 import { baseHeaders, seedUser, signedInUser } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -103,12 +104,7 @@ describe('a table-route write from another origin is refused', () => {
   ])('%s', async (_label, headers) => {
     const response = await resetTarget(headers);
 
-    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(await response.json()).toEqual({
-      success: false,
-      message: MSG_UNTRUSTED_ORIGIN,
-      data: null,
-    });
+    await expectError(response, HTTP_STATUS.FORBIDDEN, MSG_UNTRUSTED_ORIGIN);
     expect(await methodsOfTarget()).toEqual(['totp']);
   });
 });
@@ -171,7 +167,7 @@ describe('the CORS preflight', () => {
 });
 
 describe('/api/auth/* keeps Better Auth as its only origin check', () => {
-  test('an untrusted Origin is refused with the library-shaped body', async () => {
+  test('an untrusted Origin is refused by the library, as an auth problem', async () => {
     const response = await app.handle(
       new Request('http://localhost/api/auth/sign-out', {
         method: 'POST',
@@ -183,11 +179,13 @@ describe('/api/auth/* keeps Better Auth as its only origin check', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(await response.json()).toEqual({
-      message: MSG_UNTRUSTED_ORIGIN,
-      code: CUSTOM_AUTH_CODE,
-    });
+    expect(
+      await expectAuthError(
+        response,
+        HTTP_STATUS.FORBIDDEN,
+        MSG_UNTRUSTED_ORIGIN
+      )
+    ).toMatchObject({ code: CUSTOM_AUTH_CODE });
   });
 
   test('a trusted Origin over same-site fetch metadata is left to the library, which admits it', async () => {

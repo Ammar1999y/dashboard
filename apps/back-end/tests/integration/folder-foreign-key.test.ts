@@ -46,7 +46,7 @@ test('a file filed into a folder that does not exist is the folder 404', async (
   expect(getConstraintName(thrown)).toBe('files_folder_id_folders_id_fk');
   const output = handleFolderForeignKeyViolation(thrown);
   expect(output?.status).toBe(HTTP_STATUS.NOT_FOUND);
-  expect(output?.body).toMatchObject({ message: mediaMsg.folderNotFound });
+  expect(output?.body).toMatchObject({ detail: mediaMsg.folderNotFound });
 });
 
 test('any other foreign-key violation is left to the caller', async () => {

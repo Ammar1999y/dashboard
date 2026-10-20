@@ -1,5 +1,6 @@
 import type { Scenario } from './harness';
 
+import { uploadRecordFile } from '@app/shared/api/media';
 import { sanitizeFilename } from '@app/shared/filename';
 import { MSG_ANIMATED_NOT_ALLOWED } from '@app/shared/messages/media';
 import {
@@ -22,7 +23,7 @@ import {
   FileError,
   prepareFile,
 } from '@/lib/files/prepare';
-import { UPLOAD_PATH, uploadFile } from '@/lib/files/upload';
+import { uploadFile } from '@/lib/files/upload';
 
 import { getAcceptedFormats } from '@/components/shared/file-upload/file-utils';
 
@@ -100,7 +101,7 @@ async function libraryInBlobWorker(url: string): Promise<string> {
 const uploadRequests = () =>
   performance
     .getEntriesByType('resource')
-    .filter((entry) => entry.name.includes(UPLOAD_PATH)).length;
+    .filter((entry) => entry.name.includes(uploadRecordFile.path)).length;
 
 /** Admitted (under the input limit) yet over the server ceiling: it must compress. */
 const photoSized = (name: string) =>

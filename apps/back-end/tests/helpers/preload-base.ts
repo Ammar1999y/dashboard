@@ -11,14 +11,14 @@
  * What this file must NOT do: import anything from `@/lib`, `@/db` or `@/app`.
  * Every one of those modules reads the environment this file is still setting up.
  */
-import { afterEach, beforeEach } from 'bun:test';
+import { afterAll, afterEach, beforeEach } from 'bun:test';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { drainAfterResponse } from '@/lib/http/after-response';
 import { takeResponseMismatches } from '@/lib/http/response-mismatches';
 
+import { settleDeferredWork } from './deferred-work';
 import {
   assertNoEgressViolations,
   installEgressGuard,
@@ -126,10 +126,8 @@ process.env.R2_PUBLIC_URL ??= 'https://cdn.example.invalid';
 
 process.env.SQLITE_MAINTENANCE_TOKEN ??= 'harness-maintenance-token-0123456789';
 
-const DEFERRED_WORK_DRAIN_MS = 5000;
-
 beforeEach(async () => {
-  await drainAfterResponse(DEFERRED_WORK_DRAIN_MS);
+  await settleDeferredWork();
   resetEgress();
   resetMailbox();
   resetObjectStore();
@@ -152,20 +150,34 @@ beforeEach(async () => {
  * before it would throw the evidence away.
  */
 afterEach(async () => {
-  await drainAfterResponse(DEFERRED_WORK_DRAIN_MS);
+  let unsettled: unknown = null;
+  try {
+    await settleDeferredWork();
+  } catch (error) {
+    unsettled = error;
+  }
   // Taken before anything can throw, so none leaks into the next test.
   const mismatches = takeResponseMismatches();
   try {
     assertNoEgressViolations();
   } finally {
-    resetEgress();
-    resetMailbox();
-    resetObjectStore();
+    if (unsettled === null) {
+      resetEgress();
+      resetMailbox();
+      resetObjectStore();
+    }
   }
+  if (unsettled !== null) throw unsettled;
   if (mismatches.length > 0)
     throw new Error(
       `a response broke its published contract (lib/http/response-check.ts answers such a response 500; tests/helpers/document-check.ts holds it to the served document):\n  ${mismatches.join('\n  ')}`
     );
+});
+
+// The hooks above skip the drain when nothing was enqueued since the last one;
+// this catches work a file's last test enqueued after its `afterEach` looked.
+afterAll(async () => {
+  await settleDeferredWork('always');
 });
 
 process.on('exit', () => {

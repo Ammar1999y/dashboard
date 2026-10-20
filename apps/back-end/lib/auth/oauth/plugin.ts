@@ -13,6 +13,7 @@ import { generateState, parseState } from 'better-auth/oauth2';
 import { google } from 'better-auth/social-providers';
 import * as z from 'zod';
 
+import * as contract from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
@@ -21,6 +22,7 @@ import {
 } from '@app/shared/messages/common';
 import { oauthOutcomeSchema } from '@app/shared/responses/better-auth';
 import {
+  googleCallbackQuerySchema,
   googleStartSchema,
   OAUTH_STATE_LOST_PAGE,
 } from '@app/shared/validation/oauth';
@@ -70,9 +72,6 @@ import {
   resolveGoogleIdentity,
 } from './identity';
 import { exchangeGoogleCode } from './token-exchange';
-
-/** `generateState`'s token: 32 of `generateRandomString`'s `a-z0-9A-Z-_`. */
-const OAUTH_STATE_PATTERN = /^[\w-]{32}$/;
 
 const GOOGLE_REDIRECT_URI = `${PUBLIC_ORIGIN}/api/auth/oauth/google/callback`;
 
@@ -306,18 +305,15 @@ export const oauth = () =>
   ({
     id: 'existing-user-oauth',
     endpoints: {
-      authCapabilities: pluginEndpoint(
-        '/capabilities',
-        { method: 'GET' },
-        (ctx) =>
-          ctx.json({
-            data: { oauthProviders: ENABLED_OAUTH_PROVIDERS },
-          })
+      authCapabilities: pluginEndpoint(contract.authCapabilities, {}, (ctx) =>
+        ctx.json({
+          data: { oauthProviders: ENABLED_OAUTH_PROVIDERS },
+        })
       ),
       ...(GOOGLE_ENABLED && {
         googleStart: pluginEndpoint(
-          '/oauth/google/start',
-          { method: 'POST', body: googleStartSchema },
+          contract.googleStart,
+          { body: googleStartSchema },
           async (ctx) => {
             if (!googleProvider) throw authenticationDenied();
             if (!(await verifyTurnstileRequest(requestHeaders(ctx))))
@@ -362,17 +358,9 @@ export const oauth = () =>
           }
         ),
         googleCallback: pluginEndpoint(
-          '/oauth/google/callback',
+          contract.googleCallback,
           {
-            method: 'GET',
-            query: z.object({
-              code: z.string().min(1).max(4096).optional(),
-              // `generateState`'s own shape. Not proof the state is ours: a
-              // passkey challenge row shares it, hence the marker check below.
-              state: z.string().regex(OAUTH_STATE_PATTERN),
-              error: z.string().max(256).optional(),
-              iss: z.string().max(255).optional(),
-            }),
+            query: googleCallbackQuerySchema,
           },
           async (ctx) => {
             let destination: string | null = null;
@@ -383,9 +371,7 @@ export const oauth = () =>
               if (!googleProvider || !GOOGLE_CREDENTIALS)
                 throw authenticationDenied();
               readingState = true;
-              // `parseState` parses whatever verification row the value names,
-              // and answers any other row's value with a 500. Only one the
-              // start endpoint marked is read.
+              // Only a state the start endpoint marked reaches `parseState`.
               const [issued] = await db
                 .select({ id: verifications.id })
                 .from(verifications)
@@ -607,47 +593,42 @@ export const oauth = () =>
             }
           }
         ),
-        oauthResult: pluginEndpoint(
-          '/oauth/result',
-          { method: 'GET' },
-          async (ctx) => {
-            const cookie = ctx.context.createAuthCookie('oauth_result');
-            const token = await ctx.getSignedCookie(
-              cookie.name,
-              ctx.context.secret
-            );
-            if (!token || !BASE64URL_32_BYTES_PATTERN.test(token))
-              throw authenticationDenied();
-            // Together, and the cookie kept until they commit: a fault between
-            // two separate consumes would leave the result unreadable for the
-            // retry its 503 invites.
-            const { owner, result } = await withAuthTransaction(
-              ctx,
-              async () => ({
-                owner:
-                  await ctx.context.internalAdapter.consumeVerificationValue(
-                    oauthResultOwnerKey(token)
-                  ),
-                result:
-                  await ctx.context.internalAdapter.consumeVerificationValue(
-                    oauthResultKey(token)
-                  ),
-              })
-            );
-            expireCookie(ctx, cookie);
-            if (!owner || !result) throw authenticationDenied();
-            const parsed = keptResultSchema.safeParse(JSON.parse(result.value));
-            // Both records are consumed, so a rejection is unrecoverable; the
-            // callback parses what it keeps for this reason.
-            if (!parsed.success) {
-              logSanitized('error', { msg: 'oauth.result.unrecognised' });
-              throw authenticationDenied();
-            }
-            // The same denial the direct callback answers, so both modes share one failure envelope.
-            if (isRefusal(parsed.data)) throw authenticationDenied();
-            return ctx.json(parsed.data);
+        oauthResult: pluginEndpoint(contract.oauthResult, {}, async (ctx) => {
+          const cookie = ctx.context.createAuthCookie('oauth_result');
+          const token = await ctx.getSignedCookie(
+            cookie.name,
+            ctx.context.secret
+          );
+          if (!token || !BASE64URL_32_BYTES_PATTERN.test(token))
+            throw authenticationDenied();
+          // Together, and the cookie kept until they commit: a fault between
+          // two separate consumes would leave the result unreadable for the
+          // retry its 503 invites.
+          const { owner, result } = await withAuthTransaction(
+            ctx,
+            async () => ({
+              owner: await ctx.context.internalAdapter.consumeVerificationValue(
+                oauthResultOwnerKey(token)
+              ),
+              result:
+                await ctx.context.internalAdapter.consumeVerificationValue(
+                  oauthResultKey(token)
+                ),
+            })
+          );
+          expireCookie(ctx, cookie);
+          if (!owner || !result) throw authenticationDenied();
+          const parsed = keptResultSchema.safeParse(JSON.parse(result.value));
+          // Both records are consumed, so a rejection is unrecoverable; the
+          // callback parses what it keeps for this reason.
+          if (!parsed.success) {
+            logSanitized('error', { msg: 'oauth.result.unrecognised' });
+            throw authenticationDenied();
           }
-        ),
+          // The same denial the direct callback answers, so both modes share one failure envelope.
+          if (isRefusal(parsed.data)) throw authenticationDenied();
+          return ctx.json(parsed.data);
+        }),
       }),
     },
   }) satisfies BetterAuthPlugin;

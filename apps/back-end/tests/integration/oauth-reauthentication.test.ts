@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
@@ -15,6 +15,7 @@ import {
 import * as z from 'zod';
 
 import { auth } from '@/lib/auth';
+import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth/credential';
 import * as passwords from '@/lib/auth/password/hash';
 import * as reauthWindow from '@/lib/auth/reauth/window';
 import { hasAdminReauth } from '@/lib/auth/reauth/window';
@@ -32,6 +33,7 @@ import {
   seedUser,
   signIn,
 } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 import { syntheticAuthenticator } from '../helpers/webauthn';
 
 beforeEach(resetTables);
@@ -378,4 +380,71 @@ test('revocation prevents every reauthentication method and never creates a cred
   ).resolves.toHaveProperty('status', 401);
   expect(await db.select().from(accounts)).toHaveLength(0);
   expect(await db.select().from(users)).toHaveLength(1);
+});
+
+async function reauthenticateWithPasskey(
+  cookie: string,
+  device: ReturnType<typeof syntheticAuthenticator>
+): Promise<Response> {
+  const started = await call('/api/auth/reauth/passkey/options', cookie, {});
+  const { data } = z
+    .object({ data: z.object({ challenge: z.string() }) })
+    .parse(await started.json());
+  return call('/api/auth/reauth/passkey/verify', cookie, {
+    response: device.assertion({
+      challenge: data.challenge,
+      origin: PUBLIC_ORIGIN,
+      rpId: new URL(PUBLIC_ORIGIN).hostname,
+    }),
+  });
+}
+
+test('a passkey window closes with the last passkey, and is checked in one statement', async () => {
+  const { owner, device, cookie, sessionId } = await fixture();
+  await expect(
+    reauthenticateWithPasskey(cookie, device)
+  ).resolves.toHaveProperty('status', 200);
+
+  const recorder = recordStatements();
+  const open = await hasAdminReauth(sessionId, owner.userId).finally(
+    recorder.stop
+  );
+  expect(open).toBe(true);
+  expect(recorder.statements).toHaveLength(1);
+
+  const other = await seedUser();
+  expect(await hasAdminReauth(sessionId, other.userId)).toBe(false);
+
+  await db.delete(passkeys).where(eq(passkeys.userId, owner.userId));
+  expect(await hasAdminReauth(sessionId, owner.userId)).toBe(false);
+});
+
+test('a password window outlives the passkeys and closes with the password', async () => {
+  const { owner, cookie, sessionId } = await fixture();
+  await expect(
+    call('/api/dash/auth/reauth', cookie, { password: owner.password })
+  ).resolves.toHaveProperty('status', 200);
+
+  await db.delete(passkeys).where(eq(passkeys.userId, owner.userId));
+  expect(await hasAdminReauth(sessionId, owner.userId)).toBe(true);
+
+  await db
+    .delete(accounts)
+    .where(
+      and(
+        eq(accounts.userId, owner.userId),
+        eq(accounts.providerId, CREDENTIAL_PROVIDER_ID)
+      )
+    );
+  expect(await hasAdminReauth(sessionId, owner.userId)).toBe(false);
+});
+
+test('listing the reauthentication methods reads no role', async () => {
+  const { cookie } = await fixture();
+  const recorder = recordStatements();
+  const methods = await call('/api/auth/reauth/methods', cookie).finally(
+    recorder.stop
+  );
+  expect(methods.status).toBe(200);
+  expect(recorder.matching(/"roles"/)).toEqual([]);
 });

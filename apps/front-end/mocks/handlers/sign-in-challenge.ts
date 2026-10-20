@@ -2,6 +2,7 @@ import type { OfferedOption } from '../lib/two-factor-model';
 import type { MockUser } from '../store';
 
 import { http, HttpResponse } from 'msw';
+import * as contract from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
@@ -11,12 +12,12 @@ import { contactKindOf } from '@app/shared/validation/enums';
 import {
   isTwoFactorMethodEnabled,
   isTwoFactorOtpChannelEnabled,
-  TWO_FACTOR_OTP_AVAILABLE,
   twoFactorOtpVerifySchema,
   twoFactorPasskeyVerifySchema,
 } from '@app/shared/validation/two-factor';
 
-import { api, asPlugin, parseOrThrow, pluginOk, readJson } from '../lib/http';
+import { mock } from '../lib/endpoint';
+import { api, parseOrThrow, readJson } from '../lib/http';
 import {
   beginAttempt,
   completeChallenge,
@@ -32,13 +33,13 @@ import {
   writeTwoFactor,
 } from '../lib/two-factor';
 import { matchedTotpStep, randomToken } from '../lib/two-factor-model';
-import { challenge, session } from '../store';
+import { challenge } from '../store';
 
 /*
  * The second half of a sign-in: the endpoints that take the challenge a first
  * factor issued (`lib/sign-in.ts`) and answer a session. The library's TOTP and
- * backup-code verifiers answer plain JSON, the project's own the plugin shape;
- * both refuse in Better Auth's `{ code, message }`.
+ * backup-code verifiers answer plain JSON; the project's own are held to their
+ * entries by `mock()`.
  */
 
 const invalidCode = () =>
@@ -84,6 +85,57 @@ function otpTarget(
   const destination = kind === 'email' ? user.email : user.phoneNumber;
   if (!destination) throw methodUnavailable();
   return { option: chosen, kind, destination };
+}
+
+/**
+ * `/two-factor/otp/send` for a sign-in challenge. With a session the request
+ * is an enrolment, which `two-factor.ts` answers and hands this the rest.
+ */
+export async function sendChallengeCode(request: Request) {
+  const body = await readJson(request);
+  const { user, options, issued } = requireChallenge();
+  const { kind, destination } = otpTarget(
+    user,
+    options,
+    issued.defaultMethod,
+    body.option
+  );
+  const nextAllowedIn = sendCode(user.id, 'two_factor', destination, kind);
+  return { raw: { message: twoFactorMsg.codeSent, data: { nextAllowedIn } } };
+}
+
+/** `/two-factor/otp/verify` for a sign-in challenge, as `sendChallengeCode`. */
+export async function verifyChallengeCode(request: Request) {
+  const body = await readJson(request);
+  const { code } = parseOrThrow(
+    twoFactorOtpVerifySchema,
+    body,
+    otpMsg.invalidInput
+  );
+  const { user, options, issued } = requireChallenge();
+  const { destination } = otpTarget(
+    user,
+    options,
+    issued.defaultMethod,
+    body.option
+  );
+  beginAttempt();
+
+  try {
+    verifyCode(user.id, 'two_factor', destination, code);
+  } catch (error) {
+    if (!(error instanceof CustomError)) throw error;
+    // Only a code that was compared and lost is a guess; a code that was
+    // never sent or has expired compared nothing, and costs no attempt.
+    if (otpGuessWasEvaluated(error)) recordFailure();
+    throw error.status === HTTP_STATUS.TOO_MANY_REQUESTS
+      ? error
+      : new CustomError(twoFactorMsg.invalidCode, HTTP_STATUS.BAD_REQUEST);
+  }
+  completeChallenge(user);
+  return {
+    raw: { message: otpMsg.loginSuccess, data: { loggedIn: true as const } },
+  };
 }
 
 export const signInChallengeHandlers = [
@@ -137,57 +189,7 @@ export const signInChallengeHandlers = [
     }
   ),
 
-  // The sign-in half only. With a session the request is an enrolment, which
-  // the account's handler answers: nothing here, so it is theirs.
-  http.post(api('/api/auth/two-factor/otp/send'), async ({ request }) => {
-    requireServed(TWO_FACTOR_OTP_AVAILABLE);
-    if (session.get()) return;
-    const body = await readJson(request);
-    const { user, options, issued } = requireChallenge();
-    const { kind, destination } = otpTarget(
-      user,
-      options,
-      issued.defaultMethod,
-      body.option
-    );
-    const nextAllowedIn = sendCode(user.id, 'two_factor', destination, kind);
-    return pluginOk({ nextAllowedIn }, twoFactorMsg.codeSent);
-  }),
-
-  http.post(api('/api/auth/two-factor/otp/verify'), async ({ request }) => {
-    requireServed(TWO_FACTOR_OTP_AVAILABLE);
-    if (session.get()) return;
-    const body = await readJson(request);
-    const { code } = parseOrThrow(
-      twoFactorOtpVerifySchema,
-      body,
-      otpMsg.invalidInput
-    );
-    const { user, options, issued } = requireChallenge();
-    const { destination } = otpTarget(
-      user,
-      options,
-      issued.defaultMethod,
-      body.option
-    );
-    beginAttempt();
-
-    try {
-      verifyCode(user.id, 'two_factor', destination, code);
-    } catch (error) {
-      if (!(error instanceof CustomError)) throw error;
-      // Only a code that was compared and lost is a guess; a code that was
-      // never sent or has expired compared nothing, and costs no attempt.
-      if (otpGuessWasEvaluated(error)) recordFailure();
-      throw error.status === HTTP_STATUS.TOO_MANY_REQUESTS
-        ? error
-        : new CustomError(twoFactorMsg.invalidCode, HTTP_STATUS.BAD_REQUEST);
-    }
-    completeChallenge(user);
-    return pluginOk({ loggedIn: true }, otpMsg.loginSuccess);
-  }),
-
-  http.post(api('/api/auth/two-factor/passkey/options'), () => {
+  mock(contract.twoFactorPasskeyOptions, () => {
     requireServed(isTwoFactorMethodEnabled('passkey'));
     const { issued, user } = requireChallenge({ method: 'passkey' });
     const { passkeys } = twoFactorOf(user.id);
@@ -196,21 +198,25 @@ export const signInChallengeHandlers = [
     // Only the newest options stay live for a challenge.
     const ceremony = randomToken(32);
     challenge.set({ ...issued, ceremony });
-    return pluginOk({
-      challenge: ceremony,
-      rpId: globalThis.location?.hostname ?? 'localhost',
-      allowCredentials: passkeys.map(({ credentialId }) => ({
-        id: credentialId,
-        type: 'public-key',
-      })),
-      userVerification: 'required',
-      timeout: 60_000,
-    });
+    return {
+      raw: {
+        data: {
+          challenge: ceremony,
+          rpId: globalThis.location?.hostname ?? 'localhost',
+          allowCredentials: passkeys.map(({ credentialId }) => ({
+            id: credentialId,
+            type: 'public-key' as const,
+          })),
+          userVerification: 'required' as const,
+          timeout: 60_000,
+        },
+      },
+    };
   }),
 
   // Nothing here can check what an authenticator signed: the assertion is
   // accepted for a credential the account holds, as a registration is trusted.
-  http.post(api('/api/auth/two-factor/passkey/verify'), async ({ request }) => {
+  mock(contract.twoFactorPasskeyVerify, async ({ request }) => {
     requireServed(isTwoFactorMethodEnabled('passkey'));
     const { issued, user } = requireChallenge({ method: 'passkey' });
     const { response } = parseOrThrow(
@@ -233,6 +239,11 @@ export const signInChallengeHandlers = [
       throw invalidCode();
     }
     completeChallenge(user);
-    return pluginOk({ loggedIn: true }, twoFactorMsg.verifySuccess);
+    return {
+      raw: {
+        message: twoFactorMsg.verifySuccess,
+        data: { loggedIn: true as const },
+      },
+    };
   }),
-].map(asPlugin);
+];

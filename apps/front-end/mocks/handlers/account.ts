@@ -1,9 +1,14 @@
 import type { MockUser } from '../store';
 import type { ContactKind } from '@app/shared/validation/enums';
 
-import { http } from 'msw';
+import {
+  changeEmail,
+  changePassword,
+  changePhone,
+  verifyEmailChange,
+  verifyPhoneChange,
+} from '@app/shared/api/users';
 import { PHONE_ENABLED } from '@app/shared/config';
-import { REQUEST_BODIES } from '@app/shared/contract';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
@@ -19,7 +24,7 @@ import {
 
 import { requireUnspentCaptcha } from '../lib/captcha';
 import { now } from '../lib/db';
-import { api, ok, readJsonBody } from '../lib/http';
+import { mock } from '../lib/endpoint';
 import { insufficientPermissions } from '../lib/permissions';
 import {
   endAllSessions,
@@ -34,14 +39,6 @@ import {
 } from '../lib/two-factor';
 import { contactChangeStrands } from '../lib/two-factor-model';
 import { users } from '../store';
-
-const emailBody = REQUEST_BODIES['POST /api/dash/users/me/change-email'];
-const emailVerifyBody =
-  REQUEST_BODIES['POST /api/dash/users/me/change-email/verify'];
-const passwordBody = REQUEST_BODIES['POST /api/dash/users/me/change-password'];
-const phoneBody = REQUEST_BODIES['POST /api/dash/users/me/change-phone'];
-const phoneVerifyBody =
-  REQUEST_BODIES['POST /api/dash/users/me/change-phone/verify'];
 
 const unavailable = () =>
   new CustomError(
@@ -79,10 +76,10 @@ function authorizeContactChange(
 }
 
 export const accountHandlers = [
-  http.post(api('/api/dash/users/me/change-email'), async ({ request }) => {
+  mock(changeEmail, async ({ request, body }) => {
     const user = requireSessionUser();
     requireUnspentCaptcha(request);
-    const input = await readJsonBody(request, emailBody);
+    const input = await body();
     if (!EMAIL_OTP_AVAILABLE) throw unavailable();
 
     authorizeContactChange(
@@ -92,52 +89,55 @@ export const accountHandlers = [
       input.newEmail
     );
     sendCode(user.id, 'change_email', input.newEmail, 'email');
-    return ok({ otpSent: true }, userMsg.emailChangeCodeSent);
+    return {
+      message: userMsg.emailChangeCodeSent,
+      data: { otpSent: true as const },
+    };
   }),
 
   // The commit revokes every session, the current one too: the browser holds a
   // cookie for a session that no longer exists.
-  http.post(
-    api('/api/dash/users/me/change-email/verify'),
-    async ({ request }) => {
-      const user = requireSessionUser();
-      requireUnspentCaptcha(request);
-      const input = await readJsonBody(request, emailVerifyBody);
-      verifyCode(user.id, 'change_email', input.newEmail, input.code);
-
-      if (!user.roleId) throw insufficientPermissions();
-      if (contactChangeStrands(enrolmentOf(user), ['email']))
-        throw new CustomError(
-          twoFactorMsg.contactChangeStrands,
-          HTTP_STATUS.CONFLICT
-        );
-      if (
-        users
-          .all()
-          .some(
-            (other) =>
-              other.id !== user.id &&
-              other.email.toLowerCase() === input.newEmail.toLowerCase()
-          )
-      )
-        throw new CustomError(MSG_EMAIL_EXISTS, HTTP_STATUS.CONFLICT);
-
-      users.update(user.id, {
-        email: input.newEmail,
-        emailVerified: true,
-        updatedAt: now(),
-      });
-      removeMethodIntent(user.id, 'otp', 'email');
-      rotateCredentials(user.id, 'revoke');
-      endAllSessions(user.id);
-      return ok({ verified: true }, userMsg.emailChanged);
-    }
-  ),
-
-  http.post(api('/api/dash/users/me/change-password'), async ({ request }) => {
+  mock(verifyEmailChange, async ({ request, body }) => {
     const user = requireSessionUser();
     requireUnspentCaptcha(request);
-    const input = await readJsonBody(request, passwordBody);
+    const input = await body();
+    verifyCode(user.id, 'change_email', input.newEmail, input.code);
+
+    if (!user.roleId) throw insufficientPermissions();
+    if (contactChangeStrands(enrolmentOf(user), ['email']))
+      throw new CustomError(
+        twoFactorMsg.contactChangeStrands,
+        HTTP_STATUS.CONFLICT
+      );
+    if (
+      users
+        .all()
+        .some(
+          (other) =>
+            other.id !== user.id &&
+            other.email.toLowerCase() === input.newEmail.toLowerCase()
+        )
+    )
+      throw new CustomError(MSG_EMAIL_EXISTS, HTTP_STATUS.CONFLICT);
+
+    users.update(user.id, {
+      email: input.newEmail,
+      emailVerified: true,
+      updatedAt: now(),
+    });
+    removeMethodIntent(user.id, 'otp', 'email');
+    rotateCredentials(user.id, 'revoke');
+    endAllSessions(user.id);
+    return {
+      message: userMsg.emailChanged,
+      data: { verified: true as const },
+    };
+  }),
+
+  mock(changePassword, async ({ request, body }) => {
+    const user = requireSessionUser();
+    requireUnspentCaptcha(request);
+    const input = await body();
 
     if (input.currentPassword === input.newPassword)
       throw new CustomError(
@@ -161,14 +161,14 @@ export const accountHandlers = [
     // A voluntary change keeps the trusted devices: the old password was proven
     // on a live session, so this is the owner.
     rotateCredentials(user.id, 'keep');
-    return ok(null, userMsg.passwordChanged);
+    return { message: userMsg.passwordChanged, data: null };
   }),
 
-  http.post(api('/api/dash/users/me/change-phone'), async ({ request }) => {
+  mock(changePhone, async ({ request, body }) => {
     requireServed(PHONE_ENABLED);
     const user = requireSessionUser();
     requireUnspentCaptcha(request);
-    const input = await readJsonBody(request, phoneBody);
+    const input = await body();
     if (!isChannelEnabled(input.channel)) throw unavailable();
 
     authorizeContactChange(
@@ -178,44 +178,47 @@ export const accountHandlers = [
       input.newPhoneNumber
     );
     sendCode(user.id, 'change_phone', input.newPhoneNumber, 'phone');
-    return ok({ otpSent: true }, userMsg.phoneChangeCodeSent);
+    return {
+      message: userMsg.phoneChangeCodeSent,
+      data: { otpSent: true as const },
+    };
   }),
 
-  http.post(
-    api('/api/dash/users/me/change-phone/verify'),
-    async ({ request }) => {
-      requireServed(PHONE_ENABLED);
-      const user = requireSessionUser();
-      requireUnspentCaptcha(request);
-      const input = await readJsonBody(request, phoneVerifyBody);
-      verifyCode(user.id, 'change_phone', input.newPhoneNumber, input.code);
+  mock(verifyPhoneChange, async ({ request, body }) => {
+    requireServed(PHONE_ENABLED);
+    const user = requireSessionUser();
+    requireUnspentCaptcha(request);
+    const input = await body();
+    verifyCode(user.id, 'change_phone', input.newPhoneNumber, input.code);
 
-      if (!user.roleId) throw insufficientPermissions();
-      if (contactChangeStrands(enrolmentOf(user), ['phone']))
-        throw new CustomError(
-          twoFactorMsg.contactChangeStrands,
-          HTTP_STATUS.CONFLICT
-        );
-      if (
-        users
-          .all()
-          .some(
-            (other) =>
-              other.id !== user.id && other.phoneNumber === input.newPhoneNumber
-          )
-      )
-        throw new CustomError(MSG_PHONE_EXISTS, HTTP_STATUS.CONFLICT);
+    if (!user.roleId) throw insufficientPermissions();
+    if (contactChangeStrands(enrolmentOf(user), ['phone']))
+      throw new CustomError(
+        twoFactorMsg.contactChangeStrands,
+        HTTP_STATUS.CONFLICT
+      );
+    if (
+      users
+        .all()
+        .some(
+          (other) =>
+            other.id !== user.id && other.phoneNumber === input.newPhoneNumber
+        )
+    )
+      throw new CustomError(MSG_PHONE_EXISTS, HTTP_STATUS.CONFLICT);
 
-      users.update(user.id, {
-        phoneNumber: input.newPhoneNumber,
-        phoneNumberVerified: true,
-        updatedAt: now(),
-      });
-      removeMethodIntent(user.id, 'otp', 'phone');
-      // The phone is a passwordless factor, so this rotates credentials; the
-      // current session is kept.
-      rotateCredentials(user.id, 'revoke');
-      return ok({ verified: true }, userMsg.phoneChanged);
-    }
-  ),
+    users.update(user.id, {
+      phoneNumber: input.newPhoneNumber,
+      phoneNumberVerified: true,
+      updatedAt: now(),
+    });
+    removeMethodIntent(user.id, 'otp', 'phone');
+    // The phone is a passwordless factor, so this rotates credentials; the
+    // current session is kept.
+    rotateCredentials(user.id, 'revoke');
+    return {
+      message: userMsg.phoneChanged,
+      data: { verified: true as const },
+    };
+  }),
 ];

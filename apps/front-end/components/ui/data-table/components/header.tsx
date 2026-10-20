@@ -1,5 +1,6 @@
+import type { DataTableFeatures } from '../features';
 import type { TableLayout } from '../hooks/use-table-instance';
-import type { Header, HeaderGroup } from '@tanstack/react-table';
+import type { Header, HeaderGroup, RowData } from '@tanstack/react-table';
 
 import { useMemo } from 'react';
 
@@ -11,12 +12,15 @@ import {
 import { genericMemo } from '../utils/generic-memo';
 import { DataTableHeaderCell } from './header-cell';
 
-interface HeaderRowProps<TData> {
-  headers: Header<TData, unknown>[];
+interface HeaderRowProps<TData extends RowData> {
+  headers: Header<DataTableFeatures, TData>[];
   pins: TableLayout<TData>['pins'];
 }
 
-const HeaderRowInner = <TData,>({ headers, pins }: HeaderRowProps<TData>) => {
+const HeaderRowInner = <TData extends RowData>({
+  headers,
+  pins,
+}: HeaderRowProps<TData>) => {
   const columnIds = useMemo(
     () => headers.map((header) => header.column.id),
     [headers]
@@ -43,12 +47,12 @@ const HeaderRowInner = <TData,>({ headers, pins }: HeaderRowProps<TData>) => {
 
 const HeaderRow = genericMemo(HeaderRowInner, 'DataTableHeaderRow');
 
-interface DataTableHeaderProps<TData> {
-  headerGroups: HeaderGroup<TData>[];
+interface DataTableHeaderProps<TData extends RowData> {
+  headerGroups: HeaderGroup<DataTableFeatures, TData>[];
   layout: TableLayout<TData>;
 }
 
-const DataTableHeaderInner = <TData,>({
+const DataTableHeaderInner = <TData extends RowData>({
   headerGroups,
   layout,
 }: DataTableHeaderProps<TData>) =>

@@ -1,4 +1,5 @@
 import type { Executor } from '@/db';
+import type { PermissionRows } from '@app/shared/permissions/matrix';
 import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
@@ -31,13 +32,21 @@ import { holdsLocks } from './roles';
 export type RoleScopeCheck = 'reachability' | 'grant';
 
 /**
- * The `reachability` answer, for a call site that already holds the target's
- * permission rows and must not re-read them — `DELETE
- * /api/dash/permissions/:id` reads them `FOR SHARE` for its own audit payload.
+ * The `reachability` answer over the target role's permission rows, for a call
+ * site that already holds them and must not re-read them.
  */
-export function collapseToNotFound(error: unknown): never {
-  if (!(error instanceof CustomError)) throw error;
-  throw notFoundError();
+export function assertRowsReachable(
+  actorPermissions: ActorPermissions,
+  rows: PermissionRows
+): void {
+  try {
+    assertRowsWithinScope(actorPermissions, rows);
+  } catch (error) {
+    if (!(error instanceof CustomError)) throw error;
+    // Collapsed into the answer every other reachability gate gives, so a
+    // caller cannot tell "outranks me" from "does not exist".
+    throw notFoundError();
+  }
 }
 
 /** Under a `tx`, `FOR SHARE` so the role cannot be re-permissioned between this read and the caller's write. */
@@ -56,14 +65,6 @@ export async function validateRolePermissionScope(
     .where(eq(rolePermissions.roleId, roleId));
   const perms = await (holdsLocks(executor) ? query.for('share') : query);
 
-  if (perms.length === 0) return;
-
-  try {
-    assertRowsWithinScope(actorPermissions, perms);
-  } catch (error) {
-    if (check === 'grant') throw error;
-    // Collapsed into the answer every other reachability gate gives, so a
-    // caller cannot tell "outranks me" from "does not exist".
-    collapseToNotFound(error);
-  }
+  if (check === 'grant') assertRowsWithinScope(actorPermissions, perms);
+  else assertRowsReachable(actorPermissions, perms);
 }

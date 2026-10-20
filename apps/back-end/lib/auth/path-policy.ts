@@ -2,12 +2,14 @@ import type { HookContext } from './context';
 import type { AcceptedPasswordHashes } from './login-guard';
 import type { EntityID } from '@app/shared/types';
 import type { TwoFactorMethod } from '@app/shared/validation/enums';
+import type { APIError } from 'better-auth/api';
 
 import { eq } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { sessions } from '@/db/schema';
 import { formCsrfMiddleware } from 'better-auth/api';
+import { deleteSessionCookie } from 'better-auth/cookies';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -260,7 +262,7 @@ async function enforceTwoFactorPathPolicy(
   if (dualMode || needsGrant) {
     const mode = await resolveRequestSession(ctx);
     if (mode) {
-      await requireLiveSession(mode.sessionId, mode.userId);
+      await requireLiveSession(ctx, mode.sessionId, mode.userId);
       if (
         needsGrant &&
         !(await consumeReauthGrant(ctx, {
@@ -270,7 +272,7 @@ async function enforceTwoFactorPathPolicy(
         }))
       )
         throw authError(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
-    } else if (needsGrant) throw sessionRequired();
+    } else if (needsGrant) throw sessionRefused(ctx);
   }
 
   if (
@@ -296,10 +298,11 @@ async function enforceTwoFactorPathPolicy(
   // Memoised for the endpoint's session middleware, which reads a fault as no
   // session; liveness is checked against the row below, not the cookie cache.
   const session = await resolveRequestSession(ctx);
-  if (!session) throw sessionRequired();
+  if (!session) throw sessionRefused(ctx);
 
-  if (needsLiveSession)
-    await requireLiveSession(session.sessionId, session.userId);
+  // A grant path checked it above.
+  if (needsLiveSession && !needsGrant)
+    await requireLiveSession(ctx, session.sessionId, session.userId);
 
   if (!needsProof) return withBody(ctx, { ...body, ...patch });
 
@@ -343,6 +346,7 @@ function withBody(
 }
 
 async function requireLiveSession(
+  ctx: HookContext,
   sessionId: string,
   userId: EntityID
 ): Promise<void> {
@@ -353,9 +357,37 @@ async function requireLiveSession(
       error instanceof CustomError &&
       error.status === HTTP_STATUS.UNAUTHORIZED
     )
-      throw sessionRequired();
+      throw sessionRefused(ctx);
     throw error;
   }
+}
+
+/**
+ * ⚠️ A before hook's throw is answered with the error's own headers alone, so
+ * what the session read set, and the expiries of a session the request
+ * presented, ride on it. `getSessionFromCtx` answers a 401 it caught as no
+ * session, its expiries dropped.
+ */
+function sessionRefused(ctx: HookContext): APIError {
+  if (ctx.getCookie(ctx.context.authCookies.sessionToken.name) !== null)
+    deleteSessionCookie(ctx);
+  const cookies = lastPerName(ctx.responseHeaders?.getSetCookie() ?? []);
+  const headers = new Headers(ctx.responseHeaders);
+  headers.delete('set-cookie');
+  for (const entry of cookies) headers.append('set-cookie', entry);
+  return sessionRequired(headers);
+}
+
+// `deleteSessionCookie` expires an unchunked cache twice: once by name, once
+// as a stale chunk.
+function lastPerName(setCookies: readonly string[]): string[] {
+  const byName = new Map<string, string>();
+  for (const entry of setCookies) {
+    const name = entry.split('=', 1)[0] ?? '';
+    byName.delete(name);
+    byName.set(name, entry);
+  }
+  return byName.values().toArray();
 }
 
 /**

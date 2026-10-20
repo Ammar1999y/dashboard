@@ -3,7 +3,14 @@
  * prefix; `merge-better-auth.ts` applies them to the library's generated
  * document.
  */
-import type { BetterAuthResponseRoute } from '@app/shared/response-contract';
+import type { PluginPath } from '@app/shared/api/all';
+import type { Assert, UnknownFieldsOf } from '@app/shared/api/fields-are-typed';
+import type * as z from 'zod';
+
+import { loginSchema } from '@app/shared/validation/auth';
+import { twoFactorPasswordSchema } from '@app/shared/validation/two-factor';
+
+import { SERVER_FAILURE } from '../refusals';
 
 export const BETTER_AUTH_SUMMARIES: Record<string, string> = {
   'GET /capabilities': 'Read enabled OAuth sign-in providers',
@@ -47,7 +54,7 @@ export const BETTER_AUTH_SUMMARIES: Record<string, string> = {
 export const BETTER_AUTH_STATUS_DESCRIPTIONS = {
   '404':
     'The Better Auth endpoint is unavailable in the current feature configuration.',
-  '500': 'Better Auth, or one of its dependencies, failed.',
+  '500': SERVER_FAILURE,
   '400':
     'The body is not JSON of the shape the endpoint reads, or required request input was absent or invalid.',
   '401':
@@ -61,8 +68,8 @@ export const BETTER_AUTH_STATUS_DESCRIPTIONS = {
 } as const;
 
 /**
- * Statuses reachable on some allowlisted paths only, keyed like
- * `BETTER_AUTH_BODIES`. `/get-session` is a GET, so the origin check that
+ * Statuses reachable on some allowlisted paths only, keyed by the path under
+ * the prefix. `/get-session` is a GET, so the origin check that
  * produces 403 does not apply and an absent session is a 200 carrying `null`;
  * the paths that create a session run the `session.create` hook in
  * `lib/auth/session/hooks.ts`, which is what can refuse 401 or 403. Every POST
@@ -120,9 +127,7 @@ export const BETTER_AUTH_PATH_STATUSES: Record<
 
 /**
  * Paths that throttle inside the endpoint as well as at the wildcard's
- * admission limiter, and so answer 429/503 in two body shapes: the wildcard's
- * goes to `handleApiError` (envelope), an inner `CustomError` to
- * `toAuthApiError`.
+ * admission limiter, so 429 and 503 have one more reason there.
  */
 export const BETTER_AUTH_LOCAL_THROTTLE_PATHS = new Set([
   '/reauth/passkey/options',
@@ -158,25 +163,16 @@ export const BETTER_AUTH_SPENT_INPUT_REMEDIES: Readonly<
 };
 
 /**
- * Paths whose handler maps a database 503 itself, so it answers in Better
- * Auth's error shape as well as the wildcard's envelope.
- */
-export const BETTER_AUTH_DATABASE_FAULT_PATHS = new Set([
-  '/oauth/google/callback',
-]);
-
-/**
  * Paths whose second-factor credential the library locks after repeated
- * failures (`assertTwoFactorNotLocked`), so a locked one answers 429 there in
- * Better Auth's error shape.
+ * failures (`assertTwoFactorNotLocked`), so a locked one answers 429 there.
  */
 export const BETTER_AUTH_CREDENTIAL_LOCKOUT_PATHS: ReadonlySet<string> =
   new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code']);
 
 /**
  * Paths that check the account password (`requireReauthPassword`, or the proof
- * `/two-factor/get-totp-uri` takes), so a locked account answers 429 there in
- * Better Auth's error shape, and a request with neither a password nor an open
+ * `/two-factor/get-totp-uri` takes), so a locked account answers 429 there,
+ * and a request with neither a password nor an open
  * re-authentication window answers 401 `REAUTH_REQUIRED`.
  */
 export const BETTER_AUTH_PASSWORD_LOCKOUT_PATHS = new Set([
@@ -193,12 +189,12 @@ export const BETTER_AUTH_PASSWORD_LOCKOUT_PATHS = new Set([
 /** Our plugin endpoints that answer a redirect in place of a body in one mode. */
 export const REDIRECTING_PLUGIN_PATHS = [
   '/oauth/google/callback',
-] as const satisfies readonly BetterAuthResponseRoute[];
+] as const satisfies readonly PluginPath[];
 
 /**
  * The library's own paths whose 200 this project's hook can replace with the
  * two-factor challenge (`twoFactorSignInGuard`). Our own endpoints publish the
- * challenge inside their `BETTER_AUTH_RESPONSES` union instead.
+ * challenge inside their entry’s `raw` union instead.
  */
 export const TWO_FACTOR_CHALLENGE_PATHS: ReadonlySet<string> = new Set([
   '/sign-in/email',
@@ -207,7 +203,7 @@ export const TWO_FACTOR_CHALLENGE_PATHS: ReadonlySet<string> = new Set([
 export const CHALLENGE_INSTEAD =
   'A two-factor account is answered with the challenge branch instead, and no session cookie.';
 
-/** The description of each plugin endpoint's 200, whose body the shared registry gives. */
+/** The description of each plugin endpoint's 200, whose body its entry gives. */
 export const BETTER_AUTH_RESPONSE_DESCRIPTIONS = {
   '/capabilities': 'Enabled OAuth sign-in providers.',
   '/reauth/methods': 'Methods available for this authenticated account.',
@@ -240,7 +236,7 @@ export const BETTER_AUTH_RESPONSE_DESCRIPTIONS = {
   '/two-factor/trusted-devices': 'The caller’s trusted devices.',
   '/two-factor/trusted-devices/revoke': 'The device was revoked.',
   '/passkey/delete-passkey': 'The passkey was deleted.',
-} as const satisfies Record<BetterAuthResponseRoute, string>;
+} as const satisfies Record<PluginPath, string>;
 
 /**
  * The two verifiers answer through the plugin's shared `valid()`
@@ -296,3 +292,27 @@ export const BETTER_AUTH_TRUSTED_RESPONSES: ReadonlySet<string> = new Set([
   '/passkey/list-user-passkeys',
   '/passkey/update-passkey',
 ]);
+
+/**
+ * The library’s own endpoints whose request body the document publishes
+ * from this project’s schema; a plugin endpoint’s comes from its entry.
+ */
+export const LIBRARY_REQUEST_BODIES = {
+  '/sign-in/email': loginSchema.omit({ captcha: true }),
+  '/two-factor/get-totp-uri': twoFactorPasswordSchema,
+} as const satisfies Record<`/${string}`, z.ZodType>;
+
+type LibraryBodyPath = keyof typeof LIBRARY_REQUEST_BODIES;
+
+/** `UnknownFieldsOf` on the bodies above, as `api/fields-are-typed.ts` holds every entry’s. */
+export type LibraryBodiesAreTyped = Assert<
+  [
+    {
+      [P in LibraryBodyPath]: UnknownFieldsOf<
+        z.input<(typeof LIBRARY_REQUEST_BODIES)[P]>
+      >;
+    }[LibraryBodyPath],
+  ] extends [never]
+    ? true
+    : false
+>;

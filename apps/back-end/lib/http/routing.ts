@@ -245,6 +245,16 @@ export function createRouting(
     });
   }
 
+  const bindingMatchers = routes.map((route) => compile(route.path));
+
+  /** Whether a prefix handler, not a binding, owns `pathname`. */
+  function servedByPrefix(pathname: string): boolean {
+    return (
+      prefixes.some((entry) => pathname.startsWith(`${entry.prefix}/`)) &&
+      !bindingMatchers.some((matcher) => matcher.test(pathname))
+    );
+  }
+
   /** 404 or 405, decided from the lookup. */
   function routeMiss(pathname: string): Response {
     const methods = lookupMethods(pathname);
@@ -264,6 +274,7 @@ export function createRouting(
     lookupBodyCeiling: createBodyCeilingLookup(routes, prefixes),
     canonicalRedirect,
     routeMiss,
+    servedByPrefix,
   };
 }
 

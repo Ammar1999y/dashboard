@@ -30,6 +30,7 @@ import {
 } from '@/lib/http/request';
 
 import { egressCalls } from '../helpers/egress';
+import { expectAuthError, expectError } from '../helpers/expect-body';
 import { baseHeaders } from '../helpers/session';
 
 const TURNSTILE_HOST = 'challenges.cloudflare.com';
@@ -76,10 +77,11 @@ describe('an oversized JSON body is refused before the mount that would read it'
       post('/api/auth/sign-in/email', jsonBody(oversized), 'application/json')
     );
 
-    expect(response.status).toBe(HTTP_STATUS.CONTENT_TOO_LARGE);
-    // This project's envelope, not Better Auth's error shape: the refusal is
-    // this application's, taken before the library was called at all.
-    expect(await response.json()).toMatchObject({ success: false });
+    // The refusal is this application's, taken before the library was called
+    // at all, and under the prefix it carries `message` like the library's.
+    expect(
+      await expectAuthError(response, HTTP_STATUS.CONTENT_TOO_LARGE)
+    ).toMatchObject({ title: 'Content Too Large' });
     expect(
       egressCalls().filter((call) => call.host === TURNSTILE_HOST)
     ).toBeEmpty();
@@ -95,12 +97,17 @@ describe('an oversized JSON body is refused before the mount that would read it'
       post('/api/dash/users', body, 'application/json', body.length)
     );
 
-    expect(response.status).toBe(HTTP_STATUS.CONTENT_TOO_LARGE);
+    expect(
+      await expectError(response, HTTP_STATUS.CONTENT_TOO_LARGE)
+    ).toMatchObject({ title: 'Content Too Large' });
   });
 
-  test.each(['/api/auth/get-session', '/api/dash/permissions'])(
+  test.each([
+    ['/api/auth/get-session', expectAuthError],
+    ['/api/dash/permissions', expectError],
+  ] as const)(
     'GET %s answers a declared over-size length 413 too, as its document says',
-    async (path) => {
+    async (path, expectRefusal) => {
       const response = await app.handle(
         new Request(`http://localhost${path}`, {
           headers: baseHeaders({
@@ -109,7 +116,7 @@ describe('an oversized JSON body is refused before the mount that would read it'
         })
       );
 
-      expect(response.status).toBe(HTTP_STATUS.CONTENT_TOO_LARGE);
+      await expectRefusal(response, HTTP_STATUS.CONTENT_TOO_LARGE);
     }
   );
 

@@ -23,6 +23,7 @@ import {
   beforeEach,
   describe,
   expect,
+  setSystemTime,
   spyOn,
   test,
 } from 'bun:test';
@@ -63,8 +64,11 @@ import { DOC_MIME_TYPE } from '@app/shared/validation/media-types';
 
 import * as purge from '@/lib/cloudflare/purge';
 import { generateUuidV7 } from '@/lib/id';
+import { runElected } from '@/lib/maintenance/election';
 import { FILE_TYPES } from '@/lib/media/allowlist';
+import * as mediaFilesModule from '@/lib/media/files';
 import { downloadFilename, downloadUrl } from '@/lib/media/files';
+import * as foldersModule from '@/lib/media/folders';
 import { claimFiles, sweepFiles } from '@/lib/media/lifecycle';
 import { attachFiles, linkFiles, promoteForLink } from '@/lib/media/link';
 import {
@@ -91,6 +95,7 @@ import {
 } from '../helpers/object-store';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { authedRequest, signedInUser } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 import {
   createReferrerTable,
   dropReferrerTable,
@@ -110,10 +115,10 @@ const PUBLIC_URL = process.env.R2_PUBLIC_URL ?? '';
 interface Answer {
   status: number;
   body: {
-    success: boolean;
-    message: string;
+    message?: string;
+    detail?: string;
     code?: string;
-    data: unknown;
+    data?: unknown;
     meta?: unknown;
   };
 }
@@ -378,7 +383,7 @@ describe('upload into a folder', () => {
       svgForm()
     );
     expect(answer.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
-    expect(answer.body.message).toBe(mediaMsg.storeFailed);
+    expect(answer.body.detail).toBe(mediaMsg.storeFailed);
 
     // A lost response does not prove the object was not written, so the row
     // — the only record of the key — survives as `pending` for the sweep.
@@ -582,7 +587,7 @@ describe('upload into a folder', () => {
         pdfForm('private-intent.pdf')
       );
       expect(answer.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-      expect(answer.body.message).toBe(mediaMsg.visibilityDisabled);
+      expect(answer.body.detail).toBe(mediaMsg.visibilityDisabled);
       expect(answer.body.code).toBe(VISIBILITY_DISABLED_CODE);
       expect(storeOps()).toEqual([]);
     } finally {
@@ -592,6 +597,79 @@ describe('upload into a folder', () => {
 });
 
 describe('listing, renaming, moving', () => {
+  /**
+   * The folder check and the folder search are held on a gate; the page, which
+   * used to wait for one and come before the other, is answered meanwhile.
+   */
+  async function pagedWhileHeld(
+    held: 'requireFolder' | 'searchFolders',
+    path: string
+  ): Promise<number> {
+    const gate = Promise.withResolvers<void>();
+    const paged = { done: false };
+    const { requireFolder, searchFolders } = foldersModule;
+    const heldSpy =
+      held === 'requireFolder'
+        ? spyOn(foldersModule, 'requireFolder').mockImplementation(
+            async (...args) => {
+              await gate.promise;
+              return requireFolder(...args);
+            }
+          )
+        : spyOn(foldersModule, 'searchFolders').mockImplementation(
+            async (...args) => {
+              await gate.promise;
+              return searchFolders(...args);
+            }
+          );
+    const realPage = mediaFilesModule.toMediaFiles;
+    const pageSpy = spyOn(mediaFilesModule, 'toMediaFiles').mockImplementation(
+      async (...args) => {
+        paged.done = true;
+        return realPage(...args);
+      }
+    );
+    try {
+      const answer = call(admin(), 'GET', path);
+      await until(() => paged.done, `the page while ${held} is held`);
+      gate.resolve();
+      const answered = await answer;
+      return answered.status;
+    } finally {
+      gate.resolve();
+      heldSpy.mockRestore();
+      pageSpy.mockRestore();
+    }
+  }
+
+  test('a folder view and a search build their page beside the folder check and the folder search', async () => {
+    const folderId = await createFolder(admin(), 'Parallel listing');
+    await upload(admin(), folderId, svgForm('parallel.svg'));
+
+    expect(
+      await pagedWhileHeld(
+        'requireFolder',
+        `/api/dash/media?folder=${folderId}`
+      )
+    ).toBe(HTTP_STATUS.OK);
+    expect(
+      await pagedWhileHeld(
+        'searchFolders',
+        '/api/dash/media?scope=all&search=parallel'
+      )
+    ).toBe(HTTP_STATUS.OK);
+
+    const missing = await call(
+      admin(),
+      'GET',
+      `/api/dash/media?folder=${generateUuidV7()}`
+    );
+    expect([missing.status, missing.body.code]).toEqual([
+      HTTP_STATUS.NOT_FOUND,
+      FOLDER_NOT_FOUND_CODE,
+    ]);
+  });
+
   test('a folder view pages its files; the library search crosses folders and names folders too', async () => {
     const a = await createFolder(admin(), 'List A');
     const b = await createFolder(admin(), 'List B');
@@ -718,7 +796,7 @@ describe('listing, renaming, moving', () => {
       }
     );
     expect(badFolder.status).toBe(HTTP_STATUS.NOT_FOUND);
-    expect(badFolder.body.message).toBe(mediaMsg.folderNotFound);
+    expect(badFolder.body.detail).toBe(mediaMsg.folderNotFound);
     expect(badFolder.body.code).toBe(FOLDER_NOT_FOUND_CODE);
   });
 
@@ -821,12 +899,11 @@ describe('publish and unpublish', () => {
     });
     expect(storeHas(PUBLIC_BUCKET, key)).toBe(true);
     expect(storeHas(PRIVATE_BUCKET, key)).toBe(false);
-    // Head the source, copy with the TARGET's headers, head the copy, then
-    // remove the stale source.
+    // Head the source, copy with the TARGET's headers, then remove the stale
+    // source. The copy's own ETag verifies it, so the target is never headed.
     expect(storeOps().map((op) => op.kind)).toEqual([
       'HeadObject',
       'CopyObject',
-      'HeadObject',
       'DeleteObject',
     ]);
     const [copy] = storeOpsOf('CopyObject');
@@ -889,7 +966,7 @@ describe('publish and unpublish', () => {
       `/api/dash/media/files/${file.id}/publish`
     );
     expect(answer.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
-    expect(answer.body.message).toBe(mediaMsg.storeFailed);
+    expect(answer.body.detail).toBe(mediaMsg.storeFailed);
 
     expect(await rowOf(file.id)).toMatchObject({
       bucketType: 'private',
@@ -920,7 +997,7 @@ describe('publish and unpublish', () => {
       `/api/dash/media/files/${file.id}/publish`
     );
     expect(answer.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
-    expect(answer.body.message).toBe(mediaMsg.storeFailed);
+    expect(answer.body.detail).toBe(mediaMsg.storeFailed);
     expect(await rowOf(file.id)).toMatchObject({
       bucketType: 'private',
       transition: null,
@@ -939,17 +1016,16 @@ describe('publish and unpublish', () => {
     const key = await keyOf(file.id);
 
     const gate = Promise.withResolvers<void>();
-    const real = r2.headObjectInR2;
-    const heads = { count: 0 };
-    const spy = spyOn(r2, 'headObjectInR2').mockImplementation(
-      async (params) => {
-        heads.count += 1;
-        // The second HEAD is the target verification: the copy has landed and the
-        // row still says `to_public`.
-        if (heads.count === 2) await gate.promise;
-        return real(params);
-      }
-    );
+    const real = r2.copyFileInR2;
+    const copies = { count: 0 };
+    const spy = spyOn(r2, 'copyFileInR2').mockImplementation(async (params) => {
+      const copied = await real(params);
+      copies.count += 1;
+      // Before the copy is verified: it has landed and the row still says
+      // `to_public`.
+      if (copies.count === 1) await gate.promise;
+      return copied;
+    });
 
     try {
       const stalled = transitionFile({
@@ -958,8 +1034,8 @@ describe('publish and unpublish', () => {
         actor: actorOf(admin()),
       });
       await until(
-        () => heads.count >= 2 && storeHas(PUBLIC_BUCKET, key),
-        'the first publish to block on its target HEAD'
+        () => copies.count >= 1 && storeHas(PUBLIC_BUCKET, key),
+        'the first publish to block before verifying its copy'
       );
 
       // The sweep gives up on it and takes the copy back.
@@ -1019,19 +1095,16 @@ describe('publish and unpublish', () => {
 
     const copied = Promise.withResolvers<void>();
     const flipAttempted = Promise.withResolvers<void>();
-    const realHead = r2.headObjectInR2;
+    const realCopy = r2.copyFileInR2;
     const realDelete = r2.deleteFromR2;
-    const heads = { count: 0 };
-    const headSpy = spyOn(r2, 'headObjectInR2').mockImplementation(
+    const copySpy = spyOn(r2, 'copyFileInR2').mockImplementation(
       async (params) => {
-        heads.count += 1;
-        // The second HEAD is the target verification: the copy has landed and
-        // the row still says `to_public`.
-        if (heads.count === 2) {
-          copied.resolve();
-          await flipAttempted.promise;
-        }
-        return realHead(params);
+        // Before the copy is verified: it has landed and the row still says
+        // `to_public`.
+        const result = await realCopy(params);
+        copied.resolve();
+        await flipAttempted.promise;
+        return result;
       }
     );
     const deleteSpy = spyOn(r2, 'deleteFromR2').mockImplementation(
@@ -1072,7 +1145,7 @@ describe('publish and unpublish', () => {
     } finally {
       copied.resolve();
       flipAttempted.resolve();
-      headSpy.mockRestore();
+      copySpy.mockRestore();
       deleteSpy.mockRestore();
     }
 
@@ -1099,9 +1172,7 @@ describe('publish and unpublish', () => {
 
     const copying = Promise.withResolvers<void>();
     const swept = Promise.withResolvers<void>();
-    const realHead = r2.headObjectInR2;
     const realCopy = r2.copyFileInR2;
-    const heads = { count: 0 };
 
     const copySpy = spyOn(r2, 'copyFileInR2').mockImplementation(
       async (params) => {
@@ -1109,15 +1180,9 @@ describe('publish and unpublish', () => {
         // and the copy arrives after it has cleared the marker.
         copying.resolve();
         await swept.promise;
-        return realCopy(params);
-      }
-    );
-    const headSpy = spyOn(r2, 'headObjectInR2').mockImplementation(
-      async (params) => {
-        heads.count += 1;
-        // The second HEAD is the target verification.
-        if (heads.count === 2) throw new Error('head timed out');
-        return realHead(params);
+        await realCopy(params);
+        // Landed, and its answer lost: the verification has nothing to check.
+        throw new Error('copy response timed out');
       }
     );
 
@@ -1142,7 +1207,6 @@ describe('publish and unpublish', () => {
       copying.resolve();
       swept.resolve();
       copySpy.mockRestore();
-      headSpy.mockRestore();
     }
 
     // The request failed, and the bucket the row does not name is empty anyway.
@@ -1174,23 +1238,19 @@ describe('publish and unpublish', () => {
     const swept = Promise.withResolvers<void>();
     const cleaning = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const realHead = r2.headObjectInR2;
+    const realCopy = r2.copyFileInR2;
     const realDelete = r2.deleteFromR2;
-    const heads = { count: 0 };
     const publicDeletes = { count: 0 };
 
-    const headSpy = spyOn(r2, 'headObjectInR2').mockImplementation(
+    const copySpy = spyOn(r2, 'copyFileInR2').mockImplementation(
       async (params) => {
-        heads.count += 1;
-        // The second HEAD verifies the target copy. Answered BEFORE the pause,
-        // so the publish carries a verification the sweep has not invalidated
-        // and reaches its flip — which is the step that has to fail.
-        const found = await realHead(params);
-        if (heads.count === 2) {
-          copied.resolve();
-          await swept.promise;
-        }
-        return found;
+        // The copy answers, and with it the ETag that verifies it, BEFORE the
+        // pause, so the publish carries a verification the sweep has not
+        // invalidated and reaches its flip — which is the step that has to fail.
+        const result = await realCopy(params);
+        copied.resolve();
+        await swept.promise;
+        return result;
       }
     );
     const deleteSpy = spyOn(r2, 'deleteFromR2').mockImplementation(
@@ -1249,7 +1309,7 @@ describe('publish and unpublish', () => {
       swept.resolve();
       cleaning.resolve();
       release.resolve();
-      headSpy.mockRestore();
+      copySpy.mockRestore();
       deleteSpy.mockRestore();
     }
 
@@ -1282,9 +1342,7 @@ describe('publish and unpublish', () => {
       const deleting = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       const realCopy = r2.copyFileInR2;
-      const realHead = r2.headObjectInR2;
       const realDelete = r2.deleteFromR2;
-      const heads = { count: 0 };
       const publicDeletes = { count: 0 };
 
       const copySpy = spyOn(r2, 'copyFileInR2').mockImplementation(
@@ -1293,15 +1351,10 @@ describe('publish and unpublish', () => {
           // a bucket that has just been emptied.
           copying.resolve();
           await deleting.promise;
-          return realCopy(params);
-        }
-      );
-      const headSpy = spyOn(r2, 'headObjectInR2').mockImplementation(
-        async (params) => {
-          heads.count += 1;
-          if (failure === 'verification' && heads.count === 2)
-            throw new Error('head timed out');
-          return realHead(params);
+          const result = await realCopy(params);
+          if (failure === 'verification')
+            throw new Error('copy response timed out');
+          return result;
         }
       );
       const deleteSpy = spyOn(r2, 'deleteFromR2').mockImplementation(
@@ -1348,7 +1401,6 @@ describe('publish and unpublish', () => {
         deleting.resolve();
         release.resolve();
         copySpy.mockRestore();
-        headSpy.mockRestore();
         deleteSpy.mockRestore();
       }
 
@@ -1389,8 +1441,6 @@ describe('publish and unpublish', () => {
     const landed = Promise.withResolvers<void>();
     const removed = Promise.withResolvers<void>();
     const realCopy = r2.copyFileInR2;
-    const realHead = r2.headObjectInR2;
-    const heads = { count: 0 };
 
     const copySpy = spyOn(r2, 'copyFileInR2').mockImplementation(
       async (params) => {
@@ -1398,19 +1448,12 @@ describe('publish and unpublish', () => {
         // and clears the marker on its way out.
         copying.resolve();
         await swept.promise;
-        return realCopy(params);
-      }
-    );
-    const headSpy = spyOn(r2, 'headObjectInR2').mockImplementation(
-      async (params) => {
-        heads.count += 1;
-        // The target verification: the copy has landed and the private source is
-        // still there, which is the moment the delete arrives.
-        if (heads.count === 2) {
-          landed.resolve();
-          await removed.promise;
-        }
-        return realHead(params);
+        const result = await realCopy(params);
+        // The copy has landed and the private source is still there, which is
+        // the moment the delete arrives.
+        landed.resolve();
+        await removed.promise;
+        return result;
       }
     );
 
@@ -1435,10 +1478,7 @@ describe('publish and unpublish', () => {
       const answer = await call(admin(), 'DELETE', '/api/dash/media/files', {
         ids: [file.id],
       });
-      expect([answer.status, answer.body.success]).toEqual([
-        HTTP_STATUS.OK,
-        true,
-      ]);
+      expect(answer.status).toBe(HTTP_STATUS.OK);
 
       removed.resolve();
       await expect(stalled).rejects.toThrow();
@@ -1448,7 +1488,6 @@ describe('publish and unpublish', () => {
       landed.resolve();
       removed.resolve();
       copySpy.mockRestore();
-      headSpy.mockRestore();
     }
 
     expect(await rowOf(file.id)).toBeNull();
@@ -1486,9 +1525,7 @@ describe('publish and unpublish', () => {
     const copyLanded = Promise.withResolvers<void>();
     const rowRemoved = Promise.withResolvers<void>();
     const realCopy = r2.copyFileInR2;
-    const realHead = r2.headObjectInR2;
     const realDeleteObjects = r2.deleteObjectsFromR2;
-    const heads = { count: 0 };
 
     const copySpy = spyOn(r2, 'copyFileInR2').mockImplementation(
       async (params) => {
@@ -1499,16 +1536,10 @@ describe('publish and unpublish', () => {
         await publicSwept.promise;
         const copied = await realCopy(params);
         copyLanded.resolve();
+        // Answered only once the row itself is gone: the state neither the
+        // transition token nor `cleanup_requests` can survive.
+        await rowRemoved.promise;
         return copied;
-      }
-    );
-    const headSpy = spyOn(r2, 'headObjectInR2').mockImplementation(
-      async (params) => {
-        heads.count += 1;
-        // The target verification, held until the row itself is gone: the state
-        // neither the transition token nor `cleanup_requests` can survive.
-        if (heads.count === 2) await rowRemoved.promise;
-        return realHead(params);
       }
     );
     const deleteSpy = spyOn(r2, 'deleteObjectsFromR2').mockImplementation(
@@ -1557,7 +1588,6 @@ describe('publish and unpublish', () => {
       copyLanded.resolve();
       rowRemoved.resolve();
       copySpy.mockRestore();
-      headSpy.mockRestore();
       deleteSpy.mockRestore();
     }
 
@@ -1764,6 +1794,245 @@ describe('publish and unpublish', () => {
     }
   });
 
+  /**
+   * One purge call per orphan cost a pass of `ORPHAN_DRAIN_BATCH` that many
+   * calls of the deployment-wide budget in `lib/cloudflare/purge.ts`, against
+   * one per `PURGE_BATCH_SIZE`.
+   */
+  test('the orphan drain purges its public objects together; a refused URL keeps only its own demand', async () => {
+    const keys = Array.from(
+      { length: 40 },
+      () => `orphan/${generateUuidV7()}.bin`
+    );
+    await db
+      .insert(orphanedObjects)
+      .values(keys.map((r2Key) => ({ r2Key, bucketType: 'public' as const })));
+    const [refused] = keys;
+    const calls: string[][] = [];
+    const purgeSpy = spyOn(purge, 'purgeUrls').mockImplementation(
+      async (urls) => {
+        calls.push([...urls]);
+        const failed = urls.filter((url) => url === `${PUBLIC_URL}/${refused}`);
+        return {
+          attempted: urls.length,
+          purged: urls.length - failed.length,
+          failed,
+        };
+      }
+    );
+
+    try {
+      expect(await sweepOrphanedObjects()).toEqual({
+        removed: keys.length - 1,
+        failed: 1,
+        hasMore: false,
+      });
+    } finally {
+      purgeSpy.mockRestore();
+    }
+    expect(calls.map((urls) => urls.toSorted(compareCodeUnits))).toEqual([
+      keys.map((key) => `${PUBLIC_URL}/${key}`).toSorted(compareCodeUnits),
+    ]);
+    expect(await orphanDemands()).toEqual([`public/${refused}`]);
+    await db
+      .delete(orphanedObjects)
+      .where(inArray(orphanedObjects.r2Key, keys));
+  });
+
+  test('the transition sweep purges its stale copies together; a refused URL keeps only its own marker', async () => {
+    const folderId = await createFolder(admin(), 'Unpublish sweep purge');
+    const ids: string[] = [];
+    for (const name of ['a.svg', 'b.svg', 'c.svg']) {
+      const file = await upload(admin(), folderId, svgForm(name));
+      await transitionFile({
+        id: file.id,
+        to: 'public',
+        actor: actorOf(admin()),
+      });
+      ids.push(file.id);
+    }
+    // Flipped private with the public copy left behind: `cleanup` markers.
+    failObjectStore('DeleteObject');
+    try {
+      for (const id of ids)
+        await transitionFile({ id, to: 'private', actor: actorOf(admin()) });
+    } finally {
+      clearObjectStoreFailures();
+    }
+    await db
+      .update(files)
+      .set({ updatedAt: sql`now() - interval '11 minutes'` })
+      .where(inArray(files.id, ids));
+    const keys = await Promise.all(ids.map((id) => keyOf(id)));
+    const [refused] = keys;
+    const calls: string[][] = [];
+    const purgeSpy = spyOn(purge, 'purgeUrls').mockImplementation(
+      async (urls) => {
+        calls.push([...urls]);
+        const failed = urls.filter((url) => url === `${PUBLIC_URL}/${refused}`);
+        return {
+          attempted: urls.length,
+          purged: urls.length - failed.length,
+          failed,
+        };
+      }
+    );
+
+    try {
+      expect(await retryTransitions()).toEqual({
+        reverted: 0,
+        finished: 2,
+        failed: 1,
+        hasMore: false,
+      });
+    } finally {
+      purgeSpy.mockRestore();
+    }
+    expect(calls.map((urls) => urls.toSorted(compareCodeUnits))).toEqual([
+      keys.map((key) => `${PUBLIC_URL}/${key}`).toSorted(compareCodeUnits),
+    ]);
+    const markers = await db
+      .select({ id: files.id, transition: files.transition })
+      .from(files)
+      .where(inArray(files.id, ids));
+    expect(
+      Object.fromEntries(markers.map((row) => [row.id, row.transition]))
+    ).toEqual({
+      [ids[0] ?? '']: 'cleanup',
+      [ids[1] ?? '']: null,
+      [ids[2] ?? '']: null,
+    });
+  });
+
+  /**
+   * Each pass runs inside `runElected`, which holds a reserved pool connection
+   * for as long as the pass runs. Before the budget, a hung R2 cost every row a
+   * full SDK retry ladder (about 46 s measured): an orphan pass about 76 min,
+   * a transition pass up to 12.7 h. Both are driven on a fake clock, each R2
+   * call advancing it by the time it would have taken.
+   */
+  async function onFakeClock<T>(
+    perCallMs: number,
+    outcome: 'times out' | 'succeeds',
+    run: (calls: { atMs: number; signal: unknown }[]) => Promise<T>
+  ): Promise<T> {
+    const start = Date.now();
+    setSystemTime(start);
+    const calls: { atMs: number; signal: unknown }[] = [];
+    const realDelete = r2.deleteFromR2;
+    const deleteSpy = spyOn(r2, 'deleteFromR2').mockImplementation(
+      async (params) => {
+        calls.push({ atMs: Date.now() - start, signal: params.signal });
+        setSystemTime(Date.now() + perCallMs);
+        if (outcome === 'times out')
+          throw new DOMException('request timed out', 'TimeoutError');
+        return realDelete(params);
+      }
+    );
+    try {
+      return await run(calls);
+    } finally {
+      deleteSpy.mockRestore();
+      setSystemTime();
+    }
+  }
+
+  test('an orphan pass against a hung R2 stops after a few timeouts, keeps every demand and frees its connection', async () => {
+    const keys = Array.from(
+      { length: 10 },
+      () => `orphan/${generateUuidV7()}.bin`
+    );
+    await db
+      .insert(orphanedObjects)
+      .values(keys.map((r2Key) => ({ r2Key, bucketType: 'private' as const })));
+
+    const { election, calls, spareConnection } = await onFakeClock(
+      46_000,
+      'times out',
+      async (calls) => {
+        const spare = { reserved: false };
+        const election = await runElected('retention-parked-r2', async () => {
+          // The election's own connection is held; ordinary work still gets one.
+          const connection = await db.$client.reserve({
+            signal: AbortSignal.timeout(1000),
+          });
+          spare.reserved = true;
+          connection.release();
+          return sweepOrphanedObjects();
+        });
+        return { election, calls, spareConnection: spare.reserved };
+      }
+    );
+
+    expect(spareConnection).toBe(true);
+    expect(election).toEqual({
+      elected: true,
+      result: { removed: 0, failed: 3, hasMore: true },
+    });
+    expect(calls.map((call) => call.atMs)).toEqual([0, 46_000, 92_000]);
+    expect(calls.every((call) => call.signal instanceof AbortSignal)).toBe(
+      true
+    );
+    expect(await orphanDemands()).toEqual(
+      keys.map((key) => `private/${key}`).toSorted(compareCodeUnits)
+    );
+    // Released: the next firing is elected rather than locked out.
+    expect(await runElected('retention-parked-r2', async () => 'next')).toEqual(
+      { elected: true, result: 'next' }
+    );
+    await db
+      .delete(orphanedObjects)
+      .where(inArray(orphanedObjects.r2Key, keys));
+  });
+
+  test('a transition pass against a slow R2 starts no delete after its budget and keeps the markers it did not reach', async () => {
+    const folderId = await createFolder(admin(), 'Slow store sweep');
+    const ids: string[] = [];
+    for (const name of ['a.svg', 'b.svg', 'c.svg', 'd.svg']) {
+      const file = await upload(admin(), folderId, svgForm(name));
+      await transitionFile({
+        id: file.id,
+        to: 'public',
+        actor: actorOf(admin()),
+      });
+      ids.push(file.id);
+    }
+    failObjectStore('DeleteObject');
+    try {
+      for (const id of ids)
+        await transitionFile({ id, to: 'private', actor: actorOf(admin()) });
+    } finally {
+      clearObjectStoreFailures();
+    }
+    await db
+      .update(files)
+      .set({ updatedAt: sql`now() - interval '11 minutes'` })
+      .where(inArray(files.id, ids));
+
+    // Four minutes a delete, against a ten-minute budget.
+    const { swept, calls } = await onFakeClock(
+      4 * 60_000,
+      'succeeds',
+      async (calls) => ({ swept: await retryTransitions(), calls })
+    );
+
+    expect(swept).toEqual({
+      reverted: 0,
+      finished: 3,
+      failed: 0,
+      hasMore: true,
+    });
+    expect(calls.map((call) => call.atMs)).toEqual([0, 240_000, 480_000]);
+    const markers = await db
+      .select({ transition: files.transition })
+      .from(files)
+      .where(inArray(files.id, ids));
+    expect(markers.filter((row) => row.transition === null)).toHaveLength(3);
+    expect(markers.filter((row) => row.transition === 'cleanup')).toHaveLength(
+      1
+    );
+  });
+
   test('a revert that cannot remove the target keeps its marker, and the sweep reverts it later', async () => {
     const folderId = await createFolder(admin(), 'Revert deferred');
     const file = await upload(admin(), folderId, svgForm('deferred.svg'));
@@ -1789,7 +2058,7 @@ describe('publish and unpublish', () => {
       `/api/dash/media/files/${file.id}/publish`
     );
     expect(again.status).toBe(HTTP_STATUS.CONFLICT);
-    expect(again.body.message).toBe(mediaMsg.fileBusy);
+    expect(again.body.detail).toBe(mediaMsg.fileBusy);
     expect(again.body.code).toBe(FILE_BUSY_CODE);
 
     clearObjectStoreFailures();
@@ -1880,7 +2149,7 @@ describe('deletion and the composite foreign key', () => {
       ids: [file.id],
     });
     expect(refused.status).toBe(HTTP_STATUS.CONFLICT);
-    expect(refused.body.message).toBe(mediaMsg.fileInUse);
+    expect(refused.body.detail).toBe(mediaMsg.fileInUse);
     expect(refused.body.code).toBe(FILE_IN_USE_CODE);
     expect(await rowOf(file.id)).toMatchObject({ status: 'active' });
     expect(storeHas(PRIVATE_BUCKET, key)).toBe(true);
@@ -1962,7 +2231,7 @@ describe('deletion and the composite foreign key', () => {
       ids: [file.id],
     });
     expect(again.status).toBe(HTTP_STATUS.CONFLICT);
-    expect(again.body.message).toBe(mediaMsg.fileBusy);
+    expect(again.body.detail).toBe(mediaMsg.fileBusy);
     expect(again.body.code).toBe(FILE_BUSY_CODE);
 
     clearObjectStoreFailures();
@@ -2105,6 +2374,50 @@ describe('deletion and the composite foreign key', () => {
     expect(await rowOf(file.id)).toBeNull();
   });
 
+  /**
+   * A private row's public URL was never served: a delete refuses a file
+   * mid-transition, and a transition clears its marker only once the opposite
+   * copy is deleted and purged. So the purge, and an outage of it, is no
+   * business of a private delete.
+   */
+  test('a private file is deleted without a purge, and a failing purge holds back only the public one', async () => {
+    const folderId = await createFolder(admin(), 'Purge public only');
+    const published = await upload(admin(), folderId, svgForm('public.svg'));
+    const kept = await upload(admin(), folderId, svgForm('private.svg'));
+    const publicKey = await keyOf(published.id);
+    await transitionFile({
+      id: published.id,
+      to: 'public',
+      actor: actorOf(admin()),
+    });
+
+    const purged: string[][] = [];
+    const purgeSpy = spyOn(purge, 'purgeUrls').mockImplementation(
+      async (urls) => {
+        purged.push([...urls]);
+        return { attempted: urls.length, purged: 0, failed: [...urls] };
+      }
+    );
+
+    let answer: Answer;
+    try {
+      answer = await call(admin(), 'DELETE', '/api/dash/media/files', {
+        ids: [published.id, kept.id],
+      });
+    } finally {
+      purgeSpy.mockRestore();
+    }
+
+    expect(answer.status).toBe(HTTP_STATUS.OK);
+    expect(answer.body.data).toEqual({
+      deleted: [kept.id],
+      pending: [published.id],
+    });
+    expect(purged).toEqual([[`${PUBLIC_URL}/${publicKey}`]]);
+    expect(await rowOf(kept.id)).toBeNull();
+    expect(await rowOf(published.id)).toMatchObject({ status: 'deleting' });
+  });
+
   test('a missing id is 404 and nothing in the batch is touched', async () => {
     const folderId = await createFolder(admin(), 'Batch');
     const file = await upload(admin(), folderId, svgForm());
@@ -2117,6 +2430,38 @@ describe('deletion and the composite foreign key', () => {
 });
 
 describe('entity uploads: claiming, governance, unfiled', () => {
+  test('an entity upload answers the row it inserted without reading it back, and a claim audits its files in one statement', async () => {
+    const uploads = recordStatements();
+    let first: MediaFile;
+    try {
+      first = await uploadForRecord(admin(), 'first.svg');
+    } finally {
+      uploads.stop();
+    }
+    expect(uploads.matching(/^select .* from "files"/i)).toEqual([]);
+    const [stored] = await db
+      .select({ createdAt: files.createdAt, updatedAt: files.updatedAt })
+      .from(files)
+      .where(eq(files.id, first.id));
+    expect(first).toMatchObject({
+      createdAt: stored?.createdAt.toISOString(),
+      updatedAt: stored?.updatedAt.toISOString(),
+    });
+
+    const second = await uploadForRecord(admin(), 'second.svg');
+    const claims = recordStatements();
+    try {
+      await withTransaction((tx) =>
+        claimFiles(tx, { ids: [first.id, second.id], actor: actorOf(admin()) })
+      );
+    } finally {
+      claims.stop();
+    }
+    expect(claims.matching(/^insert into "audit_logs"/i)).toHaveLength(1);
+    expect(await auditActions(first.id)).toEqual(['INSERT', 'UPDATE']);
+    expect(await auditActions(second.id)).toEqual(['INSERT', 'UPDATE']);
+  });
+
   test('claim flips pending to active for the uploader only, with an audit event for the upload and for the claim', async () => {
     const file = await uploadForRecord(admin());
     expect(file.folderId).toBeNull();
@@ -2405,7 +2750,7 @@ describe('entity uploads: claiming, governance, unfiled', () => {
         `/api/dash/media/files/${picked.id}/unpublish`
       );
       expect(unpublish.status).toBe(HTTP_STATUS.CONFLICT);
-      expect(unpublish.body.message).toBe(mediaMsg.unpublishInUse);
+      expect(unpublish.body.detail).toBe(mediaMsg.unpublishInUse);
       expect(unpublish.body.code).toBe(UNPUBLISH_IN_USE_CODE);
 
       // The race: promoted, then unpublished by someone else before the owner's
@@ -2770,7 +3115,7 @@ describe('moving a batch of files', () => {
       folderId: generateUuidV7(),
     });
     expect(gone.status).toBe(HTTP_STATUS.NOT_FOUND);
-    expect(gone.body.message).toBe(mediaMsg.folderNotFound);
+    expect(gone.body.detail).toBe(mediaMsg.folderNotFound);
     expect(gone.body.code).toBe(FOLDER_NOT_FOUND_CODE);
     expect(await rowOf(mine.id)).toMatchObject({ folderId: from });
 
@@ -2872,7 +3217,7 @@ describe('recursive folder delete', () => {
       `/api/dash/media/folders/${parent}?recursive=true`
     );
     expect(answer.status).toBe(HTTP_STATUS.CONFLICT);
-    expect(answer.body.message).toBe(mediaMsg.folderBusy);
+    expect(answer.body.detail).toBe(mediaMsg.folderBusy);
     expect(answer.body.code).toBe(FOLDER_BUSY_CODE);
     expect(await rowOf(settled.id)).toMatchObject({ status: 'active' });
   });
@@ -2903,7 +3248,7 @@ describe('recursive folder delete', () => {
       `/api/dash/media/folders/${parent}?recursive=true`
     );
     expect(tooBig.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(tooBig.body.message).toBe(mediaMsg.folderTooLarge);
+    expect(tooBig.body.detail).toBe(mediaMsg.folderTooLarge);
     expect(tooBig.body.code).toBe(SELECTION_TOO_LARGE_CODE);
     expect(await filesInFolder(parent)).toBe(FOLDER_RECURSIVE_DELETE_MAX + 1);
 
@@ -2914,7 +3259,7 @@ describe('recursive folder delete', () => {
       `/api/dash/media/folders/${parent}?recursive=please`
     );
     expect(unknown.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(unknown.body.message).toBe(mediaMsg.invalidRecursive);
+    expect(unknown.body.detail).toBe(mediaMsg.invalidRecursive);
 
     // And without the flag a folder with anything in it is still a 409.
     const notEmpty = await call(
@@ -2923,7 +3268,7 @@ describe('recursive folder delete', () => {
       `/api/dash/media/folders/${parent}`
     );
     expect(notEmpty.status).toBe(HTTP_STATUS.CONFLICT);
-    expect(notEmpty.body.message).toBe(mediaMsg.folderNotEmpty);
+    expect(notEmpty.body.detail).toBe(mediaMsg.folderNotEmpty);
     expect(notEmpty.body.code).toBe(FOLDER_NOT_EMPTY_CODE);
 
     // The partner assertion: a tree of exactly the cap is inside it and goes.

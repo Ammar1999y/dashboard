@@ -5,16 +5,15 @@ import type {
 
 import * as z from 'zod';
 import {
-  enrolledMethodsSchema,
-  pluginMessage,
-  trustedDevicesSchema,
-} from '@app/shared/responses/better-auth';
+  listTrustedDevices,
+  listTwoFactorMethods,
+} from '@app/shared/api/better-auth';
 
 export type EnrolledMethod = z.output<typeof enrolledMethodSchema>;
 
 /** The list itself: that is what the cache holds. */
-export const methodsSchema = enrolledMethodsSchema.transform(
-  ({ methods }) => methods
+export const methodsSchema = listTwoFactorMethods.response.raw.transform(
+  ({ data }) => data.methods
 );
 
 /** A passkey as the library lists it; only what the page shows. */
@@ -32,9 +31,6 @@ export const passkeysSchema = z.array(passkeySchema);
 
 export type TrustedDevice = z.output<typeof trustedDeviceSchema>;
 
-export const devicesSchema = trustedDevicesSchema.transform(
-  ({ devices }) => devices
+export const devicesSchema = listTrustedDevices.response.raw.transform(
+  ({ data }) => data.devices
 );
-
-/** A whole `plain` body for the plugin endpoints that answer a message and no `data`. */
-export const messageOnlySchema = pluginMessage();

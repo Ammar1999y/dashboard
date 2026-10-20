@@ -11,8 +11,10 @@
  *
  * ⚠️ SCAFFOLD: no call site uses this yet. Before the first one adopts it,
  * decide and write down the key namespace grammar, the total on-disk budget and
- * what enforces it, and the invalidation trigger. A per-value size cap is
- * enforced; a total-size cap and an eviction policy are NOT.
+ * what enforces it, and the invalidation trigger, and schedule the expiry sweep
+ * in `lib/maintenance/sqlite.ts`, which skips this store until then. A
+ * per-value size cap is enforced; a total-size cap and an eviction policy are
+ * NOT.
  */
 import type { Migration } from '@/lib/sqlite/database';
 import type { SweepResult } from '@/lib/sqlite/sweep';
@@ -162,10 +164,12 @@ export function cacheDeletePrefix(prefix: string): void {
   }
 }
 
+/** @knipignore */
 export function cacheSweepExpired(now = Date.now()): Promise<SweepResult> {
   return sweepInBatches(getStore().sweep, now);
 }
 
+/** @knipignore */
 export function cacheHasExpiredRows(now = Date.now()): boolean {
   return Boolean(getStore().anyExpired.get(now));
 }

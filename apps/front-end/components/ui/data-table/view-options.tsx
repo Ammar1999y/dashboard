@@ -1,5 +1,6 @@
+import type { DataTableFeatures } from './features';
 import type { DragEndEvent, UniqueIdentifier } from '@dnd-kit/core';
-import type { Column } from '@tanstack/react-table';
+import type { Column, RowData } from '@tanstack/react-table';
 
 import { memo, useCallback, useMemo, useState } from 'react';
 
@@ -110,11 +111,11 @@ const ShowAllItem = memo(() => {
 
 ShowAllItem.displayName = 'ShowAllItem';
 
-interface ViewOptionsProps<TData> {
-  columns: Column<TData>[];
+interface ViewOptionsProps<TData extends RowData> {
+  columns: Column<DataTableFeatures, TData>[];
 }
 
-const DataTableViewOptionsInner = <TData,>({
+const DataTableViewOptionsInner = <TData extends RowData>({
   columns,
 }: ViewOptionsProps<TData>) => {
   const actions = useColumnActions();

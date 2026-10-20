@@ -63,8 +63,12 @@ export function consumePasswordProof(hash: string, candidate: string): boolean {
   );
 }
 
-// Longer than `PASSWORD_MAX`, so no inbound password surviving validation is a proof.
-const PROOF_LENGTH =
+/**
+ * Longer than `PASSWORD_MAX`, so no inbound password surviving validation is a
+ * proof. Also Better Auth's `maxPasswordLength`: the library measures the proof
+ * the handler receives, and the inbound cap stays `PASSWORD_MAX` in the hook.
+ */
+export const PROOF_LENGTH =
   `${PROOF_PREFIX}${Buffer.alloc(PROOF_ENTROPY_BYTES).toString('base64url')}`
     .length;
 if (PROOF_LENGTH <= PASSWORD_MAX)

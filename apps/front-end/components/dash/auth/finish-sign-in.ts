@@ -2,6 +2,7 @@ import type { SignInResult, TwoFactorChallenge } from './schemas';
 import type { ContactKind } from '@app/shared/validation/enums';
 
 import { toast } from 'sonner';
+import { trustCurrentDevice } from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
 import {
   EMAIL_NOT_VERIFIED_CODE,
@@ -9,10 +10,9 @@ import {
   TWO_FACTOR_UNAVAILABLE_CODE,
 } from '@app/shared/error-codes';
 import { MSG_LOGIN_SUCCESS } from '@app/shared/messages/common';
-import { deviceTrustedSchema } from '@app/shared/responses/better-auth';
 import { MSG_TRUST_DEVICE_FAILED } from '@/constants/messages';
+import { api } from '@/lib/api/client';
 import { hasErrorCode } from '@/lib/api/fetch';
-import { authRequest } from '@/lib/auth/request';
 
 /**
  * What follows a second factor the server accepted: the session exists, and
@@ -24,10 +24,7 @@ export async function finishSignIn(trustDevice: boolean) {
   toast.success(MSG_LOGIN_SUCCESS);
   if (!trustDevice) return;
   try {
-    await authRequest('/two-factor/trust-device', {
-      method: 'POST',
-      schema: deviceTrustedSchema,
-    });
+    await api(trustCurrentDevice);
   } catch (error) {
     // The server's text for a failed save talks about sending a code.
     console.error(error);

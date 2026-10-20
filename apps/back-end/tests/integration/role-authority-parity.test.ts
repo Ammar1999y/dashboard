@@ -56,12 +56,12 @@ function roleOf(key: 'outranking' | 'reachable'): string {
 
 interface Observed {
   status: number;
-  message: string;
+  detail: string;
 }
 
 async function observe(response: Response): Promise<Observed> {
-  const body = (await response.json()) as { message?: string };
-  return { status: response.status, message: body.message ?? '' };
+  const body = (await response.json()) as { detail?: string };
+  return { status: response.status, detail: body.detail ?? '' };
 }
 
 function put(roleId: string): Promise<Response> {
@@ -120,7 +120,7 @@ describe('a role that outranks the caller', () => {
     // Positively the unreachable-target answer, not a 403 both happen to give.
     expect(edited).toEqual({
       status: HTTP_STATUS.NOT_FOUND,
-      message: MSG_NOT_FOUND,
+      detail: MSG_NOT_FOUND,
     });
   });
 
@@ -131,11 +131,11 @@ describe('a role that outranks the caller', () => {
 
     expect(await observe(await put(absent))).toEqual({
       status: HTTP_STATUS.NOT_FOUND,
-      message: MSG_NOT_FOUND,
+      detail: MSG_NOT_FOUND,
     });
     expect(await observe(await remove(absent))).toEqual({
       status: HTTP_STATUS.NOT_FOUND,
-      message: MSG_NOT_FOUND,
+      detail: MSG_NOT_FOUND,
     });
   });
 });

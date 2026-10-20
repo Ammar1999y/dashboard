@@ -355,10 +355,9 @@ try {
   }
 
   // ---- backlog probe -------------------------------------------------------
-  // The sweep route's `hasMore` is the only signal that expired rows are piling
-  // up, so the probe has to answer from the index rather than a scan — and it
-  // must report FALSE once every row's expiry is in the future, or the signal is
-  // permanently true and therefore worthless.
+  // The sweep's `hasMore` is the only signal that expired rows are piling up,
+  // so the probe must report FALSE once every row's expiry is in the future, or
+  // the signal is permanently true and therefore worthless.
   //
   // One table, not two: `auth_rate_limit` was dropped when Better Auth's own
   // limiter was switched off (`lib/rate-limit/store.ts` migration 2). The DDL
@@ -385,21 +384,18 @@ try {
       `empty=${empty} expired=${expired} future=${future}`
     );
 
-    // Seeded first: the query planner picks a full scan over a near-empty table
-    // regardless of the index, so an unseeded plan check would prove nothing.
-    db.transaction(() => {
-      for (let i = 0; i < 500; i++) rlInsert.run(`b${i}`, 0, 1, 9_000_000 + i);
-    })();
-    const plan = db
-      .prepare(`EXPLAIN QUERY PLAN ${sql.anyExpired}`)
-      .all(1000)
-      .map((r) => r.detail)
-      .join(' | ');
+    // Every index on `rate_limit` is rewritten by every admission, because
+    // `SQL_CONSUME` sets every non-key column; the sweep and this probe scan.
+    const indexes = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'rate_limit' AND sql IS NOT NULL"
+      )
+      .all()
+      .map((r) => r.name);
     check(
-      'backlog probe searches the expires_at index rather than scanning',
-      plan.includes('INDEX rate_limit_expires_at') &&
-        !plan.includes('SCAN rate_limit'),
-      plan
+      'the limiter table has no secondary index for an admission to rewrite',
+      indexes.length === 0,
+      indexes.length === 0 ? 'primary key only' : indexes.join(', ')
     );
     db.close(false);
   }

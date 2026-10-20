@@ -66,6 +66,7 @@ export type IconName =
   | 'solar:question-circle-linear'
   | 'solar:quit-full-screen-linear'
   | 'solar:quote-linear'
+  | 'solar:refresh-linear'
   | 'solar:restart-linear'
   | 'solar:settings-bold-duotone'
   | 'solar:shield-keyhole-bold-duotone'

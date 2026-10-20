@@ -1,6 +1,6 @@
 # Plan: Phase 4 — the wire-format switch and the front-end migration
 
-Status: **implementation spec, not started (2026-10-10).** Two owner-approved back-end contract changes have landed ahead of it (2026-10-10, §3.1): `PUT /api/dash/users/:id` no longer renames the caller, and Better Auth plugin successes no longer carry `success`. **The current front end is broken against the back end on both until S1** (owner accepted: development only). Written for an implementing agent that has the repository but none of the conversations behind it. Everything needed is here or in a file this plan names. Phase 4 of `docs/http-layer-plan.md` (called "the main plan" below; its IDs `Dn`, `Fn`, `Rn`, `Qn`, `Pn` keep their meaning). This plan's own IDs carry a `P4-` prefix.
+Status: **done, 2026-10-16** (§14 records what was built and where it departs from this spec). Written for an implementing agent that has the repository but none of the conversations behind it. Phase 4 of `docs/http-layer-plan.md` (called "the main plan" below; its IDs `Dn`, `Fn`, `Rn`, `Qn`, `Pn` keep their meaning). This plan's own IDs carry a `P4-` prefix. §3 describes the state before the phase.
 
 **Nothing here is absolute.** Each decision states its reason. Rows marked **author decision** fill a gap the main plan left; a reviewer or the owner may overturn them. Before you dispute a fact, re-run the check that produced it.
 
@@ -571,12 +571,12 @@ Known flakes (main plan records): a media DIFAT timing test under load, and setu
 
 ## 12. Open questions
 
-| #     | Question                                                                                           | Who             |
-| ----- | -------------------------------------------------------------------------------------------------- | --------------- |
-| P4-Q1 | When does the CSP go on (D12, P4-D21)? It is also the check for P4-R4                              | front-end owner |
-| P4-Q4 | Adopt a typed back-end test client broadly (D17, P4-D20)?                                          | owner           |
-| P4-Q5 | A back end for `/api/dash/settings`                                                                | owner           |
-| P4-Q6 | `toAuthError` cannot read `Retry-After` (better-fetch hands no headers); existing gap, not Phase 4 | Phase 5         |
+| #     | Question                                                              | Who             |
+| ----- | --------------------------------------------------------------------- | --------------- |
+| P4-Q1 | When does the CSP go on (D12, P4-D21)? It is also the check for P4-R4 | front-end owner |
+| P4-Q4 | Adopt a typed back-end test client broadly (D17, P4-D20)?             | owner           |
+| P4-Q5 | A back end for `/api/dash/settings`                                   | owner           |
+| P4-Q6 | Closed 2026-10-16: `authRequest` refusals keep `Retry-After` (§14.4)  | done            |
 
 Closed by the owner on 2026-10-10: P4-Q2 (no new message: the caller's own id answers 403 with the existing `MSG_INSUFFICIENT_PERMISSIONS`) and P4-Q3 (plugin successes dropped `success` now, not in Phase 5; P4-D6).
 
@@ -617,3 +617,43 @@ globalThis.Function = new Proxy(Function, {
 | `apps/front-end/components/app/react-query-provider.tsx`                                                                                                                       | query retry policy                 |
 | `apps/front-end/mocks/lib/http.ts`, `mocks/handlers/*.ts`, `tests/mocks-harness.ts`, `tests/api-fetch.test.ts`, `tests/mocks-contract.test.ts`                                 | mocks and their checks             |
 | `apps/front-end/eslint.config.mjs`, `next.config.js`                                                                                                                           | lint rules, CSP                    |
+
+## 14. Record (2026-10-16)
+
+Every step is done, uncommitted, on the working tree of branch `http-layer`.
+
+### 14.1 Where the build departs from the spec
+
+| Spec                                                                      | Built                                                                                                                                                                                                           | Why                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S1's tolerant reader (both formats) before the S2 flip                    | Skipped: the client reads only the new format                                                                                                                                                                   | It existed for a deployed old bundle meeting a flipped server between two releases (P4-R1). Nothing deployed between the steps, and S9 would have deleted it. Cost: a browser holding a bundle from before this change reads every answer as unreadable until reloaded. |
+| S1 item 8 (self-rename on `/me`)                                          | Already done before the phase; the `/:id` mock's own-id 403 was still after the body read, now before it                                                                                                        | Matches the gate's order (P4-D16).                                                                                                                                                                                                                                      |
+| `message` on Better Auth prefix answers, added where the mount sends them | Added once, in the exit step (`server/elysia/respond.ts`, `toAuthProblem`, `routing.servedByPrefix`)                                                                                                            | The request hook's 413, route misses and the error hook answer prefix paths before or outside the mount. Bindings under the prefix are excluded by path.                                                                                                                |
+| `api()` options `signal`, `captcha`, `narrow`, bookkeeping                | Also `table` on a paged entry (the table state, encoded by `writeTableQuery`); `readEndpoint` / `readPage` for reads through any method                                                                         | A query reads, even through a POST (the delete preview), so it never maps to "saved, not shown".                                                                                                                                                                        |
+| `narrow` typed by the entry's output                                      | `z.ZodType<N>`                                                                                                                                                                                                  | Zod's input variance refuses a `.pick()` view typed that way.                                                                                                                                                                                                           |
+| Mocks parse lazily with `await body()`                                    | As specified; refusals are thrown, never returned; a contract break escapes the registration wrapper (`ContractBreak`), so a test that ignores the answer still fails                                           | Without that, the wrapper answered the break as an ordinary 500.                                                                                                                                                                                                        |
+| `defineEntity` gains the entity's entries                                 | Generic CRUD components type each entry by a structural constraint (`components/dash/shared/entity.ts`); `DataTable` takes `endpoint` and picks server or client paging from it (the `serverSide` prop is gone) | Calls resolve without casts; the feature keeps its exact bodies and rows.                                                                                                                                                                                               |
+| S11: keep `RequestFieldsAreTyped` / `ResponseFieldsAreTyped`              | `packages/shared/src/api/fields-are-typed.ts` (type-only, JSON bodies and non-raw answers of every entry); the Better Auth half stays in `response-contract.ts`                                                 | Mutation-checked: an `unknown` field in `updatedAtSchema` fails it.                                                                                                                                                                                                     |
+| —                                                                         | `packages/shared/src/api/all.ts` (`ENDPOINTS`): every entry, for the coverage gate and the bindings test; front-end lint refuses a runtime import                                                               | The coverage gate runs in the test runner's parent, which must not load `@/modules`.                                                                                                                                                                                    |
+| —                                                                         | `LIBRARY_UPLOAD_FIELD` / `RECORD_UPLOAD_FIELD` in `validation/media.ts`, used by the form schemas, the back-end handlers and the mocks                                                                          | The field names were literals in three places.                                                                                                                                                                                                                          |
+
+### 14.2 Defects found and fixed on the way
+
+- `mocks/handlers/auth.ts` `createAdmin` stored a user without `phoneNumber` / `phoneNumberVerified`, so its detail broke the contract; `MockUser` was typed by the cache's `UserClient` (detail fields optional) and now by the stored fields.
+- The users list mock built rows with a nullable `roleId` / `role` the published row never has.
+- `PUT /api/dash/users/:id` mock: own-id 403 after the body read (above).
+- Back-end harness: the document check ran inside the exit step, so it judged Better Auth refusals before they became problems (`tests/helpers/preload-document-check.ts`). `integration/application-pool-readiness.test.ts` terminated connections without the harness database guard.
+
+### 14.3 Checks (2026-10-16)
+
+- Front end: `bun run lint` clean; `bun run test` 828 pass, 0 fail (from 758 pass, 55 fail at S0); `bun run typecheck` 2.3–4.5 s against 2.65 s at S0 (P4-R5). `bun run find:unused-files` fails on findings that also fail at `HEAD`; none left from this phase.
+- `packages/shared`: lint and format clean.
+- Back end: see the main plan's Phase 4 record.
+- First-load JS (P4-R6), gzip, against a build of `HEAD`: every dashboard page is 5.5 to 16.8 KiB smaller (`/dash/users` 512.1 → 502.5, `/dash/media` 686.5 → 676.7), `_app` 0.1 KiB larger (`jitless`), `/dev/file-upload-lab` 2.8 KiB larger. `bun run build` passes and `prebuild` changed no committed file; the tailwind `@/constants/theme` warning is the same at `HEAD`.
+- Deliberate breaks: a mock answer with a wrong field type fails with `PUT /api/dash/users/me/preferences answered outside its contract: data.updatedAt invalid_type`; the zod `Function` probe counts 0 with the app's first import and more than 0 without it.
+
+### 14.4 Owner decisions after the phase (2026-10-16)
+
+- **Current password on the email, phone and password forms: optional.** The back end takes the password or an open re-authentication window, so the forms send it only when typed (`apps/front-end/utils/validation/account.ts`). Left empty with the window closed, the re-auth prompt opens; the captcha that attempt spent makes the form ask for a second submit.
+- **Editing your own row from the users page ends back on that page.** The own row links to `/account?from=<list URL with its table state>`; `/users/<own id>/edit` redirects there with the list as `from`. The account page shows a back link, a rename returns automatically, and an email change (which ends every session) saves the account URL for sign-in to return to. The account page gained a sessions tab, which the removed self view of the users page used to show. The self view's own two-factor reset is gone; an owner turns two-factor off from the account page's two-factor tab.
+- **Phase 5 (Better Auth plugin calls on the typed client)** was then done the same day, on the owner's go-ahead; its spec and record are in the main plan's Phase 5 section. Its one functional gap, P4-Q6, is closed: `authFetch` sends through `fetchOnline` and reads refusals with `refusalOf`, so every `authRequest` failure carries `Retry-After`; the `authClient.*` calls (sign-in, sign-out, session) still go through better-fetch.

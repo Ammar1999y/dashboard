@@ -1,5 +1,6 @@
 import { encode } from 'blurhash';
 
+import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   hasRasterSignature,
   isAnimatedRaster,
@@ -14,7 +15,7 @@ import { FILE_TYPE_TABLE } from '../allowlist';
 import { contentRefused, imageTooLarge, typeNotAllowed } from '../errors';
 import { optimizeImage } from './optimize';
 import { imageToRgba } from './rgba';
-import { sanitizeSvgServer, svgOptimizerServer } from './svg';
+import { optimizeSvgInWorker, sanitizeSvgInWorker } from './svg-jobs';
 
 /**
  * `tests/unit/upload-validation.test.ts` walks this to prove every entry has a
@@ -31,7 +32,7 @@ export function isAllowedImageType(mimeType: string): boolean {
 
 /**
  * ⚠️ Fails open for a type with no signature entry; see `ALLOWED_IMAGE_TYPES`.
- * SVG's check is `sanitizeSvgServer`.
+ * SVG's check is `validateSvgUpload`.
  */
 export function validateMagicBytes(
   buffer: Buffer,
@@ -114,11 +115,11 @@ interface UploadImageInput {
   validatedSvg?: ValidatedSvgUpload;
 }
 
-export function validateSvgUpload(
+export async function validateSvgUpload(
   buffer: Buffer,
   fileName: string
-): ValidatedSvgUpload {
-  const result = sanitizeSvgServer(buffer.toString('utf8'));
+): Promise<ValidatedSvgUpload> {
+  const result = await sanitizeSvgInWorker(buffer.toString('utf8'));
   if (result.isValid)
     return {
       cleanedSvg: result.cleanedSvg,
@@ -134,6 +135,23 @@ export function validateSvgUpload(
   throw result.reason === 'too-many-pixels' || result.reason === 'edge-too-long'
     ? imageTooLarge(message)
     : contentRefused(message);
+}
+
+/**
+ * Either failure follows from markup the sanitiser accepted, so it refuses the
+ * file as given; nothing about its size would help.
+ */
+export async function optimizeSvgUpload(cleanedSvg: string): Promise<string> {
+  const result = await optimizeSvgInWorker(cleanedSvg);
+  if (result.ok) return result.svg;
+
+  if (result.recheck)
+    logSanitized('error', {
+      msg: 'image.svg optimizer output refused',
+      reason: result.recheck.reason,
+      errors: result.recheck.errors,
+    });
+  throw contentRefused(uploadMsg.svgOptimizeFailed, HTTP_STATUS.UNPROCESSABLE);
 }
 
 /** Writes neither an object nor a row; `lib/media/upload.ts` stores the result. */
@@ -155,11 +173,9 @@ export async function processImage(
 
   if (mimeType === 'image/svg+xml') {
     const sanitizeResult =
-      input.validatedSvg ?? validateSvgUpload(buffer, file.name);
+      input.validatedSvg ?? (await validateSvgUpload(buffer, file.name));
 
-    const optimizedSvg = svgOptimizerServer({
-      data: sanitizeResult.cleanedSvg,
-    });
+    const optimizedSvg = await optimizeSvgUpload(sanitizeResult.cleanedSvg);
     buffer = Buffer.from(optimizedSvg, 'utf8');
     finalSize = buffer.length;
     finalExtension = 'svg';

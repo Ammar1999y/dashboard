@@ -7,7 +7,7 @@ import { replaceEqualDeep } from '@tanstack/react-query';
 /**
  * Keys for one entity. Lists and details sit under separate segments so a list
  * update never reaches a detail entry: `list` is the prefix of both the full
- * list (`useQueryData`) and every server-table page (`useServerDataTable`
+ * list (`useEndpointQuery`) and every server-table page (`useEndpointTable`
  * appends its page/sort/filter params).
  */
 export const entityKeys = (scope: string) => ({
@@ -24,7 +24,7 @@ interface Row {
 }
 
 /**
- * One page of a server-paged table, as `useServerDataTable` caches it. A page
+ * One page of a server-paged table, as `useEndpointTable` caches it. A page
  * may carry more than its rows (the media library's folders and breadcrumbs);
  * every write here keeps what it does not touch.
  */

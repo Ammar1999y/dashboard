@@ -16,6 +16,8 @@
     "tests/setup/*.ts",
     "tests/helpers/*.ts",
     "tests/fixtures/*.mjs",
+    // Aliased in for `msw/browser` by the server bundles (`next.config.js`).
+    "mocks/msw-browser-server.ts",
   ],
   "project": ["**/*.{ts,tsx,js,mjs}"],
   // Only the plugins loaded by NAME through `FlatCompat.extends()` in
@@ -29,5 +31,7 @@
     "eslint-plugin-import",
     // Read by `scripts/build-icons.ts` through a computed `require.resolve`.
     "@iconify-json/*",
+    // Imported only by `tests/mock-network.ts`; `.gitignore` hides `tests/`.
+    "@mswjs/interceptors",
   ],
 }

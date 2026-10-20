@@ -2,13 +2,17 @@ import type { AccessScope } from '@app/shared/permissions/constants';
 import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
-import { http } from 'msw';
-import { REQUEST_BODIES } from '@app/shared/contract';
+import {
+  listUserSessions,
+  resetUserTwoFactor,
+  revokeUserSessions as revokeSessionsEntry,
+} from '@app/shared/api/users';
 import { twoFactorMsg } from '@app/shared/messages/auth';
-import { MSG_DELETED } from '@app/shared/messages/common';
+import { MSG_DELETED, MSG_FETCHED } from '@app/shared/messages/common';
 import { validID } from '@app/shared/utils';
 
-import { api, notFoundError, ok, readJsonBody, requireId } from '../lib/http';
+import { mock } from '../lib/endpoint';
+import { notFoundError, requireId } from '../lib/http';
 import {
   assertRoleWithinScope,
   insufficientPermissions,
@@ -68,71 +72,58 @@ function assertTargetReachable({
 }
 
 export const sessionsHandlers = [
-  http.get<{ id: string }>(
-    api('/api/dash/users/:id/sessions'),
-    ({ params, request }) => {
-      const access = authorizeSessionAccess(params.id);
-      assertTargetReachable(access);
-      const query = new URL(request.url).searchParams;
-      const limit = parseSessionsLimit(query.get('limit'));
-      const cursor = parseSessionsCursor(query.get('cursor'));
-      const { sessions, nextCursor } = readSessionsPage({
-        userId: access.targetId,
-        limit,
-        cursor,
-      });
-      return ok({ sessions, nextCursor });
-    }
-  ),
+  mock(listUserSessions, ({ params, query }) => {
+    const access = authorizeSessionAccess(params.id);
+    assertTargetReachable(access);
+    const limit = parseSessionsLimit(query.get('limit'));
+    const cursor = parseSessionsCursor(query.get('cursor'));
+    const { sessions, nextCursor } = readSessionsPage({
+      userId: access.targetId,
+      limit,
+      cursor,
+    });
+    return { message: MSG_FETCHED, data: { sessions, nextCursor } };
+  }),
 
-  http.delete<{ id: string }>(
-    api('/api/dash/users/:id/sessions'),
-    async ({ params, request }) => {
-      const access = authorizeSessionAccess(params.id);
-      const body = await readJsonBody(
-        request,
-        REQUEST_BODIES['DELETE /api/dash/users/:id/sessions']
-      );
-      assertTargetReachable(access);
+  mock(revokeSessionsEntry, async ({ params, body: read }) => {
+    const access = authorizeSessionAccess(params.id);
+    const body = await read();
+    assertTargetReachable(access);
 
-      const { targetId } = access;
-      const revokeAll = 'revokeAll' in body;
-      const revoked = revokeUserSessions(
-        targetId,
-        revokeAll ? 'all' : body.sessionIds
-      );
-      // Only on `revokeAll`: ending named sessions is housekeeping, not
-      // containment, so it leaves the trusted devices.
-      if (revokeAll && twoFactorOf(targetId).trustedDevices.length > 0)
-        writeTwoFactor(targetId, { trustedDevices: [] });
-      return ok({ revoked }, MSG_DELETED);
-    }
-  ),
+    const { targetId } = access;
+    const revokeAll = 'revokeAll' in body;
+    const revoked = revokeUserSessions(
+      targetId,
+      revokeAll ? 'all' : body.sessionIds
+    );
+    // Only on `revokeAll`: ending named sessions is housekeeping, not
+    // containment, so it leaves the trusted devices.
+    if (revokeAll && twoFactorOf(targetId).trustedDevices.length > 0)
+      writeTwoFactor(targetId, { trustedDevices: [] });
+    return { message: MSG_DELETED, data: { revoked } };
+  }),
 
-  http.post<{ id: string }>(
-    api('/api/dash/users/:id/two-factor/reset'),
-    ({ params }) => {
-      const { userId, scope, permissions } = requirePermission(
-        'users',
-        'resetTwoFactor',
-        { reauth: true }
-      );
-      // A malformed id is a 404 here, unlike the neighbouring routes' 422.
-      const targetId = validID(params.id);
-      if (!targetId) throw notFoundError();
-      assertTargetReachable({
-        actorUserId: userId,
-        targetId,
-        scope,
-        permissions,
-      });
-      if (!users.find(targetId)) throw notFoundError();
+  mock(resetUserTwoFactor, ({ params }) => {
+    const { userId, scope, permissions } = requirePermission(
+      'users',
+      'resetTwoFactor',
+      { reauth: true }
+    );
+    // A malformed id is a 404 here, unlike the neighbouring routes' 422.
+    const targetId = validID(params.id);
+    if (!targetId) throw notFoundError();
+    assertTargetReachable({
+      actorUserId: userId,
+      targetId,
+      scope,
+      permissions,
+    });
+    if (!users.find(targetId)) throw notFoundError();
 
-      clearTwoFactor(targetId, { deletePasskeys: true });
-      rotateCredentials(targetId, 'revoke');
-      revokeUserSessions(targetId, 'all');
-      endAllSessions(targetId);
-      return ok(null, twoFactorMsg.disabled);
-    }
-  ),
+    clearTwoFactor(targetId, { deletePasskeys: true });
+    rotateCredentials(targetId, 'revoke');
+    revokeUserSessions(targetId, 'all');
+    endAllSessions(targetId);
+    return { message: twoFactorMsg.disabled, data: null };
+  }),
 ];

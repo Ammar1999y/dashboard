@@ -3,25 +3,6 @@ import type { MediaScope } from '@app/shared/validation/media';
 
 import { entityKeys } from '@/lib/api/query-cache';
 
-export const MEDIA_API = '/api/dash/media';
-export const FILES_API = `${MEDIA_API}/files`;
-export const FOLDERS_API = `${MEDIA_API}/folders`;
-
-export const DELETE_PREVIEW_API = `${MEDIA_API}/delete-preview`;
-export const STATS_API = `${MEDIA_API}/stats`;
-
-export const fileHref = (id: EntityID) => `${FILES_API}/${id}`;
-export const folderHref = (id: EntityID) => `${FOLDERS_API}/${id}`;
-export const uploadHref = (folderId: EntityID) =>
-  `${FILES_API}?${new URLSearchParams({ folder: folderId })}`;
-
-/** The listing of `scope`; `folder` is the one listed, omitted at the root. */
-export function listingHref(scope: MediaScope, folder: EntityID | null) {
-  const params = new URLSearchParams({ scope });
-  if (folder) params.set('folder', folder);
-  return `${MEDIA_API}?${params}`;
-}
-
 /**
  * Every listing sits under `list`, so a write reaches them all, and every file
  * detail under `detail`. A folder picker's pages share a listing's shape and so

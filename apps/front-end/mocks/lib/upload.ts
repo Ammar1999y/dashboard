@@ -1,5 +1,6 @@
 import type { FileKind } from '@app/shared/validation/enums';
 
+import { CustomError } from '@app/shared/error-class';
 import {
   FILE_TOO_LARGE_CODE,
   FILE_TYPE_NOT_ALLOWED_CODE,
@@ -27,8 +28,6 @@ import {
   normalizeMimeType,
 } from '@app/shared/validation/media-types';
 
-import { fail } from './http';
-
 /** The server's `fileTypeFor`: an allowed type's spec, by its normalized name. */
 const fileTypeFor = (mimeType: string) =>
   ALLOWED_MIME_TYPES.includes(mimeType)
@@ -52,29 +51,24 @@ export async function toDataUrl(file: File, type: string): Promise<string> {
 export const readFormData = (request: Request) =>
   request.formData().catch(() => null);
 
+const badForm = (message: string) =>
+  new CustomError(message, HTTP_STATUS.BAD_REQUEST);
+
 /**
  * The server's `takeSingleFile`: the one part under `field`, or the 400 the
  * server answers.
  */
-export function takeSingleFile(
-  form: FormData | null,
-  field: string
-): File | Response {
-  if (!form) return fail(HTTP_STATUS.BAD_REQUEST, MSG_NO_FILES);
+export function takeSingleFile(form: FormData | null, field: string): File {
+  if (!form) throw badForm(MSG_NO_FILES);
   for (const [name] of form)
     if (name !== field)
-      return fail(
-        HTTP_STATUS.BAD_REQUEST,
-        MSG_UNEXPECTED_FORM_FIELD(sanitizeFilename(name))
-      );
+      throw badForm(MSG_UNEXPECTED_FORM_FIELD(sanitizeFilename(name)));
   const entries = form.getAll(field);
-  if (entries.length === 0) return fail(HTTP_STATUS.BAD_REQUEST, MSG_NO_FILES);
-  if (entries.length > 1)
-    return fail(HTTP_STATUS.BAD_REQUEST, MSG_MAX_FILES(1));
+  if (entries.length === 0) throw badForm(MSG_NO_FILES);
+  if (entries.length > 1) throw badForm(MSG_MAX_FILES(1));
   const [entry] = entries;
-  return entry instanceof File
-    ? entry
-    : fail(HTTP_STATUS.BAD_REQUEST, MSG_NO_VALID_FILES);
+  if (!(entry instanceof File)) throw badForm(MSG_NO_VALID_FILES);
+  return entry;
 }
 
 export interface AdmittedUpload {
@@ -91,26 +85,26 @@ export interface AdmittedUpload {
  * pipeline or the rate limits: type, then size. Rasters are answered as the
  * WebP the server stores, though their bytes stay as sent.
  */
-export function admitUpload(file: File): AdmittedUpload | Response {
+export function admitUpload(file: File): AdmittedUpload {
   const safeName = sanitizeFilename(file.name);
   const declared = normalizeMimeType(file.type);
   const spec = fileTypeFor(declared);
   if (!spec)
-    return fail(
-      HTTP_STATUS.BAD_REQUEST,
+    throw new CustomError(
       MSG_FILE_TYPE_NOT_ALLOWED(safeName),
+      HTTP_STATUS.BAD_REQUEST,
       FILE_TYPE_NOT_ALLOWED_CODE
     );
   if (spec.kind === 'image' && file.size > MAX_IMAGE_SIZE * MIB)
-    return fail(
-      HTTP_STATUS.BAD_REQUEST,
+    throw new CustomError(
       MSG_FILE_TOO_LARGE(safeName, MAX_IMAGE_SIZE),
+      HTTP_STATUS.BAD_REQUEST,
       FILE_TOO_LARGE_CODE
     );
   if (spec.kind === 'document' && file.size > MAX_DOCUMENT_SIZE_MB * MIB)
-    return fail(
-      HTTP_STATUS.BAD_REQUEST,
+    throw new CustomError(
       MSG_DOCUMENT_TOO_LARGE(safeName, MAX_DOCUMENT_SIZE_MB),
+      HTTP_STATUS.BAD_REQUEST,
       FILE_TOO_LARGE_CODE
     );
 

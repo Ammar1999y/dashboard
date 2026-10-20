@@ -22,15 +22,26 @@ const [
 ]);
 
 // Generated before the first test, whose timeout would otherwise pay for it.
-const check = documentCheck(await servedDocument(), [
+const checkAnswer = documentCheck(await servedDocument(), [
   REFERENCE_PAGE_ROUTE.path,
 ]);
 
-// A later wrap runs inside the exit step's, so a HEAD still carries its GET's
-// body here.
-app.wrap((fetch) => async (request: Request, ...rest: unknown[]) => {
-  const response = await fetch(request, ...rest);
-  const problems = await check(request, response);
-  for (const problem of problems) recordResponseMismatch(problem);
-  return response;
-});
+// The first wrap is the outermost: `app.wrap` would add this one inside the
+// exit step's, which rewrites a Better Auth refusal into its problem after it
+// had been checked, and takes a HEAD's body. A HEAD here has none, so only its
+// status is held to the document.
+const check: Parameters<typeof app.wrap>[0] =
+  (fetch) =>
+  async (request: Request, ...rest: unknown[]) => {
+    const response = await fetch(request, ...rest);
+    const problems = await checkAnswer(request, response);
+    for (const problem of problems) recordResponseMismatch(problem);
+    return response;
+  };
+const ext = app['~ext'];
+if (!ext?.hoc || !ext.hocOrigin)
+  throw new Error(
+    'the application has no wraps to put the document check before'
+  );
+ext.hoc.unshift(check);
+ext.hocOrigin.unshift({});

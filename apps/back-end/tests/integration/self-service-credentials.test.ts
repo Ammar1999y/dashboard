@@ -78,6 +78,12 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
+import { resetPassword } from '@app/shared/api/auth';
+import {
+  changeEmail,
+  changePassword,
+  verifyEmailChange,
+} from '@app/shared/api/users';
 import { OTP_AUTO_VERIFY, PHONE_ENABLED } from '@app/shared/config';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
@@ -101,6 +107,7 @@ import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { expectData, expectError } from '../helpers/expect-body';
 import { sentMail, settleDelivery } from '../helpers/mailbox';
 import {
   authedRequest,
@@ -158,32 +165,9 @@ function uniqueEmail(prefix: string): string {
   return `${prefix}.${generateUuidV7().replaceAll('-', '').slice(0, 16)}@gmail.com`;
 }
 
-interface ApiBody {
-  success: boolean;
-  message: string;
-  data: unknown;
-}
-
-async function bodyOf(response: Response): Promise<ApiBody> {
-  return (await response.json()) as ApiBody;
-}
-
-/**
- * One field of the envelope, as its own await.
- *
- * `messageOf`/`dataOf` exist because `(await bodyOf(r)).message` reads as an
- * await of the member rather than of the response, which is what
- * `unicorn/no-await-expression-member` objects to. Same for the `userRow`
- * accessors below.
- */
-async function messageOf(response: Response): Promise<string> {
-  const body = await bodyOf(response);
-  return body.message;
-}
-
-async function dataOf(response: Response): Promise<unknown> {
-  const body = await bodyOf(response);
-  return body.data;
+/** The body as sent, for the cases that compare two answers field for field. */
+async function bodyOf(response: Response): Promise<unknown> {
+  return response.json();
 }
 
 function anonPost(url: string, body: unknown): Request {
@@ -448,14 +432,16 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    // The whole envelope, not just the status: `data` must stay null, because
-    // this is the shape every unauthenticated caller sees, and a handler that
-    // started returning a user id here would still be answering 401.
-    expect(await bodyOf(response)).toEqual({
-      success: false,
-      message: MSG_LOGIN_REQUIRED,
-      data: null,
+    // The whole problem, not just the status: it must carry nothing else,
+    // because this is the shape every unauthenticated caller sees, and a
+    // handler that started returning a user id here would still be answering 401.
+    expect(
+      await expectError(response, HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED)
+    ).toEqual({
+      type: 'about:blank',
+      title: 'Unauthorized',
+      status: 401,
+      detail: MSG_LOGIN_REQUIRED,
     });
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await storedHash(subject('pwGuard').userId)).toBe(before);
@@ -477,8 +463,7 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(await messageOf(response)).toBe(MSG_LOGIN_REQUIRED);
+    await expectError(response, HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
     expect(await storedHash(doomed.userId)).toMatch(PEPPERED_HASH);
   });
 
@@ -492,8 +477,7 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(await messageOf(response)).toBe(otpMsg.captchaFailed);
+    await expectError(response, HTTP_STATUS.FORBIDDEN, otpMsg.captchaFailed);
     expect(await storedHash(subject('pwGuard').userId)).toBe(before);
   });
 
@@ -502,8 +486,7 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       authedPost(actor('pwGuard'), CHANGE_PASSWORD, '{"currentPassword":')
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await messageOf(response)).toBe(MSG_INVALID_INPUT);
+    await expectError(response, HTTP_STATUS.BAD_REQUEST, MSG_INVALID_INPUT);
   });
 
   test('a JSON array body is 400, not a 500 and not a 422', async () => {
@@ -516,8 +499,7 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       ])
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await messageOf(response)).toBe(MSG_INVALID_INPUT);
+    await expectError(response, HTTP_STATUS.BAD_REQUEST, MSG_INVALID_INPUT);
   });
 
   test('a missing newPassword is 422 and the hash is untouched', async () => {
@@ -529,8 +511,7 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(await dataOf(response)).toBeNull();
+    await expectError(response, HTTP_STATUS.UNPROCESSABLE);
     expect(await storedHash(subject('pwGuard').userId)).toBe(before);
   });
 
@@ -577,8 +558,11 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await messageOf(response)).toBe(userMsg.newPasswordSameAsCurrent);
+    await expectError(
+      response,
+      HTTP_STATUS.BAD_REQUEST,
+      userMsg.newPasswordSameAsCurrent
+    );
     // The discriminator for ORDER. The pair sent above is not this user's
     // password, so if the equality check ran after `verifyLoginAttempt` the
     // failed-attempt counter would have moved and five such requests would lock
@@ -606,8 +590,11 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await messageOf(response)).toBe(userMsg.newPasswordSameAsCurrent);
+    await expectError(
+      response,
+      HTTP_STATUS.BAD_REQUEST,
+      userMsg.newPasswordSameAsCurrent
+    );
     // Byte-identical, so nothing was rehashed under a new salt either — a
     // rehash of the same password would pass a "can still sign in" check while
     // still being the rotation this refuses.
@@ -640,8 +627,11 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await messageOf(response)).toBe(MSG_PASSWORD_COMPROMISED);
+    await expectError(
+      response,
+      HTTP_STATUS.BAD_REQUEST,
+      MSG_PASSWORD_COMPROMISED
+    );
     expect(await storedHash(subject('pwGuard').userId)).toBe(hashBefore);
     // The HIBP screen runs before re-auth, so a request that was going to be
     // refused anyway does not spend one of the account's five attempts.
@@ -662,12 +652,11 @@ describe('POST /api/dash/users/me/change-password — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await bodyOf(response)).toEqual({
-      success: false,
-      message: userMsg.currentPasswordIncorrect,
-      data: null,
-    });
+    await expectError(
+      response,
+      HTTP_STATUS.BAD_REQUEST,
+      userMsg.currentPasswordIncorrect
+    );
     // Byte-identical, which is the only statement that distinguishes "refused"
     // from "refused after writing".
     expect(await storedHash(subject('pwGuard').userId)).toBe(hashBefore);
@@ -783,9 +772,7 @@ describe('POST /api/dash/users/me/change-password — the rotation', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.OK);
-    expect(await bodyOf(response)).toEqual({
-      success: true,
+    expect(await expectData(response, changePassword)).toEqual({
       message: userMsg.passwordChanged,
       data: null,
     });
@@ -843,8 +830,7 @@ describe('POST /api/dash/users/me/change-password — the rotation', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(await messageOf(response)).toBe(MSG_LOGIN_REQUIRED);
+    await expectError(response, HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
   });
 
   test('the surviving session is still usable', async () => {
@@ -865,12 +851,7 @@ describe('POST /api/dash/users/me/change-email — refusals', () => {
         newEmail: uniqueEmail('anon'),
       })
     );
-    expect(initiate.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(await bodyOf(initiate)).toEqual({
-      success: false,
-      message: MSG_LOGIN_REQUIRED,
-      data: null,
-    });
+    await expectError(initiate, HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
 
     const verify = await app.handle(
       anonPost(CHANGE_EMAIL_VERIFY, {
@@ -878,8 +859,7 @@ describe('POST /api/dash/users/me/change-email — refusals', () => {
         code: ARBITRARY_CODE,
       })
     );
-    expect(verify.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(await messageOf(verify)).toBe(MSG_LOGIN_REQUIRED);
+    await expectError(verify, HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
   });
 
   test('a wrong currentPassword is 400, sends nothing and moves nothing', async () => {
@@ -893,12 +873,11 @@ describe('POST /api/dash/users/me/change-email — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await bodyOf(response)).toEqual({
-      success: false,
-      message: userMsg.currentPasswordIncorrect,
-      data: null,
-    });
+    await expectError(
+      response,
+      HTTP_STATUS.BAD_REQUEST,
+      userMsg.currentPasswordIncorrect
+    );
     expect(await emailOf(userId)).toBe(before.email);
     // No code went to the address the caller named, so a stolen session cannot
     // be used to mail an arbitrary address without the password.
@@ -917,8 +896,11 @@ describe('POST /api/dash/users/me/change-email — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await messageOf(response)).toBe(userMsg.newEmailSameAsCurrent);
+    await expectError(
+      response,
+      HTTP_STATUS.BAD_REQUEST,
+      userMsg.newEmailSameAsCurrent
+    );
     await settleDelivery();
     expect(sentMail()).toEqual([]);
     expect(await proofRows(userId)).toEqual([]);
@@ -950,14 +932,12 @@ describe('POST /api/dash/users/me/change-email — refusals', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
-    const body = await bodyOf(response);
-    expect(body.data).toBeNull();
+    const problem = await expectError(response, HTTP_STATUS.NOT_FOUND);
     // The proof lookup is keyed on the caller's own id, so this 404 says nothing
     // about whether the address belongs to anybody — and the message must not
     // echo the request back either.
-    expect(body.message).not.toContain(stranger);
-    expect(body.message).not.toContain(subject('emailGuard').userId);
+    expect(problem.detail).not.toContain(stranger);
+    expect(problem.detail).not.toContain(subject('emailGuard').userId);
   });
 });
 
@@ -983,9 +963,7 @@ describe('POST /api/dash/users/me/change-email — the two-step change', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.OK);
-    expect(await bodyOf(response)).toEqual({
-      success: true,
+    expect(await expectData(response, changeEmail)).toEqual({
       message: userMsg.emailChangeCodeSent,
       data: { otpSent: true },
     });
@@ -1026,8 +1004,7 @@ describe('POST /api/dash/users/me/change-email — the two-step change', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await dataOf(response)).toBeNull();
+    await expectError(response, HTTP_STATUS.BAD_REQUEST);
     expect(await emailOf(userId)).toBe(before.email);
     // The proof survives so the user can still finish with the real code.
     const rows = await proofRows(userId);
@@ -1049,9 +1026,7 @@ describe('POST /api/dash/users/me/change-email — the two-step change', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.OK);
-    expect(await bodyOf(response)).toEqual({
-      success: true,
+    expect(await expectData(response, verifyEmailChange)).toEqual({
       message: userMsg.emailChanged,
       data: { verified: true },
     });
@@ -1149,7 +1124,6 @@ describe('POST /api/auth/forgot-password/send — the enumeration boundary', () 
     expect(knownResponse.status).toBe(unknownResponse.status);
     expect(knownBody).toEqual(unknownBody);
     expect(unknownBody).toEqual({
-      success: true,
       message: otpMsg.sendSuccess,
       data: { nextAllowedIn: 30 },
     });
@@ -1210,9 +1184,10 @@ describe('POST /api/auth/forgot-password/reset', () => {
     // the reason the reset path can afford to swallow its own errors.
     expect(unownedBody).toEqual(wrongCodeBody);
     expect(wrongCodeBody).toEqual({
-      success: false,
-      message: otpMsg.invalidOrExpired,
-      data: null,
+      type: 'about:blank',
+      title: 'Bad Request',
+      status: 400,
+      detail: otpMsg.invalidOrExpired,
     });
 
     expect(await storedHash(userId)).toBe(hashBefore);
@@ -1248,9 +1223,7 @@ describe('POST /api/auth/forgot-password/reset', () => {
       })
     );
 
-    expect(reset.status).toBe(HTTP_STATUS.OK);
-    expect(await bodyOf(reset)).toEqual({
-      success: true,
+    expect(await expectData(reset, resetPassword)).toEqual({
       message: otpMsg.passwordResetSuccess,
       data: { reset: true },
     });
@@ -1277,8 +1250,7 @@ describe('POST /api/auth/forgot-password/reset', () => {
         newPassword: 'Harness!Reset0wo',
       })
     );
-    expect(replay.status).toBe(HTTP_STATUS.BAD_REQUEST);
-    expect(await messageOf(replay)).toBe(otpMsg.invalidOrExpired);
+    await expectError(replay, HTTP_STATUS.BAD_REQUEST, otpMsg.invalidOrExpired);
 
     const old = await signInResponse(
       subject('forgot').email,
@@ -1319,7 +1291,6 @@ describe('POST /api/auth/passwordless/send — the enumeration boundary', () => 
     expect(knownResponse.status).toBe(unknownResponse.status);
     expect(knownBody).toEqual(unknownBody);
     expect(unknownBody).toEqual({
-      success: true,
       message: otpMsg.sendSuccess,
       data: { nextAllowedIn: 30 },
     });
@@ -1353,8 +1324,7 @@ describe('POST /api/auth/passwordless/send — the enumeration boundary', () => 
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(await messageOf(response)).toBe(otpMsg.invalidInput);
+    await expectError(response, HTTP_STATUS.UNPROCESSABLE, otpMsg.invalidInput);
     await settleDelivery();
     expect(sentMail()).toEqual([]);
   });
@@ -1374,8 +1344,7 @@ describe('POST /api/dash/users/me/change-phone', () => {
       })
     );
 
-    expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
-    expect(await messageOf(response)).toBe(MSG_LOGIN_REQUIRED);
+    await expectError(response, HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
   });
 
   test('with no phone channel enabled it is 503 and never reaches the password', async () => {
@@ -1393,8 +1362,11 @@ describe('POST /api/dash/users/me/change-phone', () => {
     // This tier runs with NEXT_PUBLIC_ENABLED_OTP_CHANNELS=email, so no phone
     // channel can prove ownership. Refusing up front is the only alternative to
     // sending to a dead channel or stranding the change forever.
-    expect(response.status).toBe(HTTP_STATUS.SERVICE_UNAVAILABLE);
-    expect(await messageOf(response)).toBe(userMsg.verificationUnavailable);
+    await expectError(
+      response,
+      HTTP_STATUS.SERVICE_UNAVAILABLE,
+      userMsg.verificationUnavailable
+    );
     const after = await userRow(userId);
     expect(after.phoneNumber).toBe(before.phoneNumber);
     // The availability check precedes re-auth, so nothing was charged.

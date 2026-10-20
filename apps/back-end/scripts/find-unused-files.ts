@@ -38,6 +38,10 @@ const KNOWN_UNREACHABLE = new Set<string>();
 /** `from '…'`, `import '…'`, `import('…')`, `require('…')`, `export … from '…'`. */
 const SPECIFIER_PATTERN = /(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]/g;
 
+/** How a `Worker` entry is named: a URL relative to the file, `./` optional. */
+const FILE_URL_PATTERN =
+  /new\s+URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g;
+
 const toKey = (absolutePath: string) =>
   path.relative(ROOT, absolutePath).split(path.sep).join('/');
 
@@ -108,7 +112,13 @@ const resolveImports = (
   files: Set<string>
 ): string[] => {
   const resolved: string[] = [];
-  for (const [, specifier] of source.matchAll(SPECIFIER_PATTERN)) {
+  const specifiers = [
+    ...source.matchAll(SPECIFIER_PATTERN).map(([, specifier]) => specifier),
+    ...source
+      .matchAll(FILE_URL_PATTERN)
+      .map(([, url]) => (url?.startsWith('.') ? url : `./${url}`)),
+  ];
+  for (const specifier of specifiers) {
     if (!specifier) continue;
     const target = resolveSpecifier(specifier, fromKey, files);
     if (target && target !== fromKey) resolved.push(target);

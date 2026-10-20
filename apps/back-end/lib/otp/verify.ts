@@ -136,6 +136,8 @@ export async function processOtpVerify(
       .where(eq(users.id, userId))
       .for('update');
 
+    const windowExpired = sql`NOW() - ${verificationSessions.verifyAttemptWindowStart} > INTERVAL '24 hours'`;
+
     const [session] = await tx
       .select({
         id: verificationSessions.id,
@@ -144,6 +146,14 @@ export async function processOtpVerify(
         targetIdentifier: verificationSessions.targetIdentifier,
         // For the audit row: the request's `channel` may misreport delivery.
         channel: verificationSessions.channel,
+        // Zero once the window has aged out. Per purpose on purpose: wider,
+        // failed verify_contact attempts would deny forgot_password.
+        // Read-then-write is safe under the `users` lock, and nothing below
+        // touches the counter before its charge.
+        dailyUsed:
+          sql<number>`CASE WHEN ${windowExpired} THEN 0 ELSE ${verificationSessions.verifyAttemptDaily} END`.mapWith(
+            Number
+          ),
       })
       .from(verificationSessions)
       .where(
@@ -230,27 +240,7 @@ export async function processOtpVerify(
       return blockedUntil;
     };
 
-    const windowExpired = sql`NOW() - ${verificationSessions.verifyAttemptWindowStart} > INTERVAL '24 hours'`;
-
-    // One row (the unique key); a SUM only to fold an aged-out window to zero.
-    // Per purpose on purpose: wider, failed verify_contact attempts would deny
-    // forgot_password. Read-then-write is safe under the `users` lock.
-    const [dailyUsage] = await tx
-      .select({
-        used: sql<number>`COALESCE(SUM(CASE WHEN ${windowExpired} THEN 0 ELSE ${verificationSessions.verifyAttemptDaily} END), 0)`.mapWith(
-          Number
-        ),
-      })
-      .from(verificationSessions)
-      .where(
-        and(
-          eq(verificationSessions.userId, userId),
-          eq(verificationSessions.contactKind, contactKind),
-          eq(verificationSessions.purpose, purpose)
-        )
-      );
-
-    const dailyUsed = dailyUsage?.used ?? 0;
+    const { dailyUsed } = session;
     if (dailyUsed >= OTP_MAX_DAILY_VERIFY_ATTEMPTS)
       return {
         kind: 'blocked',

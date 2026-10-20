@@ -67,6 +67,7 @@ import { processOtpVerify } from '@/lib/otp/verify';
 import { resetTables } from '../helpers/database';
 import { dropMockedClockWindows } from '../helpers/rate-limit';
 import { seedUser } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 
 /** The code every seeded proof row will match. */
 const RIGHT_CODE = '123456';
@@ -1082,4 +1083,30 @@ describe('the ANCHORED fixed 24-hour window', () => {
     expect(row?.anchorAgeSeconds).toBeGreaterThanOrEqual(anchorBefore);
     expect(row?.anchorAgeSeconds).toBeLessThan(60 * 60);
   }, 30_000);
+});
+
+describe('a wrong-code verify', () => {
+  test('reads its proof row once, the daily budget with it', async () => {
+    const { userId, email } = await freshIdentity();
+    const sessionId = await seedProof({
+      userId,
+      channel: 'email',
+      purpose: 'verify_contact',
+      identifier: email,
+    });
+
+    const recorder = recordStatements();
+    const guess = await verify({
+      userId,
+      channel: 'email',
+      purpose: 'verify_contact',
+      identifier: email,
+      code: WRONG_CODE,
+    }).finally(recorder.stop);
+
+    expect(guess.status).toBe(HTTP_STATUS.BAD_REQUEST);
+    expect(recorder.matching(/from "verification_sessions"/)).toHaveLength(1);
+    const row = await proofRow(sessionId);
+    expect(row?.verifyAttemptDaily).toBe(1);
+  });
 });

@@ -3,6 +3,7 @@ import type { EntityID } from '@app/shared/types';
 import type { OtpChannel } from '@app/shared/validation/enums';
 
 import { http, HttpResponse } from 'msw';
+import * as contract from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
@@ -30,7 +31,8 @@ import {
 import { generateEntityId } from '@/utils/generate-id';
 
 import { now } from '../lib/db';
-import { api, asPlugin, parseOrThrow, pluginOk, readJson } from '../lib/http';
+import { mock } from '../lib/endpoint';
+import { api, parseOrThrow, readJson } from '../lib/http';
 import {
   clearTwoFactor,
   enrolmentOf,
@@ -67,13 +69,13 @@ import {
   totpUri,
 } from '../lib/two-factor-model';
 import { session } from '../store';
+import { sendChallengeCode, verifyChallengeCode } from './sign-in-challenge';
 
 /*
  * The project's two-factor plugins and the passkey plugin it mounts, over the
- * state in `lib/two-factor.ts`. They answer `{ success, message?, data? }` and
- * refuse in Better Auth's `{ code, message }`, never the API envelope; the
+ * state in `lib/two-factor.ts`, each held to its entry by `mock()`; the
  * library's own `/passkey/*` routes answer plain JSON. The sign-in half (a
- * challenge, the verifiers) is not here.
+ * challenge, the verifiers) is in `sign-in-challenge.ts`.
  */
 
 const ENROLMENT_TTL_S = 600;
@@ -135,7 +137,7 @@ const readPassword = async (request: Request) => {
 const enrolledMethods = (user: MockUser) => twoFactorOf(user.id).methods;
 
 export const twoFactorHandlers = [
-  http.post(api('/api/auth/two-factor/totp/start'), async ({ request }) => {
+  mock(contract.startTotpEnrolment, async ({ request }) => {
     requireServed(isTwoFactorMethodEnabled('totp'));
     const user = requireSessionUser();
     requireReauthProof(await readPassword(request));
@@ -155,10 +157,10 @@ export const twoFactorHandlers = [
     console.info(
       `[mock api] ${TOTP_ISSUER} authenticator code for ${user.email}: ${await totpCodeAt(secret, totpStep())}`
     );
-    return pluginOk({ totpURI: totpUri(secret, user.email) });
+    return { raw: { data: { totpURI: totpUri(secret, user.email) } } };
   }),
 
-  http.post(api('/api/auth/two-factor/totp/confirm'), async ({ request }) => {
+  mock(contract.confirmTotpEnrolment, async ({ request }) => {
     requireServed(isTwoFactorMethodEnabled('totp'));
     const user = requireSessionUser();
     const { code } = parseOrThrow(
@@ -196,71 +198,63 @@ export const twoFactorHandlers = [
       contactKind: null,
     });
     markTwoFactorProven(user.id, sessionId());
-    return pluginOk({ method: 'totp' }, twoFactorMsg.enabled);
+    return {
+      raw: { message: twoFactorMsg.enabled, data: { method: 'totp' as const } },
+    };
   }),
 
-  http.post(
-    api('/api/auth/two-factor/generate-backup-codes'),
-    async ({ request }) => {
-      requireServed(isTwoFactorMethodEnabled('backup_code'));
-      const user = requireSessionUser();
-      requireReauthProof(await readPassword(request));
+  mock(contract.generateBackupCodes, async ({ request }) => {
+    requireServed(isTwoFactorMethodEnabled('backup_code'));
+    const user = requireSessionUser();
+    requireReauthProof(await readPassword(request));
 
-      const codes = generateBackupCodes();
-      const setId = generateEntityId();
-      writeTwoFactor(user.id, {
-        backupCodes: {
-          codes,
-          remaining: BACKUP_CODE_COUNT,
-          setId,
-          acknowledgedSetId: null,
-        },
-      });
-      return pluginOk({ backupCodes: codes, setId });
-    }
-  ),
+    const codes = generateBackupCodes();
+    const setId = generateEntityId();
+    writeTwoFactor(user.id, {
+      backupCodes: {
+        codes,
+        remaining: BACKUP_CODE_COUNT,
+        setId,
+        acknowledgedSetId: null,
+      },
+    });
+    return { raw: { data: { backupCodes: codes, setId } } };
+  }),
 
-  http.post(
-    api('/api/auth/two-factor/backup-codes/acknowledge'),
-    async ({ request }) => {
-      requireServed(TWO_FACTOR_ENABLED);
-      const user = requireSessionUser();
-      requireMethod('backup_code');
-      const body = await readJson(request);
-      // Before the proof, so a malformed body cannot buy a password check.
-      const { setId } = parseOrThrow(
-        twoFactorBackupAcknowledgeSchema,
-        body,
-        otpMsg.invalidInput
-      );
-      requireReauthProof(body.password);
+  mock(contract.acknowledgeBackupCodes, async ({ request }) => {
+    requireServed(TWO_FACTOR_ENABLED);
+    const user = requireSessionUser();
+    requireMethod('backup_code');
+    const body = await readJson(request);
+    // Before the proof, so a malformed body cannot buy a password check.
+    const { setId } = parseOrThrow(
+      twoFactorBackupAcknowledgeSchema,
+      body,
+      otpMsg.invalidInput
+    );
+    requireReauthProof(body.password);
 
-      const { backupCodes } = twoFactorOf(user.id);
-      if (!backupCodes?.setId || backupCodes.remaining === 0)
-        throw methodNotFound();
-      if (backupCodes.setId !== setId)
-        throw new CustomError(
-          twoFactorMsg.staleBackupSet,
-          HTTP_STATUS.CONFLICT
-        );
+    const { backupCodes } = twoFactorOf(user.id);
+    if (!backupCodes?.setId || backupCodes.remaining === 0)
+      throw methodNotFound();
+    if (backupCodes.setId !== setId)
+      throw new CustomError(twoFactorMsg.staleBackupSet, HTTP_STATUS.CONFLICT);
 
-      writeTwoFactor(user.id, {
-        backupCodes: { ...backupCodes, acknowledgedSetId: backupCodes.setId },
-      });
-      recordEnabledMethod(user.id, {
-        method: 'backup_code',
-        channel: null,
-        contactKind: null,
-      });
-      return pluginOk(undefined, twoFactorMsg.enabled);
-    }
-  ),
+    writeTwoFactor(user.id, {
+      backupCodes: { ...backupCodes, acknowledgedSetId: backupCodes.setId },
+    });
+    recordEnabledMethod(user.id, {
+      method: 'backup_code',
+      channel: null,
+      contactKind: null,
+    });
+    return { raw: { message: twoFactorMsg.enabled } };
+  }),
 
-  // The enrolment half only. With no session the request belongs to a sign-in
-  // challenge, which answers it: nothing here, so the next handler does.
-  http.post(api('/api/auth/two-factor/otp/send'), async ({ request }) => {
+  // A session enrols; without one the request belongs to a sign-in challenge.
+  mock(contract.twoFactorOtpSend, async ({ request }) => {
     requireServed(TWO_FACTOR_OTP_AVAILABLE);
-    if (!session.get()) return;
+    if (!session.get()) return sendChallengeCode(request);
     const user = requireSessionUser();
     const body = await readJson(request);
     requireReauthProof(body.password);
@@ -272,12 +266,12 @@ export const twoFactorHandlers = [
     );
     const { kind, destination } = enrolmentTarget(user, channel);
     const nextAllowedIn = sendCode(user.id, 'two_factor', destination, kind);
-    return pluginOk({ nextAllowedIn }, twoFactorMsg.codeSent);
+    return { raw: { message: twoFactorMsg.codeSent, data: { nextAllowedIn } } };
   }),
 
-  http.post(api('/api/auth/two-factor/otp/verify'), async ({ request }) => {
+  mock(contract.twoFactorOtpVerify, async ({ request }) => {
     requireServed(TWO_FACTOR_OTP_AVAILABLE);
-    if (!session.get()) return;
+    if (!session.get()) return verifyChallengeCode(request);
     const body = await readJson(request);
     const { code } = parseOrThrow(
       twoFactorOtpVerifySchema,
@@ -308,105 +302,114 @@ export const twoFactorHandlers = [
     }
 
     recordEnabledMethod(user.id, { method: 'otp', channel, contactKind: kind });
-    return pluginOk({ method: 'otp', channel }, twoFactorMsg.enabled);
+    return {
+      raw: {
+        message: twoFactorMsg.enabled,
+        data: { method: 'otp' as const, channel },
+      },
+    };
   }),
 
-  http.get(api('/api/auth/two-factor/methods'), () => {
+  mock(contract.listTwoFactorMethods, () => {
     requireServed(TWO_FACTOR_ENABLED);
     const user = requireSessionUser();
-    return pluginOk({
-      methods: sortedMethods(enrolledMethods(user)).map(
-        ({ method, channel, contactKind, isDefault }) => ({
-          method,
-          channel,
-          contactKind,
-          isDefault,
-        })
-      ),
-    });
+    return {
+      raw: {
+        data: {
+          methods: sortedMethods(enrolledMethods(user)).map(
+            ({ method, channel, contactKind, isDefault }) => ({
+              method,
+              channel,
+              contactKind,
+              isDefault,
+            })
+          ),
+        },
+      },
+    };
   }),
 
-  http.post(
-    api('/api/auth/two-factor/methods/disable'),
-    async ({ request }) => {
-      requireServed(TWO_FACTOR_ENABLED);
-      const user = requireSessionUser();
-      const body = await readJson(request);
-      requireReauthProof(body.password);
+  mock(contract.disableTwoFactorMethod, async ({ request }) => {
+    requireServed(TWO_FACTOR_ENABLED);
+    const user = requireSessionUser();
+    const body = await readJson(request);
+    requireReauthProof(body.password);
 
-      const { method, contactKind } = parseOrThrow(
-        twoFactorMethodOptionSchema,
-        body,
-        twoFactorMsg.methodUnavailable
-      );
-      const enrolled = enrolledMethods(user);
-      const target = enrolled.find((entry) =>
-        matchesEnrolment(entry, method, contactKind)
-      );
-      if (!target) throw methodNotFound();
-      if (
-        enrolled.length === 1 ||
-        removalStrands(enrolmentOf(user), method, target.contactKind)
-      )
-        throw new CustomError(twoFactorMsg.lastMethod, HTTP_STATUS.CONFLICT);
+    const { method, contactKind } = parseOrThrow(
+      twoFactorMethodOptionSchema,
+      body,
+      twoFactorMsg.methodUnavailable
+    );
+    const enrolled = enrolledMethods(user);
+    const target = enrolled.find((entry) =>
+      matchesEnrolment(entry, method, contactKind)
+    );
+    if (!target) throw methodNotFound();
+    if (
+      enrolled.length === 1 ||
+      removalStrands(enrolmentOf(user), method, target.contactKind)
+    )
+      throw new CustomError(twoFactorMsg.lastMethod, HTTP_STATUS.CONFLICT);
 
-      removeMethodIntent(user.id, method, target.contactKind);
-      // The method's capability goes with it, or an intent write alone would
-      // bring it back with no proof: the secret, and the acknowledgement.
-      const { totp, backupCodes } = twoFactorOf(user.id);
-      if (method === 'totp' && totp) writeTwoFactor(user.id, { totp: null });
-      if (method === 'backup_code' && backupCodes)
-        writeTwoFactor(user.id, {
-          backupCodes: { ...backupCodes, acknowledgedSetId: null },
-        });
-      revokeTwoFactorState(user.id);
-
-      return pluginOk(
-        { removedMethod: optionId(method, target.contactKind) },
-        twoFactorMsg.disabled
-      );
-    }
-  ),
-
-  http.post(
-    api('/api/auth/two-factor/methods/default'),
-    async ({ request }) => {
-      requireServed(TWO_FACTOR_ENABLED);
-      const user = requireSessionUser();
-      const { method, contactKind } = parseOrThrow(
-        twoFactorMethodOptionSchema,
-        await readJson(request),
-        twoFactorMsg.methodUnavailable
-      );
-      const enrolled = enrolledMethods(user);
-      const target = enrolled.find((entry) =>
-        matchesEnrolment(entry, method, contactKind)
-      );
-      if (!target) throw methodNotFound();
-
+    removeMethodIntent(user.id, method, target.contactKind);
+    // The method's capability goes with it, or an intent write alone would
+    // bring it back with no proof: the secret, and the acknowledgement.
+    const { totp, backupCodes } = twoFactorOf(user.id);
+    if (method === 'totp' && totp) writeTwoFactor(user.id, { totp: null });
+    if (method === 'backup_code' && backupCodes)
       writeTwoFactor(user.id, {
-        methods: enrolled.map((entry) => ({
-          ...entry,
-          isDefault: entry === target,
-        })),
+        backupCodes: { ...backupCodes, acknowledgedSetId: null },
       });
-      return pluginOk({
-        defaultMethod: optionId(method, target.contactKind),
-      });
-    }
-  ),
+    revokeTwoFactorState(user.id);
 
-  http.post(api('/api/auth/two-factor/disable'), async ({ request }) => {
+    return {
+      raw: {
+        message: twoFactorMsg.disabled,
+        data: { removedMethod: optionId(method, target.contactKind) },
+      },
+    };
+  }),
+
+  mock(contract.setDefaultTwoFactorMethod, async ({ request }) => {
+    requireServed(TWO_FACTOR_ENABLED);
+    const user = requireSessionUser();
+    const { method, contactKind } = parseOrThrow(
+      twoFactorMethodOptionSchema,
+      await readJson(request),
+      twoFactorMsg.methodUnavailable
+    );
+    const enrolled = enrolledMethods(user);
+    const target = enrolled.find((entry) =>
+      matchesEnrolment(entry, method, contactKind)
+    );
+    if (!target) throw methodNotFound();
+
+    writeTwoFactor(user.id, {
+      methods: enrolled.map((entry) => ({
+        ...entry,
+        isDefault: entry === target,
+      })),
+    });
+    return {
+      raw: {
+        data: {
+          defaultMethod: optionId(method, target.contactKind),
+        },
+      },
+    };
+  }),
+
+  mock(contract.disableTwoFactor, async ({ request }) => {
     requireServed(TWO_FACTOR_ENABLED);
     const user = requireSessionUser();
     requireReauthProof(await readPassword(request));
 
     clearTwoFactor(user.id, { deletePasskeys: false });
     revokeTwoFactorState(user.id);
-    return pluginOk(undefined, twoFactorMsg.disabled);
+    return { raw: { message: twoFactorMsg.disabled } };
   }),
 
-  http.post(api('/api/auth/two-factor/trust-device'), () => {
+  mock(contract.trustCurrentDevice, () => {
     requireServed(TWO_FACTOR_ENABLED);
     const user = requireSessionUser();
     if (!takeProof(user.id, 'two-factor-proven', sessionId()))
@@ -429,54 +432,53 @@ export const twoFactorHandlers = [
         },
       ],
     });
-    return pluginOk({ trusted: true });
+    return { raw: { data: { trusted: true as const } } };
   }),
 
-  http.get(api('/api/auth/two-factor/trusted-devices'), () => {
+  mock(contract.listTrustedDevices, () => {
     requireServed(TWO_FACTOR_ENABLED);
     const user = requireSessionUser();
-    return pluginOk({
-      devices: twoFactorOf(user.id)
-        .trustedDevices.filter(
-          (device) => Date.parse(device.expiresAt) > Date.now()
-        )
-        .toSorted(
-          (a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt)
-        ),
-    });
+    return {
+      raw: {
+        data: {
+          devices: twoFactorOf(user.id)
+            .trustedDevices.filter(
+              (device) => Date.parse(device.expiresAt) > Date.now()
+            )
+            .toSorted(
+              (a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt)
+            ),
+        },
+      },
+    };
   }),
 
-  http.post(
-    api('/api/auth/two-factor/trusted-devices/revoke'),
-    async ({ request }) => {
-      requireServed(TWO_FACTOR_ENABLED);
-      const user = requireSessionUser();
-      const { id } = await readJson(request);
-      const deviceId = validID(id);
-      if (!deviceId)
-        throw new CustomError(MSG_INVALID_INPUT, HTTP_STATUS.UNPROCESSABLE);
+  mock(contract.revokeTrustedDevice, async ({ request }) => {
+    requireServed(TWO_FACTOR_ENABLED);
+    const user = requireSessionUser();
+    const { id } = await readJson(request);
+    const deviceId = validID(id);
+    if (!deviceId)
+      throw new CustomError(MSG_INVALID_INPUT, HTTP_STATUS.UNPROCESSABLE);
 
-      const { trustedDevices } = twoFactorOf(user.id);
-      // Another user's device and a missing one answer alike.
-      if (!trustedDevices.some((device) => device.id === deviceId))
-        throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-      writeTwoFactor(user.id, {
-        trustedDevices: trustedDevices.filter(
-          (device) => device.id !== deviceId
-        ),
-      });
-      return pluginOk({ revoked: true });
-    }
-  ),
+    const { trustedDevices } = twoFactorOf(user.id);
+    // Another user's device and a missing one answer alike.
+    if (!trustedDevices.some((device) => device.id === deviceId))
+      throw new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    writeTwoFactor(user.id, {
+      trustedDevices: trustedDevices.filter((device) => device.id !== deviceId),
+    });
+    return { raw: { data: { revoked: true as const } } };
+  }),
 
-  http.post(api('/api/auth/two-factor/passkey/grant'), async ({ request }) => {
+  mock(contract.passkeyEnrolmentGrant, async ({ request }) => {
     requireServed(isTwoFactorMethodEnabled('passkey'));
     const user = requireSessionUser();
     requireReauthProof(await readPassword(request));
 
     const grant = randomToken(24);
     issueProof(user.id, 'passkey-grant', grant, { ttlSeconds: GRANT_TTL_S });
-    return pluginOk({ grant });
+    return { raw: { data: { grant } } };
   }),
 
   // The ceremony itself runs in the browser against these options; nothing
@@ -574,7 +576,7 @@ export const twoFactorHandlers = [
     );
   }),
 
-  http.post(api('/api/auth/passkey/delete-passkey'), async ({ request }) => {
+  mock(contract.deletePasskey, async ({ request }) => {
     requireServed(isTwoFactorMethodEnabled('passkey'));
     const user = requireSessionUser();
     const body = await readJson(request);
@@ -609,6 +611,6 @@ export const twoFactorHandlers = [
       removeMethodIntent(user.id, 'passkey');
       revokeTwoFactorState(user.id);
     }
-    return pluginOk({ deleted: true });
+    return { raw: { data: { deleted: true as const } } };
   }),
-].map(asPlugin);
+];

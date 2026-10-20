@@ -6,12 +6,17 @@
 import { describe, expect, test } from 'bun:test';
 import type { OpenApiDocument } from '@app/shared/responses/openapi';
 
+import { PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
 import { OPENAPI_VERSION } from '@app/shared/responses/openapi';
 
 import { documentCheck } from '../helpers/document-check';
 
 const json = (schema: unknown) => ({
   content: { 'application/json': { schema } },
+});
+
+const problem = (schema: unknown) => ({
+  content: { [PROBLEM_MEDIA_TYPE]: { schema } },
 });
 
 const DOCUMENT: OpenApiDocument = {
@@ -21,6 +26,16 @@ const DOCUMENT: OpenApiDocument = {
   tags: [],
   components: {
     schemas: {
+      Problem: {
+        type: 'object',
+        properties: {
+          type: { const: 'about:blank' },
+          status: { type: 'integer' },
+          detail: { type: 'string' },
+        },
+        required: ['type', 'status', 'detail'],
+        additionalProperties: false,
+      },
       Thing: {
         type: 'object',
         properties: { id: { type: 'string', format: 'uuid' } },
@@ -42,6 +57,10 @@ const DOCUMENT: OpenApiDocument = {
           '409': {
             description: 'No schema.',
             content: { 'application/json': {} },
+          },
+          '422': {
+            description: 'A problem.',
+            ...problem({ $ref: '#/components/schemas/Problem' }),
           },
         },
       },
@@ -81,6 +100,18 @@ describe('an answer the document describes', () => {
           status: 404,
           headers: { 'content-type': 'text/plain; charset=utf-8' },
         })
+      )
+    ).toEqual([]);
+  });
+
+  test('a refusal passes as a problem, in the media type the document publishes', async () => {
+    expect(
+      await ask(
+        '/api/things/x',
+        Response.json(
+          { type: 'about:blank', status: 422, detail: 'x' },
+          { status: 422, headers: { 'content-type': PROBLEM_MEDIA_TYPE } }
+        )
       )
     ).toEqual([]);
   });
@@ -144,6 +175,26 @@ describe('an answer the document cannot describe fails', () => {
       )
     ).toEqual([
       'GET /api/things/{id} 200: a body that is not application/json',
+    ]);
+  });
+
+  test('a refusal in another media type than the document publishes, or a body breaking its problem', async () => {
+    const body = { type: 'about:blank', status: 422, detail: 'x' };
+    expect(
+      await ask('/api/things/x', Response.json(body, { status: 422 }))
+    ).toEqual([
+      'GET /api/things/{id} 422: a application/json body, where the document publishes application/problem+json',
+    ]);
+    expect(
+      await ask(
+        '/api/things/x',
+        Response.json(
+          { ...body, message: 'x' },
+          { status: 422, headers: { 'content-type': PROBLEM_MEDIA_TYPE } }
+        )
+      )
+    ).toEqual([
+      'GET /api/things/{id} 422: body must NOT have additional properties',
     ]);
   });
 

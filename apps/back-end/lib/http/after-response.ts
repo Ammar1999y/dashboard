@@ -33,10 +33,13 @@ const flushed = new WeakMap<Request, string>();
 
 const inFlight = new Set<Promise<void>>();
 
+const enqueued = { count: 0 };
+
 export function enqueueAfterResponse(
   request: Request,
   task: AfterResponseTask
 ): void {
+  enqueued.count += 1;
   const path = flushed.get(request);
   if (path !== undefined) {
     track([task], path);
@@ -99,6 +102,14 @@ function logRequest(summary: RequestSummary): void {
 
 export function pendingAfterResponse(): number {
   return inFlight.size;
+}
+
+/**
+ * Tasks enqueued so far. Every in-flight batch holds an enqueued task, so a
+ * queue proven idle stays idle while this has not moved.
+ */
+export function enqueuedAfterResponse(): number {
+  return enqueued.count;
 }
 
 export const AFTER_RESPONSE_SETTLE_MS = 50;

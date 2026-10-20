@@ -102,7 +102,7 @@ const DataTablePagination = memo(({ pageCount }: { pageCount: number }) => {
       </div>
 
       <Select value={perPage.toString()} onValueChange={handlePageSizeChange}>
-        <SelectTrigger className='w-32 border-border'>
+        <SelectTrigger className='!h-9 w-32 border-border'>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

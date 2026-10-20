@@ -326,8 +326,8 @@ DevTools, the request must go to `https://example.com/api/...` with
 `curl -s https://example.com/api/health/storage` without the token must return
 the back-end's 401 JSON envelope, not a Next.js 404 page.
 
-The Dockerfile's `FROM oven/bun:1.4.3` is the second home of the Bun pin. Bump
-it with `packageManager` (Renovate's `bun` group moves both, with the Bun
+The Dockerfiles' `FROM oven/bun:1.4.3` (back-end and front-end) is the second
+home of the Bun pin. Bump it with `packageManager` (Renovate's `bun` group moves both, with the Bun
 types, in one PR); `scripts/require-bun.mjs` fails the image build when
 the image's Bun is older than the pin, and `server.ts` logs when it is newer.
 
@@ -360,6 +360,33 @@ image-baked development value would silently become the production maintenance
 secret. `PUBLIC_URL` fails loudly instead, because two disagreeing names are a
 boot failure. One flag removes the input; §1's "never commit `.env`" is the
 other half.
+
+### The front-end application
+
+A second Coolify application, built by `apps/front-end/Dockerfile` into Next's
+standalone server.
+
+| Field               | Value                                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Build Pack          | `Dockerfile`                                                                                                                           |
+| Base Directory      | `/`                                                                                                                                    |
+| Dockerfile Location | `/apps/front-end/Dockerfile`                                                                                                           |
+| Domain              | `https://example.com`, the bare host (the back-end keeps `/api`)                                                                       |
+| Ports Exposes       | `3000`                                                                                                                                 |
+| Watch Paths         | `apps/front-end/**`, `packages/shared/**`, `bun.lock`, `package.json`, `bunfig.toml`, `tsconfig.base.json`, `scripts/**`, `patches/**` |
+| Health check        | HTTP, path `/robots.txt`, expect `200` (`/` redirects to `/dash`)                                                                      |
+
+- **Every variable is a Build Variable.** `next build` inlines
+  `NEXT_PUBLIC_URL`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY`,
+  `NEXT_PUBLIC_BUSINESS_TIMEZONE` and the three OTP/2FA lists, which the
+  Dockerfile declares as `ARG`s; a runtime-only value does nothing. The
+  front-end needs no secret, so none goes here.
+- **Leave the start command empty.** The `CMD` runs `bun server.js` as PID 1,
+  so Next's own `SIGTERM` handler drains requests. An override must `exec` it.
+- **Rolling updates are safe here.** The front-end holds no state. A tab
+  opened on the old release that requests a chunk the new container no longer
+  has gets a full reload from Next's router instead of an error, so
+  `deploymentId` is not needed for a single instance.
 
 ### Startup refuses to boot on five conditions
 
@@ -659,14 +686,20 @@ comes stays full until each holder ends; a pool query issued from inside a
 transaction, which waits for a second connection while holding the first, is
 one such trigger.
 §3.3's `idle_in_transaction_session_timeout` is the server-side bound that ends
-them. Confirm the server's `max_connections` leaves headroom for a
-migration run and a `psql` session on top of the app's 10.
+them. Data-table list reads run on a second pool of
+`DATA_TABLE_POOL_CONNECTIONS` (4, `db/limits.ts`), and readiness on a third of
+one. Confirm the server's `max_connections` leaves headroom for a migration run
+and a `psql` session on top of the app's 15.
 
 **d. `prepare: true` is the default and is correct only here.** Bun creates
 named prepared statements on the server, which is right against PostgreSQL
 directly and wrong behind a transaction-pooling proxy — PgBouncer in transaction
 mode can split a two-round-trip query across backends. If a pooler is ever put
-in front of this database, set `prepare: false` in `db/index.ts`.
+in front of this database, set `prepare: false` on the application pool in
+`db/index.ts` (the data-table pool already runs unprepared), and change the
+`jsonb` column type in `db/schema.ts` to send JSON text with it: unprepared,
+an object parameter reaches PostgreSQL as `[object Object]` and every jsonb
+write fails.
 
 ### 3.2 Key retirement — the two keyrings have different horizons
 
@@ -1488,10 +1521,9 @@ surface.
 
 **Two blind spots remain.**
 
-- **`cache.db` is never touched.** A broken or unwritable cache emits
-  `maintenance.cacheSweep failed`, followed by `scheduled sweep degraded` (§9).
-  Acceptable while the cache has no call sites; revisit when the first one is
-  added.
+- **`cache.db` is never touched.** Neither readiness nor the expiry sweep opens
+  it, so a broken or unwritable cache volume goes unnoticed. Acceptable while the
+  cache has no call sites; revisit when the first one is added.
 - **A mounted volume is not proven.** SQLite creates the same path in the
   container layer just as happily. Only §8 settles that.
 
@@ -1500,8 +1532,9 @@ runs on the probe's own one-connection pool, which cannot see the application's.
 Bun 1.4.3's pool can wedge when its connections are killed while it reconnects
 (a PostgreSQL restart or failover, measured on 2026-10-15): every query then
 fails at once, for good, while the probe still answers. So `postgres` also
-fails when the application pool raises that wedge, and a watchdog in
-`server.ts` checks the pool every 30 s and, still wedged 5 s later, logs
+fails when either application pool (the main one or the data-table list pool)
+raises that wedge, and a watchdog in
+`server.ts` checks them every 30 s and, still wedged 5 s later, logs
 `database pool unusable` and exits with code 1.
 
 ⚠️ **Recovery depends on the restart policy, not on this health check.**
@@ -1598,8 +1631,9 @@ BUN
 ```
 
 Expected: readiness `{"status":"ok"}` with every check `true`; `journalMode`
-`wal`; `userVersion` `1`; `quickCheck` `ok`; tables include `rate_limit` and
-`auth_rate_limit`. WAL/SHM sidecars may exist while a connection is open.
+`wal`; `userVersion` `3`; `quickCheck` `ok`; tables include `rate_limit`.
+Schema 3 only drops an index, but a build from before it refuses the file
+(§11). WAL/SHM sidecars may exist while a connection is open.
 `cache.db` may be absent — the cache has no call sites.
 
 ### Persistence proof
@@ -1845,7 +1879,7 @@ replacement is the log stream. One line per run:
 
 ```
 {"msg":"scheduled sweep completed","job":"sqlite-expiry-sweep","status":"ok","durationMs":12,"hasMore":false}
-{"msg":"scheduled sweep degraded","job":"sqlite-expiry-sweep","status":"degraded","durationMs":12,"hasMore":true}
+{"msg":"scheduled sweep degraded","job":"database-retention-sweep","status":"degraded","durationMs":12,"hasMore":true}
 {"msg":"scheduled sweep failed","job":"database-retention-sweep","errorClass":"..."}
 ```
 
@@ -1891,15 +1925,9 @@ as §4.
 `lib/maintenance/schedule.ts` (the sweep is cheap and idempotent) rather than waiting for the
 disk alert.
 
-A corrupt `cache.db` no longer fails the whole run: its half is contained, so the
-limiter deletions still commit. The run then reports `status: "degraded"` and
-logs `scheduled sweep degraded` (stderr) instead of `scheduled sweep completed`,
-alongside a `maintenance.cacheSweep failed` line carrying the error class; the
-result marks `hasMore: true` because a sweep that threw leaves an unknown backlog. Containment is not
-success — reporting `ok` here told every alert built on the completion line that
-maintenance had finished. A degraded run is the signal to **delete `cache.db`
-and restart**, which is what its own module header says to do and why the two
-databases are separate files.
+The expiry sweep covers `rate-limit.db` only. `cache.db` has no call sites, so
+the sweep leaves it alone rather than creating it on every container; the first
+caller of the cache schedules its sweep too.
 
 ### The retention sweep is the load-bearing one
 

@@ -1,10 +1,10 @@
 import type {
   ColumnOrderState,
   ColumnPinningState,
-  ColumnSizingInfoState,
+  columnResizingState,
   ColumnSizingState,
+  ColumnVisibilityState,
   Updater,
-  VisibilityState,
 } from '@tanstack/react-table';
 
 import { arrayMove } from '@dnd-kit/sortable';
@@ -16,19 +16,19 @@ import { loadLayout, saveLayout } from './layout-storage';
 /** The per-table column state that is saved between visits. */
 export interface ColumnLayout {
   columnOrder: ColumnOrderState;
-  columnVisibility: VisibilityState;
+  columnVisibility: ColumnVisibilityState;
   columnPinning: ColumnPinningState;
   columnSizing: ColumnSizingState;
 }
 
-export type PinSide = 'left' | 'right';
+export type PinSide = 'start' | 'end';
 
 /** `previous`/`next` step one place; `first`/`last` jump to the end of the column's pin zone. */
 export type MoveTarget = 'previous' | 'next' | 'first' | 'last';
 
 export interface ColumnActions {
   setColumnSizing: (updater: Updater<ColumnSizingState>) => void;
-  setColumnSizingInfo: (updater: Updater<ColumnSizingInfoState>) => void;
+  setColumnResizing: (updater: Updater<columnResizingState>) => void;
   setVisible: (columnId: string, visible: boolean) => void;
   showAll: () => void;
   pin: (columnId: string, side: PinSide | false) => void;
@@ -40,13 +40,13 @@ export interface ColumnActions {
 }
 
 export interface ColumnStoreState extends ColumnLayout {
-  columnSizingInfo: ColumnSizingInfoState;
+  columnResizing: columnResizingState;
   actions: ColumnActions;
 }
 
 export type ColumnStore = ReturnType<typeof createColumnStore>;
 
-const IDLE_SIZING_INFO: ColumnSizingInfoState = {
+const IDLE_RESIZING: columnResizingState = {
   startOffset: null,
   startSize: null,
   deltaOffset: null,
@@ -59,10 +59,12 @@ const SAVE_DELAY_MS = 500;
 
 /** Pinned columns first and last, the rest in their current relative order. */
 function orderByPinning(order: string[], pinning: ColumnPinningState) {
-  const left = pinning.left ?? [];
-  const right = pinning.right ?? [];
-  const pinned = new Set([...left, ...right]);
-  return [...left, ...order.filter((id) => !pinned.has(id)), ...right];
+  const pinned = new Set([...pinning.start, ...pinning.end]);
+  return [
+    ...pinning.start,
+    ...order.filter((id) => !pinned.has(id)),
+    ...pinning.end,
+  ];
 }
 
 /** The pin zone a column sits in, and that zone's columns in display order. */
@@ -70,11 +72,10 @@ function zoneOf(
   { columnOrder, columnPinning }: ColumnLayout,
   columnId: string
 ): { zone: PinSide | 'center'; segment: string[] } {
-  const left = columnPinning.left ?? [];
-  if (left.includes(columnId)) return { zone: 'left', segment: left };
-  const right = columnPinning.right ?? [];
-  if (right.includes(columnId)) return { zone: 'right', segment: right };
-  const pinned = new Set([...left, ...right]);
+  const { start, end } = columnPinning;
+  if (start.includes(columnId)) return { zone: 'start', segment: start };
+  if (end.includes(columnId)) return { zone: 'end', segment: end };
+  const pinned = new Set([...start, ...end]);
   return {
     zone: 'center',
     segment: columnOrder.filter((id) => !pinned.has(id)),
@@ -117,15 +118,15 @@ export function createColumnStore(
 ) {
   const store = createStore<ColumnStoreState>()((set, get) => ({
     ...defaults,
-    columnSizingInfo: IDLE_SIZING_INFO,
+    columnResizing: IDLE_RESIZING,
     actions: {
       setColumnSizing: (updater) =>
         set((s) => ({
           columnSizing: functionalUpdate(updater, s.columnSizing),
         })),
-      setColumnSizingInfo: (updater) =>
+      setColumnResizing: (updater) =>
         set((s) => ({
-          columnSizingInfo: functionalUpdate(updater, s.columnSizingInfo),
+          columnResizing: functionalUpdate(updater, s.columnResizing),
         })),
       setVisible: (columnId, visible) =>
         set((s) => ({
@@ -134,13 +135,11 @@ export function createColumnStore(
       showAll: () => set({ columnVisibility: {} }),
       pin: (columnId, side) => {
         const { columnPinning, columnOrder } = get();
-        const left = (columnPinning.left ?? []).filter((id) => id !== columnId);
-        const right = (columnPinning.right ?? []).filter(
-          (id) => id !== columnId
-        );
-        if (side === 'left') left.push(columnId);
-        else if (side === 'right') right.push(columnId);
-        const nextPinning = { left, right };
+        const start = columnPinning.start.filter((id) => id !== columnId);
+        const end = columnPinning.end.filter((id) => id !== columnId);
+        if (side === 'start') start.push(columnId);
+        else if (side === 'end') end.push(columnId);
+        const nextPinning = { start, end };
         set({
           columnPinning: nextPinning,
           columnOrder: orderByPinning(columnOrder, nextPinning),
@@ -149,8 +148,7 @@ export function createColumnStore(
       move: (columnId, target) => {
         const state = get();
         const { columnPinning, columnOrder } = state;
-        const left = columnPinning.left ?? [];
-        const right = columnPinning.right ?? [];
+        const { start, end } = columnPinning;
         const { zone, segment } = zoneOf(state, columnId);
 
         const from = segment.indexOf(columnId);
@@ -165,14 +163,14 @@ export function createColumnStore(
 
         const moved = arrayMove(segment, from, to);
         const nextPinning = {
-          left: zone === 'left' ? moved : left,
-          right: zone === 'right' ? moved : right,
+          start: zone === 'start' ? moved : start,
+          end: zone === 'end' ? moved : end,
         };
         set({
           columnPinning: nextPinning,
           columnOrder:
             zone === 'center'
-              ? [...left, ...moved, ...right]
+              ? [...start, ...moved, ...end]
               : orderByPinning(columnOrder, nextPinning),
         });
       },
@@ -183,21 +181,21 @@ export function createColumnStore(
         const to = columnOrder.indexOf(overId);
         if (from === -1 || to === -1) return;
 
-        const left = new Set(columnPinning.left);
-        const right = new Set(columnPinning.right);
-        const joinsLeft = left.has(overId);
-        const joinsRight = right.has(overId);
-        left.delete(activeId);
-        right.delete(activeId);
-        if (joinsLeft) left.add(activeId);
-        else if (joinsRight) right.add(activeId);
+        const start = new Set(columnPinning.start);
+        const end = new Set(columnPinning.end);
+        const joinsStart = start.has(overId);
+        const joinsEnd = end.has(overId);
+        start.delete(activeId);
+        end.delete(activeId);
+        if (joinsStart) start.add(activeId);
+        else if (joinsEnd) end.add(activeId);
 
         const nextOrder = arrayMove(columnOrder, from, to);
         set({
           columnOrder: nextOrder,
           columnPinning: {
-            left: nextOrder.filter((id) => left.has(id)),
-            right: nextOrder.filter((id) => right.has(id)),
+            start: nextOrder.filter((id) => start.has(id)),
+            end: nextOrder.filter((id) => end.has(id)),
           },
         });
       },

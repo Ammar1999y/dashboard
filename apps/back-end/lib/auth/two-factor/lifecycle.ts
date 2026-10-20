@@ -1,6 +1,6 @@
 import type { AuthContext } from '../context';
 import type { RequestSession } from '../session/request';
-import type { Tx } from '@/db';
+import type { Executor, Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { TwoFactorMethod } from '@app/shared/validation/enums';
 
@@ -16,14 +16,13 @@ import { revokeOtherSessions } from '../session/rotation';
 import { lockUser } from '../user-eligibility';
 import { recordEnabledMethod } from './methods';
 
-/** Written inside the transaction that made the change. */
 export async function auditLifecycle(
-  tx: Tx,
+  executor: Executor,
   ctx: AuthContext,
   session: RequestSession,
   newData: Record<string, unknown>
 ): Promise<void> {
-  await auditLog(tx, {
+  await auditLog(executor, {
     userId: session.userId,
     userEmail: session.userEmail,
     action: 'UPDATE',

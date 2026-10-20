@@ -10,7 +10,7 @@
  * What it proves: the process starts, the bindings register, every SQLite
  * readiness check passes (so the volume opened, migrated, and reported the
  * PRAGMAs this build expects), the security headers are attached, an unrouted
- * path produces the API envelope rather than a framework default, Better Auth is
+ * path produces the API's problem rather than a framework default, Better Auth is
  * mounted, and every authenticated surface refuses an anonymous caller.
  *
  * What it does NOT prove: that PostgreSQL is reachable. CI runs this against a
@@ -18,6 +18,8 @@
  * and the aggregate `status` only has to be CONSISTENT with `checks`.
  */
 import * as z from 'zod';
+
+import { plainProblemSchema, PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
 
 // Not `@/lib/audit`: that one loads `db/schema` and the OTP config into this
 // parent process for one constant.
@@ -119,8 +121,6 @@ const healthBodySchema = z.object({
   checks: z.record(z.string(), z.boolean()).optional(),
 });
 
-const envelopeSchema = z.object({ success: z.boolean() });
-
 async function runChecks(health: Response): Promise<Check[]> {
   const healthRaw: unknown = await health.json();
   const healthParsed = healthBodySchema.safeParse(healthRaw);
@@ -142,7 +142,8 @@ async function runChecks(health: Response): Promise<Check[]> {
     : 'degraded';
   const missing = await probe('/api/definitely-not-a-route');
   const missingRaw: unknown = await missing.json();
-  const missingBody = envelopeSchema.safeParse(missingRaw);
+  const missingBody = plainProblemSchema.safeParse(missingRaw);
+  const missingType = missing.headers.get('content-type');
   // Rejected by Better Auth's own path allowlist, so 404 is the expected
   // answer. A 500 or a connection error is the failure this catches.
   const authProbe = await probe('/api/auth/not-an-endpoint');
@@ -203,12 +204,13 @@ async function runChecks(health: Response): Promise<Check[]> {
           : wrongHeaders.join('; '),
     },
     {
-      name: 'unknown route returns the API envelope',
+      name: 'unknown route returns a problem',
       ok:
         missing.status === 404 &&
+        missingType === PROBLEM_MEDIA_TYPE &&
         missingBody.success &&
-        !missingBody.data.success,
-      detail: `HTTP ${missing.status} ${missing.headers.get('content-type') ?? 'no content-type'} envelope=${String(missingBody.success)}`,
+        missingBody.data.status === 404,
+      detail: `HTTP ${missing.status} ${missingType ?? 'no content-type'} problem=${String(missingBody.success)}`,
     },
     {
       name: 'better auth handler is mounted',

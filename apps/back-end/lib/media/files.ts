@@ -346,8 +346,13 @@ export async function toMediaFiles(
   known: { usedIds?: ReadonlySet<EntityID> } = {}
 ): Promise<MediaFile[]> {
   if (rows.length === 0) return [];
-  const used = known.usedIds ?? (await usedIds(rows.map((row) => row.id)));
-  const nameOf = await userNames(rows.map((row) => row.uploadedBy));
+  const names = userNames(rows.map((row) => row.uploadedBy));
+  const [used] = await Promise.all([
+    known.usedIds ?? usedIds(rows.map((row) => row.id)),
+    names,
+  ]);
+  // A plain binding, not destructuring: the route-gates analyzer follows it.
+  const nameOf = await names;
   const window = signingWindow(Date.now());
   return Promise.all(
     rows.map(async (row) =>

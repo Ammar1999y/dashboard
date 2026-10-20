@@ -14,7 +14,9 @@ import { createApp } from '@/app';
 import { BINDINGS, REGISTERED_BINDINGS, registeredBindings } from '@/modules';
 import { generateDocument } from '@/server/elysia/openapi';
 
+import { isPluginPath, PLUGIN_ENDPOINTS } from '@app/shared/api/all';
 import { isRawResponse } from '@app/shared/api/endpoint';
+import { PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
 import { operatorsForSpec } from '@app/shared/data-table/column-specs';
 import {
   MEDIA_FILTER_COLUMNS,
@@ -30,10 +32,6 @@ import {
   MAX_SORT_ITEMS,
   MAX_VALUE_LENGTH,
 } from '@app/shared/data-table/parsers';
-import {
-  BETTER_AUTH_RESPONSES,
-  isBetterAuthResponseRoute,
-} from '@app/shared/response-contract';
 import { UUID_V7_PATTERN } from '@app/shared/utils';
 import {
   MAX_DOCUMENT_SIZE_MB,
@@ -164,6 +162,10 @@ function resolveRef(
   return resolved as Record<string, unknown>;
 }
 
+/** A refusal is a problem; every other published body is JSON. */
+const mediaTypeOf = (status: string) =>
+  Number(status) >= 400 ? PROBLEM_MEDIA_TYPE : 'application/json';
+
 function responseSchemaOf(
   document: unknown,
   pathName: string,
@@ -174,8 +176,8 @@ function responseSchemaOf(
   const responses = operation.responses as Record<string, unknown>;
   const response = responses[status] as Record<string, unknown>;
   const content = response.content as Record<string, unknown>;
-  const json = content['application/json'] as Record<string, unknown>;
-  return resolveRef(document, json.schema as Record<string, unknown>);
+  const media = content[mediaTypeOf(status)] as Record<string, unknown>;
+  return resolveRef(document, media.schema as Record<string, unknown>);
 }
 
 function requestSchemaOf(
@@ -832,7 +834,7 @@ describe('request and response contract fidelity', () => {
       );
   });
 
-  test('every application envelope success has concrete data and errors have the error discriminator', () => {
+  test('every application success has concrete data and no success flag, and every refusal is a problem', () => {
     const envelopes = REGISTERED_BINDINGS.filter(
       (binding) => !isRawResponse(binding.entry.response)
     );
@@ -848,7 +850,10 @@ describe('request and response contract fidelity', () => {
         successStatus
       );
       const successProperties = objectProperty(success, 'properties');
-      expect(objectProperty(successProperties, 'success').const).toBe(true);
+      expect(successProperties).not.toHaveProperty('success');
+      expect(success.required).toEqual(
+        expect.arrayContaining(['message', 'data'])
+      );
       expect(
         Object.keys(objectProperty(successProperties, 'data')).length
       ).toBeGreaterThan(0);
@@ -859,15 +864,21 @@ describe('request and response contract fidelity', () => {
       for (const status of refusals) {
         const error = responseSchemaOf(production(), pathName, method, status);
         const errorProperties = objectProperty(error, 'properties');
-        expect(objectProperty(errorProperties, 'success').const).toBe(false);
+        expect(errorProperties).not.toHaveProperty('success');
+        expect(objectProperty(errorProperties, 'type').const).toBe(
+          'about:blank'
+        );
+        expect(error.required).toEqual(
+          expect.arrayContaining(['type', 'status', 'detail'])
+        );
       }
     }
   });
 
-  test('a refusal publishes ids in `data` only at a status whose codes name them, each envelope once', () => {
+  test('a refusal publishes ids in `data` only at a status whose codes name them, each problem once', () => {
     // Frozen: the statuses where a handler's refusal names ids, traced through
     // `lib/media/errors.ts`. Every other refusal of every binding publishes
-    // `data: null`, a folder create's and an upload's included.
+    // no `data`, a folder create's and an upload's included.
     const withIds = [
       'DELETE /api/dash/media 409',
       'DELETE /api/dash/media/files 409',
@@ -888,13 +899,14 @@ describe('request and response contract fidelity', () => {
         : [];
       const responses = bindingOperation(production(), binding)
         .responses as Record<string, Record<string, unknown>>;
-      const enveloped = bindingStatuses(production(), binding).filter(
+      const problems = bindingStatuses(production(), binding).filter(
         (status) =>
           status !== String(binding.entry.status) && !raw.includes(status)
       );
-      for (const status of enveloped) {
+      for (const status of problems) {
         const content = responses[status]?.content as Record<string, unknown>;
-        const { schema } = content['application/json'] as {
+        expect(Object.keys(content)).toEqual([PROBLEM_MEDIA_TYPE]);
+        const { schema } = content[PROBLEM_MEDIA_TYPE] as {
           schema: { $ref?: unknown };
         };
         (published[String(schema.$ref)] ??= []).push(
@@ -903,33 +915,32 @@ describe('request and response contract fidelity', () => {
       }
     }
     expect(Object.keys(published).toSorted(compareCodeUnits)).toEqual([
-      '#/components/schemas/ErrorEnvelope',
-      '#/components/schemas/MediaRefusalEnvelope',
+      '#/components/schemas/MediaRefusalProblem',
+      '#/components/schemas/Problem',
     ]);
     expect(
-      published['#/components/schemas/MediaRefusalEnvelope']?.toSorted(
+      published['#/components/schemas/MediaRefusalProblem']?.toSorted(
         compareCodeUnits
       )
     ).toEqual(withIds.toSorted(compareCodeUnits));
 
-    const envelope = (name: string) =>
-      objectProperty(
-        resolveRef(production(), { $ref: `#/components/schemas/${name}` }),
-        'properties'
-      );
-    expect(objectProperty(envelope('ErrorEnvelope'), 'data')).toEqual({
-      type: 'null',
-    });
-    const ids = objectProperty(envelope('MediaRefusalEnvelope'), 'data');
-    expect(ids.anyOf).toEqual([
+    const problem = (name: string) =>
+      resolveRef(production(), { $ref: `#/components/schemas/${name}` });
+    const plain = problem('Problem');
+    expect(objectProperty(plain, 'properties')).not.toHaveProperty('data');
+    const media = problem('MediaRefusalProblem');
+    expect(objectProperty(objectProperty(media, 'properties'), 'data')).toEqual(
       expect.objectContaining({
+        type: 'object',
         properties: {
           fileIds: expect.any(Object),
           folderIds: expect.any(Object),
         },
-      }),
-      { type: 'null' },
-    ]);
+      })
+    );
+    // Omitted when it names nothing, never `null`.
+    expect(media.required).toEqual(['type', 'status', 'detail']);
+    expect(plain.required).toEqual(['type', 'status', 'detail']);
   });
 
   test('every media refusal code a route answers is published at its status', () => {
@@ -988,7 +999,7 @@ describe('request and response contract fidelity', () => {
 
   test('each media code is declared with ids exactly where its handler attaches them, and published so', () => {
     // Frozen from the handlers through `lib/media/errors.ts`. A code missing
-    // here answers `data: null` at that status; `FILE_IN_USE` may too.
+    // here answers no `data` at that status; `FILE_IN_USE` may too.
     const expected: Record<string, readonly string[]> = {
       'DELETE /api/dash/media 409': [
         'FILE_IN_USE',
@@ -1045,7 +1056,7 @@ describe('request and response contract fidelity', () => {
       'get',
       '200'
     );
-    expect(users.required).toEqual(['success', 'message', 'data', 'meta']);
+    expect(users.required).toEqual(['message', 'data', 'meta']);
     const userData = (users.properties as Record<string, unknown>)
       .data as Record<string, unknown>;
     const userItem = userData.items as Record<string, unknown>;
@@ -1117,9 +1128,9 @@ describe('request and response contract fidelity', () => {
     // methods this deployment enables.
     expect(Object.keys(schemas).toSorted(compareCodeUnits)).toEqual(
       [
-        'BetterAuthError',
-        'ErrorEnvelope',
-        'MediaRefusalEnvelope',
+        'AuthProblem',
+        'MediaRefusalProblem',
+        'Problem',
         'Session',
         'User',
         ...(isTwoFactorMethodEnabled('passkey') ? ['Passkey'] : []),
@@ -1258,9 +1269,9 @@ describe('the Better Auth surface, per endpoint', () => {
     for (const status of ['200', '400', '401', '403', '404', '500']) {
       const response = responses[status] as Record<string, unknown>;
       const content = response.content as Record<string, unknown>;
-      const json = content['application/json'] as Record<string, unknown>;
+      const media = content[mediaTypeOf(status)] as Record<string, unknown>;
       expect(
-        Object.keys(json.schema as Record<string, unknown>).length
+        Object.keys(media.schema as Record<string, unknown>).length
       ).toBeGreaterThan(0);
     }
 
@@ -1600,7 +1611,7 @@ describe('the refusals an operation declares for its own authorisation', () => {
     );
   });
 
-  test('the refusal bodies are the envelope, not an unconstrained schema', () => {
+  test('the refusal bodies are the problem, not an unconstrained schema', () => {
     // A client told only the status has been told nothing it can render, which
     // is the half of the defect a status code alone leaves open.
     for (const status of ['401', '403'])
@@ -1611,7 +1622,7 @@ describe('the refusals an operation declares for its own authorisation', () => {
             'properties'
           )
         )
-      ).toContain('message');
+      ).toEqual(expect.arrayContaining(['type', 'status', 'detail']));
   });
 });
 
@@ -2032,7 +2043,7 @@ describe('the statuses each Better Auth operation declares', () => {
   test('every Better Auth path takes its 200 from exactly one source', () => {
     expect(
       successSourceProblems(BETTER_AUTH_KNOWN_PATHS, [
-        ['BETTER_AUTH_RESPONSES', new Set(Object.keys(BETTER_AUTH_RESPONSES))],
+        ['PLUGIN_ENDPOINTS', new Set(PLUGIN_ENDPOINTS.keys())],
         ['LIBRARY_VERIFIER_PATHS', LIBRARY_VERIFIER_PATHS],
         ['BETTER_AUTH_TRUSTED_RESPONSES', BETTER_AUTH_TRUSTED_RESPONSES],
       ])
@@ -2040,9 +2051,7 @@ describe('the statuses each Better Auth operation declares', () => {
     expect(LIBRARY_VERIFIER_PATHS).toEqual(
       new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code'])
     );
-    expect(
-      [...BETTER_AUTH_TRUSTED_RESPONSES].filter(isBetterAuthResponseRoute)
-    ).toEqual([]);
+    expect([...BETTER_AUTH_TRUSTED_RESPONSES].filter(isPluginPath)).toEqual([]);
 
     expect(
       successSourceProblems(new Set(['/ours', '/twice', '/nowhere']), [
@@ -2198,22 +2207,30 @@ describe('the statuses each Better Auth operation declares', () => {
     expect(pattern.test('..')).toBe(false);
   });
 
-  test('a path with its own limiter declares BOTH throttle body shapes', () => {
-    // Two producers, two shapes: the wildcard's limiter answers in the
-    // envelope, the endpoint's own in Better Auth's error shape.
-    const branchesOf = (pathName: string, status: string) =>
-      responseSchemaOf(development(), pathName, 'post', status).anyOf as
-        unknown[] | undefined;
+  test('a path with its own limiter publishes one auth problem and names the second limiter in the prose', () => {
+    // Both producers answer the same auth problem, so there is one body and
+    // the description says which limiter may answer.
+    const responseOf = (pathName: string, status: string) =>
+      (
+        operationOf(development(), pathName, 'post').responses as Record<
+          string,
+          { description?: unknown; content?: unknown }
+        >
+      )[status];
 
     for (const status of ['429', '503']) {
-      const branches = branchesOf('/api/auth/passwordless/verify', status);
-      expect(branches).toHaveLength(2);
-      expect(branches?.[1]).toEqual({
-        $ref: '#/components/schemas/BetterAuthError',
+      const limited = responseOf('/api/auth/passwordless/verify', status);
+      expect(limited?.content).toEqual({
+        [PROBLEM_MEDIA_TYPE]: {
+          schema: { $ref: '#/components/schemas/AuthProblem' },
+        },
       });
-      // `/sign-in/email` has no inner limiter, so widening it would advertise
-      // a body it cannot send.
-      expect(branchesOf('/api/auth/sign-in/email', status)).toBeUndefined();
+      expect(String(limited?.description)).toInclude('verify quota');
+      // `/sign-in/email` has no inner limiter, so naming one would advertise
+      // a refusal it cannot send.
+      expect(
+        String(responseOf('/api/auth/sign-in/email', status)?.description)
+      ).not.toInclude('verify quota');
     }
   });
 });
@@ -2312,14 +2329,18 @@ describe('refusals a client branches on are published', () => {
     '/api/auth/two-factor/get-totp-uri',
     '/api/auth/two-factor/disable',
     '/api/auth/two-factor/passkey/grant',
-  ])('%s publishes the locked-account 429 in both shapes', (pathName) => {
+  ])('%s publishes the locked-account 429 as an auth problem', (pathName) => {
     const responses = operationOf(production(), pathName, 'post')
       .responses as Record<
       string,
       { description?: unknown; content?: unknown }
     >;
     expect(String(responses['429']?.description)).toInclude('locked');
-    expect(JSON.stringify(responses['429']?.content)).toInclude('anyOf');
+    expect(responses['429']?.content).toEqual({
+      [PROBLEM_MEDIA_TYPE]: {
+        schema: { $ref: '#/components/schemas/AuthProblem' },
+      },
+    });
   });
 
   test('every write publishes the cross-origin 403', () => {
@@ -2343,6 +2364,97 @@ describe('refusals a client branches on are published', () => {
       );
       expect(responses['503']?.headers, binding.key).toHaveProperty(
         'Retry-After'
+      );
+    }
+  });
+
+  test('a binding publishes its refusals as a problem and its success as JSON, a raw refusal aside', () => {
+    const bodies = REGISTERED_BINDINGS.flatMap((binding) => {
+      const raw = isRawResponse(binding.entry.response)
+        ? Object.keys(binding.entry.response.refusals ?? {})
+        : [];
+      const responses = bindingOperation(production(), binding)
+        .responses as Record<string, { content?: Record<string, unknown> }>;
+      return Object.entries(responses)
+        .filter(
+          ([status, response]) =>
+            response.content !== undefined && !raw.includes(status)
+        )
+        .map(([status, response]) => ({
+          at: `${binding.key} ${status}`,
+          mediaTypes: Object.keys(response.content ?? {}),
+          expected: [mediaTypeOf(status)],
+        }));
+    });
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const { at, mediaTypes, expected } of bodies)
+      expect(mediaTypes, at).toEqual(expected);
+  });
+
+  test('every Better Auth refusal is the auth problem, whoever raises it', () => {
+    const bound = new Set(
+      REGISTERED_BINDINGS.map(({ entry }) => openApiPath(entry.path))
+    );
+    const refusals = documentOperations(production())
+      .filter(
+        ({ pathName }) =>
+          pathName.startsWith('/api/auth/') && !bound.has(pathName)
+      )
+      .flatMap(({ pathName, method, operation }) =>
+        Object.entries(
+          operation.responses as Record<string, { content?: unknown }>
+        )
+          .filter(([status]) => Number(status) >= 400)
+          .map(([status, response]) => ({
+            at: `${method} ${pathName} ${status}`,
+            content: response.content,
+          }))
+      );
+    expect(refusals.length).toBeGreaterThan(0);
+    for (const { at, content } of refusals)
+      expect(content, at).toEqual({
+        [PROBLEM_MEDIA_TYPE]: {
+          schema: { $ref: '#/components/schemas/AuthProblem' },
+        },
+      });
+  });
+
+  test('the problems carry their members, and only the media one carries `data`', () => {
+    const schemas = (production().components as Record<string, unknown>)
+      .schemas as Record<string, Record<string, unknown>>;
+    const membersOf = (name: string) =>
+      Object.keys(objectProperty(schemas[name] ?? {}, 'properties')).toSorted(
+        compareCodeUnits
+      );
+    const common = ['code', 'detail', 'status', 'title', 'type'];
+    expect(membersOf('Problem')).toEqual(common);
+    expect(membersOf('MediaRefusalProblem')).toEqual(
+      [...common, 'data'].toSorted(compareCodeUnits)
+    );
+    expect(membersOf('AuthProblem')).toEqual(
+      [...common, 'message'].toSorted(compareCodeUnits)
+    );
+    expect(schemas.AuthProblem?.required).toContain('message');
+    for (const name of ['Problem', 'MediaRefusalProblem', 'AuthProblem'])
+      expect(schemas[name]?.required, name).toEqual(
+        expect.arrayContaining(['type', 'status', 'detail'])
+      );
+  });
+
+  test('every operation publishes the 500 with the code a committed write answers', () => {
+    const operations = documentOperations(production());
+    expect(operations.length).toBeGreaterThan(0);
+    for (const { pathName, method, operation } of operations) {
+      const description = String(
+        (operation.responses as Record<string, { description?: unknown }>)[
+          '500'
+        ]?.description
+      );
+      expect(description, `${method} ${pathName}`).toInclude(
+        'invalid_response'
+      );
+      expect(description, `${method} ${pathName}`).toInclude(
+        'do not send it again'
       );
     }
   });

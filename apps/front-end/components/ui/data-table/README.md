@@ -11,14 +11,13 @@ Read this before changing anything here, or anything it depends on outside this 
   title='المستخدمين'
   cta={{ href: '/dash/users/new', label: 'إضافة مستخدم جديد' }}
   columns={columns}
-  queryKey={USERS_QUERY_KEYS.list}
-  href='/api/dash/users'
+  queryKey={userEntity.keys.list}
+  endpoint={listUsers} // a paged entry; one answering the whole list is paged here
   storageKey='users-table'
-  serverSide // omit when the endpoint returns the whole list
 />
 ```
 
-Build columns from the presets in `index.ts` (`textColumn`, `statusColumn`, `dateColumn`, `actionsColumn`) and the actions column from `rowActionsColumn` in `components/dash/shared/row-actions.tsx`. A hand-written column is a plain TanStack `ColumnDef`; its table options live on `meta` (`column-meta.ts`). The header defaults to `meta.label`.
+Build columns from the presets in `index.ts` (`textColumn`, `statusColumn`, `dateColumn`, `actionsColumn`) and the actions column from `rowActionsColumn` in `components/dash/shared/row-actions.tsx`. A hand-written column is a TanStack `ColumnDef<DataTableFeatures, TData>`; its table options live on `meta` (`column-meta.ts`). The header defaults to `meta.label`.
 
 `defaultSort` falls back to `createdAt` descending when that column exists, and `defaultPinning` falls back to the `actions` column pinned to the end.
 
@@ -31,9 +30,9 @@ There are two stores, and they own different things:
 | page, page size, sort, filters, search   | `useDataTableStore` (`store/url-store.ts`), mirrored to the URL by `mirrorTableToUrl`  | one module singleton, bound to the route and navigation by `initTable` |
 | column order, visibility, pinning, sizes | the column store (`store/column-store.ts`), saved to `localStorage` under `storageKey` | one per mounted `DataTableView`                                        |
 
-- `DataTable` picks the data source: the server one, or `queryRows` over the whole list (`lib/data-table/query.ts`, which the mocks use too). It then renders `DataTableView`.
+- `DataTable` picks the data source by its entry: the server one for a paged entry, or `queryRows` over the whole list (`lib/data-table/query.ts`, which the mocks use too). It then renders `DataTableView`.
 - `DataTableView` creates the column store and renders the frame.
-- `hooks/use-table-instance.ts` is the only place `useReactTable` is called. TanStack does no paging, sorting or filtering here (`manual*`): rows arrive ready, and TanStack only lays out columns.
+- `hooks/use-table-instance.ts` is the only place `useTable` is called, with the features in `features.ts`. TanStack does no paging, sorting or filtering here (`manual*`, and no row-model slots): rows arrive ready, and TanStack only lays out columns.
 - Column changes go through the store actions (`useColumnActions()`): `setVisible`, `pin`, `move`, `drop`, `resetSize`, `reset`. TanStack's resize handler writes through `onColumnSizingChange`, which is the same store.
 
 The URL store is bound to one visit (the route, the history entry the table mounted on, and Next's `asPath`), so a route holds **one** `DataTable`, and every visit, Back to an earlier one included, starts from its own URL.
@@ -55,16 +54,17 @@ The URL holds the query in the keys `@app/shared` names (`DATA_TABLE_PARAMS`); `
 | `store/`                                                    | column store, its React context, `localStorage` load and save                |
 | `view-options.tsx`                                          | the "العرض" popover: show/hide, reorder, reset                               |
 | `filters/`                                                  | search box and its draft, filter and sort lists, column filter popover       |
-| `column-presets.tsx`, `column-header.tsx`, `column-meta.ts` | column helpers, default header, `ColumnMeta` augmentation                    |
+| `column-presets.tsx`, `column-header.tsx`, `column-meta.ts` | column helpers, default header, the `meta` type                              |
+| `features.ts`                                               | the TanStack features every table registers                                  |
 
 ## Rules that keep the UI in sync
 
-1. **Render from what `useTableInstance` returns, never from `table`.** `table` keeps one identity for its whole life. React Compiler caches a component by its props, so a component that renders from `table` (`table.getHeaderGroups()`, `row.getVisibleCells()`, `column.getIsPinned()` in JSX) renders once and then freezes. That is how the header and rows used to stop updating. Use `table` only inside event handlers.
+1. **Render from what `useTableInstance` returns, never from `table`.** Rows, columns and headers keep their identity while what their getters return changes, and React Compiler caches a component by its props. A component that renders from them (`row.getVisibleCells()`, `column.getIsPinned()` in JSX) renders once and then freezes. That is how the header and rows used to stop updating. Use `table` only inside event handlers.
 2. **Only `use-table-instance.ts` calls TanStack getters for rendering.** Each derived value has a memo whose dependencies are TanStack's own memoized values (`headerGroups`, the three leaf-column zones). Add a new derived value the same way. Don't pull it through `table` and hide the dependency behind an `eslint-disable`.
 3. **The column store lives in a `useState` initializer.** Don't make it a module singleton: one table's unmount used to wipe the next table's layout. Don't use `useMemo` either: React may drop a memo. To load another layout, remount the view (`key`).
 4. **Cell renderers read only from their row.** A row whose record is unchanged skips rendering and keeps its old cells (`sameRow` in `body.tsx`). A cell that shows outside state (a store, a context) must subscribe to it inside its own component.
 5. **Keep the keys:** rows by record id (`getRowId`), cells and headers by column id. Index keys make a sort rewrite other records' DOM, and make the memo comparators compare the wrong records.
-6. **Keep stable references stable:** `NO_ROWS`, the module-level `coreRowModel`, `DEFAULT_COLUMN`. A new array or function each render is new input to TanStack, which rebuilds every row.
+6. **Keep stable references stable:** `NO_ROWS`, `DATA_TABLE_FEATURES`, `DEFAULT_COLUMN`. A new array, object or function each render is new input to TanStack, which rebuilds every row.
 
 ## Rules that keep it fast
 

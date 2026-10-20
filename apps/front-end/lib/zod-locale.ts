@@ -1,3 +1,5 @@
+import './zod-jitless';
+
 import * as z from 'zod';
 import { localizedIssueMessage } from '@app/shared/validation/rules';
 

@@ -1,6 +1,6 @@
 import { and, count, eq, isNotNull } from 'drizzle-orm';
 
-import { db } from '@/db';
+import { dataTableDb } from '@/db';
 import { files } from '@/db/schema';
 
 import {
@@ -100,52 +100,63 @@ export const listMediaBinding = bind(listMedia, {
             ? null
             : and(active, eq(files.folderId, folderId), where);
 
-    if (scope === 'folder' && folderId !== null) await requireFolder(folderId);
-
-    const [rows, [totalRow]] = filter
-      ? await Promise.all([
-          db
+    // Nothing below depends on another read but `toMediaFiles` on its rows, so
+    // every branch awaits the page beside its own reads.
+    const page = filter
+      ? Promise.all([
+          dataTableDb
             .select(FILE_COLUMNS)
             .from(files)
             .where(filter)
             .orderBy(...orderBy)
             .limit(limit)
-            .offset(offset),
-          db.select({ total: count() }).from(files).where(filter),
+            .offset(offset)
+            .then((rows) => toMediaFiles(rows)),
+          dataTableDb
+            .select({ total: count() })
+            .from(files)
+            .where(filter)
+            .then(([row]) => row?.total ?? 0),
         ])
-      : [[], [{ total: 0 }]];
-    const pageMeta = paginationMeta(totalRow?.total ?? 0);
+      : Promise.all([toMediaFiles([]), 0]);
 
     if (scope === 'all') {
-      const hits = search
-        ? await searchFolders(search)
-        : { folders: [], truncated: false };
+      const [[listed, total], hits] = await Promise.all([
+        page,
+        search ? searchFolders(search) : { folders: [], truncated: false },
+      ]);
       return {
         message: mediaMsg.fetched,
         data: {
           ...common,
-          files: await toMediaFiles(rows),
+          files: listed,
           folders: hits.folders,
           foldersTruncated: hits.truncated,
         },
-        meta: pageMeta,
+        meta: paginationMeta(total),
       };
     }
 
-    if (scope === 'unfiled')
+    if (scope === 'unfiled') {
+      const [listed, total] = await page;
       return {
         message: mediaMsg.fetched,
         data: {
           ...common,
-          files: await toMediaFiles(rows),
+          files: listed,
           retentionDays: UNFILED_RETENTION_DAYS,
         },
-        meta: pageMeta,
+        meta: paginationMeta(total),
       };
+    }
 
-    const [trail, subfolders] = await Promise.all([
-      folderId === null ? Promise.resolve([]) : breadcrumbs(folderId),
+    // A missing folder lists nothing, so the reads beside its check are
+    // harmless when it answers 404.
+    const [[listed, total], trail, subfolders] = await Promise.all([
+      page,
+      folderId === null ? [] : breadcrumbs(folderId),
       listSubfolders(folderId),
+      folderId === null ? undefined : requireFolder(folderId),
     ]);
 
     return {
@@ -154,9 +165,9 @@ export const listMediaBinding = bind(listMedia, {
         ...common,
         breadcrumbs: trail,
         folders: subfolders,
-        files: await toMediaFiles(rows),
+        files: listed,
       },
-      meta: pageMeta,
+      meta: paginationMeta(total),
     };
   },
 });

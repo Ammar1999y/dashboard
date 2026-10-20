@@ -3,18 +3,16 @@ import type { StoredPreferences } from '@app/shared/validation/preferences';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useTheme } from 'next-themes';
-import { updatedAtSchema } from '@app/shared/responses/common';
-import { storedPreferencesSchema } from '@app/shared/responses/users';
+import { getPreferences, updatePreferences } from '@app/shared/api/users';
 import { DEFAULT_PREFERENCES } from '@app/shared/validation/preferences';
 import { MSG_RETRY } from '@/constants/messages';
-import { apiRequest } from '@/lib/api/fetch';
-import { mutate } from '@/lib/api/mutation';
+import { api } from '@/lib/api/client';
 import { useSession } from '@/lib/auth/use-session';
 import { toastError } from '@/lib/toast-error';
 
 import { applyPreset } from './apply-preset';
 import { useSettingStore, useThemeLayout } from './layout-store';
-import { isColorMode, PREFERENCES_HREF, samePreferences } from './preferences';
+import { isColorMode, samePreferences } from './preferences';
 import { createPreferencesSaver } from './preferences-saver';
 import { useEditorStore } from './store';
 
@@ -94,13 +92,7 @@ export const PreferencesSync = memo(() => {
     createPreferencesSaver({
       delayMs: SAVE_DELAY_MS,
       send: (preferences, signal) =>
-        mutate({
-          href: PREFERENCES_HREF,
-          method: 'PUT',
-          data: preferences,
-          schema: updatedAtSchema,
-          signal,
-        }),
+        api(updatePreferences, { body: preferences }, { signal }),
       onFailed: (error) => {
         target.current = null;
         toastError(error, undefined, SAVE_TOAST);
@@ -111,10 +103,7 @@ export const PreferencesSync = memo(() => {
   useEffect(() => {
     if (!userId) return;
     const controller = new AbortController();
-    apiRequest(PREFERENCES_HREF, {
-      signal: controller.signal,
-      schema: storedPreferencesSchema,
-    })
+    api(getPreferences, undefined, { signal: controller.signal })
       .then(({ data }) => {
         const current = latest.current;
         // A save of this device's choices from before the account's copy was

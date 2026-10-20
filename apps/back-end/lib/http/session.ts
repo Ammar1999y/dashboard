@@ -11,12 +11,12 @@ import { MSG_REAUTH_REQUIRED } from '@app/shared/messages/auth';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 
 import { hasAdminReauth } from '@/lib/auth/reauth/window';
-import { assertLiveSession } from '@/lib/auth/session/live';
 import {
   authenticatedSession,
   checkMultiplePermissions,
   checkUserPermission,
   insufficientPermissions,
+  readLiveSession,
 } from '@/lib/permissions/checker';
 
 export async function requirePermission(
@@ -66,20 +66,21 @@ export async function requirePermission(
  * the cookie: the cookie cache outlives a deleted row by minutes, so a session
  * revoked by credential rotation could otherwise finish a mutation it started.
  * The preferences `GET` pays that query too rather than growing a cache-only
- * variant.
+ * variant. `live` lets a handler's grant check reuse the row.
  */
 export async function requireSession(ctx: Pick<HandlerRequestMeta, 'headers'>) {
   const { session, userId } = await authenticatedSession(ctx.headers);
-  const sessionId = await assertLiveSession(session.session.id, userId);
+  const live = await readLiveSession(ctx.headers, session, userId);
 
   return {
     session,
     userId,
-    sessionId,
+    sessionId: live.sessionId,
+    live,
   };
 }
 
-/** Any view grant; `signedIn` is the session the gate already read for this request. */
+/** Any view grant; `signedIn` is the session and row the gate already read for this request. */
 export async function requireDashboardAccess(
   ctx: Pick<HandlerRequestMeta, 'headers'>,
   signedIn?: Awaited<ReturnType<typeof requireSession>>
@@ -106,8 +107,8 @@ export async function requireDashboardAccess(
  * One `checkMultiplePermissions` call rather than a `checkUserPermission` loop:
  * it resolves every check from one permissions read and forces the live-session
  * assertion as soon as any action is a write, where a loop would repeat the
- * session lookup and throw on the first miss. `signedIn` is the session the
- * gate already read for this request, so it is not read twice.
+ * session lookup and throw on the first miss. `signedIn` is the session and
+ * row the gate already read for this request, so neither is read twice.
  *
  * Returns the granted subset, so a caller can tell create from edit without
  * asking again.

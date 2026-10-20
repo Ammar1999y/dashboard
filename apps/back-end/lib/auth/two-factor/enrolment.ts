@@ -28,6 +28,7 @@ import {
   symmetricEncrypt,
 } from 'better-auth/crypto';
 
+import * as contract from '@app/shared/api/better-auth';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { otpMsg } from '@app/shared/messages/otp';
@@ -67,7 +68,7 @@ import {
   removalStrandsTwoFactor,
   removeMethodIntent,
 } from './methods';
-import { sessionGetOptions, sessionPostOptions } from './session-endpoint';
+import { sessionBodyOptions, sessionOptions } from './session-endpoint';
 import { consumeTotpCode } from './totp-replay';
 import { markTwoFactorProven } from './trusted-device';
 
@@ -109,8 +110,8 @@ export const twoFactorEnrolment = () =>
       // `two_factor_enabled` is deliberately NOT set here: an abandoned setup
       // must leave the account as it was.
       startTotpEnrolment: pluginEndpoint(
-        '/two-factor/totp/start',
-        sessionPostOptions(),
+        contract.startTotpEnrolment,
+        sessionBodyOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'totp');
           const { userId } = session;
@@ -185,8 +186,8 @@ export const twoFactorEnrolment = () =>
 
       /** The ONLY writer that turns TOTP on. */
       confirmTotpEnrolment: pluginEndpoint(
-        '/two-factor/totp/confirm',
-        sessionPostOptions(),
+        contract.confirmTotpEnrolment,
+        sessionBodyOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'totp');
 
@@ -286,8 +287,8 @@ export const twoFactorEnrolment = () =>
       // The new set id unbinds the old acknowledgement, so `backup_code` is not
       // offered until the new set is acknowledged.
       generateBackupCodes: pluginEndpoint(
-        '/two-factor/generate-backup-codes',
-        sessionPostOptions(),
+        contract.generateBackupCodes,
+        sessionBodyOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'backup_code');
           const { userId } = session;
@@ -348,8 +349,8 @@ export const twoFactorEnrolment = () =>
       ),
 
       acknowledgeBackupCodes: pluginEndpoint(
-        '/two-factor/backup-codes/acknowledge',
-        sessionPostOptions(),
+        contract.acknowledgeBackupCodes,
+        sessionBodyOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'backup_code');
 
@@ -400,8 +401,8 @@ export const twoFactorEnrolment = () =>
       ),
 
       listTwoFactorMethods: pluginEndpoint(
-        '/two-factor/methods',
-        sessionGetOptions(),
+        contract.listTwoFactorMethods,
+        sessionOptions(),
         async (ctx) => {
           const userId = validID(ctx.context.session?.user.id);
           if (!userId) throw challengeMissingError();
@@ -418,8 +419,8 @@ export const twoFactorEnrolment = () =>
        * is refused too — see `removalStrandsTwoFactor`.
        */
       disableTwoFactorMethod: pluginEndpoint(
-        '/two-factor/methods/disable',
-        sessionPostOptions(),
+        contract.disableTwoFactorMethod,
+        sessionBodyOptions(),
         async (ctx) => {
           const session = await requireSession(ctx);
           const { userId } = session;
@@ -472,8 +473,8 @@ export const twoFactorEnrolment = () =>
 
       /** The method a challenge routes to first, within what is enrolled. */
       setDefaultTwoFactorMethod: pluginEndpoint(
-        '/two-factor/methods/default',
-        sessionPostOptions(),
+        contract.setDefaultTwoFactorMethod,
+        sessionBodyOptions(),
         async (ctx) => {
           const session = await requireSession(ctx);
           const { userId } = session;
@@ -517,8 +518,8 @@ export const twoFactorEnrolment = () =>
        * the enrolment grant, consumed in `path-policy.ts`.
        */
       deletePasskey: pluginEndpoint(
-        '/passkey/delete-passkey',
-        sessionPostOptions(),
+        contract.deletePasskey,
+        sessionBodyOptions(),
         async (ctx) => {
           const session = await requireSession(ctx, 'passkey');
           const { userId } = session;
@@ -580,8 +581,8 @@ export const twoFactorEnrolment = () =>
       // Replaces the plugin's `/two-factor/disable`, which leaves intent rows,
       // trusted devices and live challenges behind.
       disableTwoFactor: pluginEndpoint(
-        '/two-factor/disable',
-        sessionPostOptions(),
+        contract.disableTwoFactor,
+        sessionBodyOptions(),
         async (ctx) => {
           const session = await requireSession(ctx);
           const { userId } = session;
@@ -608,8 +609,8 @@ export const twoFactorEnrolment = () =>
       // The library's ceremony bodies cannot carry a password, so it is proven
       // here and spent by `/passkey/verify-registration` and `/passkey/delete-passkey`.
       passkeyEnrolmentGrant: pluginEndpoint(
-        '/two-factor/passkey/grant',
-        sessionPostOptions(),
+        contract.passkeyEnrolmentGrant,
+        sessionBodyOptions(),
         async (ctx) => {
           const { userId } = await requireSession(ctx, 'passkey');
           await requireReauthPassword(ctx, userId);

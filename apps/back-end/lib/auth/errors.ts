@@ -1,9 +1,12 @@
 import type { HookContext } from './context';
+import type { authProblemSchema } from '@app/shared/api/wire';
+import type * as z from 'zod';
 
 import { isDatabaseContention } from '@/db/errors';
 import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
 import { APIError, isAPIError } from 'better-auth/api';
 
+import { PROBLEM_MEDIA_TYPE, problemBody } from '@app/shared/api/wire';
 import { CustomError } from '@app/shared/error-class';
 import {
   CUSTOM_AUTH_CODE,
@@ -17,9 +20,15 @@ import {
   MSG_LOGIN_REQUIRED,
   MSG_REAUTH_REQUIRED,
 } from '@app/shared/messages/auth';
-import { MSG_SERVICE_UNAVAILABLE } from '@app/shared/messages/common';
+import {
+  MSG_INTERNAL_ERROR,
+  MSG_INVALID_INPUT,
+  MSG_SERVICE_UNAVAILABLE,
+} from '@app/shared/messages/common';
 
 import { logSanitized, logServerErrorResponse } from '@/utils/log';
+
+type AuthProblem = z.output<typeof authProblemSchema>;
 
 type AuthErrorStatus = NonNullable<ConstructorParameters<typeof APIError>[0]>;
 
@@ -59,8 +68,8 @@ export function authenticationDenied(): APIError {
   return authErrorCodeFirst(HTTP_STATUS.UNAUTHORIZED, MSG_INVALID_CREDENTIALS);
 }
 
-export function sessionRequired(): APIError {
-  return authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED);
+export function sessionRequired(headers?: Headers): APIError {
+  return authError(HTTP_STATUS.UNAUTHORIZED, MSG_LOGIN_REQUIRED, headers);
 }
 
 export function reauthenticationRequired(): APIError {
@@ -178,32 +187,54 @@ export function localiseReturnedAuthError(returned: unknown): void {
 }
 
 /**
- * A Better Auth error response with its message replaced by this deployment's
- * Arabic one; anything else, and any body this cannot read, passes untouched.
+ * Every refusal the Better Auth prefix route answers, as a problem that also
+ * carries `message`, which Better Auth's client reads. Better Auth's
+ * `{ code, message }` is localised where this deployment words its code, and
+ * otherwise keeps its own message; a body this route built is a problem
+ * already. A success, a redirect, and a body that is not a JSON object pass
+ * untouched.
  */
-export async function localiseAuthError(response: Response): Promise<Response> {
-  if (response.ok) return response;
+export async function toAuthProblem(response: Response): Promise<Response> {
+  if (response.status < HTTP_STATUS.BAD_REQUEST) return response;
 
-  const cloned = response.clone();
   let body: unknown;
   try {
-    body = await cloned.json();
+    body = await response.clone().json();
   } catch {
     return response;
   }
-
-  const code =
-    typeof body === 'object' && body !== null && 'code' in body
-      ? body.code
-      : undefined;
-  const localised = localisedAuthBody(code);
-  if (localised === undefined) return response;
+  if (typeof body !== 'object' || body === null || Array.isArray(body))
+    return response;
 
   const headers = new Headers(response.headers);
-  headers.set('content-type', 'application/json;charset=utf-8');
-  return Response.json(localised, {
+  headers.set('content-type', PROBLEM_MEDIA_TYPE);
+  headers.delete('content-length');
+  return Response.json(authProblemOf(response.status, body), {
     status: response.status,
     statusText: response.statusText,
     headers,
   });
+}
+
+const textOf = (body: object, key: string): string | undefined => {
+  const value: unknown = Object.hasOwn(body, key)
+    ? Reflect.get(body, key)
+    : undefined;
+  return typeof value === 'string' && value !== '' ? value : undefined;
+};
+
+function authProblemOf(status: number, body: object): AuthProblem {
+  const code = textOf(body, 'code');
+  const localised = localisedAuthBody(code);
+  const detail =
+    localised?.message ??
+    textOf(body, 'detail') ??
+    textOf(body, 'message') ??
+    (status >= HTTP_STATUS.INTERNAL_ERROR
+      ? MSG_INTERNAL_ERROR
+      : MSG_INVALID_INPUT);
+  return {
+    ...problemBody(status, detail, localised?.code ?? code),
+    message: detail,
+  };
 }

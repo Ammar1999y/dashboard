@@ -3,7 +3,7 @@ import type { AuditMeta } from '@/lib/audit';
 import type { HandlerRequestMeta } from '@/lib/http/contract';
 import type { EntityID } from '@app/shared/types';
 
-import { auditLog, getAuditMeta } from '@/lib/audit';
+import { auditLog, auditMany, getAuditMeta } from '@/lib/audit';
 
 export interface Actor {
   userId: EntityID;
@@ -68,15 +68,29 @@ type ActorAuditEntry = Omit<
   'userId' | 'userEmail' | 'meta'
 >;
 
+const asActor = (actor: AuditActor, entry: ActorAuditEntry) => ({
+  ...entry,
+  userId: actor.userId,
+  userEmail: actor.email,
+  meta: actor.meta,
+});
+
 export function auditAs(
   tx: Tx,
   actor: AuditActor,
   entry: ActorAuditEntry
 ): Promise<void> {
-  return auditLog(tx, {
-    ...entry,
-    userId: actor.userId,
-    userEmail: actor.email,
-    meta: actor.meta,
-  });
+  return auditLog(tx, asActor(actor, entry));
+}
+
+/** `auditAs` for a selection: one INSERT under the caller's locks. */
+export function auditManyAs(
+  tx: Tx,
+  actor: AuditActor,
+  entries: readonly ActorAuditEntry[]
+): Promise<void> {
+  return auditMany(
+    tx,
+    entries.map((entry) => asActor(actor, entry))
+  );
 }

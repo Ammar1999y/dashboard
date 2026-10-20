@@ -24,7 +24,7 @@ import { folderOf } from './schemas';
  * stale instead, and says so.
  *
  * A listing is cached either as one table page or as every page a scrolled
- * list has fetched (`useServerPages`); both are patched alike.
+ * list has fetched (`useEndpointPages`); both are patched alike.
  */
 
 type ScrolledPages = InfiniteData<LibraryPage, unknown>;

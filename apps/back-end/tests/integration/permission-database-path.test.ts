@@ -30,6 +30,7 @@ import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 import { REQUIRE_ROLE_FOR_LOGIN } from '@app/shared/permissions/constants';
 
 import { resetTables } from '../helpers/database';
+import { expectError } from '../helpers/expect-body';
 import { authedRequest, signedInUser } from '../helpers/session';
 
 const GRANTS = { users: { view: true, create: true } } as const;
@@ -101,21 +102,21 @@ describe('a role deactivated after sign-in', () => {
   test('a write re-reads the role and is refused 403', async () => {
     const response = await createUser(fx().roleDeactivated);
 
-    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(await response.json()).toMatchObject({
-      success: false,
-      message: MSG_INSUFFICIENT_PERMISSIONS,
-    });
+    await expectError(
+      response,
+      HTTP_STATUS.FORBIDDEN,
+      MSG_INSUFFICIENT_PERMISSIONS
+    );
   });
 
   test('a read without the cookie cache re-reads the role and is refused 403', async () => {
     const response = await listUsers(withoutSessionCache(fx().roleDeactivated));
 
-    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-    expect(await response.json()).toMatchObject({
-      success: false,
-      message: MSG_INSUFFICIENT_PERMISSIONS,
-    });
+    await expectError(
+      response,
+      HTTP_STATUS.FORBIDDEN,
+      MSG_INSUFFICIENT_PERMISSIONS
+    );
   });
 
   test('a read WITH the cookie cache is still answered from it — the bounded tradeoff', async () => {

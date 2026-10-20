@@ -1,7 +1,7 @@
 /**
  * Every error Elysia can raise, and every throw on a binding's way, turned
- * into this API's error envelope by core. Never Elysia's `problem()`, whose
- * slug `type` would leak into the frozen wire format. Each answer is a native
+ * into this API's problem by core. Never Elysia's `problem()`, whose slug
+ * `type` would replace the `about:blank` every problem carries. Each answer is a native
  * `Response`, so it passes the exit step like any other.
  *
  * Elysia's `InvalidCookie` is left to the last hook, a logged 500: it is raised

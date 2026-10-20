@@ -12,10 +12,11 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
-import { HTTP_STATUS } from '@app/shared/http-status';
+import { verifyOtp } from '@app/shared/api/auth';
 import { otpMsg } from '@app/shared/messages/otp';
 
 import { resetTables } from '../helpers/database';
+import { expectData } from '../helpers/expect-body';
 import { seedOtpProof } from '../helpers/otp';
 import { baseHeaders, seedUser } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
@@ -44,9 +45,7 @@ test('the right code verifies the contact', async () => {
     })
   );
 
-  expect(response.status).toBe(HTTP_STATUS.OK);
-  expect(await response.json()).toEqual({
-    success: true,
+  expect(await expectData(response, verifyOtp)).toEqual({
     message: otpMsg.verifySuccess('email'),
     data: { verified: true },
   });

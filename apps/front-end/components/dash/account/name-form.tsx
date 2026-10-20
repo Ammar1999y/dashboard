@@ -1,6 +1,7 @@
 import type { UserDetail } from '@/types/user';
 import type { RenameInput, RenameOutput } from '@/utils/validation/account';
 
+import { useRouter } from 'next/router';
 import { memo, useCallback } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -14,11 +15,18 @@ import { Form } from '@/components/form/form';
 import FormInput from '@/components/form/form-input';
 import SubmitButton, { SubmitLabel } from '@/components/form/submit-button';
 
+import { accountReturnPath } from '../auth/paths';
 import { userEntity } from '../users/entity';
 
-/** The one field a user may change of their own record; no proof is asked for it. */
+/**
+ * The one field a user may change of their own record; no proof is asked for
+ * it. Opened from another page, a rename returns there, as the administrator's
+ * form returns to the list.
+ */
 export const NameForm = memo(({ user }: { user: UserDetail }) => {
   const queryClient = useQueryClient();
+  const { query, push } = useRouter();
+  const returnTo = accountReturnPath(query);
   const { id } = user;
   const methods = useForm<RenameInput, unknown, RenameOutput>({
     resolver: zodResolver(selfUpdateUserBodySchema),
@@ -31,8 +39,9 @@ export const NameForm = memo(({ user }: { user: UserDetail }) => {
       const result = await renameSelf(queryClient, userEntity, id, name);
       toast.success(result.message);
       reset({ name });
+      if (returnTo) void push(returnTo);
     },
-    [id, queryClient, reset]
+    [id, queryClient, reset, returnTo, push]
   );
 
   return (

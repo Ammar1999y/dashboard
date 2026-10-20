@@ -13,6 +13,7 @@ import { REGISTERED_BINDINGS } from '@/modules';
 import { generateDocument } from '@/server/elysia/openapi';
 import * as z from 'zod';
 
+import { PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
 import { MSG_CHANNEL_DISABLED } from '@app/shared/messages/otp';
 import { MAX_DOCUMENT_SIZE_MB, MIB } from '@app/shared/validation/constants';
 import { OTP_CHANNELS } from '@app/shared/validation/enums';
@@ -153,6 +154,7 @@ describe('the generated document', () => {
       return isJsonSchema(headers) && 'Set-Cookie' in headers;
     }).map((binding) => binding.key);
     expect(setsCookies).toEqual([
+      'PUT /api/dash/users/me',
       'POST /api/dash/users/me/change-email',
       'POST /api/dash/users/me/change-email/verify',
     ]);
@@ -444,7 +446,7 @@ describe('what the generated document says', () => {
     );
   });
 
-  test('the document route publishes its raw success shape and envelope refusals', () => {
+  test('the document route publishes its raw success shape and problem refusals', () => {
     const operation = op('/openapi.json', 'get');
     expect(statuses(operation)).toEqual([
       '200',
@@ -466,6 +468,9 @@ describe('what the generated document says', () => {
         'required'
       )
     ).toEqual(['openapi', 'info', 'servers', 'tags', 'components', 'paths']);
+    expect(
+      json(operation, 'responses', '401', 'content', PROBLEM_MEDIA_TYPE)
+    ).toEqual({ schema: { $ref: '#/components/schemas/Problem' } });
     expect(operation.security).toEqual([{ sessionCookie: [] }]);
   });
 
@@ -654,16 +659,11 @@ describe('what the generated document says', () => {
         state.document,
         'components',
         'schemas',
-        'MediaRefusalEnvelope',
+        'MediaRefusalProblem',
         'properties',
         'data',
-        'anyOf'
+        'description'
       )
-    ).toEqual([
-      expect.objectContaining({
-        description: expect.stringContaining('What blocked a media refusal'),
-      }),
-      { type: 'null' },
-    ]);
+    ).toContain('blocked a media refusal');
   });
 });

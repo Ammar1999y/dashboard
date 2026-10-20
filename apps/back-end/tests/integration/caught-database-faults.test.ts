@@ -43,6 +43,7 @@ import { generateUuidV7 } from '@/lib/id';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
+import { expectAuthError } from '../helpers/expect-body';
 import {
   connectionClosedError,
   driverError,
@@ -446,10 +447,10 @@ describe('the plugin’s delegated verifiers', () => {
     }
   );
 
-  test('a fault reading the challenge state after the sign-in is logged once and the sign-in stands', async () => {
+  test('a fault dropping the challenge state after the sign-in is logged once and the sign-in stands', async () => {
     const signedIn = await delegatedChallenge();
     const context = await auth.$context;
-    const find = context.internalAdapter.findVerificationValue;
+    const drop = context.internalAdapter.deleteVerificationByIdentifier;
     const fault = await driverError('XX000');
     const sessionCount = async () => {
       const rows = await db
@@ -459,16 +460,16 @@ describe('the plugin’s delegated verifiers', () => {
       return rows.length;
     };
     const before = await sessionCount();
-    // Only the read after the session exists: the earlier ones gate the verify.
-    const read = spyOn(
+    // Only the delete after the session exists, in the verifier's tail.
+    const deletion = spyOn(
       context.internalAdapter,
-      'findVerificationValue'
+      'deleteVerificationByIdentifier'
     ).mockImplementation(async (...args) => {
       if (args[0].startsWith('2fa-state-') && (await sessionCount()) > before)
         throw fault;
-      return find(...args);
+      return drop(...args);
     });
-    cleanups.push(() => read.mockRestore());
+    cleanups.push(() => deletion.mockRestore());
     const lines = errorLines();
 
     const verified = await call(
@@ -477,10 +478,10 @@ describe('the plugin’s delegated verifiers', () => {
       { code: BACKUP_CODES[0] }
     );
     expect(verified.status).toBe(200);
+    expect(await sessionCount()).toBe(before + 1);
     const logged = lines();
     expect(logged).toHaveLength(1);
-    expect(logged[0]).toContain('twoFactor.completion.stateReadFailed');
-    expect(logged[0]).toContain('completion audit');
+    expect(logged[0]).toContain('twoFactor.challenge.cleanupFailed');
   });
 
   // And drops a failed re-arm.
@@ -691,8 +692,7 @@ describe('reading the session', () => {
       await db.delete(sessions).where(eq(sessions.userId, user.userId));
 
       const answered = await call(path, cookie, body);
-      expect(answered.status).toBe(401);
-      expect(await answered.json()).toMatchObject({ message: missing });
+      await expectAuthError(answered, 401, missing);
     }
   );
 });

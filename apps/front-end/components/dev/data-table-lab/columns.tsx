@@ -1,4 +1,5 @@
 import type { LabRow } from './fake-server';
+import type { DataTableFeatures } from '@/components/ui/data-table';
 import type {
   CellContext,
   ColumnDef,
@@ -20,7 +21,10 @@ export const LAB_ACTIONS_COLUMN = 'actions';
 
 // The checker compares rendered text against this, so a cell showing an old
 // value is caught even when its row id is right.
-export const displayValue = (row: Row<LabRow>, columnId: string): string => {
+export const displayValue = (
+  row: Row<DataTableFeatures, LabRow>,
+  columnId: string
+): string => {
   const value: unknown = row.getValue(columnId);
   if (columnId === 'createdAt' && typeof value === 'string')
     return value.slice(0, 10);
@@ -35,7 +39,7 @@ const named = <TProps,>(
   displayName: string
 ): Renderer<TProps> => Object.assign(fn, { displayName });
 
-const header = named<HeaderContext<LabRow, unknown>>(
+const header = named<HeaderContext<DataTableFeatures, LabRow>>(
   ({ column }) => (
     <span data-lab-col={column.id} className='contents'>
       <DataTableColumnHeader
@@ -46,7 +50,7 @@ const header = named<HeaderContext<LabRow, unknown>>(
   'LabHeader'
 );
 
-const cell = named<CellContext<LabRow, unknown>>(
+const cell = named<CellContext<DataTableFeatures, LabRow>>(
   ({ row, column }) => (
     <span
       data-lab-cell={column.id}
@@ -74,7 +78,7 @@ const LabRowAction = memo(({ rowId }: { rowId: string }) => {
 });
 LabRowAction.displayName = 'LabRowAction';
 
-const actionsCell = named<CellContext<LabRow, unknown>>(
+const actionsCell = named<CellContext<DataTableFeatures, LabRow>>(
   ({ row }) => (
     <span
       data-lab-cell={LAB_ACTIONS_COLUMN}
@@ -87,7 +91,7 @@ const actionsCell = named<CellContext<LabRow, unknown>>(
   'LabActionsCell'
 );
 
-export const labColumns: ColumnDef<LabRow>[] = [
+export const labColumns: ColumnDef<DataTableFeatures, LabRow>[] = [
   {
     accessorKey: 'name',
     id: 'name',

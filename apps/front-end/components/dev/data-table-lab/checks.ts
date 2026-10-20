@@ -1,5 +1,6 @@
 import type { LabRow } from './fake-server';
 import type { Mismatch } from './types';
+import type { DataTableFeatures } from '@/components/ui/data-table';
 import type { Column, Table } from '@tanstack/react-table';
 
 import { useDataTableStore } from '@/components/ui/data-table/store/url-store';
@@ -23,10 +24,10 @@ const sameList = (a: string[], b: string[]) =>
 
 const width = (el: Element) => Math.round(el.getBoundingClientRect().width);
 
-const expectedPinPosition = (column: Column<LabRow>) => {
+const expectedPinPosition = (column: Column<DataTableFeatures, LabRow>) => {
   const pinned = column.getIsPinned();
-  if (pinned === 'left') return `${column.getStart('left')}px`;
-  if (pinned === 'right') return `${column.getAfter('right')}px`;
+  if (pinned === 'start') return `${column.getStart('start')}px`;
+  if (pinned === 'end') return `${column.getAfter('end')}px`;
   return '';
 };
 
@@ -34,7 +35,7 @@ function checkPinning(
   out: Mismatch[],
   where: string,
   el: HTMLElement,
-  column: Column<LabRow>
+  column: Column<DataTableFeatures, LabRow>
 ) {
   const pinned = column.getIsPinned();
   const domPinned = el.dataset.pinned ?? false;
@@ -48,7 +49,7 @@ function checkPinning(
   // `styles/table.css` offsets a start-pinned column from the right (RTL) and
   // an end-pinned one from the left; the computed value resolves the variables.
   const computed = getComputedStyle(el);
-  const position = pinned === 'left' ? computed.right : computed.left;
+  const position = pinned === 'start' ? computed.right : computed.left;
   const expected = expectedPinPosition(column);
   if (position !== expected)
     out.push({
@@ -57,11 +58,12 @@ function checkPinning(
     });
 
   const isEdge =
-    pinned === 'left'
-      ? column.getIsLastColumn('left')
-      : column.getIsFirstColumn('right');
+    pinned === 'start'
+      ? column.getIsLastColumn('start')
+      : column.getIsFirstColumn('end');
   const domEdge =
-    el.dataset[pinned === 'left' ? 'isLastPinned' : 'isFirstPinned'] === 'true';
+    el.dataset[pinned === 'start' ? 'isLastPinned' : 'isFirstPinned'] ===
+    'true';
   if (isEdge !== domEdge)
     out.push({
       check: `${where} pin edge`,
@@ -71,7 +73,7 @@ function checkPinning(
 
 function checkHeaders(
   out: Mismatch[],
-  table: Table<LabRow>,
+  table: Table<DataTableFeatures, LabRow>,
   root: HTMLElement
 ) {
   const headerRoot = root.querySelector('[data-slot="table-header"]');
@@ -108,15 +110,13 @@ function checkHeaders(
 
     if (!header.column.getCanSort()) continue;
     const current = sort.find((s) => s.id === header.column.id);
-    const expectedIcon = current
-      ? current.desc
-        ? 'lucide-arrow-down'
-        : 'lucide-arrow-up'
-      : 'lucide-arrow-down-up';
-    if (!el.querySelector(`.${expectedIcon}`))
+    const expected = current ? (current.desc ? 'desc' : 'asc') : 'none';
+    const shown =
+      el.querySelector<HTMLElement>('[data-sort]')?.dataset.sort ?? 'missing';
+    if (shown !== expected)
       out.push({
         check: 'sort icon',
-        detail: `${header.column.id}: expected ${expectedIcon.replace('lucide-', '')}`,
+        detail: `${header.column.id}: shows ${shown}, expected ${expected}`,
       });
   }
 }
@@ -133,7 +133,7 @@ function domBodyKind(body: Element): BodyKind {
 
 function checkBody(
   out: Mismatch[],
-  table: Table<LabRow>,
+  table: Table<DataTableFeatures, LabRow>,
   root: HTMLElement,
   status: LabTableStatus
 ) {
@@ -271,7 +271,11 @@ function checkPagination(
     });
 }
 
-function checkLayout(out: Mismatch[], table: Table<LabRow>, root: HTMLElement) {
+function checkLayout(
+  out: Mismatch[],
+  table: Table<DataTableFeatures, LabRow>,
+  root: HTMLElement
+) {
   const tableEl = root.querySelector<HTMLElement>('[data-slot="table"]');
   if (!tableEl) return;
   const total = table.getTotalSize();
@@ -304,7 +308,10 @@ function checkLayout(out: Mismatch[], table: Table<LabRow>, root: HTMLElement) {
 }
 
 // The popover is portalled, so it is looked up in the document, not the table root.
-function checkViewOptions(out: Mismatch[], table: Table<LabRow>) {
+function checkViewOptions(
+  out: Mismatch[],
+  table: Table<DataTableFeatures, LabRow>
+) {
   const input = document.querySelector('input[placeholder="بحث عن عمود..."]');
   const popover = input?.closest('[cmdk-root]');
   if (!popover) return;
@@ -323,7 +330,7 @@ function checkViewOptions(out: Mismatch[], table: Table<LabRow>) {
     return labelToId.get(text) ?? `?${text}`;
   });
 
-  const order = table.getState().columnOrder;
+  const order = table.store.state.columnOrder;
   const rank = (id: string) => {
     const index = order.indexOf(id);
     return index === -1 ? Infinity : index;
@@ -352,7 +359,7 @@ function checkViewOptions(out: Mismatch[], table: Table<LabRow>) {
 }
 
 export function runChecks(
-  table: Table<LabRow>,
+  table: Table<DataTableFeatures, LabRow>,
   root: HTMLElement,
   status: LabTableStatus
 ): Mismatch[] {

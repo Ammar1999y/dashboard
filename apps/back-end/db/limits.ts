@@ -17,6 +17,13 @@
 export const MAX_POOL_CONNECTIONS = 10;
 
 /**
+ * `dataTableDb`'s pool, on top of `MAX_POOL_CONNECTIONS`. A list request holds
+ * two at once, its rows and its count; list requests beyond what it serves wait
+ * for a connection without a bound.
+ */
+export const DATA_TABLE_POOL_CONNECTIONS = 4;
+
+/**
  * How long `withTransaction` waits for a free connection before answering 503.
  * Bun's `connectionTimeout` bounds only opening a connection; without this a
  * full pool queues callers forever. Kept above the longest legitimate

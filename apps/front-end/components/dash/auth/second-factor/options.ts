@@ -1,7 +1,7 @@
 import type { TwoFactorOption } from '../schemas';
 import type { IconName } from '@/components/ui/icon';
 
-import { REQUEST_BODIES } from '@app/shared/contract';
+import { completePasswordReset } from '@app/shared/api/auth';
 import {
   isTwoFactorMethodEnabled,
   isTwoFactorOtpChannelEnabled,
@@ -34,8 +34,7 @@ export function usableOptions<T extends FactorOption>(
 }
 
 /** A backup code or a six-digit code: the recovery schema's rule for what it accepts. */
-export const backupCodeSchema =
-  REQUEST_BODIES['POST /api/auth/forgot-password/complete'].shape.code;
+export const backupCodeSchema = completePasswordReset.body.shape.code;
 
 export function optionLabel({ method, contactKind }: FactorOption) {
   switch (method) {

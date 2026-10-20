@@ -288,7 +288,7 @@ describe('a malformed id is the not-found of its route, the body’s 422 stays',
         : mediaMsg.folderNotFound
     );
     expect(refusal.code).toBe(code);
-    expect(refusal.data).toBeNull();
+    expect(refusal.data).toBeUndefined();
   });
 
   test('a repeated query key does not hide it: params answer first', async () => {

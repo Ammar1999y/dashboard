@@ -11,16 +11,14 @@
 import { SQL } from 'bun';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 
-import { sql } from 'drizzle-orm';
-
 import { app } from '@/app';
 import * as database from '@/db';
-import { db } from '@/db';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 
 import { SQLITE_MAINTENANCE_TOKEN } from '@/lib/env.server';
 
+import { assertHarnessDatabase } from '../helpers/database';
 import { adminUrl } from '../helpers/provision';
 import { baseHeaders } from '../helpers/session';
 
@@ -46,10 +44,7 @@ async function readiness() {
 
 describe('readiness and the application pool', () => {
   test('a dropped connection the pool replaces does not fail it', async () => {
-    const rows: unknown[] = await db.execute(
-      sql`select current_database() as name`
-    );
-    const { name } = rows[0] as { name: string };
+    const name = await assertHarnessDatabase();
     const admin = new SQL(adminUrl(), { max: 1 });
     cleanups.push(() => admin.close());
     await admin`select pg_terminate_backend(pid) from pg_stat_activity where datname = ${name}`;

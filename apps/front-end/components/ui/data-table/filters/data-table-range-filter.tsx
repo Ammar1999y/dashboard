@@ -1,5 +1,6 @@
+import type { DataTableFeatures } from '../features';
 import type { FilterItemSchema } from '@app/shared/data-table/parsers';
-import type { Column } from '@tanstack/react-table';
+import type { Column, RowData } from '@tanstack/react-table';
 import type { ChangeEvent, ComponentProps } from 'react';
 
 import { useCallback, useMemo } from 'react';
@@ -9,10 +10,21 @@ import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 
 import { genericMemo } from '../utils/generic-memo';
+import {
+  filterField,
+  filterSegmentFirst,
+  filterSegmentLast,
+  filterSegmentWrapper,
+} from './segments';
 
-interface DataTableRangeFilterProps<TData> extends ComponentProps<'div'> {
+// For a column without `meta.range`; no table registers TanStack's faceting.
+const DEFAULT_RANGE: [number, number] = [0, 100];
+
+interface DataTableRangeFilterProps<
+  TData extends RowData,
+> extends ComponentProps<'div'> {
   filter: FilterItemSchema;
-  column: Column<TData>;
+  column: Column<DataTableFeatures, TData>;
   inputId: string;
   onFilterUpdate: (
     filterId: string,
@@ -20,7 +32,7 @@ interface DataTableRangeFilterProps<TData> extends ComponentProps<'div'> {
   ) => void;
 }
 
-function DataTableRangeFilterInner<TData>({
+function DataTableRangeFilterInner<TData extends RowData>({
   filter,
   column,
   inputId,
@@ -30,15 +42,7 @@ function DataTableRangeFilterInner<TData>({
 }: DataTableRangeFilterProps<TData>) {
   const meta = column.columnDef.meta;
 
-  const [min, max] = useMemo(() => {
-    const range = column.columnDef.meta?.range;
-    if (range) return range;
-
-    const values = column.getFacetedMinMaxValues();
-    if (!values) return [0, 100];
-
-    return [values[0], values[1]];
-  }, [column]);
+  const [min, max] = column.columnDef.meta?.range ?? DEFAULT_RANGE;
 
   const formatValue = useCallback((value: string | number | undefined) => {
     if (value === undefined || value === '') return '';
@@ -95,7 +99,11 @@ function DataTableRangeFilterInner<TData>({
   return (
     <div
       data-slot='range'
-      className={cn('flex w-full items-center gap-2', className)}
+      className={cn(
+        'flex w-full items-center gap-2 group-data-[segmented]/segments:gap-0',
+        filterSegmentWrapper,
+        className
+      )}
       {...props}
     >
       <Input
@@ -109,7 +117,7 @@ function DataTableRangeFilterInner<TData>({
         placeholder={min.toString()}
         min={min}
         max={max}
-        className='!h-8 w-full rounded bg-transparent shadow-xs hover:shadow-sm'
+        className={cn(filterField, filterSegmentFirst)}
         defaultValue={value[0]}
         onChange={onMinChange}
       />
@@ -125,7 +133,7 @@ function DataTableRangeFilterInner<TData>({
         placeholder={max.toString()}
         min={min}
         max={max}
-        className='!h-8 w-full rounded bg-transparent shadow-xs hover:shadow-sm'
+        className={cn(filterField, filterSegmentLast)}
         defaultValue={value[1]}
         onChange={onMaxChange}
       />

@@ -1,63 +1,55 @@
-# Elysia
+# Elysia Interactive
 
-## Table of Contents
+you can read elysia-llms-references.md for references, only read the necessary To read references of things, you need to read about it more
 
-### Getting Started
+## Documentation
 
-- [Key Concept - ElysiaJS](https://elysiajs.com/key-concept.md)
-- [Quick Start - ElysiaJS](https://elysiajs.com/quick-start.md)
-- [Cheat Sheet - ElysiaJS](https://elysiajs.com/integrations/cheat-sheet.md)
-- [Key Concept - ElysiaJS](https://elysiajs.com/key-concept.md)
-
-### Essential
-
-- [Route - ElysiaJS](https://elysiajs.com/essential/route.md)
-- [Handler - ElysiaJS](https://elysiajs.com/essential/handler.md)
-- [Plugin - ElysiaJS](https://elysiajs.com/essential/plugin.md)
-- [Lifecycle - ElysiaJS](https://elysiajs.com/essential/life-cycle.md)
-- [Validation - ElysiaJS](https://elysiajs.com/essential/validation.md)
-- [Best Practice - ElysiaJS](https://elysiajs.com/essential/best-practice.md)
-
-### Patterns
-
-- [Config - ElysiaJS](https://elysiajs.com/patterns/configuration.md)
-- [Reactive Cookie - ElysiaJS](https://elysiajs.com/patterns/cookie.md)
-- [Deploy to Production - ElysiaJS](https://elysiajs.com/patterns/deploy.md)
-- [Error Handling - ElysiaJS](https://elysiajs.com/patterns/error-handling.md)
-- [Extends Context - ElysiaJS](https://elysiajs.com/patterns/extends-context.md)
-- [Macro - ElysiaJS](https://elysiajs.com/patterns/macro.md)
-- [OpenAPI - ElysiaJS](https://elysiajs.com/patterns/openapi.md)
-- [Trace - ElysiaJS](https://elysiajs.com/patterns/trace.md)
-- [TypeScript - ElysiaJS](https://elysiajs.com/patterns/typescript.md)
-- [Testing - ElysiaJS](https://elysiajs.com/patterns/unit-test.md)
-
-### Eden
-
-- [End-to-End Type Safety - ElysiaJS](https://elysiajs.com/eden/overview.md)
-- [Eden Installation - ElysiaJS](https://elysiajs.com/eden/installation.md)
-- [Eden Fetch - ElysiaJS](https://elysiajs.com/eden/fetch.md)
-
-#### Eden Treaty
-
-- [Overview - ElysiaJS](https://elysiajs.com/eden/treaty/overview.md)
-- [Eden Treaty Parameters - ElysiaJS](https://elysiajs.com/eden/treaty/parameters.md)
-- [Eden Treaty Response - ElysiaJS](https://elysiajs.com/eden/treaty/response.md)
-- [Eden Treaty Config - ElysiaJS](https://elysiajs.com/eden/treaty/config.md)
-- [Eden Treaty Unit Test - ElysiaJS](https://elysiajs.com/eden/treaty/unit-test.md)
-
-### Plugins
-
-- [CORS Plugin - ElysiaJS](https://elysiajs.com/plugins/cors.md)
-- [Cron Plugin - ElysiaJS](https://elysiajs.com/plugins/cron.md)
-- [OpenAPI Plugin - ElysiaJS](https://elysiajs.com/plugins/openapi.md)
-- [Server Timing Plugin - ElysiaJS](https://elysiajs.com/plugins/server-timing.md)
-
-### Integration
-
-- [Better Auth - ElysiaJS](https://elysiajs.com/integrations/better-auth.md)
-- [Better Auth - ElysiaJS - 2](https://better-auth.com/llms.txt/docs/integrations/elysia.md)
-- [Integration with Drizzle - ElysiaJS](https://elysiajs.com/integrations/drizzle.md)
-
-### Internal
-
-- [JIT Compiler - ElysiaJS Internal](https://elysiajs.com/internal/jit-compiler.md)
+- [At a glance](https://next.elysiajs.com/at-glance/index.md)
+- [Elysia 2 RC - またおいで](https://next.elysiajs.com/blog/elysia-20-rc/index.md)
+- [Elysia 2 beta - DayDream](https://next.elysiajs.com/blog/elysia-20/index.md)
+- [Design system](https://next.elysiajs.com/design-system/index.md)
+- [Eden Fetch](https://next.elysiajs.com/eden/fetch/index.md)
+- [End-to-end type safety](https://next.elysiajs.com/eden/index.md)
+- [Eden installation](https://next.elysiajs.com/eden/installation/index.md)
+- [Config](https://next.elysiajs.com/eden/treaty/config/index.md)
+- [Eden Treaty legacy](https://next.elysiajs.com/eden/treaty/legacy/index.md)
+- [Eden Treaty](https://next.elysiajs.com/eden/treaty/overview/index.md)
+- [Parameters](https://next.elysiajs.com/eden/treaty/parameters/index.md)
+- [Eden plugin](https://next.elysiajs.com/eden/treaty/plugin/index.md)
+- [Response](https://next.elysiajs.com/eden/treaty/response/index.md)
+- [Unit test](https://next.elysiajs.com/eden/treaty/unit-test/index.md)
+- [WebSocket](https://next.elysiajs.com/eden/treaty/websocket/index.md)
+- [Best practice](https://next.elysiajs.com/essential/best-practice/index.md)
+- [Handler](https://next.elysiajs.com/essential/handler/index.md)
+- [Life cycle](https://next.elysiajs.com/essential/life-cycle/index.md)
+- [Plugin](https://next.elysiajs.com/essential/plugin/index.md)
+- [Routing](https://next.elysiajs.com/essential/route/index.md)
+- [Validation](https://next.elysiajs.com/essential/validation/index.md)
+- [Better Auth](https://next.elysiajs.com/integrations/better-auth/index.md)
+- [Drizzle](https://next.elysiajs.com/integrations/drizzle/index.md)
+- [React Email](https://next.elysiajs.com/integrations/react-email/index.md)
+- [JIT “compiler”](https://next.elysiajs.com/internal/jit-compiler/index.md)
+- [Key concepts](https://next.elysiajs.com/key-concept/index.md)
+- [From Hono to Elysia](https://next.elysiajs.com/migrate/from-hono/index.md)
+- [Configuration](https://next.elysiajs.com/patterns/configuration/index.md)
+- [Cookie](https://next.elysiajs.com/patterns/cookie/index.md)
+- [Deploy to production](https://next.elysiajs.com/patterns/deploy/index.md)
+- [Error handling](https://next.elysiajs.com/patterns/error-handling/index.md)
+- [Macro](https://next.elysiajs.com/patterns/macro/index.md)
+- [Mount](https://next.elysiajs.com/patterns/mount/index.md)
+- [OpenAPI](https://next.elysiajs.com/patterns/openapi/index.md)
+- [OpenTelemetry](https://next.elysiajs.com/patterns/opentelemetry/index.md)
+- [Trace](https://next.elysiajs.com/patterns/trace/index.md)
+- [TypeBox](https://next.elysiajs.com/patterns/typebox/index.md)
+- [TypeScript](https://next.elysiajs.com/patterns/typescript/index.md)
+- [Unit test](https://next.elysiajs.com/patterns/unit-test/index.md)
+- [WebSocket](https://next.elysiajs.com/patterns/websocket/index.md)
+- [Bearer plugin](https://next.elysiajs.com/plugins/bearer/index.md)
+- [Compress plugin](https://next.elysiajs.com/plugins/compress/index.md)
+- [CORS plugin](https://next.elysiajs.com/plugins/cors/index.md)
+- [Cron plugin](https://next.elysiajs.com/plugins/cron/index.md)
+- [OpenAPI plugin](https://next.elysiajs.com/plugins/openapi/index.md)
+- [OpenTelemetry](https://next.elysiajs.com/plugins/opentelemetry/index.md)
+- [Plugin overview](https://next.elysiajs.com/plugins/overview/index.md)
+- [Server Timing plugin](https://next.elysiajs.com/plugins/server-timing/index.md)
+- [Static plugin](https://next.elysiajs.com/plugins/static/index.md)

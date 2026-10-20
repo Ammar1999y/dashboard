@@ -120,13 +120,11 @@ export async function processOtpSend({
     // below, which can wait out the SQLite busy timeout (`should-ignore.md`
     // #13): a write that only references this user, an audit row or a session
     // insert, need not wait for it. Every other locker of the row still does.
+    // It is also what keeps two first sends from both INSERTing, where the
+    // proof row's FOR UPDATE below has no row to lock yet, and the lock a
+    // revocation has to conflict with to exclude a send in flight
+    // (`should-ignore.md` 2FA-2).
     await lockUser(tx, userId, 'no key update');
-
-    // FOR UPDATE locks nothing before the row exists, so two first sends would
-    // both INSERT. Keyed like the unique index, on contact kind.
-    await tx.execute(
-      sql`SELECT pg_advisory_xact_lock(hashtext(${userId}), hashtext(${contactKind} || ':' || ${purpose}))`
-    );
 
     const now = new Date();
     let [session] = await tx

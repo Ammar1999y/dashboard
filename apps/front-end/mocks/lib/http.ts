@@ -1,31 +1,30 @@
-import type { ResponseIssue } from '@app/shared/response-contract';
+import type { ResponseIssue } from '@app/shared/api/issues';
+import type { MediaRefusalData } from '@app/shared/responses/media';
 import type { EntityID } from '@app/shared/types';
-import type { PaginationMeta } from '@app/shared/types/api';
 import type * as z from 'zod';
 
 import { HttpHandler, HttpResponse } from 'msw';
+import * as authEndpoints from '@app/shared/api/auth';
+import { BETTER_AUTH_PREFIX } from '@app/shared/api/endpoint';
+import { twoFactorChallengeIssues } from '@app/shared/api/issues';
+import {
+  PROBLEM_MEDIA_TYPE,
+  problemBody,
+  problemSchema,
+} from '@app/shared/api/wire';
 import { CustomError } from '@app/shared/error-class';
 import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   MSG_CREATE_ERROR,
-  MSG_CREATED,
   MSG_DELETE_ERROR,
   MSG_FETCH_ERROR,
-  MSG_FETCHED,
   MSG_INTERNAL_ERROR,
   MSG_INVALID_INPUT,
   MSG_NOT_FOUND,
   MSG_UPDATE_ERROR,
 } from '@app/shared/messages/common';
 import { idRequired } from '@app/shared/messages/validation';
-import {
-  betterAuthResponseIssues,
-  isBetterAuthResponseRoute,
-  isResponseRoute,
-  responseIssues,
-  twoFactorChallengeIssues,
-} from '@app/shared/response-contract';
 import { validID } from '@app/shared/utils';
 import { zodIssueMessage } from '@app/shared/validation/rules';
 import { API_URL } from '@/lib/env';
@@ -33,31 +32,20 @@ import { API_URL } from '@/lib/env';
 /** The URL `apiFetch` and the auth client send `path` to. */
 export const api = (path: string) => `${API_URL}${path}`;
 
-export const ok = <T>(
-  data: T,
-  message: string = MSG_FETCHED,
-  status: number = HTTP_STATUS.OK
-) => HttpResponse.json({ success: true, message, data }, { status });
+const asProblem = (body: object, status: number, headers?: HeadersInit) => {
+  const sent = new Headers(headers);
+  sent.set('content-type', PROBLEM_MEDIA_TYPE);
+  return HttpResponse.json(body, { status, headers: sent });
+};
 
-export const created = (id: string) =>
-  ok({ id }, MSG_CREATED, HTTP_STATUS.CREATED);
-
-/** One page: its rows as an array, or an object that holds them with more. */
-export const okPage = <T>(page: { data: T; meta: PaginationMeta }) =>
-  HttpResponse.json({ success: true, message: MSG_FETCHED, ...page });
-
-/** `data` is a media refusal's blockers, which the server sends in place of `null`. */
+/** `data` is a media refusal's blockers, for the codes that name them. */
 export const fail = (
   status: number,
   message: string,
   code?: string,
   headers?: HeadersInit,
-  data: unknown = null
-) =>
-  HttpResponse.json(
-    { success: false, message, data, ...(code && { code }) },
-    { status, headers }
-  );
+  data?: MediaRefusalData
+) => asProblem(problemBody(status, message, code, data), status, headers);
 
 export const notFoundError = () =>
   new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
@@ -121,8 +109,20 @@ const FALLBACK_MESSAGES = new Map<string, string>([
   ['DELETE', MSG_DELETE_ERROR],
 ]);
 
+/**
+ * A route's own 500 text for a throw that is not a refusal, as the server's
+ * binding `failure` option gives one: `promise.catch(failingAs(message))`.
+ */
+export const failingAs =
+  (message: string) =>
+  (error: unknown): never => {
+    if (error instanceof CustomError) throw error;
+    console.error('[mock api] handler failed', error);
+    throw new CustomError(message, HTTP_STATUS.INTERNAL_ERROR);
+  };
+
 /** What the server's `handleApiError` answers for `error`. */
-export function errorResponse(
+function errorResponse(
   error: unknown,
   fallbackMessage: string = MSG_INTERNAL_ERROR
 ): Response {
@@ -135,28 +135,53 @@ export function errorResponse(
       error.message,
       error.code,
       error.responseHeaders,
-      error.data ?? null
+      error.data
     );
   }
   console.error('[mock api] handler failed', error);
   return fail(HTTP_STATUS.INTERNAL_ERROR, fallbackMessage);
 }
 
-const AUTH_PREFIX = '/api/auth';
+/** Ours, although they sit under the Better Auth prefix. */
+const AUTH_BINDING_PATHS: ReadonlySet<string> = new Set(
+  Object.values(authEndpoints).map(({ path }) => path)
+);
 
-/** Where `body` breaks the contract published for `key`; `undefined` where none is. */
-function contractIssues(
-  key: string,
-  path: string,
-  body: unknown
-): ResponseIssue[] | undefined {
-  if (isResponseRoute(key)) return responseIssues(key, body);
-  const subPath = path.startsWith(`${AUTH_PREFIX}/`)
-    ? path.slice(AUTH_PREFIX.length)
-    : undefined;
-  if (subPath !== undefined && isBetterAuthResponseRoute(subPath))
-    return betterAuthResponseIssues(subPath, body);
-  // The server's hook answers the challenge from library routes too (`/sign-in/email`).
+/** The server's `servedByPrefix`: a path Better Auth owns, not a binding. */
+const servedByBetterAuth = (path: string) =>
+  path.startsWith(`${BETTER_AUTH_PREFIX}/`) && !AUTH_BINDING_PATHS.has(path);
+
+/**
+ * The server's `toAuthProblem`: a refusal where Better Auth answers repeats
+ * `detail` as `message`, which Better Auth's client reads, and always has a
+ * `code`.
+ */
+async function toAuthProblem(response: Response): Promise<Response> {
+  if (response.ok) return response;
+  const problem = problemSchema.safeParse(
+    await response
+      .clone()
+      .json()
+      .catch(() => null)
+  );
+  if (!problem.success) return response;
+  const { status, detail, code } = problem.data;
+  return asProblem(
+    {
+      ...problemBody(status, detail, code ?? CUSTOM_AUTH_CODE),
+      message: detail,
+    },
+    status,
+    response.headers
+  );
+}
+
+/**
+ * Where an answer `mock()` does not hold breaks what the server publishes:
+ * only the challenge the server's hook answers from library routes
+ * (`/sign-in/email`), whose own bodies are the library's.
+ */
+function contractIssues(body: unknown): ResponseIssue[] | undefined {
   if (body !== null && typeof body === 'object' && 'twoFactorRedirect' in body)
     return twoFactorChallengeIssues(body);
 }
@@ -177,13 +202,7 @@ async function checkAnswer(
     !response.headers.get('content-type')?.includes('application/json')
   )
     return;
-  const path = pattern
-    .slice(API_URL.length)
-    .split('/')
-    // Every route key names its parameter `:id`.
-    .map((segment) => (segment.startsWith(':') ? ':id' : segment))
-    .join('/');
-  const key = `${method} ${path}`;
+  const path = pattern.slice(API_URL.length);
   let body: unknown;
   try {
     body = await response.clone().json();
@@ -191,69 +210,59 @@ async function checkAnswer(
     // Unreadable JSON is checked as no body, which every contract refuses.
     body = undefined;
   }
-  const issues = contractIssues(key, path, body);
-  if (!issues?.length) return;
+  const issues = contractIssues(body);
+  if (issues?.length) reportOutsideContract(`${method} ${path}`, issues);
+}
+
+/** A mock that answered outside its contract: a bug in the mock, never a refusal. */
+class ContractBreak extends Error {}
+
+/**
+ * Throws under `bun test`, which fails the request and, through MSW's
+ * `unhandledException`, the test; logs in the browser.
+ */
+export function reportOutsideContract(
+  key: string,
+  issues: readonly ResponseIssue[]
+) {
+  if (issues.length === 0) return;
   const where = issues
     .map(
       ({ path: at, code }) => `${at.map(String).join('.') || '(root)'} ${code}`
     )
     .join(', ');
   const report = `[mock api] ${key} answered outside its contract: ${where}`;
-  if (process.env.NODE_ENV === 'test') throw new Error(report);
+  if (process.env.NODE_ENV === 'test') throw new ContractBreak(report);
   console.error(report);
 }
 
+/** `mock()` handlers, which hold their answer to their entry themselves. */
+export const checkedByEntry = new WeakSet<HttpHandler>();
+
 /**
- * `handler`, answering a throw with the API envelope instead of MSW's
- * `{ name, message, stack }` 500, and checking each 2xx answer against the
- * published contract. Applied at registration, so a handler module needs
- * nothing to be covered; `run` is the only public way in, as MSW keeps the
- * resolver protected.
+ * `handler`, answering a throw with a problem instead of MSW's
+ * `{ name, message, stack }` 500, refusing where Better Auth answers in its
+ * client's shape, and checking each 2xx answer against the published
+ * contract. Applied at registration, so a handler module needs nothing to be
+ * covered; `run` is the only public way in, as MSW keeps the resolver
+ * protected.
  */
 export function withApiErrors(handler: HttpHandler): HttpHandler {
   const { method, path } = handler.info;
   return new HttpHandler(method, path, async ({ request, requestId }) => {
-    let result: Awaited<ReturnType<HttpHandler['run']>>;
-    try {
-      result = await handler.run({ request, requestId });
-    } catch (error) {
-      return errorResponse(error, FALLBACK_MESSAGES.get(request.method));
-    }
-    const response = result?.response;
-    if (response && typeof path === 'string')
-      await checkAnswer(request.method, path, response);
-    return response;
-  });
-}
-
-/** `{ success, message?, data? }`, which the project's Better Auth plugins answer with. */
-export const pluginOk = (data?: unknown, message?: string) =>
-  HttpResponse.json({
-    success: true,
-    ...(message && { message }),
-    ...(data !== undefined && { data }),
-  });
-
-/**
- * `handler`, refusing in Better Auth's `{ code, message }` instead of the API
- * envelope, as every `/api/auth` route does except the forgot-password, OTP
- * and passwordless sends, which are the project's own routes.
- */
-export function asPlugin(handler: HttpHandler): HttpHandler {
-  const { method, path } = handler.info;
-  return new HttpHandler(method, path, async ({ request, requestId }) => {
+    let response: Response | undefined;
     try {
       const result = await handler.run({ request, requestId });
-      return result?.response;
+      response = result?.response;
     } catch (error) {
-      if (!(error instanceof CustomError)) throw error;
-      return HttpResponse.json(
-        { code: error.code ?? CUSTOM_AUTH_CODE, message: error.message },
-        {
-          status: error.status ?? HTTP_STATUS.INTERNAL_ERROR,
-          headers: error.responseHeaders,
-        }
-      );
+      if (error instanceof ContractBreak) throw error;
+      response = errorResponse(error, FALLBACK_MESSAGES.get(request.method));
     }
+    if (!response) return;
+    if (servedByBetterAuth(new URL(request.url).pathname))
+      response = await toAuthProblem(response);
+    if (typeof path === 'string' && !checkedByEntry.has(handler))
+      await checkAnswer(request.method, path, response);
+    return response;
   });
 }

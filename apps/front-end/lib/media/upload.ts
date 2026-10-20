@@ -3,17 +3,14 @@ import type { PrepareOptions } from '@/lib/files/prepare';
 import type { EntityID } from '@app/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 
+import { uploadMediaFile } from '@app/shared/api/media';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { mediaFileSchema } from '@app/shared/responses/media';
+import { api } from '@/lib/api/client';
 import { hasErrorStatus, retryAfterMs } from '@/lib/api/fetch';
-import { mutate } from '@/lib/api/mutation';
 import { prepareFile } from '@/lib/files/prepare';
 
-import { mediaKeys, uploadHref } from './api';
+import { mediaKeys } from './api';
 import { cacheFileUploaded } from './cache';
-
-/** The one multipart field `POST /api/dash/media/files` reads. */
-export const LIBRARY_UPLOAD_FIELD = 'file';
 
 /** The longest `Retry-After` an upload waits out by itself. */
 const MAX_AUTOMATIC_WAIT_MS = 60_000;
@@ -27,20 +24,17 @@ async function uploadToLibrary(
   { signal, onConverted }: Pick<PrepareOptions, 'signal' | 'onConverted'>
 ): Promise<LibraryFile> {
   const prepared = await prepareFile(file, { signal, onConverted });
-  const body = new FormData();
-  body.append(LIBRARY_UPLOAD_FIELD, prepared);
-
-  const result = await mutate({
-    href: uploadHref(folderId),
-    method: 'POST',
-    data: body,
-    signal,
-    schema: mediaFileSchema,
-    onSuccess: (file) => cacheFileUploaded(queryClient, file),
-    // The file exists on the server under an id this client never saw.
-    onUnreadAnswer: () =>
-      void queryClient.invalidateQueries({ queryKey: mediaKeys.all }),
-  });
+  const result = await api(
+    uploadMediaFile,
+    { query: { folder: folderId }, body: { file: prepared } },
+    {
+      signal,
+      onSuccess: (uploaded) => cacheFileUploaded(queryClient, uploaded),
+      // The file exists on the server under an id this client never saw.
+      onUnreadAnswer: () =>
+        void queryClient.invalidateQueries({ queryKey: mediaKeys.all }),
+    }
+  );
   return result.data;
 }
 

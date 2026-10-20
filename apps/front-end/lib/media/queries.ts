@@ -1,42 +1,43 @@
 import type { LibraryListing, LibraryPage } from './schemas';
+import type { BodyOf } from '@/lib/api/client';
 import type { TableQuery } from '@/lib/data-table/query';
-import type { RequestBody } from '@app/shared/contract';
 import type { EntityID } from '@app/shared/types';
 import type { PaginationMeta } from '@app/shared/types/api';
 import type { MediaScope } from '@app/shared/validation/media';
 import type { QueryClient } from '@tanstack/react-query';
 
+import {
+  deleteMedia,
+  getMediaFile,
+  getMediaFolder,
+  getMediaStats,
+  listMedia,
+  previewMediaDelete,
+} from '@app/shared/api/media';
 import { effectiveSearchTerm } from '@app/shared/data-table/parsers';
 import {
-  deletePreviewSchema,
-  mediaFileDetailsSchema,
-  mediaFolderDetailsSchema,
-  mediaStatsSchema,
-} from '@app/shared/responses/media';
-import { apiRequest } from '@/lib/api/fetch';
-import {
-  queryDataQuery,
-  serverPageQuery,
-  serverPagesKey,
-  useQueryData,
-  useServerPage,
-  useServerPages,
+  endpointPageQuery,
+  endpointPagesKey,
+  endpointQuery,
+  useEndpointPage,
+  useEndpointPages,
+  useEndpointQuery,
 } from '@/lib/api/query';
 
 import {
-  DELETE_PREVIEW_API,
   deletePreviewKey,
-  fileHref,
   folderDetailsKeys,
-  folderHref,
-  listingHref,
   listingKey,
   mediaKeys,
   pickerKey,
-  STATS_API,
   statsKey,
 } from './api';
 import { listingSchemas, toLibraryPage } from './schemas';
+
+/** The listing of `scope`; `folder` is the one listed, omitted at the root. */
+const listingInput = (scope: MediaScope, folder: EntityID | null) => ({
+  query: { scope, ...(folder && { folder }) },
+});
 
 /**
  * One listing as it is scrolled: the scope's files, page after page, with its
@@ -50,11 +51,10 @@ export function useLibraryPages(
 ) {
   const narrowed =
     state.filters.length > 0 || effectiveSearchTerm(state.search) !== '';
-  return useServerPages({
+  return useEndpointPages(listMedia, listingInput(scope, folder), {
     queryKey: listingKey(scope, folder),
-    href: listingHref(scope, folder),
     state,
-    schema: listingSchemas[scope],
+    narrow: listingSchemas[scope],
     toPage: narrowed ? toNarrowedPage : toLibraryPage,
     enabled,
   });
@@ -70,7 +70,7 @@ export const libraryPagesKey = (
   scope: MediaScope,
   folder: EntityID | null,
   state: Omit<TableQuery, 'page'>
-) => serverPagesKey(listingKey(scope, folder), state);
+) => endpointPagesKey(listingKey(scope, folder), state);
 
 /** Its files are not wanted by a folder picker, so one is asked for. */
 const PICKER_STATE: TableQuery = {
@@ -84,9 +84,8 @@ const PICKER_STATE: TableQuery = {
 
 const folderChoices = (folder: EntityID | null) => ({
   queryKey: pickerKey(folder),
-  href: listingHref('folder', folder),
   state: PICKER_STATE,
-  schema: listingSchemas.folder,
+  narrow: listingSchemas.folder,
   toPage: toLibraryPage,
 });
 
@@ -95,7 +94,10 @@ export function useFolderChoices(
   folder: EntityID | null,
   { enabled = true }: { enabled?: boolean } = {}
 ) {
-  return useServerPage({ ...folderChoices(folder), enabled });
+  return useEndpointPage(listMedia, listingInput('folder', folder), {
+    ...folderChoices(folder),
+    enabled,
+  });
 }
 
 /** `fresh` asks the server again, for whether the folder is still there now. */
@@ -114,19 +116,21 @@ export const fetchFolderChoices = (
   { fresh = false }: FetchOptions = {}
 ) =>
   queryClient.fetchQuery({
-    ...serverPageQuery(folderChoices(folder)),
+    ...endpointPageQuery(
+      listMedia,
+      listingInput('folder', folder),
+      folderChoices(folder)
+    ),
     ...(fresh && { staleTime: 0 }),
   });
 
-const libraryFile = (id: EntityID) => ({
-  queryKey: mediaKeys.detail(id),
-  href: fileHref(id),
-  schema: mediaFileDetailsSchema,
-});
-
 /** A file with its download link and where it is used; fetched while shown. */
 export function useLibraryFile(id: EntityID, { enabled = true } = {}) {
-  return useQueryData({ ...libraryFile(id), enabled });
+  return useEndpointQuery(
+    getMediaFile,
+    { params: { id } },
+    { queryKey: mediaKeys.detail(id), enabled }
+  );
 }
 
 /** `useLibraryFile` for a handler; `fresh` for links signed just now. */
@@ -136,7 +140,11 @@ export const fetchLibraryFile = (
   { fresh = false }: FetchOptions = {}
 ) =>
   queryClient.fetchQuery({
-    ...queryDataQuery(libraryFile(id)),
+    ...endpointQuery(
+      getMediaFile,
+      { params: { id } },
+      { queryKey: mediaKeys.detail(id) }
+    ),
     ...(fresh && { staleTime: 0 }),
   });
 
@@ -145,39 +153,31 @@ export function useFolderDetails(
   id: EntityID | null,
   { enabled = true }: { enabled?: boolean } = {}
 ) {
-  return useQueryData({
-    queryKey: folderDetailsKeys.one(id ?? ''),
-    href: folderHref(id ?? ''),
-    schema: mediaFolderDetailsSchema,
-    enabled: enabled && id !== null,
-  });
+  return useEndpointQuery(
+    getMediaFolder,
+    { params: { id: id ?? '' } },
+    {
+      queryKey: folderDetailsKeys.one(id ?? ''),
+      enabled: enabled && id !== null,
+    }
+  );
 }
 
 /** What the whole library holds. */
 export const useLibraryStats = () =>
-  useQueryData({
-    queryKey: statsKey,
-    href: STATS_API,
-    schema: mediaStatsSchema,
-  });
+  useEndpointQuery(getMediaStats, undefined, { queryKey: statsKey });
 
-export type DeleteBody = RequestBody<'DELETE /api/dash/media'>;
+export type DeleteBody = BodyOf<typeof deleteMedia>;
 
 /**
  * What the delete of `body` would meet now, read with the delete's own body.
  * Advisory: the delete decides again, so it is asked afresh every time.
  */
 export const deletePreviewQuery = (body: DeleteBody) => ({
-  queryKey: deletePreviewKey(body),
-  queryFn: async ({ signal }: { signal: AbortSignal }) => {
-    const { data } = await apiRequest(DELETE_PREVIEW_API, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers: { 'Content-Type': 'application/json' },
-      signal,
-      schema: deletePreviewSchema,
-    });
-    return data;
-  },
+  ...endpointQuery(
+    previewMediaDelete,
+    { body },
+    { queryKey: deletePreviewKey(body) }
+  ),
   staleTime: 0,
 });

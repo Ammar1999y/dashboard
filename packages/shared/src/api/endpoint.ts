@@ -2,7 +2,11 @@ import type { MediaCodeWithIds } from '../responses/media';
 
 import * as z from 'zod';
 
-import { REAUTH_REQUIRED_CODE } from '../error-codes';
+import { INVALID_RESPONSE_CODE, REAUTH_REQUIRED_CODE } from '../error-codes';
+import { HTTP_STATUS } from '../http-status';
+
+/** Where Better Auth is mounted. It routes by the path under this. */
+export const BETTER_AUTH_PREFIX = '/api/auth';
 
 export type EndpointMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
@@ -35,7 +39,7 @@ export interface EndpointError {
   readonly codes?: readonly string[];
   /**
    * The `code`s whose refusal here names in `data` the media that blocked it;
-   * not repeated in `codes`. Any other refusal's `data` is `null`.
+   * not repeated in `codes`. No other refusal carries `data`.
    */
   readonly codesWithIds?: readonly MediaCodeWithIds[];
 }
@@ -57,13 +61,13 @@ export interface PagedResponse<
   readonly meta: M;
 }
 
-/** A body whose shape an outside consumer fixes, sent without the envelope. */
+/** A body whose shape an outside consumer fixes, sent as it is. */
 export interface RawResponse<
   R extends z.ZodType = z.ZodType,
   F extends RawRefusals = RawRefusals,
 > {
   readonly raw: R;
-  /** The raw bodies the handler answers at a refusal status, in place of the error envelope. */
+  /** The raw bodies the handler answers at a refusal status, in place of a problem. */
   readonly refusals?: F;
 }
 
@@ -92,6 +96,11 @@ export interface EndpointDefinition {
     Partial<Record<EndpointErrorStatus, EndpointError>>
   >;
   readonly policy: EndpointPolicy;
+  /**
+   * A success can set or replace the session cookie, so a client reads its
+   * session again, even when it cannot read the answer.
+   */
+  readonly changesSession?: boolean;
 }
 
 // The refusal is an object type, not `never` or a literal: either would
@@ -149,7 +158,8 @@ export const codesWithIds = (
 
 /**
  * Every `code` the endpoint can answer at `status`: the ones its `errors`
- * name, with ids or without, and the ones its policy implies.
+ * name, with ids or without, the ones its policy implies, and at 500 the
+ * failed-contract code.
  */
 export function declaredCodes(
   entry: Pick<EndpointDefinition, 'errors' | 'policy'>,
@@ -157,9 +167,12 @@ export function declaredCodes(
 ): readonly string[] {
   const declared = declaredAt(entry, status);
   const codes = [...(declared?.codes ?? []), ...(declared?.codesWithIds ?? [])];
-  return status === 401 && entry.policy.reauth
-    ? [...codes, REAUTH_REQUIRED_CODE]
-    : codes;
+  if (status === HTTP_STATUS.UNAUTHORIZED && entry.policy.reauth)
+    return [...codes, REAUTH_REQUIRED_CODE];
+  // Any success can fail its own contract.
+  if (status === HTTP_STATUS.INTERNAL_ERROR)
+    return [...codes, INVALID_RESPONSE_CODE];
+  return codes;
 }
 
 /**

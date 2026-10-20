@@ -37,11 +37,13 @@ What the layout depends on:
   `{ params, query, body, actor, meta }` and return
   `{ message, data, meta?, headers?, cookies? }` (or `{ raw }` on a raw entry),
   typed by `bind()` from the entry. The success status is the entry's.
-- **One wire format, built in one place per body kind.** `successBody` and the
-  module-private `errorBody` in `lib/http/response.ts` build every envelope;
+- **One wire format, built in one place per body kind.** The shared
+  `successBody` and `problemBody` (`packages/shared/src/api/wire.ts`) build
+  every body: `run()` the successes, `apiError` in `lib/http/response.ts`
+  every refusal, sent as `application/problem+json`. Under the Better Auth
+  prefix the exit step adds `message` to each refusal (`toAuthProblem`).
   `apiRaw` is the raw escape hatch (`GET /api/health/storage`,
-  `GET /openapi.json`). The format is frozen until the front end moves (D18,
-  Phase 4).
+  `GET /openapi.json`).
 - **`z.compile` runs only in `server/elysia/register.ts`,** on contract schemas,
   at registration (D10). `packages/shared` and the front end never call it, and
   no global `zod/compile` import is used: it would compile Better Auth's
@@ -139,12 +141,9 @@ ceiling as the request hook, and hands the request to `auth.handler` unread
 
 1. **Contract entry.** Add an `endpoint({ ... })` to
    `packages/shared/src/api/<domain>.ts`, reusing the request schemas in
-   `validation/` and the response schemas in `responses/`. Until Phase 4 the
-   old registries stay (D29): give a JSON body its `REQUEST_BODIES` entry
-   (`packages/shared/src/contract.ts`) and an enveloped response its
-   `RESPONSE_DATA` entry (`response-contract.ts`), using the same schema
-   objects. `bind()` throws without the response entry, and
-   `tests/unit/bindings.test.ts` asserts the identity.
+   `validation/` and the response schemas in `responses/`. A new domain
+   file is added to `api/all.ts` and `api/fields-are-typed.ts`;
+   `tests/unit/bindings.test.ts` asserts every entry is bound once.
 2. **Field prose.** Describe new fields in the `*.docs.ts` beside the schema
    file, through `fieldDocs` (a renamed field then fails to compile). A new
    docs file is added to `FIELD_DOCS_MODULES` in `lib/http/openapi/docs.ts`;
@@ -164,6 +163,15 @@ ceiling as the request hook, and hands the request to `auth.handler` unread
 
 Registration, compiled validation, HEAD, the OpenAPI operation and its derived
 refusals follow from the entry; nothing else is edited by hand.
+
+A **Better Auth plugin endpoint** is served by `auth.handler`, not bound. Its
+entry goes in `packages/shared/src/api/better-auth.ts`, with `response: { raw }`
+holding the whole 2xx body, and its plugin builds it with
+`pluginEndpoint(entry, options, handler)`, which takes the path and method from
+the entry and types the handler's answer by it. Add its row to
+`lib/auth/allowed-paths.ts` and its 200 description to
+`BETTER_AUTH_RESPONSE_DESCRIPTIONS`; `tests/unit/plugin-entries.test.ts` holds
+the entry to that row and to the mounted endpoint.
 
 ## 5. Porting off Elysia (non-binding notes)
 
@@ -199,7 +207,7 @@ look in a port:
 ## 6. Verifying
 
 `bun run smoke` boots the real server and asserts, from outside the process,
-storage readiness, the security headers, the API envelope on an unrouted path,
+storage readiness, the security headers, a problem on an unrouted path,
 the Better Auth mount, and that the upload, the readiness probe and the OpenAPI
 document refuse an anonymous caller. The integration,
 matrix and process tiers run against `app.handle`; the plan's §12 lists the

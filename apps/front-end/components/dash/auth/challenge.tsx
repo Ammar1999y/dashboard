@@ -4,17 +4,22 @@ import type { FactorOption } from './second-factor/options';
 import { memo, useMemo } from 'react';
 
 import { toast } from 'sonner';
+import {
+  twoFactorOtpSend,
+  twoFactorOtpVerify,
+  twoFactorPasskeyOptions,
+  twoFactorPasskeyVerify,
+} from '@app/shared/api/better-auth';
 import { twoFactorMsg } from '@app/shared/messages/auth';
-import { ladderOtpSentSchema } from '@app/shared/responses/auth';
 import {
   loggedInSchema,
-  passkeyRequestOptionsSchema,
+  pluginBodyWithMessage,
 } from '@app/shared/responses/better-auth';
+import { api } from '@/lib/api/client';
+import { verifyBackupCode, verifyTotp } from '@/lib/auth/library-endpoints';
 import { authenticateWithPasskey } from '@/lib/auth/passkey';
-import { authRequest } from '@/lib/auth/request';
 
 import { finishSignIn } from './finish-sign-in';
-import { signedInSchema } from './schemas';
 import SecondFactor from './second-factor';
 import { usableOptions } from './second-factor/options';
 import { TwoFactorUnavailable } from './second-factor/unavailable';
@@ -27,13 +32,14 @@ interface TwoFactorChallengeProps {
   offerTrust?: boolean;
 }
 
+/** The answer a challenge cookie gets: a session, never an enrolment. */
+const signedIn = pluginBodyWithMessage(loggedInSchema);
+
 async function sendCode(option: FactorOption) {
-  const { data, message } = await authRequest('/two-factor/otp/send', {
-    method: 'POST',
-    data: { option: option.id },
-    schema: ladderOtpSentSchema,
+  const { data, message } = await api(twoFactorOtpSend, {
+    body: { option: option.id },
   });
-  if (message) toast.success(message);
+  toast.success(message);
   return data.nextAllowedIn;
 }
 
@@ -44,29 +50,19 @@ async function verifyCode(
 ) {
   switch (option.method) {
     case 'totp': {
-      await authRequest('/two-factor/verify-totp', {
-        method: 'POST',
-        data: { code },
-        plain: true,
-        schema: signedInSchema,
-      });
+      await api(verifyTotp, { body: { code } });
       break;
     }
     case 'backup_code': {
-      await authRequest('/two-factor/verify-backup-code', {
-        method: 'POST',
-        data: { code },
-        plain: true,
-        schema: signedInSchema,
-      });
+      await api(verifyBackupCode, { body: { code } });
       break;
     }
     case 'otp': {
-      await authRequest('/two-factor/otp/verify', {
-        method: 'POST',
-        data: { code, option: option.id },
-        schema: loggedInSchema,
-      });
+      await api(
+        twoFactorOtpVerify,
+        { body: { code, option: option.id } },
+        { narrow: signedIn }
+      );
       break;
     }
     case 'passkey': {
@@ -77,17 +73,9 @@ async function verifyCode(
 }
 
 async function verifyPasskey(trustDevice: boolean) {
-  const { data: options } = await authRequest('/two-factor/passkey/options', {
-    method: 'POST',
-    data: {},
-    schema: passkeyRequestOptionsSchema,
-  });
+  const { data: options } = await api(twoFactorPasskeyOptions);
   const response = await authenticateWithPasskey(options);
-  await authRequest('/two-factor/passkey/verify', {
-    method: 'POST',
-    data: { response },
-    schema: loggedInSchema,
-  });
+  await api(twoFactorPasskeyVerify, { body: { response } });
   await finishSignIn(trustDevice);
 }
 

@@ -32,7 +32,7 @@ import {
   FOLDER_RECURSIVE_DELETE_MAX,
 } from '@app/shared/validation/constants';
 
-import { auditAs, withinScope } from './actor';
+import { auditManyAs, withinScope } from './actor';
 import {
   fileBusy,
   fileInUse,
@@ -187,22 +187,22 @@ export async function moveSelection(
       const [written] = [...writtenFolders, ...writtenFiles];
       if (!written) throw new Error('moveSelection wrote no row');
 
-      for (const folder of moving)
-        await auditAs(tx, actor, {
-          action: 'UPDATE',
+      await auditManyAs(tx, actor, [
+        ...moving.map((folder) => ({
+          action: 'UPDATE' as const,
           tableName: 'folders',
           recordId: folder.id,
           oldData: { parentId: folder.parentId },
           newData: { parentId: to },
-        });
-      for (const file of movingFiles)
-        await auditAs(tx, actor, {
-          action: 'UPDATE',
+        })),
+        ...movingFiles.map((file) => ({
+          action: 'UPDATE' as const,
           tableName: 'files',
           recordId: file.id,
           oldData: { folderId: file.folderId },
           newData: { folderId: to },
-        });
+        })),
+      ]);
 
       return {
         fileIds: sortedIds(ids(movingFiles)),
@@ -627,9 +627,9 @@ export async function deleteSelection(
         await tx.delete(folders).where(inArray(folders.id, treeIds));
       }
 
-      for (const file of verdict.doomedFiles)
-        await auditAs(tx, actor, {
-          action: 'DELETE',
+      await auditManyAs(tx, actor, [
+        ...verdict.doomedFiles.map((file) => ({
+          action: 'DELETE' as const,
           tableName: 'files',
           recordId: file.id,
           oldData: {
@@ -638,14 +638,14 @@ export async function deleteSelection(
             bucketType: file.bucketType,
             key: file.r2Key,
           },
-        });
-      for (const folder of verdict.doomedFolders)
-        await auditAs(tx, actor, {
-          action: 'DELETE',
+        })),
+        ...verdict.doomedFolders.map((folder) => ({
+          action: 'DELETE' as const,
           tableName: 'folders',
           recordId: folder.id,
           oldData: { name: folder.name, parentId: folder.parentId },
-        });
+        })),
+      ]);
       return { rows: marked, folderIds: treeIds };
     });
   } catch (error) {

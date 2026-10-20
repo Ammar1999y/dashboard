@@ -96,6 +96,8 @@ export const MSG_PASSKEY_FAILED =
   'تعذّر إكمال العملية على هذا الجهاز. أعد المحاولة أو استخدم جهازاً آخر';
 export const MSG_REAUTH_DESCRIPTION =
   'هذا إجراء حساس. أكّد هويتك للمتابعة، ولن يُطلب منك ذلك مجدداً لفترة قصيرة.';
+export const MSG_CURRENT_PASSWORD_OPTIONAL =
+  'اتركها فارغة إن أكّدت هويتك قبل قليل';
 export const MSG_REAUTH_NO_METHODS = 'لا توجد طريقة تأكيد متاحة لحسابك';
 export const MSG_REAUTH_PROVEN_RESUBMIT =
   'تم تأكيد هويتك، لكن رمز التحقق من أنك لست روبوتاً استُهلك. أرسل النموذج مرة أخرى لإتمام العملية.';
@@ -435,8 +437,6 @@ export const MSG_TWO_FACTOR_RESET_DONE =
   'أُعيد تعيين التحقق بخطوتين وأُنهيت كل جلسات المستخدم';
 
 export const MSG_ACCOUNT_PAGE = 'الصفحة الشخصية';
-export const MSG_USER_SELF_EDIT =
-  'تعديل حسابك يتم من الصفحة الشخصية: الاسم وكلمة المرور والبريد الإلكتروني والتحقق بخطوتين.';
 export const MSG_COPIED = 'تم النسخ';
 export const MSG_COPY_FAILED = 'تعذّر النسخ، انسخ النص يدوياً';
 export const MSG_CODE_SENT_TO = 'أُرسل رمز التحقق إلى';

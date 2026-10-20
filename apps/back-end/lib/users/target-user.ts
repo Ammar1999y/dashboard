@@ -1,6 +1,7 @@
 import type { Executor, Tx } from '@/db';
 import type { RolePolicyTarget } from '@/lib/permissions/roles';
 import type { AccessScope } from '@app/shared/permissions/constants';
+import type { PermissionRows } from '@app/shared/permissions/matrix';
 import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
@@ -10,6 +11,7 @@ import { roles, users } from '@/db/schema';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
+import { assertRowsWithinScope } from '@app/shared/permissions/scope';
 
 import { notFoundError } from '@/lib/http/response';
 import { isProtectedSystemRole } from '@/lib/permissions/roles';
@@ -89,27 +91,17 @@ export async function assertTargetUserReachable(
   return roleId;
 }
 
-/** Non-throwing `validateRolePermissionScope`, for data omitted rather than refused. */
-export async function actorCoversTargetRole(
+/** Non-throwing reachability over the target role's rows, for data omitted rather than refused. */
+export function actorCoversTargetRole(
   actorPermissions: ActorPermissions,
-  roleId: EntityID,
-  executor: Executor
-): Promise<boolean> {
+  rows: PermissionRows
+): boolean {
   try {
-    await validateRolePermissionScope(
-      actorPermissions,
-      roleId,
-      executor,
-      'reachability'
-    );
+    assertRowsWithinScope(actorPermissions, rows);
     return true;
   } catch (error) {
-    // Both refusal shapes (404 and 403), or an omission becomes a whole-request refusal.
-    if (
-      error instanceof CustomError &&
-      (error.status === HTTP_STATUS.FORBIDDEN ||
-        error.status === HTTP_STATUS.NOT_FOUND)
-    )
+    // Or an omission becomes a whole-request refusal.
+    if (error instanceof CustomError && error.status === HTTP_STATUS.FORBIDDEN)
       return false;
     throw error;
   }

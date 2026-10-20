@@ -1,29 +1,29 @@
+import type { BodyOf } from '@/lib/api/client';
 import type { UserClient, UserDetail } from '@/types/user';
 import type {
   UpdateUserInput,
   UpdateUserOutput,
 } from '@/utils/validation/auth';
-import type { RequestBody } from '@app/shared/contract';
 
-import { memo, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/router';
+import { memo, useCallback, useEffect, useMemo } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { PHONE_ENABLED } from '@app/shared/config';
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
-import { userDetailSchema } from '@app/shared/responses/users';
+import { validID } from '@app/shared/utils';
 import { adminUpdateUserBodySchema } from '@app/shared/validation/auth';
-import { MSG_ACCOUNT_PAGE, MSG_USER_SELF_EDIT } from '@/constants/messages';
 import { markDetailStale } from '@/lib/api/query-cache';
 import { clearCachedSessions } from '@/lib/users/security';
 
 import { toUserForm } from '@/utils/validation/auth';
 
-import { Link } from '@/components/ui/link';
+import { LoadingState } from '@/components/ui/loading-state';
 import { Form } from '@/components/form/form';
 
-import { ACCOUNT_PATH } from '../auth/paths';
+import { accountPath } from '../auth/paths';
 import { samePermissions } from '../permission-matrix/matrix';
 import {
   cachedRoleMatrix,
@@ -38,53 +38,39 @@ import { userEntity } from './entity';
 import { UserFields } from './fields';
 import { UserSecurity } from './security';
 
-type Payload = RequestBody<'PUT /api/dash/users/:id'>;
-
-export default function EditUser() {
-  return (
-    <EditRecord
-      entity={userEntity}
-      schema={userDetailSchema}
-      Form={UserEditPage}
-    />
-  );
-}
+type Payload = BodyOf<typeof userEntity.endpoints.update>;
 
 /**
  * Your own account is edited on the account page, where each change asks for
- * the proof it needs: this page's form is the administrator's, and the
- * endpoint takes nothing but a name for one's own record.
+ * the proof it needs: this page's form is the administrator's, and its
+ * endpoint refuses one's own record. That page returns to the list.
  */
+export default function EditUser() {
+  const { query, replace } = useRouter();
+  const { userId } = useResourceAccess(userEntity.resource);
+  const isSelf = !!userId && validID(query.id) === userId;
+
+  useEffect(() => {
+    if (isSelf) void replace(accountPath(userEntity.route));
+  }, [isSelf, replace]);
+
+  if (isSelf) return <LoadingState />;
+  return <EditRecord entity={userEntity} Form={UserEditPage} />;
+}
+
 const UserEditPage = memo(({ record }: { record: UserDetail }) => {
-  const { userId, can } = useResourceAccess(userEntity.resource);
-  const isSelf = record.id === userId;
-  if (!isSelf && !can('edit')) return <ForbiddenState />;
+  const { can } = useResourceAccess(userEntity.resource);
+  if (!can('edit')) return <ForbiddenState />;
 
   return (
     <>
-      {isSelf ? <SelfRecord /> : <UserEditForm record={record} />}
+      <UserEditForm record={record} />
       <UserSecurity record={record} />
     </>
   );
 });
 
 UserEditPage.displayName = 'UserEditPage';
-
-const SelfRecord = memo(() => (
-  <div className='flex flex-col justify-between gap-4 pb-5 xs2:flex-row xs2:items-center'>
-    <div>
-      <h1 className='text-lg font-bold md:text-xl lg:text-2xl'>
-        {MSG_ACCOUNT_PAGE}
-      </h1>
-      <p className='text-sm text-muted-foreground'>{MSG_USER_SELF_EDIT}</p>
-    </div>
-    <Link href={ACCOUNT_PATH} className='self-end'>
-      {MSG_ACCOUNT_PAGE}
-    </Link>
-  </div>
-));
-
-SelfRecord.displayName = 'SelfRecord';
 
 const UserEditForm = memo(({ record }: { record: UserDetail }) => {
   const queryClient = useQueryClient();

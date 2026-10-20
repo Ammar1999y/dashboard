@@ -2,17 +2,18 @@ import type {
   ChangePasswordInput,
   ChangePasswordOutput,
 } from '@/utils/validation/account';
-import type { RequestBody } from '@app/shared/contract';
 
 import { memo, useCallback } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { noDataSchema } from '@app/shared/responses/common';
-import { MSG_PASSWORD_CHANGE_EFFECT } from '@/constants/messages';
-import { mutate } from '@/lib/api/mutation';
-import { withCaptcha } from '@/lib/auth/captcha';
+import { changePassword } from '@app/shared/api/users';
+import {
+  MSG_CURRENT_PASSWORD_OPTIONAL,
+  MSG_PASSWORD_CHANGE_EFFECT,
+} from '@/constants/messages';
+import { api } from '@/lib/api/client';
 
 import { changePasswordFormSchema } from '@/utils/validation/account';
 
@@ -38,16 +39,8 @@ export const PasswordSection = memo(() => {
   const { reset } = methods;
 
   const onSubmit = useCallback(
-    async (values: ChangePasswordOutput) => {
-      const { data, headers } = withCaptcha(values);
-      const body: RequestBody<'POST /api/dash/users/me/change-password'> = data;
-      const result = await mutate({
-        href: '/api/dash/users/me/change-password',
-        method: 'POST',
-        data: body,
-        headers,
-        schema: noDataSchema,
-      });
+    async ({ captcha, ...body }: ChangePasswordOutput) => {
+      const result = await api(changePassword, { body }, { captcha });
       toast.success(result.message);
       reset(EMPTY);
     },
@@ -64,7 +57,7 @@ export const PasswordSection = memo(() => {
           <FormPassword
             name='currentPassword'
             label='كلمة المرور الحالية'
-            required
+            tip={MSG_CURRENT_PASSWORD_OPTIONAL}
           />
           <div>
             <FormPassword

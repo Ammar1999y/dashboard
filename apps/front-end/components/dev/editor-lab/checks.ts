@@ -17,6 +17,8 @@ import { EMPTY_DATE_LABEL, formatDateLabel } from '@/components/editor/date';
 import { createBaseEditorKit } from '@/components/editor/editor-base-kit';
 import {
   buildEditorDocument,
+  CAPTURE_WIDTH,
+  captureDocument,
   deserializeEditorHtml,
   prepareCaptureDocument,
   renderEditorBody,
@@ -52,6 +54,26 @@ import {
 import { loadFixture, useLab } from './lab-store';
 
 type Check = (check: string, ok: boolean, detail?: string) => void;
+
+/** Pixels that differ from the first one, which is taken as the background. */
+function paintOf(canvas: HTMLCanvasElement) {
+  const context = canvas.getContext('2d');
+  if (!context) return { drawn: 0, background: 'a canvas with no 2D context' };
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  let drawn = 0;
+  for (let i = 0; i < data.length; i += 4)
+    if (
+      data[i] !== data[0] ||
+      data[i + 1] !== data[1] ||
+      data[i + 2] !== data[2] ||
+      data[i + 3] !== data[3]
+    )
+      drawn += 1;
+  return {
+    drawn,
+    background: `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3]})`,
+  };
+}
 
 export interface Scenario {
   group: string;
@@ -404,6 +426,56 @@ export const SCENARIOS: Scenario[] = [
         toggles.length > 0 && toggles.every((toggle) => toggle.checked)
       );
       check('ordinary links remain', !!doc.querySelector('a[href]'));
+    },
+  },
+  {
+    group: 'Rendering',
+    title: 'Image capture draws the exported page',
+    run: async (check) => {
+      const canvas = await captureDocument(createFixture());
+      check(
+        'the canvas is at least the page width',
+        canvas.width >= CAPTURE_WIDTH && canvas.height > 0,
+        `${canvas.width}x${canvas.height}`
+      );
+      const page = paintOf(canvas);
+      check(
+        'it is not blank',
+        page.drawn > 0,
+        `${page.drawn} drawn pixels on ${page.background}`
+      );
+      const png = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, 'image/png')
+      );
+      check(
+        'it encodes as PNG',
+        (png?.size ?? 0) > 0,
+        `${png?.size ?? 0} bytes`
+      );
+
+      // The control: an element of this page, not of the capture iframe. If
+      // it draws and the page above does not, the iframe is what fails.
+      const probe = document.createElement('div');
+      probe.textContent = 'html2canvas probe';
+      Object.assign(probe.style, {
+        background: '#fff',
+        color: '#000',
+        font: '20px sans-serif',
+        padding: '8px',
+        width: '240px',
+      });
+      document.body.append(probe);
+      try {
+        const { default: html2canvas } = await import('html2canvas-pro');
+        const control = paintOf(await html2canvas(probe));
+        check(
+          'it draws an element of this page (control)',
+          control.drawn > 0,
+          `${control.drawn} drawn pixels on ${control.background}`
+        );
+      } finally {
+        probe.remove();
+      }
     },
   },
   {

@@ -1,25 +1,18 @@
 /**
- * Which answers came back within the contract: each table route key and each
- * of our Better Auth plugin endpoints, and each member of a union answer. Each
+ * Which answers came back within the contract: each endpoint and each of our
+ * Better Auth plugin endpoints, and each member of a union answer. Each
  * process appends its first sightings to a file of its own under
  * `RESPONSE_CONTRACT_COVERAGE_DIR`, so a test's child processes count too;
  * `tests/helpers/run.ts` totals them after a tier.
  */
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type {
-  BetterAuthResponseRoute,
-  ResponseRoute,
-} from '@app/shared/response-contract';
+import type { AnyEndpoint } from '@app/shared/api/endpoint';
 
 import * as z from 'zod';
 
-import {
-  BETTER_AUTH_RESPONSES,
-  isBetterAuthResponseRoute,
-  isResponseRoute,
-  RESPONSE_DATA,
-} from '@app/shared/response-contract';
+import { ENDPOINTS, PLUGIN_ENDPOINTS } from '@app/shared/api/all';
+import { isPagedResponse, isRawResponse } from '@app/shared/api/endpoint';
 
 import {
   REDIRECTING_PLUGIN_PATHS,
@@ -51,16 +44,28 @@ function unionOf(schema: z.core.$ZodType): UnionSite {
   return NO_UNION;
 }
 
-/** A table route's union is its `data` schema, answered inside the envelope. */
-const tableUnion = (key: ResponseRoute): UnionSite => {
-  const data = RESPONSE_DATA[key];
+const keyOf = ({ method, path }: AnyEndpoint) => `${method} ${path}`;
+
+/** An endpoint's union is its `data` schema; a raw answer has none to count. */
+const entryUnion = ({ response }: AnyEndpoint): UnionSite => {
+  if (isRawResponse(response)) return NO_UNION;
+  const data = isPagedResponse(response) ? response.data : response;
   return data instanceof z.ZodUnion
     ? { members: data.options, pick: dataOf }
     : NO_UNION;
 };
 
-const pluginUnion = (route: BetterAuthResponseRoute): UnionSite =>
-  unionOf(BETTER_AUTH_RESPONSES[route]);
+/** Every endpoint with an answer of its own to hold, by its key. */
+const ANSWERING = new Map(
+  ENDPOINTS.filter(({ response }) => !isRawResponse(response)).map(
+    (entry) => [keyOf(entry), entry] as const
+  )
+);
+
+const pluginUnion = (route: string): UnionSite => {
+  const entry = PLUGIN_ENDPOINTS.get(route);
+  return entry ? unionOf(entry.response.raw) : NO_UNION;
+};
 
 /** How a plugin endpoint is named in a report: its path under the prefix. */
 export const pluginCoverageName = (route: string): string =>
@@ -85,12 +90,10 @@ const idsOf = (name: string, site: UnionSite): string[] =>
 /** What a run that reached every answer would have recorded. */
 export function expectedResponseCoverage(): string[] {
   return [
-    ...Object.keys(RESPONSE_DATA)
-      .filter(isResponseRoute)
-      .flatMap((key) => idsOf(key, tableUnion(key))),
-    ...Object.keys(BETTER_AUTH_RESPONSES)
-      .filter(isBetterAuthResponseRoute)
-      .flatMap((route) => idsOf(pluginCoverageName(route), pluginUnion(route))),
+    ...[...ANSWERING].flatMap(([key, entry]) => idsOf(key, entryUnion(entry))),
+    ...PLUGIN_ENDPOINTS.keys().flatMap((route) =>
+      idsOf(pluginCoverageName(route), pluginUnion(route))
+    ),
     ...REDIRECTING_PLUGIN_PATHS.map((route) => redirectCoverageId(route)),
     ...[...TWO_FACTOR_CHALLENGE_PATHS].map((route) =>
       challengeCoverageId(route)
@@ -102,11 +105,10 @@ const PLUGIN_NAME = /^Better Auth (\/\S+)$/;
 
 /** The union a named answer belongs to, for describing `NAME #n` in a report. */
 function siteOf(name: string): UnionSite {
-  if (isResponseRoute(name)) return tableUnion(name);
+  const entry = ANSWERING.get(name);
+  if (entry) return entryUnion(entry);
   const route = PLUGIN_NAME.exec(name)?.[1];
-  return route !== undefined && isBetterAuthResponseRoute(route)
-    ? pluginUnion(route)
-    : NO_UNION;
+  return route === undefined ? NO_UNION : pluginUnion(route);
 }
 
 /** The keys of a union member, which say what `NAME #n` is in a report. */
@@ -130,15 +132,12 @@ const matchingMember = (
   );
 };
 
-/** The id a table route's answer counts for; `body` as it went on the wire. */
-export const responseCoverageId = (key: ResponseRoute, body: unknown): string =>
-  memberId(key, matchingMember(tableUnion(key), body));
+/** The id an endpoint's answer counts for; `body` as it went on the wire. */
+export const responseCoverageId = (entry: AnyEndpoint, body: unknown): string =>
+  memberId(keyOf(entry), matchingMember(entryUnion(entry), body));
 
 /** The id a plugin endpoint's 2xx body counts for. */
-export const pluginCoverageId = (
-  route: BetterAuthResponseRoute,
-  body: unknown
-): string =>
+export const pluginCoverageId = (route: string, body: unknown): string =>
   memberId(pluginCoverageName(route), matchingMember(pluginUnion(route), body));
 
 const sighted = new Set<string>();

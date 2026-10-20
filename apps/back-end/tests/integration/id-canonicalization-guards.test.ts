@@ -111,9 +111,10 @@ describe('case-variant path ids keep identity guards closed', () => {
     const expected = {
       status: HTTP_STATUS.FORBIDDEN,
       body: {
-        success: false,
-        message: MSG_INSUFFICIENT_PERMISSIONS,
-        data: null,
+        type: 'about:blank',
+        title: 'Forbidden',
+        status: 403,
+        detail: MSG_INSUFFICIENT_PERMISSIONS,
       },
     };
 
@@ -154,9 +155,10 @@ describe('case-variant path ids keep identity guards closed', () => {
     const expected = {
       status: HTTP_STATUS.FORBIDDEN,
       body: {
-        success: false,
-        message: permissionMsg.cannotEditOwnRole,
-        data: null,
+        type: 'about:blank',
+        title: 'Forbidden',
+        status: 403,
+        detail: permissionMsg.cannotEditOwnRole,
       },
     };
 
@@ -192,9 +194,10 @@ describe('case-variant path ids keep identity guards closed', () => {
     const expected = {
       status: HTTP_STATUS.BAD_REQUEST,
       body: {
-        success: false,
-        message: userMsg.cannotDeleteSelf,
-        data: null,
+        type: 'about:blank',
+        title: 'Bad Request',
+        status: 400,
+        detail: userMsg.cannotDeleteSelf,
       },
     };
 

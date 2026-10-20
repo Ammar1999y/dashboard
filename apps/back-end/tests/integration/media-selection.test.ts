@@ -70,6 +70,7 @@ import {
 } from '../helpers/object-store';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { authedRequest, signedInUser } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 import {
   createReferrerTable,
   dropReferrerTable,
@@ -82,10 +83,10 @@ import {
 interface Answer {
   status: number;
   body: {
-    success: boolean;
-    message: string;
+    message?: string;
+    detail?: string;
     code?: string;
-    data: unknown;
+    data?: unknown;
   };
 }
 
@@ -202,13 +203,14 @@ function expectRefusal(
   answer: Answer,
   status: number,
   code: string,
-  data: unknown = null
+  data?: unknown
 ): void {
   expect(answer.status, JSON.stringify(answer.body)).toBe(status);
-  expect(answer.body.success).toBe(false);
+  expect(answer.body.detail).toEqual(expect.any(String));
+  expect(answer.body.message).toBeUndefined();
   expect(answer.body.code).toBe(code);
   expect(answer.body.data).toEqual(data);
-  if (answer.body.data !== null)
+  if (answer.body.data !== undefined)
     expect(mediaRefusalDataSchema.safeParse(answer.body.data).success).toBe(
       true
     );
@@ -360,6 +362,53 @@ describe('the delete and its preview', () => {
     );
   });
 
+  /**
+   * The audit rows are written under the tree lock and the row locks, where a
+   * statement per item was about 45% of a capped delete's hold (measured).
+   */
+  test('a delete audits every file and folder in one statement', async () => {
+    const top = await seedFolder('Audit top');
+    const child = await seedFolder('Audit child', top);
+    const inside = await seedFiles(3, { folderId: child });
+
+    const recorder = recordStatements();
+    let answer: Answer;
+    try {
+      answer = await call(admin(), 'DELETE', '/api/dash/media', {
+        folderIds: [top],
+        recursive: true,
+      });
+    } finally {
+      recorder.stop();
+    }
+    expect(answer.status, JSON.stringify(answer.body)).toBe(HTTP_STATUS.OK);
+    expect(recorder.matching(/^insert into "audit_logs"/i)).toHaveLength(1);
+
+    const audited = await db
+      .select({
+        tableName: auditLogs.tableName,
+        recordId: auditLogs.recordId,
+        oldData: auditLogs.oldData,
+      })
+      .from(auditLogs)
+      .where(
+        and(
+          inArray(auditLogs.recordId, [top, child, ...inside]),
+          eq(auditLogs.action, 'DELETE')
+        )
+      );
+    expect(audited).toHaveLength(5);
+    expect(audited.find((row) => row.recordId === child)?.oldData).toEqual({
+      name: 'Audit child',
+      parentId: top,
+    });
+    expect(
+      audited
+        .filter((row) => row.tableName === 'files')
+        .map((row) => row.recordId)
+    ).toEqual(expect.arrayContaining(inside));
+  });
+
   test('an item inside another selected folder is dropped, so it is neither counted twice nor refused', async () => {
     const top = await seedFolder('Nested top');
     const child = await seedFolder('Nested child', top);
@@ -491,7 +540,7 @@ describe('the delete and its preview', () => {
         expectRefusal(answer, HTTP_STATUS.CONFLICT, FILE_IN_USE_CODE, {
           fileIds: [held],
         });
-        expect(answer.body.message).toBe(
+        expect(answer.body.detail).toBe(
           mediaMsg.fileInUseBy([PUBLIC_SOURCE.label], 0)
         );
         expect(await fileRow(free)).toMatchObject({
@@ -541,7 +590,7 @@ describe('the delete and its preview', () => {
     });
     const refused = await call(admin(), 'DELETE', '/api/dash/media', atCap);
     expectRefusal(refused, HTTP_STATUS.UNPROCESSABLE, SELECTION_TOO_LARGE_CODE);
-    expect(refused.body.message).toBe(mediaMsg.selectionTooLarge);
+    expect(refused.body.detail).toBe(mediaMsg.selectionTooLarge);
     const single = await call(
       admin(),
       'DELETE',
@@ -562,7 +611,7 @@ describe('the delete and its preview', () => {
       `/api/dash/media/folders/${top}?recursive=true`
     );
     expectRefusal(answer, HTTP_STATUS.UNPROCESSABLE, SELECTION_TOO_LARGE_CODE);
-    expect(answer.body.message).toBe(mediaMsg.folderTooLarge);
+    expect(answer.body.detail).toBe(mediaMsg.folderTooLarge);
   });
 
   test('an own scope reaches the files too: anything someone else made answers 404, in the preview as in the delete', async () => {
@@ -757,14 +806,14 @@ describe('the delete and its preview', () => {
     for (const body of [{}, { fileIds: [], folderIds: [] }]) {
       const answer = await call(admin(), 'DELETE', '/api/dash/media', body);
       expect(answer.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-      expect(answer.body.message).toBe(mediaValidationMsg.selectionRequired);
+      expect(answer.body.detail).toBe(mediaValidationMsg.selectionRequired);
     }
     const tooMany = await call(admin(), 'DELETE', '/api/dash/media', {
       fileIds: Array.from({ length: 30 }, () => generateUuidV7()),
       folderIds: Array.from({ length: 21 }, () => generateUuidV7()),
     });
     expect(tooMany.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(tooMany.body.message).toBe(mediaValidationMsg.selectionTooMany);
+    expect(tooMany.body.detail).toBe(mediaValidationMsg.selectionTooMany);
     const unknown = await call(
       admin(),
       'POST',
@@ -959,14 +1008,19 @@ describe('the delete under real contention', () => {
     const doomed = await seedFolder('Raced folder');
     const paused = gate();
     const resume = gate();
-    const original = actorModule.auditAs;
-    const audit = spyOn(actorModule, 'auditAs').mockImplementation(
-      async (tx, actor, entry) => {
-        if (entry.tableName === 'folders' && entry.action === 'DELETE') {
+    const original = actorModule.auditManyAs;
+    const audit = spyOn(actorModule, 'auditManyAs').mockImplementation(
+      async (tx, actor, entries) => {
+        if (
+          entries.some(
+            (entry) =>
+              entry.tableName === 'folders' && entry.action === 'DELETE'
+          )
+        ) {
           paused.open();
           await resume.promise;
         }
-        return original(tx, actor, entry);
+        return original(tx, actor, entries);
       }
     );
     try {
@@ -1038,6 +1092,54 @@ describe('the move', () => {
       .from(files)
       .where(eq(files.id, unfiled));
     expect(adopted?.unfiledAt).toBeNull();
+  });
+
+  test('a move audits every re-parented item in one statement, and nothing it left in place', async () => {
+    const from = await seedFolder('Audit move from');
+    const to = await seedFolder('Audit move to');
+    const moving = [
+      await seedFolder('Audit move a', from),
+      await seedFolder('Audit move b', from),
+    ];
+    const movingFiles = await seedFiles(2, { folderId: from });
+    const [alreadyThere = ''] = await seedFiles(1, { folderId: to });
+
+    const recorder = recordStatements();
+    let answer: Answer;
+    try {
+      answer = await call(admin(), 'PUT', '/api/dash/media', {
+        folderIds: moving,
+        fileIds: [...movingFiles, alreadyThere],
+        to,
+      });
+    } finally {
+      recorder.stop();
+    }
+    expect(answer.status, JSON.stringify(answer.body)).toBe(HTTP_STATUS.OK);
+    expect(recorder.matching(/^insert into "audit_logs"/i)).toHaveLength(1);
+
+    const audited = await db
+      .select({
+        recordId: auditLogs.recordId,
+        changedFields: auditLogs.changedFields,
+      })
+      .from(auditLogs)
+      .where(
+        and(
+          inArray(auditLogs.recordId, [
+            ...moving,
+            ...movingFiles,
+            alreadyThere,
+          ]),
+          eq(auditLogs.action, 'UPDATE')
+        )
+      );
+    expect(sorted(audited.map((row) => row.recordId))).toEqual(
+      sorted([...moving, ...movingFiles])
+    );
+    expect(
+      audited.find((row) => row.recordId === moving[0])?.changedFields
+    ).toEqual(['parentId']);
   });
 
   test('a folder cannot move into itself or below itself; the cycle names the folders', async () => {
@@ -1153,7 +1255,7 @@ describe('the move', () => {
       to: null,
     });
     expect(toRoot.status).toBe(HTTP_STATUS.UNPROCESSABLE);
-    expect(toRoot.body.message).toBe(mediaValidationMsg.filesToRoot);
+    expect(toRoot.body.detail).toBe(mediaValidationMsg.filesToRoot);
 
     expectRefusal(
       await call(admin(), 'PUT', '/api/dash/media', {
@@ -1394,14 +1496,14 @@ describe('the move under real contention', () => {
     const destination = await seedFolder('Upload destination');
     const paused = gate();
     const resume = gate();
-    const original = actorModule.auditAs;
-    const audit = spyOn(actorModule, 'auditAs').mockImplementation(
-      async (tx, actor, entry) => {
-        if (entry.tableName === 'folders') {
+    const original = actorModule.auditManyAs;
+    const audit = spyOn(actorModule, 'auditManyAs').mockImplementation(
+      async (tx, actor, entries) => {
+        if (entries.some((entry) => entry.tableName === 'folders')) {
           paused.open();
           await resume.promise;
         }
-        return original(tx, actor, entry);
+        return original(tx, actor, entries);
       }
     );
     try {

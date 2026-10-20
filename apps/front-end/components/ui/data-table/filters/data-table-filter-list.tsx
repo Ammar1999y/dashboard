@@ -1,10 +1,11 @@
+import type { DataTableFeatures } from '../features';
 import type { FilterItemSchema } from '@app/shared/data-table/parsers';
 import type {
   FilterOperator,
   FilterVariant,
   JoinOperator,
 } from '@app/shared/types/data-table';
-import type { Column } from '@tanstack/react-table';
+import type { Column, RowData } from '@tanstack/react-table';
 import type { ComponentProps, KeyboardEvent } from 'react';
 
 import { memo, useCallback, useId, useMemo, useRef, useState } from 'react';
@@ -59,11 +60,28 @@ import {
 import {
   getDefaultFilterOperator,
   getFilterOperators,
+  isValuelessOperator,
 } from '../utils/data-table';
 import { genericMemo } from '../utils/generic-memo';
 import { FilterInput } from './filter-inputs';
+import { filterField, filterSegments, filterTrigger } from './segments';
 
 const FILTER_SHORTCUT_KEY = 'f';
+// Half the 32px the phone width leaves out, so the popover sits centred.
+const POPOVER_GUTTER = 16;
+const WHERE_LABEL = 'حيث';
+
+// Each slot rounds the corners of the segment group it sits on, so its control
+// (which inherits the radius) curves with the group. Phones stack the field
+// over operator + value; from `md` the three share one line.
+const FIELD_SLOT_RADIUS =
+  'rounded-t md:ltr:rounded-bl md:ltr:rounded-tr-none md:rtl:rounded-br md:rtl:rounded-tl-none';
+const OPERATOR_SLOT_RADIUS =
+  'ltr:rounded-bl rtl:rounded-br md:ltr:rounded-bl-none md:rtl:rounded-br-none';
+const LAST_OPERATOR_SLOT_RADIUS =
+  'rounded-b md:ltr:rounded-bl-none md:ltr:rounded-tr md:rtl:rounded-br-none md:rtl:rounded-tl';
+const VALUE_SLOT_RADIUS =
+  'ltr:rounded-br rtl:rounded-bl md:ltr:rounded-tr md:rtl:rounded-tl';
 
 const joinOperatorLabels: Record<JoinOperator, string> = {
   and: 'و',
@@ -72,14 +90,90 @@ const joinOperatorLabels: Record<JoinOperator, string> = {
 
 const getFilterItemValue = (item: FilterItemSchema) => item.filterId;
 
-interface DataTableFilterListProps<TData> extends ComponentProps<
-  typeof PopoverContent
-> {
-  columns: Column<TData>[];
+interface JoinOperatorToggleProps {
+  joinOperator: JoinOperator;
+  onToggle: () => void;
+}
+
+const JoinOperatorToggle = memo(
+  ({ joinOperator, onToggle }: JoinOperatorToggleProps) => (
+    <Button
+      aria-label={`طريقة الجمع بين التصفيات: ${joinOperatorLabels[joinOperator]}`}
+      variant='outline'
+      size='none'
+      className='relative h-7 gap-1 rounded-md bg-popover px-2 text-sm font-normal'
+      onClick={onToggle}
+    >
+      {joinOperatorLabels[joinOperator]}
+      <Icon
+        icon='solar:refresh-linear'
+        className='size-3.5 text-muted-foreground'
+      />
+    </Button>
+  )
+);
+JoinOperatorToggle.displayName = 'JoinOperatorToggle';
+
+interface JoinOperatorOptionProps {
+  value: JoinOperator;
+  isActive: boolean;
+  onSelect: (value: JoinOperator) => void;
+}
+
+const JoinOperatorOption = memo(
+  ({ value, isActive, onSelect }: JoinOperatorOptionProps) => {
+    const onClick = useCallback(() => onSelect(value), [value, onSelect]);
+
+    return (
+      <button
+        type='button'
+        aria-pressed={isActive}
+        className={cn(
+          'flex-1 rounded-md text-sm font-medium text-muted-foreground transition-[color,background-color,box-shadow] hover:text-foreground',
+          isActive && 'bg-background text-foreground shadow-sm'
+        )}
+        onClick={onClick}
+      >
+        {joinOperatorLabels[value]}
+      </button>
+    );
+  }
+);
+JoinOperatorOption.displayName = 'JoinOperatorOption';
+
+interface JoinOperatorSwitchProps {
+  joinOperator: JoinOperator;
+  onSelect: (value: JoinOperator) => void;
+}
+
+const JoinOperatorSwitch = memo(
+  ({ joinOperator, onSelect }: JoinOperatorSwitchProps) => (
+    <div
+      role='group'
+      aria-label='طريقة الجمع بين التصفيات'
+      className='flex h-9 flex-1 gap-1 rounded-lg bg-muted p-1'
+    >
+      {dataTableConfig.joinOperators.map((value) => (
+        <JoinOperatorOption
+          key={value}
+          value={value}
+          isActive={value === joinOperator}
+          onSelect={onSelect}
+        />
+      ))}
+    </div>
+  )
+);
+JoinOperatorSwitch.displayName = 'JoinOperatorSwitch';
+
+interface DataTableFilterListProps<
+  TData extends RowData,
+> extends ComponentProps<typeof PopoverContent> {
+  columns: Column<DataTableFeatures, TData>[];
   disabled?: boolean;
 }
 
-export function DataTableFilterList<TData>({
+export function DataTableFilterList<TData extends RowData>({
   columns: allColumns,
   disabled,
   ...props
@@ -164,6 +258,10 @@ export function DataTableFilterList<TData>({
     setDraftJoinOperator('and');
   }, []);
 
+  const onJoinOperatorToggle = useCallback(() => {
+    setDraftJoinOperator((prev) => (prev === 'and' ? 'or' : 'and'));
+  }, []);
+
   const toggleOpen = useCallback(
     () => handleOpenChange(!open),
     [open, handleOpenChange]
@@ -218,7 +316,8 @@ export function DataTableFilterList<TData>({
         <PopoverContent
           aria-describedby={descriptionId}
           aria-labelledby={labelId}
-          className='flex w-full max-w-[--radix-popover-content-available-width] flex-col gap-3.5 px-0 py-4 text-sm shadow-[0_5px_22px_-3px_rgba(0,0,0,0.12)] sm:min-w-96'
+          collisionPadding={POPOVER_GUTTER}
+          className='flex w-[calc(100vw-32px)] flex-col gap-3.5 px-0 py-4 text-sm shadow-[0_5px_22px_-3px_rgba(0,0,0,0.12)] md:w-full md:min-w-96 md:max-w-[--radix-popover-content-available-width]'
           {...props}
         >
           <h4
@@ -237,26 +336,56 @@ export function DataTableFilterList<TData>({
             {draftFilters.length > 0 ? MSG_EDIT_FILTERS : MSG_NO_FILTERS}
           </p>
           {draftFilters.length > 0 ? (
-            <SortableContent asChild>
-              <div
-                role='list'
-                className='my-2 flex max-h-80 flex-col gap-2 overflow-y-auto p-1 px-3'
-              >
-                {draftFilters.map((filter, index) => (
-                  <DataTableFilterItem<TData>
-                    key={filter.filterId}
-                    filter={filter}
-                    index={index}
-                    filterItemId={`${id}-filter-${filter.filterId}`}
+            <>
+              <div className='flex items-center gap-2 px-3 md:hidden'>
+                <span className='text-sm text-muted-foreground'>
+                  {WHERE_LABEL}
+                </span>
+                {draftFilters.length > 1 ? (
+                  <JoinOperatorSwitch
                     joinOperator={draftJoinOperator}
-                    setJoinOperator={setDraftJoinOperator}
-                    columns={columns}
-                    onFilterUpdate={onFilterUpdate}
-                    onFilterRemove={onFilterRemove}
+                    onSelect={setDraftJoinOperator}
                   />
-                ))}
+                ) : null}
               </div>
-            </SortableContent>
+              <div className='my-2 max-h-80 overflow-y-auto p-1 px-3'>
+                <div className='flex gap-2'>
+                  <div className='hidden w-12 shrink-0 flex-col gap-2 md:flex'>
+                    <span className='flex h-8 items-center text-sm text-muted-foreground'>
+                      {WHERE_LABEL}
+                    </span>
+                    {draftFilters.length > 1 ? (
+                      <div className='relative flex flex-1 items-center justify-center'>
+                        {draftFilters.length > 2 ? (
+                          <span className='absolute inset-y-2 border-y border-s ltr:left-1/2 ltr:right-0 ltr:rounded-l-md rtl:left-0 rtl:right-1/2 rtl:rounded-r-md' />
+                        ) : null}
+                        <JoinOperatorToggle
+                          joinOperator={draftJoinOperator}
+                          onToggle={onJoinOperatorToggle}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                  <SortableContent asChild>
+                    <div
+                      role='list'
+                      className='flex min-w-0 flex-1 flex-col gap-3 md:gap-2'
+                    >
+                      {draftFilters.map((filter) => (
+                        <DataTableFilterItem<TData>
+                          key={filter.filterId}
+                          filter={filter}
+                          filterItemId={`${id}-filter-${filter.filterId}`}
+                          columns={columns}
+                          onFilterUpdate={onFilterUpdate}
+                          onFilterRemove={onFilterRemove}
+                        />
+                      ))}
+                    </div>
+                  </SortableContent>
+                </div>
+              </div>
+            </>
           ) : null}
           <div className='flex w-full items-center justify-between gap-2 border-t px-3 pt-3'>
             {draftFilters.length > 0 ? (
@@ -289,14 +418,11 @@ export function DataTableFilterList<TData>({
       </Popover>
       <SortableOverlay>
         <div className='flex items-center gap-2'>
-          <div className='h-8 min-w-20 rounded-sm bg-primary/10' />
-          <div className='flex flex-1 flex-col gap-2 md:flex-row md:items-center'>
-            <div className='h-8 rounded-sm bg-primary/10 md:w-32' />
-            <div className='h-8 rounded-sm bg-primary/10 md:w-32' />
-            <div className='h-8 w-full min-w-36 flex-1 rounded-sm bg-primary/10' />
+          <div className='h-16 flex-1 rounded bg-primary/10 md:h-8' />
+          <div className='flex flex-col md:flex-row md:gap-2'>
+            <div className='size-8 shrink-0 rounded-sm bg-primary/10' />
+            <div className='size-8 shrink-0 rounded-sm bg-primary/10' />
           </div>
-          <div className='size-8 shrink-0 rounded-sm bg-primary/10' />
-          <div className='size-8 shrink-0 rounded-sm bg-primary/10' />
         </div>
       </SortableOverlay>
     </Sortable>
@@ -353,13 +479,10 @@ const FilterFieldItem = memo(
 );
 FilterFieldItem.displayName = 'FilterFieldItem';
 
-interface DataTableFilterItemProps<TData> {
+interface DataTableFilterItemProps<TData extends RowData> {
   filter: FilterItemSchema;
-  index: number;
   filterItemId: string;
-  joinOperator: JoinOperator;
-  setJoinOperator: (value: JoinOperator) => void;
-  columns: Column<TData>[];
+  columns: Column<DataTableFeatures, TData>[];
   onFilterUpdate: (
     filterId: string,
     updates: Partial<Omit<FilterItemSchema, 'filterId'>>
@@ -367,12 +490,9 @@ interface DataTableFilterItemProps<TData> {
   onFilterRemove: (filterId: string) => void;
 }
 
-function DataTableFilterItemInner<TData>({
+function DataTableFilterItemInner<TData extends RowData>({
   filter,
-  index,
   filterItemId,
-  joinOperator,
-  setJoinOperator,
   columns,
   onFilterUpdate,
   onFilterRemove,
@@ -383,7 +503,6 @@ function DataTableFilterItemInner<TData>({
 
   const column = columns.find((column) => column.id === filter.id);
 
-  const joinOperatorListboxId = `${filterItemId}-join-operator-listbox`;
   const fieldListboxId = `${filterItemId}-field-listbox`;
   const operatorListboxId = `${filterItemId}-operator-listbox`;
   const inputId = `${filterItemId}-input`;
@@ -395,8 +514,7 @@ function DataTableFilterItemInner<TData>({
     (value: FilterOperator) =>
       onFilterUpdate(filter.filterId, {
         operator: value,
-        value:
-          value === 'isEmpty' || value === 'isNotEmpty' ? '' : filter.value,
+        value: isValuelessOperator(value) ? '' : filter.value,
       }),
     [filter.filterId, filter.value, onFilterUpdate]
   );
@@ -439,6 +557,8 @@ function DataTableFilterItemInner<TData>({
 
   if (!column) return null;
 
+  const hasValue = !isValuelessOperator(filter.operator);
+
   return (
     <SortableItem value={filter.filterId} asChild>
       <div
@@ -448,110 +568,110 @@ function DataTableFilterItemInner<TData>({
         className='flex items-center gap-2'
         onKeyDown={onItemKeyDown}
       >
-        <div className='min-w-20'>
-          {index === 0 ? (
-            <span className='ps-3 text-sm text-muted-foreground'>حيث</span>
-          ) : index === 1 ? (
-            <Select value={joinOperator} onValueChange={setJoinOperator}>
+        <div
+          data-segmented=''
+          className={cn(
+            filterSegments,
+            'grid min-w-0 flex-1 grid-cols-[minmax(0,2fr)_minmax(0,3fr)] md:flex'
+          )}
+        >
+          <div
+            className={cn(
+              'col-span-2 border-b md:w-32 md:shrink-0 md:border-b-0 md:border-e',
+              FIELD_SLOT_RADIUS
+            )}
+          >
+            <Popover
+              open={showFieldSelector}
+              onOpenChange={setShowFieldSelector}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  aria-controls={fieldListboxId}
+                  variant='none'
+                  size='none'
+                  className={cn(filterTrigger, 'w-full justify-between')}
+                >
+                  <span className='truncate'>
+                    {columnMeta?.label ?? 'اختر حقل'}
+                  </span>
+                  <Icon
+                    icon='solar:alt-arrow-down-linear'
+                    className='size-4 text-muted-foreground opacity-80'
+                  />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                id={fieldListboxId}
+                align='start'
+                className='w-40 p-0'
+              >
+                <Command>
+                  <CommandInput placeholder={MSG_FIND_FIELD} />
+                  <CommandList>
+                    <CommandEmpty>{MSG_NO_FIELDS}</CommandEmpty>
+                    <CommandGroup>
+                      {columns.map((option) => (
+                        <FilterFieldItem
+                          key={option.id}
+                          columnId={option.id}
+                          label={option.columnDef.meta?.label ?? option.id}
+                          variant={option.columnDef.meta?.variant ?? 'text'}
+                          isSelected={option.id === filter.id}
+                          filterId={filter.filterId}
+                          onFilterUpdate={onFilterUpdate}
+                          onSelected={onCloseFieldSelector}
+                        />
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+          <div
+            className={
+              hasValue
+                ? cn('border-e md:w-32 md:shrink-0', OPERATOR_SLOT_RADIUS)
+                : cn('col-span-2 md:flex-1', LAST_OPERATOR_SLOT_RADIUS)
+            }
+          >
+            <Select
+              open={showOperatorSelector}
+              onOpenChange={setShowOperatorSelector}
+              value={filter.operator}
+              onValueChange={onOperatorChange}
+            >
               <SelectTrigger
-                aria-label='طريقة الجمع بين التصفيات'
-                aria-controls={joinOperatorListboxId}
+                aria-controls={operatorListboxId}
                 size='sm'
-                className='!h-8 w-full rounded lowercase'
+                className={cn(filterField, 'lowercase')}
               >
-                <SelectValue placeholder={joinOperatorLabels[joinOperator]} />
+                <div className='truncate'>
+                  <SelectValue placeholder={filter.operator} />
+                </div>
               </SelectTrigger>
-              <SelectContent
-                id={joinOperatorListboxId}
-                position='popper'
-                className='min-w-[--radix-select-trigger-width] lowercase'
-              >
-                {dataTableConfig.joinOperators.map((joinOperator) => (
-                  <SelectItem key={joinOperator} value={joinOperator}>
-                    {joinOperatorLabels[joinOperator]}
+              <SelectContent id={operatorListboxId}>
+                {filterOperators.map((operator) => (
+                  <SelectItem
+                    key={operator.value}
+                    value={operator.value}
+                    className='lowercase'
+                  >
+                    {operator.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          ) : (
-            <span className='ps-3 text-sm text-muted-foreground'>
-              {joinOperatorLabels[joinOperator]}
-            </span>
-          )}
-        </div>
-        <div className='flex flex-1 flex-col gap-2 md:flex-row md:items-center'>
-          <Popover open={showFieldSelector} onOpenChange={setShowFieldSelector}>
-            <PopoverTrigger asChild>
-              <Button
-                aria-controls={fieldListboxId}
-                variant='none'
-                size='none'
-                className='h-8 min-w-0 justify-between rounded border bg-transparent px-3 py-1 text-sm font-normal shadow-xs hover:shadow-sm dark:bg-input/30 hover:dark:bg-input/45 md:w-32'
-              >
-                <span className='truncate'>
-                  {columnMeta?.label ?? 'اختر حقل'}
-                </span>
-                <Icon
-                  icon='solar:alt-arrow-down-linear'
-                  className='size-4 text-muted-foreground opacity-80'
-                />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent
-              id={fieldListboxId}
-              align='start'
-              className='w-40 p-0'
-            >
-              <Command>
-                <CommandInput placeholder={MSG_FIND_FIELD} />
-                <CommandList>
-                  <CommandEmpty>{MSG_NO_FIELDS}</CommandEmpty>
-                  <CommandGroup>
-                    {columns.map((option) => (
-                      <FilterFieldItem
-                        key={option.id}
-                        columnId={option.id}
-                        label={option.columnDef.meta?.label ?? option.id}
-                        variant={option.columnDef.meta?.variant ?? 'text'}
-                        isSelected={option.id === filter.id}
-                        filterId={filter.filterId}
-                        onFilterUpdate={onFilterUpdate}
-                        onSelected={onCloseFieldSelector}
-                      />
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
-          <Select
-            open={showOperatorSelector}
-            onOpenChange={setShowOperatorSelector}
-            value={filter.operator}
-            onValueChange={onOperatorChange}
+          </div>
+          {/* Kept mounted without a value: the empty-state input announces the operator. */}
+          <div
+            className={
+              hasValue
+                ? cn('min-w-0 md:min-w-40 md:flex-1', VALUE_SLOT_RADIUS)
+                : 'sr-only'
+            }
           >
-            <SelectTrigger
-              aria-controls={operatorListboxId}
-              size='sm'
-              className='!h-8 w-full rounded bg-transparent lowercase shadow-xs hover:shadow-sm md:w-32'
-            >
-              <div className='truncate'>
-                <SelectValue placeholder={filter.operator} />
-              </div>
-            </SelectTrigger>
-            <SelectContent id={operatorListboxId}>
-              {filterOperators.map((operator) => (
-                <SelectItem
-                  key={operator.value}
-                  value={operator.value}
-                  className='lowercase'
-                >
-                  {operator.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <div className='min-w-36 max-w-60 flex-1'>
             <FilterInput
               filter={filter}
               inputId={inputId}
@@ -563,25 +683,26 @@ function DataTableFilterItemInner<TData>({
             />
           </div>
         </div>
-
-        <Button
-          aria-controls={filterItemId}
-          variant='destructiveGhost'
-          size='icon'
-          className='size-8 rounded text-muted-foreground hover:text-destructive'
-          onClick={onRemove}
-        >
-          <Icon icon='solar:trash-bin-trash-linear' className='size-4' />
-        </Button>
-        <SortableItemHandle asChild>
+        <div className='flex flex-col md:flex-row md:gap-2'>
           <Button
-            variant='ghost'
+            aria-controls={filterItemId}
+            variant='destructiveGhost'
             size='icon'
-            className='size-8 rounded text-muted-foreground'
+            className='size-8 rounded text-muted-foreground hover:text-destructive'
+            onClick={onRemove}
           >
-            <Icon icon='solar:grip-vertical-linear' className='size-4' />
+            <Icon icon='solar:trash-bin-trash-linear' className='size-4' />
           </Button>
-        </SortableItemHandle>
+          <SortableItemHandle asChild>
+            <Button
+              variant='ghost'
+              size='icon'
+              className='size-8 rounded text-muted-foreground'
+            >
+              <Icon icon='solar:grip-vertical-linear' className='size-4' />
+            </Button>
+          </SortableItemHandle>
+        </div>
       </div>
     </SortableItem>
   );

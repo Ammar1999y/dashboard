@@ -22,6 +22,8 @@ import path from 'node:path';
 
 import * as ts from 'typescript';
 
+import { BETTER_AUTH_PREFIX } from '@app/shared/api/endpoint';
+
 export const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 
 export type Gate = 'window' | 'password' | 'reauthRequired';
@@ -242,21 +244,35 @@ export function createRouteGateAnalyzer(
   const checker = program.getTypeChecker();
 
   /**
-   * `pluginEndpoint` (`lib/auth/plugin-endpoint.ts`) hands its own `path` on to
-   * `createAuthEndpoint`. That call defines no endpoint: each `pluginEndpoint`
-   * call site does, with its literal path and its handler.
+   * `pluginEndpoint` (`lib/auth/plugin-endpoint.ts`) hands its entry's path on
+   * to `createAuthEndpoint`. That call defines no endpoint: each
+   * `pluginEndpoint` call site does, with its entry and its handler.
    */
   function forwardsWrapperPath(call: ts.CallExpression): boolean {
-    const [pathArgument] = call.arguments;
-    if (!pathArgument || !ts.isIdentifier(pathArgument)) return false;
-    const declaration =
-      checker.getSymbolAtLocation(pathArgument)?.valueDeclaration;
-    return (
-      declaration !== undefined &&
-      ts.isParameter(declaration) &&
-      ts.isFunctionDeclaration(declaration.parent) &&
-      declaration.parent.name?.text === 'pluginEndpoint'
-    );
+    for (
+      let node: ts.Node = call.parent;
+      !ts.isSourceFile(node);
+      node = node.parent
+    )
+      if (ts.isFunctionDeclaration(node))
+        return node.name?.text === 'pluginEndpoint';
+    return false;
+  }
+
+  /**
+   * The path under the prefix an endpoint factory's first argument names: a
+   * literal, or a plugin endpoint's shared entry, whose `path` is a literal type.
+   */
+  function endpointPathOf(argument: ts.Expression): string | undefined {
+    const type = checker.getTypeAtLocation(argument);
+    if (type.isStringLiteral()) return type.value;
+    const property = type.getProperty('path');
+    const pathType =
+      property && checker.getTypeOfSymbolAtLocation(property, argument);
+    return pathType?.isStringLiteral() &&
+      pathType.value.startsWith(`${BETTER_AUTH_PREFIX}/`)
+      ? pathType.value.slice(BETTER_AUTH_PREFIX.length)
+      : undefined;
   }
 
   function sourceFileOf(file: string): ts.SourceFile {
@@ -853,11 +869,10 @@ export function createRouteGateAnalyzer(
           const handler = node.arguments.at(-1);
           // The type, not the syntax: an endpoint re-wrapped from the library
           // passes the library's own `path`.
-          const pathType =
-            pathArgument && checker.getTypeAtLocation(pathArgument);
-          if (!handler || !pathType?.isStringLiteral())
+          const endpointPath = pathArgument && endpointPathOf(pathArgument);
+          if (!handler || endpointPath === undefined)
             throw new Error(`${file}: an endpoint whose path is not a literal`);
-          endpoints.push({ path: pathType.value, handler });
+          endpoints.push({ path: endpointPath, handler });
         }
         ts.forEachChild(node, visit);
       };

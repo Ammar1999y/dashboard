@@ -1,11 +1,11 @@
-import { useAuthQuery } from '@/lib/auth/query';
+import { authCapabilities } from '@app/shared/api/better-auth';
+import { useEndpointQuery } from '@/lib/api/query';
 
 import { providersSchema } from './schemas';
 
 /** The providers this deployment signs in with; the server decides, and may offer none. */
 export const useOAuthProviders = () =>
-  useAuthQuery({
+  useEndpointQuery(authCapabilities, undefined, {
     queryKey: ['auth', 'capabilities'],
-    path: '/capabilities',
-    schema: providersSchema,
+    narrow: providersSchema,
   });
