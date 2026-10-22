@@ -108,7 +108,7 @@ export const FontPreview = memo(
           placeholder={DEFAULT_PREVIEW_TEXT}
           dir={dir}
           style={previewStyle}
-          className='px-4 pb-3 pt-4 transition-all duration-300'
+          className='px-4 pb-3 pt-4'
           minRows={4}
           maxRows={10}
         />

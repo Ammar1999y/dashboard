@@ -31,7 +31,6 @@ const BasicInfoSection = memo(() => {
         dir={inputDir}
         placeholder='وصف مختصر للموقع'
         minRows={2}
-        minHeight={50}
         maxRows={4}
       />
 
@@ -41,7 +40,6 @@ const BasicInfoSection = memo(() => {
         dir={inputDir}
         placeholder='نص يظهر في أسفل الموقع'
         minRows={2}
-        minHeight={50}
         maxRows={4}
       />
 

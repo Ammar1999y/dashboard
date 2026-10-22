@@ -1,13 +1,6 @@
 import type { ChangeEvent, ComponentProps } from 'react';
 
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-} from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 
 import { useComposedRefs } from '@radix-ui/react-compose-refs';
 import { cn } from '@/lib/utils';
@@ -21,19 +14,49 @@ function parsePx(value: string | null): number {
   return Number.isNaN(n) ? 0 : n;
 }
 
-interface HeightConstraints {
-  minRows?: number;
-  maxRows?: number;
-  minHeight?: number;
-  maxHeight?: number;
+/**
+ * The text's `scrollHeight`, read from a hidden copy beside the field.
+ * Collapsing the field itself would shrink the page under it and move the
+ * scroll position and the caret. Beside it, the copy inherits what the field
+ * does; its width is pinned, and its scrollbar is hidden so it cannot narrow
+ * the lines.
+ */
+function measureText(textarea: HTMLTextAreaElement, width: string) {
+  const copy = textarea.cloneNode() as HTMLTextAreaElement;
+  for (const name of ['id', 'name', 'autofocus', 'required'])
+    copy.removeAttribute(name);
+  copy.setAttribute('aria-hidden', 'true');
+  copy.tabIndex = -1;
+  Object.assign(copy.style, {
+    position: 'absolute',
+    top: '0',
+    left: '0',
+    visibility: 'hidden',
+    width,
+    height: '0',
+    minHeight: '0',
+    maxHeight: 'none',
+    overflowY: 'hidden',
+  });
+
+  textarea.after(copy);
+  copy.value = textarea.value;
+  // Firefox can report a new textarea's first `scrollHeight` short (bug
+  // 1787062); that read flushes it, so the second one is right.
+  const height = Math.max(copy.scrollHeight, copy.scrollHeight);
+  copy.remove();
+  return height;
+}
+
+interface RowLimits {
+  minRows: number;
+  maxRows: number;
 }
 
 function measureAndSetHeight(
   textarea: HTMLTextAreaElement,
-  { minRows, maxRows, minHeight, maxHeight }: HeightConstraints
+  { minRows, maxRows }: RowLimits
 ) {
-  textarea.style.height = 'auto';
-
   const style = getComputedStyle(textarea);
   const borderHeight =
     parsePx(style.borderTopWidth) + parsePx(style.borderBottomWidth);
@@ -44,67 +67,51 @@ function measureAndSetHeight(
   const fontSize = parsePx(style.fontSize) || 16;
   const lineHeight = parsePx(style.lineHeight) || fontSize * 1.2;
 
-  const minHeightPx =
-    typeof minHeight === 'number'
-      ? minHeight
-      : typeof minRows === 'number'
-        ? minRows * lineHeight + borderHeight + paddingHeight
-        : 0;
-
-  const maxHeightPx =
-    typeof maxHeight === 'number'
-      ? maxHeight
-      : typeof maxRows === 'number'
-        ? maxRows * lineHeight + borderHeight + paddingHeight
-        : Infinity;
+  const minHeight = minRows * lineHeight + borderHeight + paddingHeight;
+  const maxHeight = maxRows * lineHeight + borderHeight + paddingHeight;
 
   // `scrollHeight` includes padding but not borders.
-  const contentHeight = textarea.scrollHeight + borderHeight;
-  textarea.style.height = `${Math.max(minHeightPx, Math.min(contentHeight, maxHeightPx))}px`;
-  textarea.style.overflowY = contentHeight > maxHeightPx ? 'auto' : 'hidden';
+  const contentHeight = measureText(textarea, style.width) + borderHeight;
+  textarea.style.height = `${Math.max(minHeight, Math.min(contentHeight, maxHeight))}px`;
+  // `scrollHeight` is rounded to whole pixels while `maxHeight` may be
+  // fractional; real overflow is at least a line.
+  textarea.style.overflowY = contentHeight - maxHeight > 1 ? 'auto' : 'hidden';
 }
 
-type AutosizeTextareaProps = ComponentProps<'textarea'> & HeightConstraints;
+type AutosizeTextareaProps = Omit<ComponentProps<'textarea'>, 'rows'> &
+  Partial<RowLimits>;
 
 export const AutosizeTextarea = memo(
   ({
     className,
     minRows = 4,
     maxRows = 6,
-    minHeight = 70,
-    maxHeight,
     onChange,
     value,
-    defaultValue,
-    rows,
     disabled,
     ref,
     ...props
   }: AutosizeTextareaProps) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const composedRef = useComposedRefs(ref, textareaRef);
-
-    const constraints = useMemo(
-      () => ({ minRows, maxRows, minHeight, maxHeight }),
-      [minRows, maxRows, minHeight, maxHeight]
-    );
+    const controlled = value !== undefined;
 
     const adjust = useCallback(() => {
       const el = textareaRef.current;
-      if (el) measureAndSetHeight(el, constraints);
-    }, [constraints]);
+      if (el) measureAndSetHeight(el, { minRows, maxRows });
+    }, [minRows, maxRows]);
 
-    // Before paint, so a value change never shows a frame at the old height.
-    useLayoutEffect(() => {
-      adjust();
-    }, [value, defaultValue, adjust]);
+    // Before paint, so a change never shows a frame at the old height. Every
+    // render, because `style` or `className` can change the text's metrics as
+    // surely as `value` does, and `memo` already limits renders to prop changes.
+    useLayoutEffect(adjust);
 
-    // Width changes re-wrap the text, so the height has to follow. Height is
-    // ignored: `adjust` writes it, and reacting to that would loop.
     useEffect(() => {
       const el = textareaRef.current;
       if (!el) return;
 
+      // Width changes re-wrap the text, so the height has to follow. Height is
+      // ignored: `adjust` writes it, and reacting to that would loop.
       let lastWidth: number | undefined;
       const ro = new ResizeObserver((entries) => {
         const width = entries[0]?.contentRect.width;
@@ -115,22 +122,44 @@ export const AutosizeTextarea = memo(
         }
       });
       ro.observe(el);
-      return () => ro.disconnect();
+
+      // Both change the text without moving the box: a web font that loads
+      // after the first measure, and `--font-scale`, which
+      // theme-customizer/theme-vars.ts writes to the root's inline style
+      // among the theme's colors.
+      const root = document.documentElement;
+      let fontScale = root.style.getPropertyValue('--font-scale');
+      const rootStyle = new MutationObserver(() => {
+        const next = root.style.getPropertyValue('--font-scale');
+        if (next === fontScale) return;
+        fontScale = next;
+        adjust();
+      });
+      rootStyle.observe(root, { attributeFilter: ['style'] });
+      document.fonts.addEventListener('loadingdone', adjust);
+
+      return () => {
+        ro.disconnect();
+        rootStyle.disconnect();
+        document.fonts.removeEventListener('loadingdone', adjust);
+      };
     }, [adjust]);
 
+    // A controlled value is measured once React commits it, which also covers
+    // a parent that rejects the edit.
     const handleChange = useCallback(
       (e: ChangeEvent<HTMLTextAreaElement>) => {
         onChange?.(e);
-        adjust();
+        if (!controlled) adjust();
       },
-      [onChange, adjust]
+      [onChange, controlled, adjust]
     );
 
     return (
       <textarea
         data-lenis-prevent
         ref={composedRef}
-        rows={rows ?? minRows}
+        rows={minRows}
         className={cn(
           fieldSurface,
           'block w-full min-w-0 resize-none px-3 py-2 caret-primary placeholder:text-muted-foreground',
@@ -138,7 +167,6 @@ export const AutosizeTextarea = memo(
           className
         )}
         value={value}
-        defaultValue={defaultValue}
         disabled={disabled}
         onChange={handleChange}
         {...props}

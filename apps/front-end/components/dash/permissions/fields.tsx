@@ -38,7 +38,6 @@ export const PermissionFields = memo(({ ownRole }: PermissionFieldsProps) => (
       <FormTextarea
         name='description'
         label='الوصف'
-        rows={1}
         minRows={3}
         maxRows={6}
         classNameField='order-3 xs2:col-span-12 sm:order-2 sm:col-span-5'
