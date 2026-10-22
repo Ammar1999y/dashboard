@@ -23,8 +23,26 @@ const TRANSPORT_FAILURE =
 const ATTEMPTS = 3;
 const BACKOFF_MS = 15_000;
 
+/**
+ * Advisories no in-range release fixes, each held by a decision that outranks
+ * it. Remove an entry when its blocker moves; `bun audit fix --dry-run` shows
+ * when one does.
+ */
+const ACCEPTED_ADVISORIES = [
+  // braces@3.0.3: no fixed release exists. Build tooling only (Tailwind 3,
+  // eslint-config-next), expanding globs this repository writes.
+  'GHSA-vfj7-8cjw-p6xm',
+  // postcss-selector-parser@6: fixed only in 7, which Tailwind 3 (kept by
+  // decision) does not accept. Parses this repository's own CSS at build time.
+  'GHSA-rj75-hqrm-r3gf',
+  // katex@0.16.22, low: `@platejs/math` pins it exactly and the front end
+  // follows that pin. Needs a prototype pollution to exist already.
+  'GHSA-238p-pmpm-9mq7',
+];
+
 async function runAudit(): Promise<{ code: number; output: string }> {
-  const audit = Bun.spawn(['bun', 'audit'], {
+  const ignored = ACCEPTED_ADVISORIES.map((id) => `--ignore=${id}`);
+  const audit = Bun.spawn(['bun', 'audit', ...ignored], {
     stdout: 'pipe',
     stderr: 'pipe',
   });

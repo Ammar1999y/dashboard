@@ -41,6 +41,8 @@
     "@simplewebauthn/server",
     "@peculiar/x509",
   ],
-  // Installed by `mise.toml`, not `bun install`; the `scan:*` scripts run it.
-  "ignoreBinaries": ["mise"],
+  // `mise` is installed by `mise.toml`, not `bun install`; the `scan:*` scripts
+  // run it. `check` and `fmt` are Bun's own subcommands (`bun check`,
+  // `bun fmt`), which knip reads as binaries.
+  "ignoreBinaries": ["mise", "check", "fmt"],
 }

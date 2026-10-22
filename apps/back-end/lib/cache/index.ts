@@ -91,8 +91,6 @@ const MAX_VALUE_BYTES = 512 * 1024;
  * Null on a miss, an expired entry, a value `schema` rejects, or any store
  * failure: a cache that throws would need a try/catch at every call site to
  * stay invisible.
- *
- * @knipignore
  */
 export function cacheGet<Value>(
   key: string,

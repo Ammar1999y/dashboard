@@ -99,8 +99,6 @@ export interface HandlerRaw extends OutputFields {
 
 export type HandlerOutput = HandlerSuccess | HandlerError | HandlerRaw;
 
-export type SuccessOutput<T> = HandlerSuccess<SuccessBody<T>>;
-
 function isRawBody(body: HandlerOutput['body']): body is RawBody {
   return 'raw' in body;
 }

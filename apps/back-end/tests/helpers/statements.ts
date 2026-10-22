@@ -11,7 +11,7 @@ import {
   BunSQLSession,
 } from 'drizzle-orm/bun-sql/session';
 
-export interface RecordedStatement {
+interface RecordedStatement {
   sql: string;
   params: readonly unknown[];
 }

@@ -304,7 +304,12 @@ export const LIBRARY_REQUEST_BODIES = {
 
 type LibraryBodyPath = keyof typeof LIBRARY_REQUEST_BODIES;
 
-/** `UnknownFieldsOf` on the bodies above, as `api/fields-are-typed.ts` holds every entry’s. */
+/**
+ * `UnknownFieldsOf` on the bodies above, as `api/fields-are-typed.ts` holds every entry’s.
+ * Exported only so the compiler keeps checking it; nothing imports it.
+ *
+ * @knipignore
+ */
 export type LibraryBodiesAreTyped = Assert<
   [
     {
