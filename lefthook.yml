@@ -27,7 +27,7 @@ pre-commit:
     - name: front-end format
       root: 'apps/front-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml,css}'
-      run: bun --bun prettier --check {staged_files}
+      run: bun fmt --no-script --check {staged_files}
     - name: front-end icons
       root: 'apps/front-end/'
       glob: '*.{ts,tsx,js,jsx,mjs}'
@@ -42,7 +42,7 @@ pre-commit:
     - name: back-end format
       root: 'apps/back-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml,css}'
-      run: bunx prettier --check {staged_files}
+      run: bun fmt --no-script --check {staged_files}
     - name: shared typecheck
       root: 'packages/shared/'
       glob: '*.ts'
@@ -54,7 +54,7 @@ pre-commit:
     - name: shared format
       root: 'packages/shared/'
       glob: '*.{ts,js,mjs,json,jsonc,md}'
-      run: bunx prettier --check {staged_files}
+      run: bun fmt --no-script --check {staged_files}
     # Root-level files: the guard script, the hooks, the workflows and the
     # manifests. No `root:`, so nothing that lives above the workspaces escapes.
     - name: root lint
@@ -64,7 +64,7 @@ pre-commit:
     - name: root format
       glob: '{scripts/**/*.mjs,*.js,*.mjs,*.json,*.yml,README.md,.github/**/*.yml,patches/**/*.md}'
       exclude: '{apps/**,packages/**}'
-      run: bunx prettier --check {staged_files}
+      run: bun fmt --no-script --check {staged_files}
     # No `exclude`, unlike the two jobs above: the workspace manifests are the
     # point. The script reads every manifest whatever was staged; the glob only
     # decides whether a commit is one it needs to look at.
@@ -93,7 +93,7 @@ pre-push: &full_verify
             run: bun --bun eslint . --max-warnings 0
           - name: front-end format
             root: 'apps/front-end/'
-            run: bun --bun prettier --check .
+            run: bun run format:check
           - name: front-end icons
             root: 'apps/front-end/'
             run: bun scripts/build-icons.ts --check
@@ -108,7 +108,7 @@ pre-push: &full_verify
             run: bunx eslint . --max-warnings 0
           - name: back-end format
             root: 'apps/back-end/'
-            run: bunx prettier --check .
+            run: bun run format:check
           - name: shared typecheck
             root: 'packages/shared/'
             run: bun run typecheck
@@ -117,7 +117,7 @@ pre-push: &full_verify
             run: bunx eslint . --max-warnings 0
           - name: shared format
             root: 'packages/shared/'
-            run: bunx prettier --check .
+            run: bun run format:check
           - name: root lint
             run: bun run lint:root
           - name: root format
@@ -198,19 +198,19 @@ fix:
   jobs:
     - name: front-end format
       root: 'apps/front-end/'
-      run: bun --bun prettier --write .
+      run: bun run format
     - name: front-end lint
       root: 'apps/front-end/'
       run: bun --bun eslint . --fix
     - name: back-end format
       root: 'apps/back-end/'
-      run: bunx prettier --write .
+      run: bun run format
     - name: back-end lint
       root: 'apps/back-end/'
       run: bunx eslint . --fix
     - name: shared format
       root: 'packages/shared/'
-      run: bunx prettier --write .
+      run: bun run format
     - name: shared lint
       root: 'packages/shared/'
       run: bunx eslint . --fix

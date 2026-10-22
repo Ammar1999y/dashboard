@@ -14,8 +14,12 @@ linker = "hoisted"
 # The install-side half of the release-age policy that `renovate.json` applies
 # through `security:minimumReleaseAgeNpm`: three days, in seconds, so a
 # compromised release has time to be caught before `bun add` or `bun update`
-# pulls it. Renovate exempts security fixes; here an urgent patch inside the
-# window is installed with `--minimum-release-age=0`, deliberately and once.
+# pulls it. Seconds, not "3d": Bun before 1.4.4 refuses units, so an outdated
+# Bun would fail here before `scripts/require-bun.mjs` could say why.
+# Renovate exempts security fixes; here an urgent patch inside the window is
+# installed once with
+# `--minimum-release-age-excludes=bun,@types/bun,bun-types,<name>@<version>`,
+# which exempts that one release and replaces the list below.
 minimumReleaseAge = 259200
 # Bun's runtime and its types are pinned together by `packageManager`, and the
 # window would only block the matching pair landing on the same day.

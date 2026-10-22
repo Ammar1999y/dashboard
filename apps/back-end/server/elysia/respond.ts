@@ -189,7 +189,7 @@ export const exitStep = (servedByPrefix: (pathname: string) => boolean) =>
         return finish(request, responseValue) as never;
       applyResponsePolicyToBag(set.headers, { durationMs: elapsed(request) });
     })
-    .afterResponse(({ request, set, path, responseValue }) => {
+    .onAfterResponse(({ request, set, path, responseValue }) => {
       if (preflights.has(request)) return;
       const started = startedAt.get(request);
       startedAt.delete(request);

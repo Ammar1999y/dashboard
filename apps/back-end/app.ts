@@ -132,7 +132,7 @@ function createBase(routing: Routing) {
         maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
       },
     })
-      .request(({ set, request }) => {
+      .onRequest(({ set, request }) => {
         markStarted(request);
         applySecurityHeaders(set.headers);
         const early = (logPath: string, response: Response) => {

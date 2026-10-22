@@ -1,6 +1,6 @@
 # Coolify deployment: ElysiaJS, `bun:sql`, `bun:sqlite`
 
-Updated: 2026-10-15
+Updated: 2026-10-22
 
 > **Nothing here has been executed against a live Coolify instance since the
 > Elysia migration.** Treat it as revised instructions, not a verified
@@ -11,7 +11,7 @@ Updated: 2026-10-15
 
 One Coolify application on one VPS:
 
-- **Runtime:** Bun 1.4.3 — runtime, package manager and TypeScript loader. No
+- **Runtime:** Bun 1.4.4 — runtime, package manager and TypeScript loader. No
   Node process, no bundle, no `node-gyp`.
 - **Business data:** PostgreSQL via `bun:sql`. One pooled client in
   `db/index.ts`; `withTransaction` runs on it.
@@ -326,7 +326,7 @@ DevTools, the request must go to `https://example.com/api/...` with
 `curl -s https://example.com/api/health/storage` without the token must return
 the back-end's 401 JSON envelope, not a Next.js 404 page.
 
-The Dockerfiles' `FROM oven/bun:1.4.3` (back-end and front-end) is the second
+The Dockerfiles' `FROM oven/bun:1.4.4` (back-end and front-end) is the second
 home of the Bun pin. Bump it with `packageManager` (Renovate's `bun` group moves both, with the Bun
 types, in one PR); `scripts/require-bun.mjs` fails the image build when
 the image's Bun is older than the pin, and `server.ts` logs when it is newer.
@@ -398,7 +398,7 @@ A container restart-looping with that line is misconfigured, not crashing.
 | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `NODE_ENV` not exactly `development`/`test`/`production` | Every production guard is an exact string comparison. `NODE_ENV=prodution` previously disabled the Better Auth secret floor, the Turnstile requirement, the absolute-`SQLITE_DIR` rule and HSTS at once, and still served traffic.                                                            |
 | `PORT` not a decimal integer in `1..65535`               | `Number(PORT)` accepted `''` as 0 and `3000abc` as `NaN`; Bun then bound an ephemeral port while the log reported the requested one.                                                                                                                                                          |
-| Bun OLDER than the pinned `1.4.3`                        | Both DB drivers are compiled into the Bun binary. The pin includes PostgreSQL query-isolation and rolled-back-commit reporting fixes, TLS verification hardening, and the native type checker used by the build. Bun NEWER than the pin boots and logs `bun version ahead of the tested pin`. |
+| Bun OLDER than the pinned `1.4.4`                        | Both DB drivers are compiled into the Bun binary. The pin includes PostgreSQL query-isolation and rolled-back-commit reporting fixes, TLS verification hardening, and the native type checker used by the build. Bun NEWER than the pin boots and logs `bun version ahead of the tested pin`. |
 | `packageManager` not `bun@<major>.<minor>.<patch>`       | It is the only source for the pin (below). A malformed field is treated as a missing runtime contract, not as "no pin".                                                                                                                                                                       |
 | `sqlite_version()` below `3.51.3`                        | The WAL-reset floor (§6), now asserted rather than eyeballed in the build log.                                                                                                                                                                                                                |
 
@@ -452,7 +452,7 @@ Two things the operator must know about it:
   "port": 3000,
   "hostname": "localhost",
   "env": "production",
-  "bun": "1.4.3",
+  "bun": "1.4.4",
   "idleTimeoutSeconds": 60,
   "maxRouteTimeoutSeconds": 120,
   "maxRequestBodyBytes": 8388608,
@@ -1584,7 +1584,7 @@ bun --version
 bun -e 'const {Database}=require("bun:sqlite");const d=new Database(":memory:");console.log(d.query("select sqlite_version() as v").get());d.close(false)'
 ```
 
-Expect Bun 1.4.3 and SQLite ≥ 3.51.3. **Record the SQLite version** — it is a
+Expect Bun 1.4.4 and SQLite ≥ 3.51.3. **Record the SQLite version** — it is a
 property of the Bun build, as are the WebP/PNG codecs and the image resampler.
 
 No native addon is on the request path: `bun:sqlite` replaced `better-sqlite3`
@@ -2349,7 +2349,7 @@ bucket CORS rule in the Cloudflare console — the API token cannot (measured
 ## Final checklist
 
 - [ ] Release committed, pushed, CI green.
-- [ ] Bun 1.4.3 in the build log; SQLite version recorded (§8).
+- [ ] Bun 1.4.4 in the build log; SQLite version recorded (§8).
 - [ ] Install, build and start command fields empty, so the image's `verify`
       stage and `CMD` apply; `NODE_ENV=production` set as a runtime variable;
       `--no-env-file` decided (§2).

@@ -1,6 +1,8 @@
 /** @type {import('prettier').Config} */
 module.exports = {
   importOrder: [
+    '^bun$',
+    '^bun:',
     '<BUILTIN_MODULES>',
     '^types$',
     '^type$',

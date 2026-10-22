@@ -33,7 +33,7 @@ import {
   folderTooDeep,
   folderTooManyChildren,
 } from './errors';
-import { distinctIds, idRowSchema, uuidList } from './ids';
+import { anyUuid, distinctIds, idRowSchema } from './ids';
 
 export interface FolderSummary {
   id: string;
@@ -422,7 +422,7 @@ async function tooTall(
   const rows = await tx.execute(sql`
     with recursive down as (
       select id as root, id, 1 as level
-      from folders where id in (${uuidList(folderIds)})
+      from folders where id = ${anyUuid(folderIds)}
       union all
       select down.root, f.id, down.level + 1
       from folders f join down on f.parent_id = down.id
@@ -498,14 +498,14 @@ export async function assertNamesFree(
   to: EntityID | null
 ): Promise<void> {
   if (folderIds.length === 0) return;
-  const moved = uuidList(folderIds);
+  const moved = anyUuid(folderIds);
   const rows = await tx.execute(sql`
     with incoming as (
-      select id, lower(name) as key from folders where id in (${moved})
+      select id, lower(name) as key from folders where id = ${moved}
     ), staying as (
       select lower(name) as key from folders
       where ${to === null ? sql`parent_id is null` : sql`parent_id = ${to}::uuid`}
-        and id not in (${moved})
+        and not (id = ${moved})
     )
     select i.id::text as id from incoming i
     where exists (select 1 from staying s where s.key = i.key)

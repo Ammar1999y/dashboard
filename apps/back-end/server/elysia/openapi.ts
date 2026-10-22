@@ -131,6 +131,6 @@ export function mountReferencePage(app: GatedApp): void {
       headers: { 'content-type': 'text/html; charset=utf-8' },
     });
   };
-  app.method(method, path, config, handler);
-  app.method('HEAD', path, config, handler);
+  app.route(method, path, config, handler);
+  app.route('HEAD', path, config, handler);
 }

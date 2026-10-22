@@ -39,9 +39,8 @@ export function reportDigest(contents: Uint8Array | string): string {
 /**
  * Did this run ask `bun test` for coverage?
  *
- * The only run that rewrites `coverage/lcov.info`, and therefore the only one
- * entitled to claim it. Nothing in `bunfig.toml` turns coverage on — it declares
- * the reporters and no more — so the flag is the whole condition.
+ * Nothing in `bunfig.toml` turns coverage on — it declares the reporters and
+ * no more. The CLI reporter option, unlike the config key, implies coverage.
  *
  * `--coverage=<value>` as well as the bare flag: Bun accepts both spellings, and
  * matching only the bare one would put the hole back for the caller who used the
@@ -49,8 +48,25 @@ export function reportDigest(contents: Uint8Array | string): string {
  */
 export function coverageRequested(flags: readonly string[]): boolean {
   return flags.some(
-    (flag) => flag === '--coverage' || flag.startsWith('--coverage=')
+    (flag) =>
+      flag === '--coverage' ||
+      flag.startsWith('--coverage=') ||
+      flag === '--coverage-reporter' ||
+      flag.startsWith('--coverage-reporter=')
   );
+}
+
+/** Focused configuration reruns must not replace the full tier's LCOV report. */
+export function configurationCoverageFlags(
+  flags: readonly string[],
+  options: { fullTier: boolean; focused: boolean }
+): readonly string[] {
+  return options.fullTier && options.focused
+    ? flags.filter(
+        (flag) =>
+          !coverageRequested([flag]) && !flag.startsWith('--coverage-dir=')
+      )
+    : flags;
 }
 
 /**

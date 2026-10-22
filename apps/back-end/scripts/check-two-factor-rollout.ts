@@ -68,14 +68,6 @@ const droppedChannels = requestedChannels.filter(
 );
 assertTwoFactorListsCoherent(methods, channels);
 
-/**
- * Bun's SQL driver binds a JS array as a comma-joined STRING, which Postgres
- * then refuses as a malformed array literal. Both lists are already checked
- * against a closed allow-list above, so the literal cannot carry anything but
- * those names.
- */
-const asArrayLiteral = (values: readonly string[]) => `{${values.join(',')}}`;
-
 interface StrandedRow {
   id: string;
   email: string;
@@ -92,7 +84,7 @@ try {
       FROM two_factor_methods m
       JOIN users u ON u.id = m.user_id
       LEFT JOIN two_factor_credentials c ON c.user_id = m.user_id
-      WHERE m.method = ANY(${asArrayLiteral(methods)}::text[]::two_factor_method[])
+      WHERE m.method = ANY(${methods}::text[]::two_factor_method[])
         AND (
           (m.method = 'totp' AND c.verified IS TRUE)
           OR (m.method = 'backup_code'
@@ -102,7 +94,7 @@ try {
           OR (m.method = 'passkey'
               AND EXISTS (SELECT 1 FROM passkeys p WHERE p.user_id = m.user_id))
           OR (m.method = 'otp'
-              AND m.channel::text = ANY(${asArrayLiteral(channels)}::text[])
+              AND m.channel::text = ANY(${channels}::text[])
               AND ((m.contact_kind = 'email' AND u.email_verified IS TRUE)
                 OR (m.contact_kind = 'phone' AND u.phone_number_verified IS TRUE)))
         )

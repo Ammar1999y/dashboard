@@ -115,7 +115,7 @@ export function mountAuthPrefix(
   const path = `${prefix.prefix}/*`;
   const methods = new Set(prefix.paths.flatMap((entry) => entry.methods));
   for (const method of methods) {
-    app.method(method, path, config, handler);
-    if (method === 'GET') app.method('HEAD', path, config, handler);
+    app.route(method, path, config, handler);
+    if (method === 'GET') app.route('HEAD', path, config, handler);
   }
 }

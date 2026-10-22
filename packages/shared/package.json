@@ -9,8 +9,8 @@
   "scripts": {
     "typecheck": "bun check",
     "lint": "bun run typecheck && eslint . --max-warnings 0",
-    "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format": "bun fmt --no-script .",
+    "format:check": "bun fmt --no-script --check ."
   },
   "dependencies": {
     "isomorphic-dompurify": "^4",

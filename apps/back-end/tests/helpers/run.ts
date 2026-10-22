@@ -31,7 +31,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { stampCoverageProvenance } from './coverage';
+import {
+  configurationCoverageFlags,
+  stampCoverageProvenance,
+} from './coverage';
 import { loadTestEnv } from './env-file';
 import { newRunToken } from './names';
 import {
@@ -342,6 +345,26 @@ const selection = forwardedNames[0]
   ? `tests/${tierName}/${forwardedNames[0]}`
   : `tests/${tierName}`;
 
+const REPORTER_OUTFILE = '--reporter-outfile=';
+
+/**
+ * A focused row writes its JUnit file beside the full row's, named after the
+ * row: each child overwrites the file, so one shared name kept only the last
+ * row's results.
+ */
+function rowReporterFlags(
+  flags: readonly string[],
+  row: { name?: string; files?: readonly string[] }
+): readonly string[] {
+  if (!row.files || !row.name) return flags;
+  const rowName = row.name;
+  return flags.map((flag) => {
+    if (!flag.startsWith(REPORTER_OUTFILE)) return flag;
+    const outfile = path.parse(flag.slice(REPORTER_OUTFILE.length));
+    return `${REPORTER_OUTFILE}${path.join(outfile.dir, `${outfile.name}.${rowName}${outfile.ext}`)}`;
+  });
+}
+
 loadTestEnv();
 
 const runToken = newRunToken(
@@ -458,7 +481,13 @@ try {
         'test',
         '--no-env-file',
         ...flags,
-        ...forwardedFlags,
+        ...rowReporterFlags(
+          configurationCoverageFlags(forwardedFlags, {
+            fullTier: !forwardedNames[0],
+            focused: row.files !== undefined,
+          }),
+          row
+        ),
         ...ignored.map((file) => `--path-ignore-patterns=${file}`),
         ...selections,
       ],

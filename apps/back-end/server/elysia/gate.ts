@@ -7,17 +7,16 @@
  * by `runBinding`, which fails closed when the gate did not run.
  */
 import type { AnyBinding } from '@/lib/http/binding';
+import type { Server } from 'elysia';
 
 import { Elysia } from 'elysia';
 
 import { admit } from '@/lib/http/admit';
 import { bodyPolicyCeiling, readJsonObject } from '@/lib/http/request';
 
-type Server = { timeout(request: Request, seconds: number): void } | null;
-
 interface GateContext {
   request: Request;
-  server: Server;
+  server: Server | null;
   /** The router's, decoded; validation has not run yet. */
   params: Record<string, string | undefined>;
 }

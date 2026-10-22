@@ -23,13 +23,13 @@
     "themes:sync": "bun scripts/sync-community-themes.ts",
     "audit": "bun scripts/audit.ts",
     "audit:css": "bun scripts/css-support.ts --app",
-    "format": "bun --bun prettier --write .",
-    "format:check": "bun --bun prettier --check .",
+    "format": "bun fmt --no-script .",
+    "format:check": "bun fmt --no-script --check .",
     "find:unused-files": "bunx knip",
     "scan:secrets": "mise exec -- gitleaks git . --redact --verbose --no-banner",
     "scan:sast": "mise exec -- semgrep scan --config=p/typescript --config=p/secrets --error --metrics=off"
   },
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "engines": {
     "npm": "use bun (run: node ../../scripts/require-bun.mjs)",
     "yarn": "use bun (run: node ../../scripts/require-bun.mjs)",

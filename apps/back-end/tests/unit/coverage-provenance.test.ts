@@ -22,6 +22,7 @@ import path from 'node:path';
 import type { CoverageProvenance } from '../helpers/coverage';
 
 import {
+  configurationCoverageFlags,
   coverageRequested,
   stampCoverageProvenance,
 } from '../helpers/coverage';
@@ -78,16 +79,64 @@ async function runGate(report: string): Promise<{
 /** A moment safely before the report was written, whatever the filesystem's mtime resolution. */
 const before = (): number => Date.now() - 5000;
 
+test('focused configuration reruns retain the full-tier report, while a narrowed run reports its own coverage', async () => {
+  const dir = coverageDir();
+  await Bun.write(
+    path.join(dir, 'subject.ts'),
+    'export function first() { return 1; }\nexport function second() { return 2; }\n'
+  );
+  await Bun.write(
+    path.join(dir, 'full.test.ts'),
+    "import { expect, test } from 'bun:test';\nimport { first, second } from './subject';\ntest('full', () => { expect(first()).toBe(1); expect(second()).toBe(2); });\n"
+  );
+  await Bun.write(
+    path.join(dir, 'focused.test.ts'),
+    "import { expect, test } from 'bun:test';\nimport { first } from './subject';\ntest('focused', () => expect(first()).toBe(1));\n"
+  );
+
+  const run = async (file: string, fullTier: boolean, focused: boolean) => {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        'test',
+        '--no-env-file',
+        ...configurationCoverageFlags(
+          ['--coverage', '--coverage-reporter=lcov', '--coverage-dir=coverage'],
+          { fullTier, focused }
+        ),
+        file,
+      ],
+      { cwd: dir, stdout: 'pipe', stderr: 'pipe' }
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect({
+      exitCode,
+      output: exitCode === 0 ? '' : `${stdout}\n${stderr}`,
+    }).toEqual({ exitCode: 0, output: '' });
+  };
+
+  await run('full.test.ts', true, false);
+  const report = Bun.file(path.join(dir, 'coverage', 'lcov.info'));
+  const full = await report.text();
+  expect(full).toContain('SF:subject.ts');
+  await run('focused.test.ts', true, true);
+  expect(await report.text()).toBe(full);
+  await run('focused.test.ts', false, true);
+  expect(await report.text()).not.toBe(full);
+});
+
 describe('a run is only entitled to claim the report when it produced one', () => {
   test.each([
     ['--coverage', true],
     ['--coverage=true', true],
-    ['--coverage-reporter=lcov', false],
+    ['--coverage-reporter=lcov', true],
+    ['--coverage-dir=coverage', false],
     ['--reporter=junit', false],
   ])('%s counts as a coverage run: %p', (flag, expected) => {
-    // `--coverage-reporter` is the trap: it names coverage without switching it
-    // on, and `bunfig.toml` wins over it anyway. Nothing in bunfig enables
-    // coverage, so the flag is the whole condition.
     expect(coverageRequested([flag])).toBe(expected);
   });
 

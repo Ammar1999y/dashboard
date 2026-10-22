@@ -54,7 +54,7 @@ import {
   lockTree,
   prepareFolderMove,
 } from './folders';
-import { distinctIds, idRowSchema, sortedIds, uuidList } from './ids';
+import { anyUuid, distinctIds, idRowSchema, sortedIds } from './ids';
 import { finishDeleting } from './lifecycle';
 import { usageLabels, usedIds } from './usages';
 
@@ -108,10 +108,10 @@ async function normalizeSelection(
   if (folderIds.length === 0) return { fileIds, folderIds };
 
   const starts = [
-    sql`select f.id, 'folder'::text as kind, f.parent_id as node from folders f where f.id in (${uuidList(folderIds)})`,
+    sql`select f.id, 'folder'::text as kind, f.parent_id as node from folders f where f.id = ${anyUuid(folderIds)}`,
     ...(fileIds.length > 0
       ? [
-          sql`select x.id, 'file'::text as kind, x.folder_id as node from files x where x.id in (${uuidList(fileIds)})`,
+          sql`select x.id, 'file'::text as kind, x.folder_id as node from files x where x.id = ${anyUuid(fileIds)}`,
         ]
       : []),
   ];
@@ -125,7 +125,7 @@ async function normalizeSelection(
       where f.parent_id is not null and up.depth <= ${FOLDER_MAX_DEPTH}
     )
     select distinct id::text as id, kind from up
-    where node in (${uuidList(folderIds)})
+    where node = ${anyUuid(folderIds)}
   `);
   const covered = new Set(rows.map((row) => coveredRowSchema.parse(row).id));
   return {
@@ -300,7 +300,7 @@ async function descendantIds(
 ): Promise<EntityID[]> {
   const rows = await executor.execute(sql`
     with recursive down as (
-      select id, 1 as level from folders where parent_id in (${uuidList(rootIds)})
+      select id, 1 as level from folders where parent_id = ${anyUuid(rootIds)}
       union all
       select f.id, down.level + 1
       from folders f join down on f.parent_id = down.id
@@ -318,7 +318,7 @@ async function occupiedFolders(
 ): Promise<EntityID[]> {
   const rows = await executor.execute(sql`
     select id::text as id from folders f
-    where f.id in (${uuidList(folderIds)})
+    where f.id = ${anyUuid(folderIds)}
       and (exists (select 1 from folders child where child.parent_id = f.id)
         or exists (select 1 from files held where held.folder_id = f.id and held.status = 'active'))
   `);

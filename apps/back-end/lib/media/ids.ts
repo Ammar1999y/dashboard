@@ -15,15 +15,11 @@ export const sortedIds = (ids: Iterable<EntityID>): EntityID[] =>
   [...new Set(ids)].toSorted(compareCodeUnits);
 
 /**
- * For `in (…)` in a raw statement: one bound parameter per id, since the driver
- * encodes a JS array as JSON text, which `::uuid[]` refuses. Every caller
- * bounds the list, by its request schema or by a page.
+ * For `x = any(…)` in a raw statement. `sql.param` keeps the array one bound
+ * value: a bare array in a `sql` template expands to a `(a, b)` list.
  */
-export const uuidList = (ids: readonly EntityID[]) =>
-  sql.join(
-    ids.map((id) => sql`${id}::uuid`),
-    sql`, `
-  );
+export const anyUuid = (ids: readonly EntityID[]) =>
+  sql`any(${sql.param(ids)}::uuid[])`;
 
 /**
  * A raw statement's `id::text as id` row. The driver types raw rows

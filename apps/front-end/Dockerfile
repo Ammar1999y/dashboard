@@ -5,7 +5,7 @@
 # Base Directory `/`, Dockerfile Location `/apps/front-end/Dockerfile`.
 #
 # The Bun tag moves with `packageManager` and with `apps/back-end/Dockerfile`.
-FROM oven/bun:1.4.3 AS build
+FROM oven/bun:1.4.4 AS build
 WORKDIR /app
 # The install guard would otherwise try to repair the toolchain over the
 # network; inside a build the image IS the toolchain.
@@ -36,7 +36,7 @@ ENV NEXT_STANDALONE=true \
 WORKDIR /app/apps/front-end
 RUN bun run build
 
-FROM oven/bun:1.4.3 AS runtime
+FROM oven/bun:1.4.4 AS runtime
 # Coolify's HTTP health check runs `curl -f` INSIDE the container.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends curl \

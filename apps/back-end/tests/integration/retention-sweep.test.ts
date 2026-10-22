@@ -334,8 +334,10 @@ describe('a pass with a healthy object store', () => {
         channel: 'email',
         identifier: 'sweep.consumed@gmail.com',
         purpose: 'verify_contact',
-        verifiedAt: sql`now()`,
-        consumedAt: sql`now()`,
+        // In the past: the column rounds to 10 ms, so `now()` can land after the
+        // sweep's own clock and the row would not yet count as spent.
+        verifiedAt: sql`now() - interval '1 minute'`,
+        consumedAt: sql`now() - interval '1 minute'`,
       })
       .returning({ id: verificationSessions.id });
     proofs.consumed = consumed?.id ?? '';
@@ -826,8 +828,9 @@ describe('a pass that skips a held row', () => {
         channel: 'email',
         identifier: 'sweep.held-owner@gmail.com',
         purpose: 'verify_contact',
-        verifiedAt: sql`now()`,
-        consumedAt: sql`now()`,
+        // In the past for the same reason as the spent proof above.
+        verifiedAt: sql`now() - interval '1 minute'`,
+        consumedAt: sql`now() - interval '1 minute'`,
       })
       .returning({ id: verificationSessions.id });
     if (!proof) throw new Error('no proof inserted');

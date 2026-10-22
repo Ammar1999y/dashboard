@@ -6,7 +6,7 @@
     "apps/*",
     "packages/*"
   ],
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "engines": {
     "npm": "use bun (run: node scripts/require-bun.mjs)",
     "yarn": "use bun (run: node scripts/require-bun.mjs)",
@@ -21,9 +21,9 @@
     "lint": "bun run lint:root && bun run --filter '*' lint",
     "lint:root": "eslint scripts *.mjs --max-warnings 0",
     "format": "bun run format:root && bun run --filter '*' format",
-    "format:root": "prettier --write \"scripts/**/*.mjs\" \"*.{js,mjs,json,yml}\" README.md \".github/**/*.yml\" \"patches/**/*.md\"",
+    "format:root": "bun fmt --no-script \"scripts/**/*.mjs\" \"*.{js,mjs,json,yml}\" README.md \".github/**/*.yml\" \"patches/**/*.md\"",
     "format:check": "bun run format:check:root && bun run --filter '*' format:check",
-    "format:check:root": "prettier --check \"scripts/**/*.mjs\" \"*.{js,mjs,json,yml}\" README.md \".github/**/*.yml\" \"patches/**/*.md\"",
+    "format:check:root": "bun fmt --no-script --check \"scripts/**/*.mjs\" \"*.{js,mjs,json,yml}\" README.md \".github/**/*.yml\" \"patches/**/*.md\"",
     "test": "bun run --filter @app/back-end test",
     "check:deps": "bun scripts/check-dependency-parity.mjs"
   },

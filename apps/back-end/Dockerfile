@@ -8,7 +8,7 @@
 # refuses an image whose Bun is older than `packageManager`, and `server.ts`
 # logs when it is newer, so a forgotten bump here fails the build or shows in
 # the boot log rather than passing silently.
-FROM oven/bun:1.4.3 AS manifests
+FROM oven/bun:1.4.4 AS manifests
 WORKDIR /app
 # The install guard would otherwise try to repair the toolchain over the
 # network; inside a build the image IS the toolchain.

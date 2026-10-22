@@ -18,10 +18,14 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import * as z from 'zod';
 
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
+const ESLINT_CLI = fileURLToPath(
+  new URL('bin/eslint.js', import.meta.resolve('eslint/package.json'))
+);
 const FIXTURE = path.join(
   import.meta.dir,
   '..',
@@ -115,7 +119,7 @@ function removeProbe(file: string): void {
 async function lintWith(
   file: string,
   source: string,
-  targets: readonly string[] = ['.']
+  targets: readonly string[] = [path.relative(REPO_ROOT, file)]
 ): Promise<{ exitCode: number | null; stdout: string; output: string }> {
   if (existsSync(file))
     throw new Error(`refusing to overwrite existing probe: ${file}`);
@@ -123,8 +127,8 @@ async function lintWith(
   try {
     const child = Bun.spawn(
       [
-        'bunx',
-        'eslint',
+        process.execPath,
+        ESLINT_CLI,
         ...targets,
         '--max-warnings',
         '0',

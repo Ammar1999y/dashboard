@@ -34,7 +34,7 @@ export function errorMapping(onNotFound: (request: Request) => Response) {
       // A throw in a `parse` hook — the gate's or the counted reader's —
       // arrives wrapped, its own error as the cause. Without one, Elysia's own
       // parser failed on the body.
-      .error(ParseError, ({ error, request }) =>
+      .onError(ParseError, ({ error, request }) =>
         toWebResponse(
           bindingFailure(
             request,
@@ -44,7 +44,7 @@ export function errorMapping(onNotFound: (request: Request) => Response) {
           )
         )
       )
-      .error(ValidationError, ({ error, request, set }) => {
+      .onError(ValidationError, ({ error, request, set }) => {
         if (error.type !== 'response')
           return toWebResponse(
             validationFailure(request, error.type, error.errors)
@@ -52,8 +52,8 @@ export function errorMapping(onNotFound: (request: Request) => Response) {
         withdrawValue(request, set);
         return toWebResponse(responseFailure(request, error.errors));
       })
-      .error(NotFound, ({ request }) => onNotFound(request))
-      .error(({ error, request, set }) => {
+      .onError(NotFound, ({ request }) => onNotFound(request))
+      .onError(({ error, request, set }) => {
         if (bindingOf(request))
           return toWebResponse(bindingFailure(request, error));
 

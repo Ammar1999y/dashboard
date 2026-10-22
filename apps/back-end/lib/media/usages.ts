@@ -14,7 +14,7 @@ import * as z from 'zod';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 import { MEDIA_USAGE_LIST_MAX } from '@app/shared/validation/constants';
 
-import { uuidList } from './ids';
+import { anyUuid } from './ids';
 import { USAGE_SOURCES } from './usage-sources';
 
 interface Usage {
@@ -63,7 +63,7 @@ async function referenceCount(
   const [row] = await executor.execute(sql`
     select count(*)::int as count
     from ${sql.identifier(source.table)}
-    where ${sql.identifier(source.column)} in (${uuidList(fileIds)})
+    where ${sql.identifier(source.column)} = ${anyUuid(fileIds)}
   `);
   return countRowSchema.parse(row).count;
 }
@@ -178,7 +178,7 @@ export async function usageVisibilities(
     const rows = await executor.execute(sql`
       select distinct ${sql.identifier(source.column)}::text as file_id
       from ${sql.identifier(source.table)}
-      where ${sql.identifier(source.column)} in (${uuidList(fileIds)})
+      where ${sql.identifier(source.column)} = ${anyUuid(fileIds)}
     `);
     for (const row of rows)
       held.get(fileIdRowSchema.parse(row).file_id)?.add(source.visibility);

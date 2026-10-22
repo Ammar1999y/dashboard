@@ -1,8 +1,8 @@
 /**
  * The access log covers the answers `app.ts` gives from `onRequest`.
  *
- * Elysia returns an `onRequest` answer before `onAfterResponse` is scheduled, so
- * the host guard's 404 and the declared-length 413 used to leave no line at all
+ * On Elysia 1.4 an `onRequest` answer returned before `onAfterResponse` was
+ * scheduled, so the host guard's 404 and the declared-length 413 left no line at all
  * while carrying application semantics (a refused upload, a tripped guard).
  * OPTIONS stays unlogged by decision (`reports/should-ignore.md` #66).
  */

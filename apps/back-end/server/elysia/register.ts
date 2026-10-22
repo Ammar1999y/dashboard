@@ -18,38 +18,38 @@ import { runBinding } from '@/lib/http/run';
 
 import { answerValue } from './respond';
 
-const problems = new Map<z.ZodType, z.ZodType>();
-
-/** Each problem schema compiled once: every refusal status of every binding declares one. */
-function compiledProblem(schema: z.ZodType): z.ZodType {
-  let compiled = problems.get(schema);
-  if (!compiled) {
-    compiled = z.compile(schema);
-    problems.set(schema, compiled);
-  }
-  return compiled;
-}
+const compiledSchemas = new WeakMap<z.ZodType, z.ZodType>();
 
 /**
- * `z.compile` on the contract's own schemas, here and nowhere else.
- * A clone: anything keyed by schema identity uses the shared original.
+ * `z.compile` on the contract's own schemas, here and nowhere else, once per
+ * instance: entries share params, bodies and problems. A clone: anything keyed
+ * by schema identity uses the shared original.
  */
+function compiled(schema: z.ZodType): z.ZodType {
+  let clone = compiledSchemas.get(schema);
+  if (!clone) {
+    clone = z.compile(schema);
+    compiledSchemas.set(schema, clone);
+  }
+  return clone;
+}
+
 function routeOptions(binding: AnyBinding) {
   const { entry } = binding;
   const response: Record<number, z.ZodType> = {};
   for (const { status } of refusalsOf(binding))
-    response[status] = compiledProblem(problemSchemaOf(entry, status));
+    response[status] = compiled(problemSchemaOf(entry, status));
   for (const [status, schema] of rawRefusalsOf(binding))
-    response[status] = z.compile(schema);
-  response[entry.status] = z.compile(successSchemaOf(entry));
+    response[status] = compiled(schema);
+  response[entry.status] = compiled(successSchemaOf(entry));
 
   return {
     binding,
     ...(entry.bodyKind !== 'json' && { parse: 'none' as const }),
-    ...(entry.params && { params: z.compile(entry.params) }),
-    ...(entry.query && { query: z.compile(entry.query) }),
+    ...(entry.params && { params: compiled(entry.params) }),
+    ...(entry.query && { query: compiled(entry.query) }),
     ...(entry.bodyKind === 'json' &&
-      entry.body && { body: z.compile(entry.body) }),
+      entry.body && { body: compiled(entry.body) }),
     response,
     detail: {
       summary: binding.options.detail.summary,
@@ -97,9 +97,9 @@ export function registerBinding(app: GatedApp, binding: AnyBinding): void {
     return answerValue(context.request, context.set, answered);
   };
 
-  app.method(entry.method, entry.path, options, answer);
+  app.route(entry.method, entry.path, options, answer);
   // The GET's own registration: the exit step drops the body.
-  if (entry.method === 'GET') app.method('HEAD', entry.path, options, answer);
+  if (entry.method === 'GET') app.route('HEAD', entry.path, options, answer);
 }
 
 const REQUIRED_HOOKS = ['error', 'mapResponse', 'afterResponse'] as const;
