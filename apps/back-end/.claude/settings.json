@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Read(//d/apps/job-app/soft-house-dash-4/apps/front-end/components/users/page/**)",
+      "Read(//d/apps/job-app/soft-house-dash-4/apps/front-end/pages/dash/permissions/**)",
+      "Read(//d/apps/job-app/soft-house-dash-4/packages/shared/src/**)",
+      "Read(//d/apps/job-app/soft-house-dash-4/apps/front-end/components/permissions/page/**)",
+      "Bash(git diff *)",
+      "Bash(git check-ignore *)",
+      "Bash(git ls-tree *)"
+    ]
+  }
+}

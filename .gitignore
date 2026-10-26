@@ -4,9 +4,6 @@
 .DS_Store
 
 # Same convention as the workspaces: agent instructions stay local.
-.claude
-CLAUDE.md
-AGENTS.md
 
 # Never commit environment files or the archived pre-monorepo checkouts.
 .env
