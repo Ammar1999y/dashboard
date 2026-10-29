@@ -4,7 +4,7 @@ Read this when you author an agent. Not routine reading.
 
 ## Writing one
 
-Frontmatter fields in use here: `name`, `description`, `model`, `effort`, `tools`. The full
+Frontmatter fields in use here: `name`, `description`, `tools`. The full
 supported set is on https://code.claude.com/docs/en/sub-agents — read it rather than guessing.
 
 `description` is what a task gets matched against, so write it around the **kind of work**,
@@ -16,17 +16,14 @@ was asked to judge, and the evidence disappears.
 
 ## Model and effort
 
-`model` is `opus` or `sonnet`, here and in any per-call override. Never Fable — a fan-out of
-Fable agents fails with HTTP 429 `session limit`. Never Haiku — it has no effort levels.
+Every subagent runs on the session's model and effort. Omit `model` and `effort` from a
+definition and `model` from every `Agent` call; both are then inherited. The user-level agents in
+`~/.claude/agents/` (`auditor`, `reviewer`, `quick`, `worker`) pin their own, so they are not
+dispatched here.
 
-`model` can be passed per `Agent` call. **`effort` cannot** — it exists only in a definition
-file. Levels are `low|medium|high|xhigh|max`; a level the model does not support silently falls
-back to the highest one below it. Omitting `effort` inherits the session's.
-
-**An effort equal to the session default is a silent no-op.** Read `effortLevel` in
-`~/.claude/settings.json` before choosing. The only reliable confirmation that a declaration
-applied is the top-level `effort` field in the subagent's transcript,
-`~/.claude/projects/<cwd>/<session>/subagents/agent-*.jsonl`.
+A Fable session's fan-out fails with HTTP 429 `session limit`: run fan-out work from an Opus
+session. The only reliable confirmation of the effort a subagent ran at is the top-level `effort`
+field in its transcript, `~/.claude/projects/<cwd>/<session>/subagents/agent-*.jsonl`.
 
 ## A new file is invisible to the session that wrote it
 

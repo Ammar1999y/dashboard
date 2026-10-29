@@ -6,6 +6,8 @@ import {
   CAPTCHA_TOKEN_MAX_LENGTH,
 } from '@app/shared/validation/auth';
 
+import { PUBLIC_ORIGIN } from '@/lib/env';
+
 import { logLine, logSanitized } from '@/utils/log';
 
 import { getClientIp } from './http/client-ip';
@@ -24,6 +26,18 @@ export function turnstileSecretKey(): string | undefined {
   return process.env.NODE_ENV === 'development'
     ? TEST_SECRET_KEY
     : process.env.TURNSTILE_SECRET_KEY;
+}
+
+/**
+ * The hostnames a token must have been issued on, shared with Better Auth's
+ * captcha plugin. Without it, a token solved on any site using the same sitekey
+ * passes. `undefined` under the test secret, whose tokens carry Cloudflare's
+ * placeholder hostname.
+ */
+export function turnstileHostnames(): string[] | undefined {
+  return process.env.NODE_ENV === 'development'
+    ? undefined
+    : [new URL(PUBLIC_ORIGIN).hostname];
 }
 
 /** Fails closed on any error. */
@@ -57,8 +71,20 @@ async function verifyTurnstileToken(
     });
     if (!response.ok) return false;
     const data: unknown = await response.json();
-    if (typeof data !== 'object' || data === null) return false;
-    return 'success' in data && data.success === true;
+    if (
+      typeof data !== 'object' ||
+      data === null ||
+      !('success' in data) ||
+      data.success !== true
+    )
+      return false;
+    const hostnames = turnstileHostnames();
+    return (
+      !hostnames ||
+      ('hostname' in data &&
+        typeof data.hostname === 'string' &&
+        hostnames.includes(data.hostname))
+    );
   } catch (error) {
     logSanitized('error', error);
     return false;

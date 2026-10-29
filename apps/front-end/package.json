@@ -18,8 +18,8 @@
     "start": "bun --bun run next start -p 3123",
     "start:mock": "NEXT_PUBLIC_API_MOCKING=enabled bun --bun run next start -p 3123",
     "typecheck": "bun check",
-    "lint": "bun run typecheck && bun --bun eslint . --max-warnings 0 && bun run audit:css",
-    "test": "bun test tests scripts/lib/tweakcn-community.test.ts",
+    "lint": "bun run typecheck && bun scripts/lint.mjs . && bun run audit:css",
+    "test": "bun test tests scripts/lib/tweakcn-community.test.ts scripts/lib/theme-contrast.test.ts scripts/lib/tailwind-conventions.test.mjs",
     "themes:sync": "bun scripts/sync-community-themes.ts",
     "audit": "bun scripts/audit.ts",
     "audit:css": "bun scripts/css-support.ts --app",
@@ -27,7 +27,7 @@
     "format:check": "bun fmt --no-script --check .",
     "find:unused-files": "bunx knip",
     "scan:secrets": "mise exec -- gitleaks git . --redact --verbose --no-banner",
-    "scan:sast": "mise exec -- semgrep scan --config=p/typescript --config=p/secrets --error --metrics=off"
+    "scan:sast": "mise exec -- semgrep scan --config=p/typescript --config=p/secrets --config=p/react --config=p/nextjs --error --metrics=off"
   },
   "packageManager": "bun@1.4.4",
   "engines": {
@@ -168,6 +168,7 @@
     "@iconify-json/uim": "^1",
     "@iconify/utils": "^3",
     "@mswjs/interceptors": "^0.45.6",
+    "@tanstack/eslint-plugin-query": "^5",
     "@types/bun": "^1.4.3",
     "@types/node": "^26",
     "@types/react": "^19",

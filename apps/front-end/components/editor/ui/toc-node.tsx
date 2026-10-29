@@ -31,7 +31,7 @@ const TocItem = memo(
       <Button
         className={cn(
           tocItemVariants({ depth: tocDepth(item.depth) }),
-          'cursor-pointer hover:bg-accent hover:text-muted-foreground'
+          'cursor-pointer hover:bg-accent hover:text-accent-foreground'
         )}
         onClick={handleClick}
         variant='ghost'

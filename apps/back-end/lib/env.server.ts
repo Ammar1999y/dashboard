@@ -1,6 +1,10 @@
 /* eslint-disable unicorn/no-top-level-side-effects -- the load-time crash IS this module's contract */
 import path from 'node:path';
 
+import {
+  isPlaceholderSecret,
+  MIN_DISTINCT_SECRET_SYMBOLS,
+} from '@/lib/auth/keyring';
 import { validatePasswordPepperConfiguration } from '@/lib/auth/password/pepper';
 import { validateOtpKeyConfiguration } from '@/lib/otp/key';
 import { R2_PRIVATE_BUCKET, R2_PUBLIC_BUCKET } from '@/lib/r2/buckets';
@@ -146,8 +150,8 @@ const BETTER_AUTH_DEFAULT_SECRET = 'better-auth-secret-12345678901234567890';
 
 /**
  * Better Auth only WARNS below 32 characters and continues, so a one-character
- * secret would sign real sessions. This is a floor, not a strength test — no
- * regex can prove randomness, and trying would only reject valid keys.
+ * secret would sign real sessions. This and the placeholder check are floors,
+ * not a strength test: nothing can prove randomness.
  */
 const BETTER_AUTH_SECRET_MIN_LENGTH = 32;
 
@@ -189,6 +193,9 @@ function betterAuthSecretError(): string | null {
 
   if (secret.length < BETTER_AUTH_SECRET_MIN_LENGTH)
     return `BETTER_AUTH_SECRET must be at least ${BETTER_AUTH_SECRET_MIN_LENGTH} characters; generate one with "openssl rand -base64 32"`;
+
+  if (isPlaceholderSecret(secret))
+    return `BETTER_AUTH_SECRET is a placeholder, not a random secret: it has fewer than ${MIN_DISTINCT_SECRET_SYMBOLS} distinct characters; generate one with "openssl rand -base64 32"`;
 
   return null;
 }
@@ -303,6 +310,14 @@ function resolveMaintenanceToken(): string {
       `SQLITE_MAINTENANCE_TOKEN must be at least ${MAINTENANCE_TOKEN_MIN_LENGTH} characters ` +
         'when set; generate one with "openssl rand -base64 32". Leave it unset to disable ' +
         'the maintenance surface entirely.'
+    );
+  if (
+    configured &&
+    process.env.NODE_ENV === 'production' &&
+    isPlaceholderSecret(configured)
+  )
+    throw new Error(
+      `SQLITE_MAINTENANCE_TOKEN is a placeholder, not a random token: it has fewer than ${MIN_DISTINCT_SECRET_SYMBOLS} distinct characters; generate one with "openssl rand -base64 32".`
     );
   return configured;
 }

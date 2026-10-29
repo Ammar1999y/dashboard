@@ -86,6 +86,17 @@ Expected renders per action; the lab's report shows them per event:
 | pin / unpin                    | the header, every row, that column's cells   |
 | refetch, one record changed    | that row and its cells                       |
 
+## Accessibility
+
+The table is `div`s carrying ARIA table roles (`table`, `rowgroup`, `row`, `columnheader`, `cell`). It is not a `grid`: it has no grid keyboard navigation.
+
+- Positions span every page: `DataTable` passes `rowCount` and `rowOffset` from the page's `meta`, and each body row carries `aria-rowindex`. A row whose position changes re-renders (its cells do not), so a record removed from the page re-renders the rows after it. Without `rowOffset` the rows carry no position at all rather than a wrong one.
+- Columns carry no `aria-colindex`: every visible column is in the DOM and a hidden one is `display:none`, so assistive technology counts them right already, and numbering them would re-render every row on a hide.
+- `aria-sort` goes on the first sort's header only; a later sort shows on its button.
+- A header is also the drag source. dnd-kit's `aria-roledescription` and `aria-pressed` are dropped and `role` is set after its spread; its instructions and announcements (`hooks/use-column-dnd.ts`) are Arabic and name columns by label.
+- The frame is `inert` while loading, which hides it from assistive technology. Loading, a failure and an empty result are announced by the `role='status'` line after the frame.
+- The table is `aria-busy` while loading and while it still shows the previous page, sort or filter's rows for the one loading (`isPlaceholderData`, from `keepPreviousData`); those rows stay readable. Not during a background refetch: `isFetching` flips on each one, which would re-render the frame for rows that mostly do not change.
+
 ## Verifying a change
 
 Type-checking proves only that shapes line up. Use the lab at `/dev/data-table-lab` (`components/dev/data-table-lab/`):

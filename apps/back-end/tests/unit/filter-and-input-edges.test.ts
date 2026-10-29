@@ -327,10 +327,11 @@ describe('no client-facing validation message is Zod ASCII', () => {
 
 describe('M9 - control characters never reach a bound parameter', () => {
   test.each([
-    ['NUL', '\u{0}'],
-    ['BEL', '\u{7}'],
-    ['CR', '\r'],
-  ])('a filter value carrying %s is stripped', (_label, control) => {
+    ['NUL', '\u{0}', 'abcd'],
+    ['BEL', '\u{7}', 'abcd'],
+    // A search term's line break parts words, as the fold of the text does.
+    ['CR', '\r', 'ab cd'],
+  ])('a filter value carrying %s is stripped', (_label, control, cleaned) => {
     const parsed = parseSearchParams({
       filters: JSON.stringify([
         {
@@ -342,7 +343,7 @@ describe('M9 - control characters never reach a bound parameter', () => {
         },
       ]),
     });
-    expect(parsed.filters[0]?.value).toBe('abcd');
+    expect(parsed.filters[0]?.value).toBe(cleaned);
   });
 
   test('a value that is ONLY control characters becomes no filter at all', () => {

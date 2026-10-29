@@ -14,6 +14,7 @@ import { useEffect, useMemo } from 'react';
 
 import { useShallow } from 'zustand/shallow';
 import { effectiveSearchTerm } from '@app/shared/data-table/parsers';
+import { searchKey } from '@app/shared/search-fold';
 import { useCapabilities } from '@/lib/media/capabilities';
 import { fileKey, folderKey } from '@/lib/media/keys';
 import { listingState } from '@/lib/media/listing';
@@ -69,9 +70,9 @@ export function resultsSource(
  * whole, so their names are matched here, as the library's search matches them.
  */
 const nameFilter = (source: ListingSource) => {
-  const term = effectiveSearchTerm(source.search).toLowerCase();
+  const term = searchKey(effectiveSearchTerm(source.search));
   return term && source.scope === 'folder'
-    ? (folder: ListedFolder) => folder.name.toLowerCase().includes(term)
+    ? (folder: ListedFolder) => searchKey(folder.name).includes(term)
     : undefined;
 };
 

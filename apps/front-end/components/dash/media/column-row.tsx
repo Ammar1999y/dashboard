@@ -98,7 +98,7 @@ export const FileRow = memo(({ file }: { file: LibraryFile }) => {
       <span
         dir='ltr'
         className={cn(
-          'num bidi-isolate shrink-0 text-xs text-muted-foreground/70',
+          'num bidi-isolate shrink-0 text-xs text-muted-foreground',
           hideOnHover
         )}
       >

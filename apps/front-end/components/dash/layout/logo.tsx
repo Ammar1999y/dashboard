@@ -9,7 +9,7 @@ const Logo = memo(({ className }: { className?: string }) => (
   <Link
     href='/dash'
     className={cn(
-      'flex rounded-md p-0.5 text-primary transition duration-300',
+      'flex rounded-md p-0.5 text-primary-brand transition duration-300',
       className
     )}
     aria-label={APP_NAME}

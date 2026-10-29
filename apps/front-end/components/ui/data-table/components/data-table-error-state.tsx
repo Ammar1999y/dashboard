@@ -7,13 +7,17 @@ import { TableCell, TableRow } from './table-elements';
 interface DataTableErrorStateProps {
   error: Error | null;
   refetch: () => void;
+  columnCount: number;
 }
 
 const DataTableErrorState = memo(
-  ({ error, refetch }: DataTableErrorStateProps) => {
+  ({ error, refetch, columnCount }: DataTableErrorStateProps) => {
     return (
       <TableRow className='min-h-52'>
-        <TableCell className='flex-1 text-center text-destructive'>
+        <TableCell
+          aria-colspan={columnCount}
+          className='flex-1 text-center text-destructive'
+        >
           <ErrorState error={error} refetch={refetch} />
         </TableCell>
       </TableRow>

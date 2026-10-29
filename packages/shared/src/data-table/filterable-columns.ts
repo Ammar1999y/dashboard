@@ -25,7 +25,7 @@ export const PERMISSIONS_FILTER_COLUMNS: FilterColumnSpecs = {
 };
 
 /**
- * `displayName` has a trigram index (`db/migrations/002_media_trgm_indexes.sql`).
+ * `displayName` has a trigram index.
  * Closed sets make an unknown member a 422, not a cast error. `mimeType` covers
  * what may EXIST, not what may be uploaded, so holding a type back does not hide
  * rows already of it.

@@ -8,6 +8,7 @@ import {
   MAX_IMAGE_EDGE,
   MAX_IMAGE_PIXELS,
 } from '../validation/constants';
+import { isolate } from './bidi';
 import {
   MSG_DELETE_ERROR,
   MSG_DELETED,
@@ -41,17 +42,17 @@ export const MSG_INVALID_UPLOAD_RESOURCE =
 export const MSG_INVALID_UPLOAD_PURPOSE = 'الغرض من الرفع غير معروف';
 
 export const MSG_FILE_TOO_LARGE = (name: string, maxMB: number) =>
-  `حجم الملف ${name} كبير جداً. الحد الأقصى: ${maxMB}MB`;
+  `حجم الملف ${isolate(name)} كبير جداً. الحد الأقصى: ${maxMB}MB`;
 export const MSG_DOCUMENT_TOO_LARGE = (name: string, maxMb: number) =>
-  `الملف "${name}" يتجاوز الحجم المسموح (${maxMb} ميجابايت)`;
+  `الملف "${isolate(name)}" يتجاوز الحجم المسموح (${maxMb} ميجابايت)`;
 export const MSG_FILE_TYPE_NOT_ALLOWED = (name: string) =>
-  `نوع الملف "${name}" غير مدعوم`;
+  `نوع الملف "${isolate(name)}" غير مدعوم`;
 export const MSG_KIND_NOT_ALLOWED_HERE =
   'هذا النوع من الملفات غير مسموح به هنا';
 
 export const MSG_ANIMATION_UNSUPPORTED = 'الصور المتحركة غير مدعومة';
 export const MSG_ANIMATED_NOT_ALLOWED = (name: string) =>
-  `الملف ${name} صورة متحركة، والصور المتحركة غير مدعومة`;
+  `الملف ${isolate(name)} صورة متحركة، والصور المتحركة غير مدعومة`;
 export const MSG_IMAGE_TOO_MANY_PIXELS = (maxMegapixels: number) =>
   `أبعاد الصورة كبيرة جداً. الحد الأقصى ${maxMegapixels} ميجابكسل`;
 export const MSG_IMAGE_EDGE_TOO_LONG = (maxEdge: number) =>
@@ -122,12 +123,12 @@ export const mediaMsg = {
   documentTooLarge: MSG_DOCUMENT_TOO_LARGE,
   refused: (name: string, reason: MediaRefusalReason) =>
     ({
-      signature: `محتوى الملف "${name}" لا يطابق نوعه المعلن`,
-      container: `الملف "${name}" ليس ملفاً صالحاً من النوع المعلن`,
-      mismatch: `الملف "${name}" من نوع مختلف عن النوع المعلن`,
-      macros: `الملف "${name}" يحتوي على وحدات ماكرو وغير مسموح به`,
-      embedded: `الملف "${name}" يحتوي على عناصر مضمنة وغير مسموح به`,
-      encrypted: `الملف "${name}" محمي بكلمة مرور ولا يمكن التحقق منه`,
+      signature: `محتوى الملف "${isolate(name)}" لا يطابق نوعه المعلن`,
+      container: `الملف "${isolate(name)}" ليس ملفاً صالحاً من النوع المعلن`,
+      mismatch: `الملف "${isolate(name)}" من نوع مختلف عن النوع المعلن`,
+      macros: `الملف "${isolate(name)}" يحتوي على وحدات ماكرو وغير مسموح به`,
+      embedded: `الملف "${isolate(name)}" يحتوي على عناصر مضمنة وغير مسموح به`,
+      encrypted: `الملف "${isolate(name)}" محمي بكلمة مرور ولا يمكن التحقق منه`,
     })[reason],
 
   uploadFailed: MSG_UPLOAD_FAILED,
@@ -145,7 +146,7 @@ export const uploadMsg = {
   unexpectedFormField: MSG_UNEXPECTED_FORM_FIELD,
   fileTooLarge: MSG_FILE_TOO_LARGE,
   contentMismatch: (name: string) =>
-    `محتوى الملف ${name} لا يتطابق مع نوعه المعلن`,
+    `محتوى الملف ${isolate(name)} لا يتطابق مع نوعه المعلن`,
   animatedNotAllowed: MSG_ANIMATED_NOT_ALLOWED,
   uploadFailed: 'حدث خطأ في رفع الملفات',
   invalidMimeType: (type: string) =>

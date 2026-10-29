@@ -25,7 +25,7 @@ function hueOf(id: string) {
 const hueStyle = (id: string): CSSProperties =>
   ({ '--h': hueOf(id) }) as CSSProperties;
 
-/** Document tiles keep their type's colour in either theme. */
+/* eslint-disable tailwind/fixed-colors -- document tiles keep their type's colour in either theme */
 const DOC_TONES: Readonly<Record<string, string>> = {
   'application/pdf': 'from-red-400 to-red-700',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
@@ -38,6 +38,7 @@ const DOC_TONES: Readonly<Record<string, string>> = {
 
 const docTone = (mimeType: string) =>
   DOC_TONES[mimeType] ?? 'from-slate-400 to-slate-600';
+/* eslint-enable tailwind/fixed-colors */
 
 /** A document as a coloured tile with its type; `large` adds the page glyph. */
 export const DocTile = memo(

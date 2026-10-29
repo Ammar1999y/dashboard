@@ -22,12 +22,12 @@ type ByScore = readonly string[] & {
 
 const STRENGTH_COLORS = [
   'bg-border',
-  'bg-red-500',
-  'bg-red-500',
-  'bg-orange-500',
-  'bg-amber-500',
-  'bg-amber-700',
-  'bg-emerald-500',
+  'bg-destructive',
+  'bg-destructive',
+  'bg-error',
+  'bg-warning',
+  'bg-warning-dark',
+  'bg-success',
 ] as const satisfies ByScore;
 
 const STRENGTH_TEXTS = [
@@ -109,18 +109,18 @@ const PasswordStrength = memo(
                   {req.met ? (
                     <Icon
                       icon='solar:check-read-linear'
-                      className='size-4 text-emerald-500'
+                      className='size-4 text-success-dark'
                     />
                   ) : (
                     <Icon
                       icon='solar:close-linear'
-                      className='size-4 text-muted-foreground/80'
+                      className='size-4 text-muted-foreground'
                     />
                   )}
                   <span
                     className={cn(
                       'text-xs',
-                      req.met ? 'text-emerald-600' : 'text-muted-foreground'
+                      req.met ? 'text-success-dark' : 'text-muted-foreground'
                     )}
                   >
                     {req.text}

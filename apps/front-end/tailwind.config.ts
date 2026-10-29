@@ -131,9 +131,13 @@ const config: Config = {
         primary: {
           DEFAULT: 'hsl(var(--primary))',
           foreground: 'hsl(var(--primary-foreground))',
+          light: 'hsl(var(--primary-light))',
+          dark: 'hsl(var(--primary-dark))',
+          ink: 'hsl(var(--primary-ink))',
         },
         secondary: {
           DEFAULT: 'hsl(var(--secondary))',
+          hover: 'hsl(var(--secondary-hover))',
           foreground: 'hsl(var(--secondary-foreground))',
         },
         muted: {
@@ -146,6 +150,7 @@ const config: Config = {
         },
         destructive: {
           DEFAULT: 'hsl(var(--destructive))',
+          hover: 'hsl(var(--destructive-hover))',
           foreground: 'hsl(var(--destructive-foreground))',
         },
         border: 'hsl(var(--border))',
@@ -170,6 +175,16 @@ const config: Config = {
           placeholder: 'hsl(var(--placeholder))',
         },
         highlight: 'hsl(var(--highlight))',
+      },
+      // On purpose `text-primary` differs from `bg-primary`: the brand fill
+      // stays as designed, and text gets the shade of it that reads on the
+      // page (`scripts/lib/theme-contrast.ts`). `text-primary-brand` is the
+      // fill itself, for marks exempt from contrast and text on an inverted fill.
+      textColor: {
+        primary: {
+          DEFAULT: 'hsl(var(--primary-ink))',
+          brand: 'hsl(var(--primary))',
+        },
       },
       spacing: {
         ...generateSpacing(),
@@ -275,7 +290,11 @@ const config: Config = {
   },
   plugins: [
     plugin(function ({ addBase }) {
-      addBase({ ':root': PRIMARY_CSS_VARIABLES });
+      addBase({
+        ':root': PRIMARY_CSS_VARIABLES.light,
+        // The dark selector of styles/theme-tokens.css.
+        ".dark, [data-theme='dark']": PRIMARY_CSS_VARIABLES.dark,
+      });
     }),
     plugin(function ({ addVariant }) {
       addVariant('touch', '@media (hover: none)');

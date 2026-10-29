@@ -4,8 +4,9 @@ import type { ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 
+import { tableFormatDate } from '@/utils/format';
+
 import { Badge } from '@/components/ui/badge';
-import { tableFormatDate } from '@/components/ui/date/utils';
 
 // The shapes every table repeats. Each returns a plain `ColumnDef`, so a
 // table can still spell out any column by hand next to these.

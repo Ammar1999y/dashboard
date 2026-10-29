@@ -24,13 +24,17 @@ import { cellAttributes } from './table-elements';
 
 type SortDirection = 'asc' | 'desc';
 
-const SortButton = memo(({ columnId }: { columnId: string }) => {
-  const direction = useDataTableStore((s): SortDirection | undefined => {
-    const current = s.sort.find((sort) => sort.id === columnId);
-    if (!current) return undefined;
-    return current.desc ? 'desc' : 'asc';
-  });
+const ARIA_SORT = {
+  asc: 'ascending',
+  desc: 'descending',
+} as const satisfies Record<SortDirection, string>;
 
+interface SortButtonProps {
+  columnId: string;
+  direction: SortDirection | undefined;
+}
+
+const SortButton = memo(({ columnId, direction }: SortButtonProps) => {
   // Unsorted and descending both go to ascending: removing a sort is disabled.
   const handleSort = useCallback(() => {
     const { sort, actions } = useDataTableStore.getState();
@@ -106,6 +110,15 @@ const HeaderCellInner = <TData extends RowData>({
   const canResize = column.getCanResize();
   const hasOptions = canSort || canPin || canHide;
 
+  const direction = useDataTableStore((s): SortDirection | undefined => {
+    const current = s.sort.find((sort) => sort.id === columnId);
+    if (!current) return undefined;
+    return current.desc ? 'desc' : 'asc';
+  });
+  // `aria-sort` belongs on one header at a time: the first sort's, which
+  // orders the rows; a later sort only breaks its ties.
+  const isFirstSort = useDataTableStore((s) => s.sort[0]?.id === columnId);
+
   const {
     attributes,
     listeners,
@@ -134,8 +147,16 @@ const HeaderCellInner = <TData extends RowData>({
         : InsertPosition.Before
       : undefined;
 
+  // dnd-kit presents the drag source as a pressed "sortable" button. It stays
+  // a column header (`role` follows the spread), and keeps the drag
+  // instructions dnd-kit points at through `aria-describedby`.
   const dragProps = isOrderingEnabled
-    ? { ...attributes, ...listeners }
+    ? {
+        ...attributes,
+        ...listeners,
+        'aria-roledescription': undefined,
+        'aria-pressed': undefined,
+      }
     : undefined;
 
   const handleResetSize = useCallback(
@@ -162,6 +183,10 @@ const HeaderCellInner = <TData extends RowData>({
       ref={setNodeRef}
       {...cellAttributes(columnId, pinSide, pinEdge)}
       {...dragProps}
+      role='columnheader'
+      // Named by its label alone: the content also holds the controls' names.
+      aria-label={column.columnDef.meta?.label}
+      aria-sort={isFirstSort && direction ? ARIA_SORT[direction] : undefined}
     >
       {header.isPlaceholder
         ? null
@@ -170,7 +195,7 @@ const HeaderCellInner = <TData extends RowData>({
       {(canFilter || hasOptions) && (
         <div className='me-1 flex items-center gap-0.5 self-end hover-device:absolute hover-device:top-1/2 hover-device:me-0 hover-device:-translate-y-1/2 hover-device:self-auto ltr:hover-device:right-3 rtl:hover-device:left-3'>
           {canFilter && <ColumnFilterPopover column={column} />}
-          {canSort && <SortButton columnId={columnId} />}
+          {canSort && <SortButton columnId={columnId} direction={direction} />}
           {hasOptions && (
             <HeaderOptions
               columnId={columnId}

@@ -12,7 +12,12 @@ import {
 } from 'react';
 
 import { useShallow } from 'zustand/shallow';
-import { MIN_SEARCH_LENGTH } from '@app/shared/data-table/parsers';
+import {
+  cleanSearchTerm,
+  MIN_SEARCH_LENGTH,
+  searchTermLength,
+} from '@app/shared/data-table/parsers';
+import { searchFold } from '@app/shared/search-fold';
 import {
   MSG_LIBRARY_ROOT,
   MSG_SEARCH_DIRECT_ONLY,
@@ -396,8 +401,11 @@ const SearchBox = memo(() => {
     [ctx]
   );
 
-  const length = [...text.trim()].length;
-  const short = length > 0 && length < MIN_SEARCH_LENGTH;
+  // Measured as `effectiveSearchTerm` measures it: «أَحْ» is four characters
+  // typed, two once folded, and the server ignores it.
+  const typed = cleanSearchTerm(text);
+  const short =
+    typed !== '' && searchTermLength(searchFold(typed)) < MIN_SEARCH_LENGTH;
   const hint = focused && (short || inFolder);
 
   return (
@@ -422,7 +430,7 @@ const SearchBox = memo(() => {
         autoComplete='off'
         spellCheck={false}
         enterKeyHint='search'
-        className='h-7 min-w-[60px] flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:!ring-0'
+        className='h-7 min-w-[60px] flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground focus-visible:!ring-0'
       />
       <Kbd keys='/' />
       {hint && (

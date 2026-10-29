@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 function TableRow({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
+      role='row'
       data-slot='table-row'
       className={cn('flex min-h-10 content-center align-middle', className)}
       {...props}
@@ -16,6 +17,7 @@ function TableRow({ className, ...props }: ComponentProps<'div'>) {
 function TableCell({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
+      role='cell'
       data-slot='table-cell'
       className={cn(
         'relative min-h-10 content-center px-2 py-3 align-middle text-foreground',

@@ -11,10 +11,10 @@ import { fileKey, folderKey } from '@/lib/media/keys';
 import { errorMessage } from '@/lib/toast-error';
 import { cn } from '@/lib/utils';
 
+import { tableFormatDate } from '@/utils/format';
 import { formatBytes } from '@/utils/format-bytes';
 
 import { Badge } from '@/components/ui/badge';
-import { tableFormatDate } from '@/components/ui/date/utils';
 import { ErrorState } from '@/components/ui/error-state';
 import { Icon } from '@/components/ui/icon';
 
@@ -155,7 +155,7 @@ Disclosure.displayName = 'Disclosure';
 const Spacer = () => <span className='size-4 shrink-0' />;
 
 const pathNoteClass =
-  'ms-2 max-w-[40%] shrink-0 truncate text-xs text-muted-foreground/70';
+  'ms-2 max-w-[40%] shrink-0 truncate text-xs text-muted-foreground';
 
 const PathNote = memo(({ folder }: { folder: EntityID | null }) => {
   const { text, error } = useFolderPathText(folder);
@@ -446,7 +446,7 @@ FolderList.displayName = 'FolderList';
 const SectionTitle = ({ title, count }: { title: string; count: number }) => (
   <div className='flex items-center gap-1.5 px-2 pb-1 pt-3 text-xs text-muted-foreground'>
     {title}
-    <span className='num rounded-full border px-1.5 text-muted-foreground/70'>
+    <span className='num rounded-full border px-1.5 text-muted-foreground'>
       {count}
     </span>
   </div>

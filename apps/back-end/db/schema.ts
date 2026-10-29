@@ -5,7 +5,8 @@
 // full index name, so keep names unique across tables.
 //
 // ⚠️ A column searchable via ILIKE in the data-table UI needs a trigram (GIN)
-// index in a `db/migrations/` SQL file, or `ILIKE '%text%'` is a full scan.
+// index on `search_fold(column)` in a `db/migrations/` SQL file, the expression
+// `foldedColumn` matches, or every search is a full scan.
 //
 // ⚠️ Every imported constant is DDL — enum labels, widths, OTP budgets,
 // `PHONE_NUMBER_MODE`, `REQUIRE_ROLE_FOR_LOGIN` — so changing one requires a new

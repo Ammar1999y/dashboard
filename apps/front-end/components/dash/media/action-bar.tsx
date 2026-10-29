@@ -69,7 +69,7 @@ const BarButton = memo(
         className={cn(
           smallButton,
           danger &&
-            'border-destructive/40 text-destructive hover:bg-destructive hover:text-white'
+            'border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground'
         )}
       >
         <Icon icon={cmd.icon} className='size-4' />

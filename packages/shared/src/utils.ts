@@ -58,25 +58,3 @@ export function normalizeArabicDigits(input: string): string {
     return String(code - base);
   });
 }
-
-const returnNumber = (value: string | undefined | number | null) => {
-  const num = Number(value);
-  return Number.isNaN(num) ? 0 : num;
-};
-
-/** @knipignore */
-export const humanReadableNumber = (
-  value: number | string,
-  numberOfDigits = 2
-) =>
-  returnNumber(value).toLocaleString('en', {
-    maximumFractionDigits: numberOfDigits,
-  });
-
-/** @knipignore */
-export const formatDate = (date: string) =>
-  new Date(date).toLocaleDateString('ar-EG', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });

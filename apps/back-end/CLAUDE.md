@@ -16,6 +16,8 @@ Treat every reachable endpoint as exposed to hostile input, but calibrate scale,
 
 Protect API contracts, the schema and its migrations, and auth and session invariants.
 
+A migration must leave the previous release working: `db:migrate` runs before the container swap, while the old release still serves. Drop or rename only in a release after the code stops using the old shape.
+
 Priorities, highest first: **security → correctness → contract compatibility → maintainability → measured performance.**
 
 ## Scope
@@ -28,7 +30,7 @@ Priorities, highest first: **security → correctness → contract compatibility
 A reported defect is one **sample of a class**.
 
 - **Sweep the class within scope, not only the instance.** Check callers and consumers, sibling routes and channels, parsers and serializers, feature modes and error paths. Search the underlying operation, not only the edited symbol. Fix at the shared boundary where possible, and list what you deferred.
-- **Treat latent risks in scope as defects,** and report those outside it: check-then-write races, multi-step writes outside a transaction, unbounded input or result sets, outbound calls without a timeout, error responses that leak internals or enumerate accounts, a sibling route missing the check its twin has, unhandled rejections, broken contracts.
+- **Treat latent risks in scope as defects,** and report those outside it: check-then-write races, multi-step writes outside a transaction, unbounded input or result sets, outbound calls without a timeout, error responses that leak internals or enumerate accounts, a sibling route missing the check its twin has, unhandled rejections, broken contracts, a grant that survives a role downgrade, list/detail/download paths to one object that authorize differently, a cache hit that skips an auth, quota or rate-limit check, a pool query awaited inside a caller's transaction, a handler that assumes state another handler creates.
 - **Fail clearly.** No fallback that hides a failed operation. A default for an absent optional value is fine. Raise a typed error and branch on its type or code, never on its message text.
 - **Never narrow an existing contract to fix an unrelated bug.**
 
@@ -49,6 +51,7 @@ One implementation per concern. The codebase should read as though one person wr
 - **Verify behaviour end to end,** not just the function you edited. Trace the feature through the neighbouring layers.
 - **Chase every reference.** After changing a function, type or export, check each caller for reliance on the old contract.
 - **Run the smallest check that proves it** when reasoning is not enough. Report the command and its result, whether temporary test code remains, and every check you could not run.
+- **A rejection test also asserts that durable state did not change.** A status code alone passes when the write happened anyway.
 
 ## Before claiming a defect
 
@@ -56,7 +59,7 @@ Never call something missing, broken or unsupported based on memory or bundle gr
 
 1. Check the installed version.
 2. Read its source and local types.
-3. Read the docs for that version: next.elysiajs.com for Elysia 2 (index in `docs/elysia-llms.md`, API reference in `docs/elysia-llms-references.md`); elysiajs.com is 1.4. The installed package wins where they disagree.
+3. Read the docs for that version: next.elysiajs.com for Elysia 2 (index in `docs/elysia-llms.md`, API reference in `docs/elysia-llms-references.md`, full live index at `https://next.elysiajs.com/llms.txt`); elysiajs.com is 1.4. Drizzle is 0.x (`relations()`, relational queries v1, journal-based migrations), while orm.drizzle.team now documents 1.0. Bun's docs for the installed types are in `node_modules/bun-types/docs/`. The installed package wins where they disagree.
 4. Search the web before giving up.
 
 ## Types

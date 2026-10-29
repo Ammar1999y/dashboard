@@ -427,6 +427,7 @@ const DataTableSortItem = memo(
           </Select>
           <Button
             aria-controls={sortItemId}
+            aria-label='حذف الترتيب'
             variant='destructiveGhost'
             size='icon'
             className='size-8 rounded text-muted-foreground hover:text-destructive'
@@ -436,6 +437,7 @@ const DataTableSortItem = memo(
           </Button>
           <SortableItemHandle asChild>
             <Button
+              aria-label='نقل الترتيب'
               variant='ghost'
               size='icon'
               className='size-8 rounded text-muted-foreground'

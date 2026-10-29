@@ -2,6 +2,7 @@ import type { CountForms } from '@app/shared/messages/count';
 import type { DashboardPage } from '@app/shared/permissions/constants';
 import type { PasswordRule } from '@app/shared/validation/rules';
 
+import { isolate } from '@app/shared/messages/bidi';
 import {
   CHARACTERS,
   countOf,
@@ -24,6 +25,8 @@ import {
   PASSWORD_MAX,
   PASSWORD_MIN,
 } from '@app/shared/validation/constants';
+
+import { formatInteger } from '@/utils/format';
 
 // Messages the client writes itself. A message the server also sends comes from
 // `@app/shared/messages/*` instead.
@@ -102,7 +105,7 @@ export const MSG_REAUTH_NO_METHODS = 'لا توجد طريقة تأكيد متا
 export const MSG_REAUTH_PROVEN_RESUBMIT =
   'تم تأكيد هويتك، لكن رمز التحقق من أنك لست روبوتاً استُهلك. أرسل النموذج مرة أخرى لإتمام العملية.';
 export const MSG_CONFIRM_DELETE = (noun: string, name: string) =>
-  `سوف يتم حذف ${noun} «${name}». هذا الإجراء لا يمكن التراجع عنه.`;
+  `سوف يتم حذف ${noun} «${isolate(name)}». هذا الإجراء لا يمكن التراجع عنه.`;
 export const MSG_POPUP_BLOCKED =
   'منع المتصفح فتح نافذة جديدة، اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة';
 export const MSG_FONT_LOAD_FAILED =
@@ -111,13 +114,13 @@ export const MSG_FONT_LOAD_FAILED =
 export const MSG_PROCESSING_FAILED = 'فشلت معالجة الملف';
 /** For a refusal that does not name the file: one pick can hold several. */
 export const MSG_FOR_FILE = (name: string, message: string) =>
-  `${name}: ${message}`;
+  `${isolate(name)}: ${message}`;
 export const MSG_IMAGE_UNSUPPORTED = (name: string) =>
-  `تعذّرت معالجة الصورة "${name}"، قد تكون صيغتها غير مدعومة. حوّلها إلى PNG أو JPG أو WebP`;
+  `تعذّرت معالجة الصورة "${isolate(name)}"، قد تكون صيغتها غير مدعومة. حوّلها إلى PNG أو JPG أو WebP`;
 export const MSG_SVG_CONVERTED = (name: string) =>
-  `حُوِّل ملف SVG "${name}" إلى صورة لأنه يستخدم تنسيقات لا تُحفظ كـ SVG`;
+  `حُوِّل ملف SVG "${isolate(name)}" إلى صورة لأنه يستخدم تنسيقات لا تُحفظ كـ SVG`;
 export const MSG_SVG_CONVERSION_FAILED = (name: string) =>
-  `تعذّر تحويل ملف SVG "${name}" إلى صورة. صدّره بصيغة PNG أو WebP وحاول مرة أخرى`;
+  `تعذّر تحويل ملف SVG "${isolate(name)}" إلى صورة. صدّره بصيغة PNG أو WebP وحاول مرة أخرى`;
 
 export const joinFormats = (formats: readonly string[]) => formats.join('، ');
 
@@ -129,10 +132,11 @@ export const MSG_FILE_INVALID_TYPE = (
   formats: readonly string[]
 ) =>
   formats.length > 0
-    ? `نوع الملف "${name}" غير مدعوم، الصيغ المدعومة: ${joinFormats(formats)}`
+    ? `نوع الملف "${isolate(name)}" غير مدعوم، الصيغ المدعومة: ${joinFormats(formats)}`
     : MSG_FILE_TYPE_NOT_ALLOWED(name);
 
-export const MSG_FILE_REJECTED = (name: string) => `تعذّر قبول الملف "${name}"`;
+export const MSG_FILE_REJECTED = (name: string) =>
+  `تعذّر قبول الملف "${isolate(name)}"`;
 
 // Not `MSG_MAX_FILES`: that one is the server's per-request ceiling, and this
 // one is the dropzone's.
@@ -174,20 +178,20 @@ export const MSG_FONT_NAME_TOO_LONG = 'اسم الخط طويل جداً';
 
 export const MSG_LETTER_SPACING_INVALID = 'تباعد الأحرف يجب أن يكون رقماً';
 export const MSG_LETTER_SPACING_MIN = (min: number) =>
-  `تباعد الأحرف يجب أن يكون أكبر من ${min}`;
+  `تباعد الأحرف يجب أن يكون ${formatInteger(min)} أو أكثر`;
 export const MSG_LETTER_SPACING_MAX = (max: number) =>
-  `تباعد الأحرف يجب أن يكون أقل من ${max}`;
+  `تباعد الأحرف يجب أن يكون ${formatInteger(max)} أو أقل`;
 export const MSG_LINE_HEIGHT_INVALID = 'تباعد الأسطر يجب أن يكون رقماً';
 export const MSG_LINE_HEIGHT_MIN = (min: number) =>
-  `تباعد الأسطر يجب أن يكون أكبر من ${min}`;
+  `تباعد الأسطر يجب أن يكون ${min} أو أكثر`;
 export const MSG_LINE_HEIGHT_MAX = (max: number) =>
-  `تباعد الأسطر يجب أن يكون أقل من ${max}`;
+  `تباعد الأسطر يجب أن يكون ${max} أو أقل`;
 export const MSG_FONT_SIZE_MULTIPLIER_INVALID =
   'مضاعف حجم الخط يجب أن يكون رقماً';
 export const MSG_FONT_SIZE_MULTIPLIER_MIN = (min: number) =>
-  `مضاعف حجم الخط يجب أن يكون أكبر من ${min}`;
+  `مضاعف حجم الخط يجب أن يكون ${min} أو أكثر`;
 export const MSG_FONT_SIZE_MULTIPLIER_MAX = (max: number) =>
-  `مضاعف حجم الخط يجب أن يكون أقل من ${max}`;
+  `مضاعف حجم الخط يجب أن يكون ${max} أو أقل`;
 
 export const MSG_SOCIAL_ACCOUNTS_INVALID = 'قم بإدخال حسابات التواصل بشكل صحيح';
 export const MSG_CONTACT_INFO_INVALID = 'قم بإدخال بيانات التواصل بشكل صحيح';
@@ -298,31 +302,33 @@ export const MSG_CUT_READY = (count: number) =>
 export const MSG_CUT_CANCELLED = 'أُلغي النقل المعلّق.';
 export const MSG_CUT_WAIT = 'انتظر حتى ينتهي النقل الجاري.';
 export const MSG_CUT_FROM = (count: number, source: string) =>
-  `${countOf(count, ITEMS_NOMINATIVE)} من «${source}»`;
+  `${countOf(count, ITEMS_NOMINATIVE)} من «${isolate(source)}»`;
 export const MSG_CUT_SEVERAL_PLACES = 'عدة مواقع';
 export const MSG_PASTE_NOTHING = 'لا توجد عناصر معلّقة للنقل.';
 export const MSG_PASTE_OPEN_FOLDER = 'افتح مجلداً للصق.';
 export const MSG_ALREADY_HERE = 'العناصر موجودة في هذا المجلد بالفعل.';
 export const MSG_PASTE_FILES_NEED_FOLDER =
   'الملفات تُحفظ داخل مجلد دائماً، فافتح مجلداً للصق.';
-export const MSG_PASTE_INTO = (name: string) => `لصق في «${name}»`;
+export const MSG_PASTE_INTO = (name: string) => `لصق في «${isolate(name)}»`;
 export const MSG_PASTE_FOLDERS_ONLY = (folders: number, files: number) =>
   `الجذر يحتوي مجلدات فقط. سيُنقل ${countOf(folders, FOLDERS_NOMINATIVE)} إلى «${MSG_LIBRARY_ROOT}»، وتبقى ${countOf(files, FILES_NOMINATIVE)} معلّقة إلى أن تفتح مجلداً وتلصقها فيه.`;
 export const MSG_MOVED = (count: number, name: string) =>
-  `نُقل ${countOf(count, ITEMS_NOMINATIVE)} إلى «${name}».`;
+  `نُقل ${countOf(count, ITEMS_NOMINATIVE)} إلى «${isolate(name)}».`;
 export const MSG_MOVE_GONE = (count: number) =>
   `أُزيل من النقل ما لم يعد موجوداً: ${countOf(count, ITEMS_NOMINATIVE)}.`;
 export const MSG_MOVE_SPLIT = (batches: number) =>
   `قُسِّم النقل إلى ${countOf(batches, BATCHES)}، فالحد ${countOf(IDS_ARRAY_MAX, ITEMS_NOMINATIVE)} في الطلب الواحد.`;
 export const MSG_MOVE_TO = (count: number, name: string) =>
-  `نقل ${countOf(count, ITEMS)} إلى «${name}»`;
+  `نقل ${countOf(count, ITEMS)} إلى «${isolate(name)}»`;
 
 // The delete dialog. A count stands only where the noun agrees for any number;
 // elsewhere the names are listed and the sentence speaks of them in general.
 
 /** One item by its name, several by how many. */
 export const MSG_DELETE_TITLE = (count: number, name: string | undefined) =>
-  name === undefined ? `حذف ${countOf(count, ITEMS)}` : `حذف «${name}»`;
+  name === undefined
+    ? `حذف ${countOf(count, ITEMS)}`
+    : `حذف «${isolate(name)}»`;
 export const MSG_DELETE_PERMANENT =
   'يُحذف نهائياً من المكتبة والتخزين، ولا يمكن استعادته بعد ذلك.';
 export const MSG_AND_MORE = (count: number) =>
@@ -361,9 +367,9 @@ export const MSG_DELETE_REFUSED_IN_USE =
 export const MSG_DELETE_REST = (count: number) => `حذف الباقي (${count})`;
 
 export const MSG_PUBLISH_FILE = (name: string) =>
-  `سيُنشر الملف «${name}» برابط دائم.`;
+  `سيُنشر الملف «${isolate(name)}» برابط دائم.`;
 export const MSG_UNPUBLISH_FILE = (name: string) =>
-  `سيعود الملف «${name}» خاصاً وتصبح روابطه مؤقتة.`;
+  `سيعود الملف «${isolate(name)}» خاصاً وتصبح روابطه مؤقتة.`;
 export const MSG_PUBLISH_WARNING =
   'يصبح الملف متاحاً لأي شخص على الإنترنت. إلغاء النشر لاحقاً يمنع الوصول الجديد فقط، ولا يسحب نسخاً حفظتها المتصفحات، وتصل مدتها إلى سنة للصور.';
 export const MSG_UNPUBLISH_WARNING =
@@ -383,14 +389,14 @@ export const MSG_FOLDER_TREE_FAILED = (reason: string) =>
   `تعذّر إنشاء بنية المجلدات: ${reason}`;
 export const MSG_DROPPED_FOLDER_UNREADABLE = 'تعذّرت قراءة المجلد المُفلَت.';
 export const MSG_DROP_TO_UPLOAD = 'أفلت الملفات للرفع';
-export const MSG_DROP_INTO = (name: string) => `رفع إلى «${name}»`;
+export const MSG_DROP_INTO = (name: string) => `رفع إلى «${isolate(name)}»`;
 export const MSG_DROP_PICKS_FOLDER =
   'أفلت لاختيار مجلد الرفع، فالجذر لا يقبل ملفات';
 export const MSG_UPLOADS_EMPTY =
   'لا توجد عمليات رفع. اسحب ملفات إلى أي مكان في المكتبة.';
-export const MSG_UPLOAD_INTO = (name: string) => `إلى «${name}»`;
+export const MSG_UPLOAD_INTO = (name: string) => `إلى «${isolate(name)}»`;
 export const MSG_UPLOAD_CONVERTED_WEBP = (before: string, after: string) =>
-  `حُوّل إلى WebP: ${before} ← ${after}`;
+  `حُوّل إلى WebP: ${isolate(before)} ← ${isolate(after)}`;
 export const MSG_UPLOAD_STORED_PRIVATE = 'تم الرفع، والملف خاص';
 export const MSG_UPLOAD_SVG_CONVERTED = 'حُوّل ملف SVG إلى صورة';
 export const MSG_UPLOAD_WAITING = (seconds: number) =>
@@ -405,9 +411,9 @@ export const MSG_UPLOADS_LEAVE =
   'الرفع جارٍ، ومغادرة الصفحة توقفه وما لم يُرفع لا يُحفظ. هل تريد المغادرة؟';
 
 export const MSG_RESULTS_IN_FOLDER = (query: string, folder: string) =>
-  `نتائج «${query}» في «${folder}»`;
+  `نتائج «${isolate(query)}» في «${isolate(folder)}»`;
 export const MSG_RESULTS_EVERYWHERE = (query: string) =>
-  `نتائج «${query}» في المكتبة كلها`;
+  `نتائج «${isolate(query)}» في المكتبة كلها`;
 export const MSG_RTL_ARROWS =
   'في الواجهة العربية تنعكس أسهم اليمين واليسار: اليسار يدخل أعمق، واليمين يرجع.';
 

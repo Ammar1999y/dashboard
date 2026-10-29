@@ -2000,7 +2000,12 @@ database backup is for database _resources_, not an arbitrary app volume.
 [Managed database backups](https://coolify.io/docs/databases/backups)
 
 - **PostgreSQL:** back up through whatever owns that server. Self-hosted means
-  this is a backup you own and must schedule.
+  this is a backup you own and must schedule. **Schedule the restore too:**
+  periodically restore the latest backup into a scratch database and run
+  `bun run db:migrate` against it — its ledger checks refuse a schema the code
+  does not match — then compare row counts of the core tables. Record how long
+  the restore took; that is the real recovery time. An untested backup is not a
+  backup.
 - **`cache.db`:** never back up; rebuild it.
 - **`rate-limit.db`:** data expires within a day, but loss resets the paid OTP
   daily cap. Choose an explicit RPO — no backup plus OTP shutdown after host
@@ -2588,3 +2593,19 @@ musl's answer directly. Two things follow.
   narrowing the class to one libc version's vintage would refuse them on the
   glibc images too; `postgres:18` (glibc) does not have this gap. Deploy on the
   glibc image if the data will contain those scripts.
+
+### Arabic search folding (`search_fold`)
+
+The data-table search matches `search_fold(column)` through the `*_fold_trgm`
+expression indexes (`db/migrations/004`–`010`).
+
+- **The database must be UTF8.** `search_fold` calls `normalize()`, which
+  PostgreSQL refuses under any other server encoding, so the 004 migration fails
+  there. `postgres:18-alpine` with its `en_US.utf8` default qualifies; check
+  `select pg_encoding_to_char(encoding) from pg_database where datname =
+current_database();` on any other image.
+- **On a PostgreSQL major upgrade, `REINDEX` the `*_fold_trgm` indexes** and run
+  `tests/integration/search-fold.test.ts` against the upgraded server.
+  `normalize()` follows the server's Unicode version, so a newer major can fold
+  a newly assigned character differently from the stored index entries, and the
+  TypeScript side (Bun's Unicode) must agree with it.

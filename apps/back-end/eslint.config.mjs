@@ -201,6 +201,37 @@ const eslintConfig = [
     },
   },
   {
+    // A suite narrowed by hand still exits 0. A platform or environment skip
+    // stays legal through `skipIf`/`if` or a conditional `test.skip`.
+    files: ['tests/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            'MemberExpression[object.name=/^(test|it|describe)$/][property.name=/^(only|todo)$/]',
+          message: 'Narrows the suite; remove it before committing.',
+        },
+        {
+          selector:
+            'CallExpression > MemberExpression.callee[object.name=/^(test|it|describe)$/][property.name="skip"]',
+          message:
+            'An unconditional skip narrows the suite. Use test.skipIf/test.if with the reason as the condition, or remove the test.',
+        },
+        {
+          selector:
+            'MemberExpression[property.name="each"] > MemberExpression.object[object.name=/^(test|it|describe)$/][property.name="skip"]',
+          message:
+            'An unconditional skip narrows the suite. Use test.skipIf/test.if with the reason as the condition, or remove the test.',
+        },
+        {
+          selector: 'ImportSpecifier[imported.name=/^x(test|it|describe)$/]',
+          message: 'Narrows the suite; remove it before committing.',
+        },
+      ],
+    },
+  },
+  {
     // Core never imports the framework: everything a request is checked
     // against stays testable without it, and replacing Elysia touches only
     // `server/elysia/`, `app.ts` and `server.ts`. The field prose of

@@ -2,15 +2,17 @@ import { memo, useCallback } from 'react';
 
 import { cn } from '@/lib/utils';
 
+import { DISPLAY_LOCALE, formatDate } from '@/utils/format';
+
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent } from '@/components/ui/popover';
 
 import { DateActions } from './components/date-actions';
 import { DateTrigger } from './components/date-trigger';
-import { DATE_PLACEHOLDER, DEFAULT_DATE_LOCALE } from './constants';
+import { DATE_PLACEHOLDER } from './constants';
 import { DateInput } from './date-input';
 import { useDatePopoverState } from './hooks/use-date-popover-state';
-import { formatDate, parseInitialDate } from './utils';
+import { parseInitialDate } from './utils';
 
 export interface SingleDatePickerProps {
   initialDate?: Date | string;
@@ -31,7 +33,7 @@ export const SingleDatePicker = memo(
   ({
     initialDate,
     align = 'center',
-    locale = DEFAULT_DATE_LOCALE,
+    locale = DISPLAY_LOCALE,
     onChange,
     title,
     triggerClassName,

@@ -35,6 +35,8 @@ interface ServerPageResult<TPage> {
   page: TPage | undefined;
   meta: PaginationMeta;
   isLoading: boolean;
+  /** `page` is the previous state's, shown while this one loads. */
+  isPlaceholderData: boolean;
   error: Error | null;
   refetch: UseQueryResult<TPage>['refetch'];
 }
@@ -53,6 +55,7 @@ interface ServerPagesResult<TPage> {
 }
 
 interface EndpointQueryOptions<N> {
+  /** Names every value `input` holds: it is the cache identity, and nothing here adds `input` to it. */
   queryKey: QueryKey;
   /** A stricter view of `data` than the entry's. */
   narrow?: z.ZodType<N>;
@@ -68,6 +71,7 @@ export function endpointQuery<E extends ClientEndpoint, N = DataOf<E>>(
   input: CallInput<E> | undefined,
   { queryKey, narrow }: EndpointQueryOptions<N>
 ) {
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `queryKey` names `input` by contract; `entry` and `narrow` are fixed for a key
   return {
     queryKey,
     queryFn: ({ signal }: { signal: AbortSignal }): Promise<N> =>
@@ -124,6 +128,7 @@ export function endpointPageQuery<
   input: CallInput<E> | undefined,
   { queryKey, state, toPage, narrow }: EndpointPageOptions<N, TPage>
 ) {
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `queryKey` names `input` by contract; `entry` and `narrow` are fixed for a key
   return {
     queryKey: pageKey([...queryKey, state.page], state),
     queryFn: async ({ signal }: { signal: AbortSignal }): Promise<TPage> => {
@@ -160,6 +165,7 @@ export function useEndpointPage<
     page: query.data,
     meta: query.data?.meta ?? DEFAULT_META,
     isLoading: query.isLoading,
+    isPlaceholderData: query.isPlaceholderData,
     error: query.error,
     refetch: query.refetch,
   };
@@ -199,6 +205,7 @@ export function useEndpointPages<
     enabled = true,
   }: EndpointPagesOptions<N, TPage>
 ): ServerPagesResult<TPage> {
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `queryKey` names `input` by contract; `entry` and `narrow` are fixed for a key
   const query = useInfiniteQuery({
     queryKey: endpointPagesKey(queryKey, state),
     initialPageParam: 1,

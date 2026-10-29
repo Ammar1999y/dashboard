@@ -24,7 +24,7 @@ export function describeFilterColumns(
         ...(spec.values ? [`one of ${spec.values.join('|')}`] : []),
         ...(operators.some(isSearchOperator)
           ? [
-              `substring searches need ${floor}+ characters including letters or digits the trigram index can key on`,
+              `substring searches need ${floor}+ characters once folded, including letters or digits the trigram index can key on`,
             ]
           : []),
         `operators: ${operators.join(', ')}`,

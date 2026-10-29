@@ -148,7 +148,7 @@ const Row = memo(({ item }: { item: UploadItem }) => {
           </span>
         </div>
         <div className='flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground'>
-          <span className='text-muted-foreground/70'>
+          <span>
             {MSG_UPLOAD_INTO(item.folderName)} ·{' '}
             <span dir='ltr' className='num bidi-isolate'>
               {formatBytes(item.file.size, 1)}
@@ -272,7 +272,7 @@ export const UploadPanel = memo(() => {
         {counts.total > 0 ? (
           items.map((item) => <Row key={item.id} item={item} />)
         ) : (
-          <div className='flex flex-col items-center gap-1.5 p-5 text-center text-xs text-muted-foreground/70'>
+          <div className='flex flex-col items-center gap-1.5 p-5 text-center text-xs text-muted-foreground'>
             <Icon icon='lucide:upload' className='size-6' />
             <p>{MSG_UPLOADS_EMPTY}</p>
           </div>

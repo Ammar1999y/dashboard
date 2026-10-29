@@ -11,6 +11,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename, security/detect-non-literal-regexp --
    the path and the pattern are module-scope constants in this file, never input */
 import { expect, test } from 'bun:test';
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const RUNNER = 'tests/fixtures/_env-secret-child.ts';
@@ -56,8 +57,9 @@ const VALID = 'Kq7vT2mXp9wLd4bR8nZc1yHj5sGf3aEu6tVi0oPk';
 const LIBRARY_DEFAULT = 'better-auth-secret-12345678901234567890';
 
 // A real unpadded base64url encoding of 32 bytes — the pepper module validates
-// the decoded length, so a string of the right length is not enough.
-const PEPPER_SECRET = Buffer.alloc(32, 7).toString('base64url');
+// the decoded length, so a string of the right length is not enough — and
+// random, because production refuses a key of a few repeated bytes.
+const PEPPER_SECRET = randomBytes(32).toString('base64url');
 
 /**
  * A satisfying value per variable name, so the environment handed to the child
@@ -297,3 +299,73 @@ test('no rejection message contains the secret value', async () => {
     expect(r.message).not.toContain(LIBRARY_DEFAULT);
   }
 }, 60_000);
+
+/** 32 bytes holding `distinct` different values, encoded as a keyring secret. */
+const keyWithDistinctBytes = (distinct: number) =>
+  Buffer.from(
+    Array.from({ length: 32 }, (_, index) => index % distinct)
+  ).toString('base64url');
+const keyringOf = (secret: string) =>
+  `{"1":{"generation":1,"secret":"${secret}"}}`;
+
+test.each([
+  ['PASSWORD_PEPPER_KEYRING', 'password pepper'],
+  ['OTP_HMAC_KEYRING', 'OTP MAC'],
+])(
+  'a placeholder key in %s fails a production boot without naming it',
+  async (variable, label) => {
+    const placeholder = Buffer.alloc(32, 7).toString('base64url');
+    const r = await run({
+      BETTER_AUTH_SECRET: VALID,
+      [variable]: keyringOf(placeholder),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain(label);
+    expect(r.message).toContain('placeholder');
+    expect(r.message).not.toContain(placeholder.slice(0, 8));
+  },
+  30_000
+);
+
+test('the placeholder floor sits at eight distinct bytes', async () => {
+  const seven = await run({
+    BETTER_AUTH_SECRET: VALID,
+    PASSWORD_PEPPER_KEYRING: keyringOf(keyWithDistinctBytes(7)),
+  });
+  expect(seven.message).toContain('placeholder');
+  const eight = await run({
+    BETTER_AUTH_SECRET: VALID,
+    PASSWORD_PEPPER_KEYRING: keyringOf(keyWithDistinctBytes(8)),
+  });
+  expect(eight.message).toBe('LOADED');
+}, 30_000);
+
+test('a placeholder Better Auth secret fails a production boot without naming it', async () => {
+  const placeholder = 'pass'.repeat(10);
+  const r = await run({ BETTER_AUTH_SECRET: placeholder });
+  expect(r.ok).toBe(false);
+  expect(r.message).toContain('BETTER_AUTH_SECRET is a placeholder');
+  expect(r.message).not.toContain('passpass');
+}, 30_000);
+
+test('a placeholder maintenance token fails a production boot without naming it', async () => {
+  const r = await run({
+    BETTER_AUTH_SECRET: VALID,
+    SQLITE_MAINTENANCE_TOKEN: '0'.repeat(40),
+  });
+  expect(r.ok).toBe(false);
+  expect(r.message).toContain('SQLITE_MAINTENANCE_TOKEN is a placeholder');
+  expect(r.message).not.toContain('0000');
+}, 30_000);
+
+test('outside production the same placeholders load', async () => {
+  const placeholder = keyringOf(Buffer.alloc(32, 7).toString('base64url'));
+  const r = await run({
+    NODE_ENV: 'development',
+    BETTER_AUTH_SECRET: 'pass'.repeat(10),
+    SQLITE_MAINTENANCE_TOKEN: '0'.repeat(40),
+    PASSWORD_PEPPER_KEYRING: placeholder,
+    OTP_HMAC_KEYRING: placeholder,
+  });
+  expect(r.message).toBe('LOADED');
+}, 30_000);

@@ -9,7 +9,7 @@ const Input = React.memo(
     <input
       className={cn(
         fieldSurface,
-        'flex h-input w-full min-w-0 px-3 py-1 caret-primary placeholder:text-muted-foreground',
+        'flex h-input w-full min-w-0 px-3 py-1 caret-primary-ink placeholder:text-muted-foreground',
         disabled && 'disabled',
         className
       )}

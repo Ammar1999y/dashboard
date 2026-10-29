@@ -1,3 +1,5 @@
+import type { PaginationMeta } from '@app/shared/types/api';
+
 const MAX_VISIBLE_PAGES = 5;
 
 /**
@@ -30,3 +32,7 @@ export function getPageNumbers(currentPage: number, totalPages: number) {
   }
   return pages;
 }
+
+/** Rows on the pages before `meta`'s. */
+export const rowOffsetOf = (meta: PaginationMeta) =>
+  (meta.page - 1) * meta.perPage;

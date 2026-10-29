@@ -25,6 +25,7 @@ import { DataTableView } from './data-table-view';
 import { DataTablePageHeader } from './page-header';
 import { columnIdsOf, textColumnIds } from './utils/columns';
 import { genericMemo } from './utils/generic-memo';
+import { rowOffsetOf } from './utils/page-numbers';
 
 type Rows<T> = z.ZodType<T[]>;
 
@@ -52,6 +53,7 @@ interface SourceProps<TData extends RowData, E> {
   storageKey: string;
   defaultSort: ColumnSort[];
   defaultPinning?: ColumnPinningState;
+  label?: string;
 }
 
 /** The API pages, sorts and filters; one page is fetched per state. */
@@ -62,10 +64,11 @@ const ServerTableInner = <TData extends RowData>({
   ...view
 }: SourceProps<TData, ServerList<TData>>) => {
   const state = useTableUrlState(defaultSort);
-  const { data, meta, isLoading, error, refetch } = useEndpointTable<
-    ServerList<TData>,
-    TData
-  >(endpoint, undefined, { queryKey, state });
+  const { data, meta, isLoading, isPlaceholderData, error, refetch } =
+    useEndpointTable<ServerList<TData>, TData>(endpoint, undefined, {
+      queryKey,
+      state,
+    });
 
   return (
     <DataTableView
@@ -73,7 +76,10 @@ const ServerTableInner = <TData extends RowData>({
       defaultSort={defaultSort}
       data={data}
       pageCount={meta.pageCount}
+      rowCount={meta.total}
+      rowOffset={rowOffsetOf(meta)}
       isLoading={isLoading}
+      isPlaceholderData={isPlaceholderData}
       error={error}
       refetch={refetch}
     />
@@ -125,12 +131,15 @@ const ClientTableInner = <TData extends object>({
     searchableColumns,
   ]);
 
+  const meta = result?.rows?.meta;
   return (
     <DataTableView
       {...view}
       defaultSort={defaultSort}
       data={result?.rows?.data}
-      pageCount={result?.rows?.meta.pageCount ?? 1}
+      pageCount={meta?.pageCount ?? 1}
+      rowCount={meta?.total}
+      rowOffset={meta && rowOffsetOf(meta)}
       isLoading={isLoading}
       error={error ?? result?.refusal ?? null}
       refetch={refetch}
@@ -144,7 +153,7 @@ const DEFAULT_SORT_COLUMN = 'createdAt';
 
 interface DataTableProps<TData extends object> extends Omit<
   SourceProps<TData, ServerList<NoInfer<TData>> | WholeList<NoInfer<TData>>>,
-  'defaultSort'
+  'defaultSort' | 'label'
 > {
   title?: string;
   cta?: DataTableCta;
@@ -178,6 +187,7 @@ const DataTableInner = <TData extends object>({
         <ServerTable
           key={source.storageKey}
           {...source}
+          label={title}
           endpoint={endpoint}
           defaultSort={defaultSort}
         />
@@ -185,6 +195,7 @@ const DataTableInner = <TData extends object>({
         <ClientTable
           key={source.storageKey}
           {...source}
+          label={title}
           endpoint={endpoint}
           defaultSort={defaultSort}
         />

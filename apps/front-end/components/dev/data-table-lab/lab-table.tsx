@@ -7,6 +7,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { DataTableView } from '@/components/ui/data-table';
 import { useTableUrlState } from '@/components/ui/data-table/store/url-store';
+import { rowOffsetOf } from '@/components/ui/data-table/utils/page-numbers';
 
 import { labColumns } from './columns';
 import { fetchLabPage, LAB_QUERY_KEY } from './fake-server';
@@ -58,7 +59,7 @@ export const LabTable = () => {
     return () => useLab.setState({ root: null });
   }, []);
 
-  const { data, isLoading, error } = query;
+  const { data, isLoading, isPlaceholderData, error } = query;
   useEffect(() => {
     useLab.setState({
       status: {
@@ -77,7 +78,10 @@ export const LabTable = () => {
         columns={labColumns}
         data={data?.data}
         pageCount={data?.meta.pageCount ?? 1}
+        rowCount={data?.meta.total}
+        rowOffset={data && rowOffsetOf(data.meta)}
         isLoading={isLoading}
+        isPlaceholderData={isPlaceholderData}
         error={error}
         refetch={query.refetch}
         storageKey={LAB_STORAGE_KEY}

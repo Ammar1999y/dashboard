@@ -22,6 +22,7 @@ import {
   safeNumber,
 } from '@app/shared/data-table/filter-rules';
 import { effectiveSearchTerm } from '@app/shared/data-table/parsers';
+import { searchKey } from '@app/shared/search-fold';
 import { safeDate } from '@app/shared/time';
 
 /** A table's full query: what the server parses from the URL, plus the quick search. */
@@ -90,7 +91,7 @@ function searchPredicate(
   operator: 'iLike' | 'notILike' | 'startsWith' | 'endsWith',
   value: string
 ): Predicate {
-  const term = value.toLowerCase();
+  const term = searchKey(value);
   const holds = (text: string) => {
     if (operator === 'startsWith') return text.startsWith(term);
     if (operator === 'endsWith') return text.endsWith(term);
@@ -99,11 +100,11 @@ function searchPredicate(
   return operator === 'notILike'
     ? (cell) => {
         const text = textOf(cell);
-        return text === null || !holds(text.toLowerCase());
+        return text === null || !holds(searchKey(text));
       }
     : (cell) => {
         const text = textOf(cell);
-        return text !== null && holds(text.toLowerCase());
+        return text !== null && holds(searchKey(text));
       };
 }
 
@@ -303,12 +304,13 @@ export function queryRows<T extends object>(
     result = result.filter(matches);
   }
 
-  const term = effectiveSearchTerm(search).toLowerCase();
+  const term = searchKey(effectiveSearchTerm(search));
   if (term && searchableColumns.length > 0) {
     result = result.filter((row) =>
-      searchableColumns.some((id) =>
-        textOf(cellOf(row, id))?.toLowerCase().includes(term)
-      )
+      searchableColumns.some((id) => {
+        const text = textOf(cellOf(row, id));
+        return text !== null && searchKey(text).includes(term);
+      })
     );
   }
 

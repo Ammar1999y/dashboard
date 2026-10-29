@@ -13,7 +13,7 @@ function Bar({ className }: { className: string }) {
   return (
     <div
       className={cn(
-        'rounded bg-gray-500 group-data-[active=true]:bg-primary',
+        'rounded bg-muted-foreground group-data-[active=true]:bg-primary',
         className
       )}
     />

@@ -40,11 +40,11 @@ import { useSelection } from '@/lib/media/selection';
 import { errorMessage } from '@/lib/toast-error';
 import { cn } from '@/lib/utils';
 
+import { formatDateTime, formatInteger } from '@/utils/format';
 import { formatBytes } from '@/utils/format-bytes';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { formatDateTime } from '@/components/ui/date/utils';
 import { Icon } from '@/components/ui/icon';
 import { LabelTooltip } from '@/components/ui/tooltip';
 
@@ -61,7 +61,7 @@ import { useImageSource } from './use-image-source';
 import { folderSource, useListing } from './use-listing';
 
 const dangerButton =
-  'w-full border-destructive/40 text-destructive hover:bg-destructive hover:text-white';
+  'w-full border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground';
 
 /** A command as an inspector button, offered only where it applies now. */
 const CommandButton = memo(
@@ -392,11 +392,11 @@ FolderInfo.displayName = 'FolderInfo';
 // ---- File --------------------------------------------------------------------
 
 const TYPE_TONES: Readonly<Record<string, string>> = {
-  'application/pdf': 'border-red-500/40 text-red-500',
+  'application/pdf': 'border-destructive/40 text-destructive',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-    'border-blue-500/40 text-blue-500',
+    'border-info/40 text-info-dark',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
-    'border-green-500/40 text-green-500',
+    'border-success/40 text-success-dark',
 };
 
 const Usages = memo(({ id }: { id: EntityID }) => {
@@ -443,7 +443,7 @@ const UsageList = memo(({ detail }: { detail: LibraryFileDetail }) => {
             <span className='min-w-0 flex-1' dir='auto'>
               {usage.name ?? usage.label}
             </span>
-            <em className='font-mono text-xs not-italic text-muted-foreground/70'>
+            <em className='font-mono text-xs not-italic text-muted-foreground'>
               #{usage.recordId}
             </em>
           </li>
@@ -651,8 +651,8 @@ const FileInfo = memo(
           )}
           <MetaRow label='الحجم'>
             <Latin>
-              {formatBytes(file.sizeBytes, 2)} ·{' '}
-              {file.sizeBytes.toLocaleString('en')} B
+              {formatBytes(file.sizeBytes, 2)} · {formatInteger(file.sizeBytes)}{' '}
+              B
             </Latin>
           </MetaRow>
           {file.width !== null && file.height !== null && (

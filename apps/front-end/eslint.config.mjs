@@ -1,4 +1,5 @@
 import { FlatCompat } from '@eslint/eslintrc';
+import pluginQuery from '@tanstack/eslint-plugin-query';
 import nextVitals from 'eslint-config-next/core-web-vitals';
 import nextTs from 'eslint-config-next/typescript';
 import eslintPluginUnicorn from 'eslint-plugin-unicorn';
@@ -272,12 +273,36 @@ const eslintConfig = [
     },
   },
   {
+    // Display formatting has one owner, which pins the locale, the calendar
+    // and Latin digits. `no-restricted-properties`, not `no-restricted-syntax`:
+    // a second block setting that rule would replace the selectors above.
+    files: ['**/*.{ts,tsx}'],
+    ignores: ['utils/format.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        ...[
+          { property: 'toLocaleString' },
+          { property: 'toLocaleDateString' },
+          { property: 'toLocaleTimeString' },
+          { object: 'Intl' },
+        ].map((restriction) => ({
+          ...restriction,
+          message:
+            'Format through `@/utils/format` (formatInteger, formatDate, formatDateTime, formatLongDate, formatMonthYear, formatRelativeTime): it pins Arabic, the Gregorian calendar and Latin digits. Add a helper there when none fits.',
+        })),
+      ],
+    },
+  },
+  {
     files: ['components/**/*.{ts,tsx}', 'pages/**/*.{ts,tsx}'],
     plugins: { tailwind: tailwindConventions },
     rules: {
       'tailwind/class-conventions': 'error',
+      'tailwind/fixed-colors': 'warn',
     },
   },
+  ...pluginQuery.configs['flat/recommended'],
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {

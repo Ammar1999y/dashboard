@@ -20,6 +20,11 @@ import {
 // For a column without `meta.range`; no table registers TanStack's faceting.
 const DEFAULT_RANGE: [number, number] = [0, 100];
 
+// Never formatted for display: a number input takes only a plain number, and
+// shows a grouped or localized one ("1,000", "١٠٠٠") as empty.
+const inputValue = (value: string | undefined) =>
+  value === undefined || Number.isNaN(Number(value)) ? '' : value;
+
 interface DataTableRangeFilterProps<
   TData extends RowData,
 > extends ComponentProps<'div'> {
@@ -44,20 +49,12 @@ function DataTableRangeFilterInner<TData extends RowData>({
 
   const [min, max] = column.columnDef.meta?.range ?? DEFAULT_RANGE;
 
-  const formatValue = useCallback((value: string | number | undefined) => {
-    if (value === undefined || value === '') return '';
-    const numValue = Number(value);
-    return Number.isNaN(numValue)
-      ? ''
-      : numValue.toLocaleString(undefined, {
-          maximumFractionDigits: 0,
-        });
-  }, []);
+  const label = meta?.label ?? column.id;
 
   const value = useMemo(() => {
-    if (Array.isArray(filter.value)) return filter.value.map(formatValue);
-    return [formatValue(filter.value), ''];
-  }, [filter.value, formatValue]);
+    if (Array.isArray(filter.value)) return filter.value.map(inputValue);
+    return [inputValue(filter.value), ''];
+  }, [filter.value]);
 
   const onRangeValueChange = useCallback(
     (value: string, isMin?: boolean) => {
@@ -109,7 +106,7 @@ function DataTableRangeFilterInner<TData extends RowData>({
       <Input
         id={`${inputId}-min`}
         type='number'
-        aria-label={`${meta?.label} minimum value`}
+        aria-label={`${label}: الحد الأدنى`}
         aria-valuemin={min}
         aria-valuemax={max}
         data-slot='range-min'
@@ -125,7 +122,7 @@ function DataTableRangeFilterInner<TData extends RowData>({
       <Input
         id={`${inputId}-max`}
         type='number'
-        aria-label={`${meta?.label} maximum value`}
+        aria-label={`${label}: الحد الأقصى`}
         aria-valuemin={min}
         aria-valuemax={max}
         data-slot='range-max'

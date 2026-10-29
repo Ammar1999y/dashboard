@@ -16,6 +16,7 @@ import { LabelTooltip } from '@/components/ui/tooltip';
 import { DialogCloseButton } from '@/components/dialogs/dialog-close-button';
 import { StoreDialog } from '@/components/dialogs/store-dialog';
 
+import { refreshPresetStyles } from './apply-preset';
 import { LayoutSelector } from './layout-selector';
 import { PreferencesSync } from './preferences-sync';
 import { PresetSelector } from './preset-selector';
@@ -60,6 +61,8 @@ FullscreenButton.displayName = 'FullscreenButton';
 const ThemeCustomizer = memo(() => {
   const handleReset = useCallback(() => useEditorStore.getState().reset(), []);
 
+  useEffect(refreshPresetStyles, []);
+
   return (
     <>
       <PreferencesSync />
@@ -69,7 +72,9 @@ const ThemeCustomizer = memo(() => {
         side='left'
         className='w-[400px] gap-2 overflow-hidden'
       >
+        {/* eslint-disable-next-line tailwind/fixed-colors -- a decorative glow, the same in every theme */}
         <div className='pointer-events-none absolute top-0 size-80 -translate-y-1/2 rounded-full bg-gradient-to-br from-cyan-400/30 to-cyan-600/30 opacity-30 blur-3xl ltr:left-0 ltr:-translate-x-1/2 rtl:right-0 rtl:translate-x-1/2' />
+        {/* eslint-disable-next-line tailwind/fixed-colors -- a decorative glow, the same in every theme */}
         <div className='pointer-events-none absolute bottom-0 size-80 translate-y-1/2 rounded-full bg-gradient-to-tr from-red-400/30 to-pink-600/30 opacity-30 blur-3xl ltr:right-0 ltr:translate-x-1/2 rtl:left-0 rtl:-translate-x-1/2' />
 
         <DialogHeader className='p-4 pb-2 pt-[calc((var(--spacing)*4)+env(safe-area-inset-top))]'>

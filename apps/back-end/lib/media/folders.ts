@@ -22,7 +22,7 @@ import {
   FOLDER_MAX_DEPTH,
 } from '@app/shared/validation/constants';
 
-import { escapeLike } from '@/lib/data-table/filter-columns';
+import { foldedColumn, searchPattern } from '@/lib/data-table/filter-columns';
 import { userNames } from '@/lib/users/names';
 
 import { auditAs, withinScope } from './actor';
@@ -273,12 +273,12 @@ export const FOLDER_SEARCH_LIMIT = 20;
 export async function searchFolders(
   term: string
 ): Promise<{ folders: FolderHit[]; truncated: boolean }> {
-  const pattern = `%${escapeLike(term)}%`;
+  const pattern = searchPattern(term, 'contains');
   const rows = await db.execute(sql`
     with recursive hits as (
       select id, name, parent_id, created_by, created_at, updated_at
       from folders
-      where name ilike ${pattern}
+      where ${foldedColumn(folders.name)} ilike ${pattern}
       order by lower(name), id
       limit ${FOLDER_SEARCH_LIMIT + 1}
     ), up as (

@@ -67,6 +67,7 @@ const ColumnItem = memo(
     return (
       <CommandItem
         onSelect={handleSelect}
+        aria-checked={isVisible}
         className={cn('w-full gap-2', !column.canHide && 'opacity-60')}
       >
         <div
@@ -77,10 +78,7 @@ const ColumnItem = memo(
               : 'opacity-50 [&_svg]:invisible'
           )}
         >
-          <Icon
-            icon='solar:check-read-linear'
-            className='size-3.5 text-background'
-          />
+          <Icon icon='solar:check-read-linear' className='size-3.5' />
         </div>
         <span className='flex-1 truncate'>{column.label}</span>
         {showHandle && <DragHandle />}

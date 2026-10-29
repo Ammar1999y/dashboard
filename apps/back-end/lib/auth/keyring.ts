@@ -14,6 +14,21 @@ export const BASE64URL_32_BYTES_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const MAX_KEYS = 8;
 const MAX_GENERATION = 2_147_483_647;
 
+/**
+ * Fewer distinct values than this is a placeholder (one character repeated, a
+ * short word), not a strength test. A random 32-byte key has this few with
+ * probability under 2^-122; a 32-character hex string, the shortest random
+ * value any secret floor here admits, under 2^-24.
+ */
+export const MIN_DISTINCT_SECRET_SYMBOLS = 8;
+
+/** Bytes for a decoded key, characters for a text secret. */
+export function isPlaceholderSecret(
+  symbols: Iterable<number | string>
+): boolean {
+  return new Set(symbols).size < MIN_DISTINCT_SECRET_SYMBOLS;
+}
+
 interface KeyMaterial {
   generation: number;
   secret: Buffer;
@@ -83,6 +98,15 @@ export function defineKeyring(spec: KeyringSpec): Keyring {
     if (decoded.length !== 32 || decoded.toString('base64url') !== encoded)
       fail(
         `key "${id}" must be an unpadded base64url encoding of exactly 32 bytes`
+      );
+
+    // Production only: development and test keyrings are throwaway, and test
+    // fixtures use constant keys.
+    if (process.env.NODE_ENV === 'production' && isPlaceholderSecret(decoded))
+      fail(
+        `key "${id}" is a placeholder, not a random key: it has fewer than ` +
+          `${MIN_DISTINCT_SECRET_SYMBOLS} distinct byte values. Generate one with ` +
+          `"openssl rand -base64 32 | tr '+/' '-_' | tr -d '='"`
       );
 
     return decoded;

@@ -13,7 +13,7 @@ export const editorVariants = cva(
   cn(
     'group/editor relative w-full cursor-text select-text overflow-x-hidden whitespace-pre-wrap break-words',
     'rounded-md ring-offset-background focus-visible:outline-none',
-    'placeholder:text-muted-foreground/80 [&_strong]:font-bold'
+    'placeholder:text-muted-foreground [&_strong]:font-bold'
   ),
   {
     defaultVariants: {
@@ -32,7 +32,7 @@ export const editorVariants = cva(
         // The field around it scrolls and shows focus, not the editable.
         comment: cn(
           'min-w-0 grow overflow-visible rounded-none border-none bg-transparent py-0.5 text-sm focus-visible:ring-0',
-          '[&_[data-slate-placeholder]]:!top-1/2 [&_[data-slate-placeholder]]:-translate-y-1/2 [&_[data-slate-placeholder]]:text-muted-foreground/80 [&_[data-slate-placeholder]]:!opacity-100'
+          '[&_[data-slate-placeholder]]:!top-1/2 [&_[data-slate-placeholder]]:-translate-y-1/2 [&_[data-slate-placeholder]]:text-muted-foreground [&_[data-slate-placeholder]]:!opacity-100'
         ),
         document: 'px-[max(16px,calc(50%-350px))] py-8 text-base print:p-0',
       },
@@ -52,11 +52,11 @@ export const headingVariants = cva('relative mb-1', {
   variants: {
     variant: {
       h1: 'mt-6 pb-1 text-4xl font-bold',
-      h2: 'mt-5 pb-px text-2xl font-semibold tracking-tight',
-      h3: 'mt-4 pb-px text-xl font-semibold tracking-tight',
-      h4: 'mt-3 text-lg font-semibold tracking-tight',
-      h5: 'mt-2 text-lg font-semibold tracking-tight',
-      h6: 'mt-2 text-base font-semibold tracking-tight',
+      h2: 'mt-5 pb-px text-2xl font-semibold',
+      h3: 'mt-4 pb-px text-xl font-semibold',
+      h4: 'mt-3 text-lg font-semibold',
+      h5: 'mt-2 text-lg font-semibold',
+      h6: 'mt-2 text-base font-semibold',
     },
   },
 });
@@ -73,7 +73,7 @@ export const KBD_CLASS =
   'rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-sm shadow-[rgba(255,_255,_255,_0.1)_0px_0.5px_0px_0px_inset,_rgb(248,_249,_250)_0px_1px_5px_0px_inset,_rgb(193,_200,_205)_0px_0px_0px_0.5px,_rgb(193,_200,_205)_0px_2px_1px_-1px,_rgb(193,_200,_205)_0px_1px_0px_0px] dark:shadow-[rgba(255,_255,_255,_0.1)_0px_0.5px_0px_0px_inset,_rgb(26,_29,_30)_0px_1px_5px_0px_inset,_rgb(76,_81,_85)_0px_0px_0px_0.5px,_rgb(76,_81,_85)_0px_2px_1px_-1px,_rgb(76,_81,_85)_0px_1px_0px_0px]';
 
 export const LINK_CLASS =
-  'font-medium text-primary underline decoration-primary underline-offset-4';
+  'font-medium text-primary underline decoration-primary-ink underline-offset-4';
 
 export const EXPORT_MEDIA_CARD_CLASS =
   'my-1 rounded-md border border-border p-3 text-sm [overflow-wrap:anywhere]';
@@ -208,7 +208,7 @@ export const todoItemClass = (checked: boolean) =>
 
 export const TOGGLE_CLASS = 'ps-6';
 export const TOGGLE_BUTTON_CLASS =
-  'absolute top-0 -ms-[calc(var(--spacing)*6.5)] size-6 cursor-pointer select-none items-center justify-center rounded-md p-px text-muted-foreground transition-colors hover:bg-accent [&_svg]:size-4';
+  'absolute top-0 -ms-[calc(var(--spacing)*6.5)] size-6 cursor-pointer select-none items-center justify-center rounded-md p-px text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground [&_svg]:size-4';
 /** Closed points to the inline end: `--inline-sign` is set in editor-content.css. */
 export const toggleIconClass = (open: boolean) =>
   cn(

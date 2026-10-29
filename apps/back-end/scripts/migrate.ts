@@ -241,6 +241,12 @@ try {
   await client`select pg_advisory_lock(${MIGRATION_LOCK_KEY})`;
   console.log('acquired');
 
+  // Set after the advisory lock, which it would otherwise cap. The running
+  // release keeps serving while this runs, and DDL queued behind one of its
+  // transactions queues every later query behind itself: failing the deploy is
+  // better than stalling the live app.
+  await client`set lock_timeout = '10s'`;
+
   const journal = await journalWithHashes();
 
   process.stdout.write('journal order ... ');

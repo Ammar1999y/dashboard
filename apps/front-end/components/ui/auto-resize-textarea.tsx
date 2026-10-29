@@ -162,7 +162,7 @@ export const AutosizeTextarea = memo(
         rows={minRows}
         className={cn(
           fieldSurface,
-          'block w-full min-w-0 resize-none px-3 py-2 caret-primary placeholder:text-muted-foreground',
+          'block w-full min-w-0 resize-none px-3 py-2 caret-primary-ink placeholder:text-muted-foreground',
           disabled && 'disabled',
           className
         )}

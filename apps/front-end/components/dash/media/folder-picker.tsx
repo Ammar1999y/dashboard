@@ -183,7 +183,7 @@ const Children = memo(
           />
         ))}
         {context.folders.length === 0 && picker.creating !== folder && (
-          <li className='py-1 text-xs text-muted-foreground/70' style={style}>
+          <li className='py-1 text-xs text-muted-foreground' style={style}>
             {MSG_NO_SUBFOLDERS}
           </li>
         )}

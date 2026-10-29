@@ -26,7 +26,7 @@ function Section({
     <>
       <div className='mx-1 mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground'>
         <span>{title}</span>
-        <span className='num rounded-full border px-1.5 text-xs text-muted-foreground/70'>
+        <span className='num rounded-full border px-1.5 text-xs text-muted-foreground'>
           {count}
         </span>
       </div>

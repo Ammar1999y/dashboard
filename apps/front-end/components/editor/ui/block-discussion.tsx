@@ -240,7 +240,7 @@ const BlockCommentContent = ({
           <div className='relative size-0 select-none ltr:right-0 rtl:left-0'>
             <PopoverTrigger asChild>
               <Button
-                className='ms-1 mt-1 flex h-6 gap-1 !px-1.5 py-0 text-muted-foreground/80 hover:text-muted-foreground/80 data-[active=true]:bg-muted'
+                className='ms-1 mt-1 flex h-6 gap-1 !px-1.5 py-0 text-muted-foreground hover:text-muted-foreground data-[active=true]:bg-muted'
                 contentEditable={false}
                 data-active={open}
                 variant='ghost'

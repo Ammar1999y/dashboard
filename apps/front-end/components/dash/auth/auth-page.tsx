@@ -7,7 +7,7 @@ import { SignInBackground } from './sign-in-background';
 import { useEnterApp } from './use-enter-app';
 import { Wordmark } from './wordmark';
 
-const WORDMARK = <Wordmark className='mx-auto mb-5 h-20 text-primary' />;
+const WORDMARK = <Wordmark className='mx-auto mb-5 h-20 text-primary-brand' />;
 
 interface AuthShellProps {
   title: string;

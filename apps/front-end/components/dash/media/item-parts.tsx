@@ -134,7 +134,7 @@ export const PublicDot = memo(
     file.bucketType === 'public' ? (
       <span
         title='عام، برابط دائم'
-        className={cn('inline-flex shrink-0 text-success', className)}
+        className={cn('inline-flex shrink-0 text-success-dark', className)}
       >
         <Icon icon='lucide:globe' className='size-3' />
       </span>
@@ -149,7 +149,7 @@ export const CountTag = memo(
     <span
       title='عدد العناصر في المجلد'
       className={cn(
-        'shrink-0 whitespace-nowrap text-xs text-muted-foreground/70',
+        'shrink-0 whitespace-nowrap text-xs text-muted-foreground',
         className
       )}
     >

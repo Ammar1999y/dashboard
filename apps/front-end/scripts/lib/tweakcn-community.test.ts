@@ -1,15 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import type { ThemePreset } from '../../components/theme-customizer/types';
 
+import Color from 'colorjs.io';
 import {
   DEFAULT_PREFERENCES,
   preferencesSchema,
 } from '@app/shared/validation/preferences';
 
-import { getPresetThemeStyles } from '../../components/theme-customizer/apply-preset';
+import {
+  getPresetThemeStyles,
+  resolvePresetStyles,
+} from '../../components/theme-customizer/apply-preset';
 import { DEFAULT_THEME_STYLES } from '../../components/theme-customizer/config';
 import { themePresets } from '../../components/theme-customizer/presets';
 import { computeThemeVars } from '../../components/theme-customizer/theme-vars';
+import { contrastFailures } from './theme-contrast';
 import {
   COMMUNITY_LIMIT,
   CommunityImportError,
@@ -98,33 +103,35 @@ describe('tweakcn community importer', () => {
         })
       ).toThrow(CommunityImportError);
     }
-    expect(
-      normalizeCommunityStyles({
-        ...upstreamStyles,
-        light: {
-          ...upstreamStyles.light,
-          'font-sans': 'external font',
-          injected: 'bad',
-        },
-      }).light
-    ).not.toHaveProperty('injected');
+    const kept = normalizeCommunityStyles({
+      ...upstreamStyles,
+      light: {
+        ...upstreamStyles.light,
+        'font-sans': 'external font',
+        // Upstream's tracking token: positive spacing breaks Arabic joins.
+        'letter-spacing': '0.05em',
+        injected: 'bad',
+      },
+    }).light;
+    expect(kept).not.toHaveProperty('injected');
+    expect(kept).not.toHaveProperty('letter-spacing');
   });
 
   test('updates matching IDs and keeps IDs compatible with saved preferences', () => {
     const themes = readCommunityResponse(flight({ themes: upstreamThemes }));
-    const first = mergeCommunityPresets({}, themes);
-    const second = mergeCommunityPresets(
+    const { presets: first } = mergeCommunityPresets({}, themes);
+    const { presets: second } = mergeCommunityPresets(
       first,
       themes.map((theme) => ({
         ...theme,
         styles: {
           ...theme.styles,
-          light: { ...theme.styles.light, primary: '#ff0000' },
+          light: { ...theme.styles.light, primary: '#b00000' },
         },
       }))
     );
     expect(Object.keys(second)).toEqual(Object.keys(first));
-    expect(second['tweakcn-test-0'].styles.light.primary).toBe('#FF0000');
+    expect(second['tweakcn-test-0'].styles.light.primary).toBe('#B00000');
     for (const preset of Object.keys(second))
       expect(
         preferencesSchema.safeParse({ ...DEFAULT_PREFERENCES, preset }).success
@@ -143,18 +150,18 @@ describe('tweakcn community importer', () => {
     };
     const [theme] = readCommunityResponse(flight({ themes: upstreamThemes }));
     for (const name of ['Ocean Blue', ' ocean BLUE ', 'BLUE']) {
-      const merged = mergeCommunityPresets(existing, [
+      const { presets: merged } = mergeCommunityPresets(existing, [
         {
           ...theme,
           name,
           styles: {
             ...theme.styles,
-            light: { ...theme.styles.light, primary: '#ff0000' },
+            light: { ...theme.styles.light, primary: '#b00000' },
           },
         },
       ]);
       expect(Object.keys(merged)).toEqual(['blue']);
-      expect(merged.blue.styles.light.primary).toBe('#FF0000');
+      expect(merged.blue.styles.light.primary).toBe('#B00000');
       expect(merged.blue.styles.light['chart-1']).toBe('#123456');
       expect(existing.blue.styles.light.primary).toBe(
         upstreamStyles.light.primary
@@ -164,13 +171,13 @@ describe('tweakcn community importer', () => {
 
   test('matches a renamed upstream ID by label and deduplicates incoming labels', () => {
     const themes = readCommunityResponse(flight({ themes: upstreamThemes }));
-    const first = mergeCommunityPresets({}, themes);
-    const renamed = mergeCommunityPresets(
+    const { presets: first } = mergeCommunityPresets({}, themes);
+    const { presets: renamed } = mergeCommunityPresets(
       first,
       themes.map((theme) => ({ ...theme, themeId: `new-${theme.themeId}` }))
     );
     expect(Object.keys(renamed)).toEqual(Object.keys(first));
-    const duplicates = mergeCommunityPresets({}, [
+    const { presets: duplicates } = mergeCommunityPresets({}, [
       themes[0],
       { ...themes[0], themeId: 'duplicate' },
     ]);
@@ -179,16 +186,72 @@ describe('tweakcn community importer', () => {
 
   test('retains every existing theme when importing new themes', () => {
     const themes = readCommunityResponse(flight({ themes: upstreamThemes }));
-    const first = mergeCommunityPresets({}, themes);
+    const { presets: first } = mergeCommunityPresets({}, themes);
     const nextThemes = themes.map((theme) => ({
       ...theme,
       themeId: `new-${theme.themeId}`,
       name: `New ${theme.name}`,
     }));
-    const second = mergeCommunityPresets(first, nextThemes);
+    const { presets: second } = mergeCommunityPresets(first, nextThemes);
     expect(Object.keys(second)).toHaveLength(40);
     for (const [id, preset] of Object.entries(first))
       expect(second[id]).toEqual(preset);
+  });
+
+  test('keeps the brand fill, reads its ink at import, keeping its hue, and a re-import changes nothing', () => {
+    const [theme] = readCommunityResponse(flight({ themes: upstreamThemes }));
+    const yellow = {
+      ...theme,
+      styles: {
+        ...theme.styles,
+        light: { ...theme.styles.light, primary: '#ffcc00' },
+      },
+    };
+    const { presets, dropped } = mergeCommunityPresets({}, [yellow]);
+    expect(dropped).toEqual([]);
+    const fixed = presets['tweakcn-test-0'];
+    expect(fixed.styles.light.primary).toBe('#FFCC00');
+    const ink = fixed.styles.light['primary-ink'] ?? '';
+    expect(ink).not.toBe('#FFCC00');
+    const [, , hue] = new Color(ink).to('oklch').coords;
+    const [, , upstreamHue] = new Color('#ffcc00').to('oklch').coords;
+    expect(Math.abs((hue ?? 0) - (upstreamHue ?? 0))).toBeLessThan(5);
+    const resolved = resolvePresetStyles(fixed);
+    expect(contrastFailures(resolved.light, 'light')).toEqual([]);
+    expect(contrastFailures(resolved.dark, 'dark')).toEqual([]);
+    expect(mergeCommunityPresets(presets, [yellow]).presets).toEqual(presets);
+  });
+
+  test('a light fix leaves the value dark mode inherited from light', () => {
+    const [theme] = readCommunityResponse(flight({ themes: upstreamThemes }));
+    const { presets } = mergeCommunityPresets({}, [
+      {
+        ...theme,
+        styles: {
+          ...theme.styles,
+          light: { ...theme.styles.light, 'muted-foreground': '#bbbbbb' },
+        },
+      },
+    ]);
+    const resolved = resolvePresetStyles(presets['tweakcn-test-0']);
+    expect(resolved.light['muted-foreground']).not.toBe('#BBBBBB');
+    expect(resolved.dark['muted-foreground']).toBe('#BBBBBB');
+  });
+
+  test('drops a preset no fix can make readable', () => {
+    const unreadable: ThemePreset = {
+      label: 'Split',
+      styles: {
+        light: { background: '#ffffff', card: '#000000' },
+        dark: {},
+      },
+    };
+    const { presets, dropped } = mergeCommunityPresets(
+      { split: unreadable },
+      []
+    );
+    expect(dropped).toEqual(['split']);
+    expect(presets).toEqual({});
   });
 });
 

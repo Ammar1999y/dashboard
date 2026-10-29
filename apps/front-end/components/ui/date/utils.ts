@@ -1,21 +1,9 @@
 import type { PresetName } from './constants';
 import type { DateRange } from './types';
 
-import { BUSINESS_TIMEZONE } from '@app/shared/config';
 import { calendarDayInZone, safeDate } from '@app/shared/time';
 
-import { DEFAULT_DATE_LOCALE } from './constants';
-
-export const formatDate = (
-  date: Date,
-  locale: string = DEFAULT_DATE_LOCALE
-): string =>
-  date.toLocaleDateString(locale, {
-    day: '2-digit',
-    month: 'numeric',
-    year: 'numeric',
-    numberingSystem: 'latn',
-  });
+import { formatDate } from '@/utils/format';
 
 /** Empty only when neither bound is set: an upper-only range still filters. */
 export const formatDateRange = (range: DateRange, locale: string): string => {
@@ -23,33 +11,6 @@ export const formatDateRange = (range: DateRange, locale: string): string => {
   const to = range.to ? formatDate(range.to, locale) : '';
   if (from && to && from !== to) return `${from} - ${to}`;
   return from || to;
-};
-
-/**
- * A stored timestamp as its BUSINESS_TIMEZONE calendar day — the zone the
- * server resolves date filters in, so a row never displays outside the range
- * that matched it.
- */
-export const tableFormatDate = (date: string | null): string => {
-  if (!date) return '-';
-  const parsed = safeDate(date);
-  if (!parsed) return '-';
-  return calendarDayInZone(parsed);
-};
-
-const dateTimeFormat = new Intl.DateTimeFormat(DEFAULT_DATE_LOCALE, {
-  year: 'numeric',
-  month: 'long',
-  day: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  timeZone: BUSINESS_TIMEZONE,
-});
-
-/** A stored timestamp as a date and time in BUSINESS_TIMEZONE; `null` when it is no date. */
-export const formatDateTime = (value: string | null | undefined) => {
-  const date = safeDate(value);
-  return date ? dateTimeFormat.format(date) : null;
 };
 
 /**

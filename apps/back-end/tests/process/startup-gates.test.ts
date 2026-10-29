@@ -21,7 +21,8 @@
  * deliberately withholding.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -74,24 +75,19 @@ function baseEnv(sqliteDir: string): Record<string, string> {
     NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email',
     SMTP_USER: 'startup-gates@example.invalid',
     SMTP_PASS: 'throwaway',
-    // Real 32-byte base64url values: the keyring validates the DECODED length,
-    // so a 43-character run of an arbitrary character is not automatically
-    // valid — its final character has to leave the trailing bits clear.
+    // Real random 32-byte keys: the keyring validates the DECODED length, and
+    // production refuses a key of a few repeated bytes as a placeholder.
     PASSWORD_PEPPER_ACTIVE_ID: 'g',
-    PASSWORD_PEPPER_KEYRING: JSON.stringify({
-      g: {
-        generation: 1,
-        secret: Buffer.alloc(32, 0x11).toString('base64url'),
-      },
-    }),
+    PASSWORD_PEPPER_KEYRING: keyringWith(randomBytes(32)),
     OTP_HMAC_ACTIVE_ID: 'g',
-    OTP_HMAC_KEYRING: JSON.stringify({
-      g: {
-        generation: 1,
-        secret: Buffer.alloc(32, 0x22).toString('base64url'),
-      },
-    }),
+    OTP_HMAC_KEYRING: keyringWith(randomBytes(32)),
   };
+}
+
+function keyringWith(secret: Buffer): string {
+  return JSON.stringify({
+    g: { generation: 1, secret: secret.toString('base64url') },
+  });
 }
 
 /** The extra variables `lib/env.server.ts` requires outside development. */
@@ -342,6 +338,36 @@ describe('the production environment gate refuses a missing variable', () => {
     expect(outcome.exitCode).not.toBe(0);
     expect(outcome.output).toInclude('BETTER_AUTH_SECRET');
   }, 60_000);
+
+  test.each([
+    [
+      'an all-zero password pepper',
+      { PASSWORD_PEPPER_KEYRING: keyringWith(Buffer.alloc(32)) },
+      'password pepper',
+    ],
+    [
+      'a repeated-word Better Auth secret',
+      { BETTER_AUTH_SECRET: 'secret'.repeat(7) },
+      'BETTER_AUTH_SECRET',
+    ],
+  ])(
+    '%s fails the boot before anything serves or writes',
+    async (_label, overrides, named) => {
+      const sqliteDir = tempSqliteDir();
+      const outcome = await bootWith({
+        ...productionEnv(sqliteDir),
+        ...overrides,
+      });
+
+      expect(outcome.exitCode).toBe(1);
+      expect(outcome.output).toInclude(named);
+      expect(outcome.output).toInclude('placeholder');
+      expect(outcome.output).not.toInclude('server started');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- a temp directory this test created
+      expect(readdirSync(sqliteDir)).toEqual([]);
+    },
+    60_000
+  );
 
   test('a missing maintenance token fails the boot rather than the health check', async () => {
     // `GET /api/health/storage` refuses every request without the token, so an

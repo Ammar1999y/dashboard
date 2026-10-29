@@ -90,7 +90,7 @@ function SuggestionSummary({ suggestion }: { suggestion: ResolvedSuggestion }) {
         <>
           {splitSuggestionText(suggestion.newText).map((line, index) => (
             <SuggestionLine
-              className='text-primary/80'
+              className='text-primary'
               key={`with-${index}`}
               label='بـ:'
               text={line}

@@ -15,7 +15,12 @@ import {
   parseSearchParams,
 } from '@app/shared/data-table/parsers';
 
-import { escapeLike, filterColumns, getColumn } from './filter-columns';
+import {
+  filterColumns,
+  foldedColumn,
+  getColumn,
+  searchPattern,
+} from './filter-columns';
 
 interface DataTableQueryParams<T extends Table> {
   url: string;
@@ -37,7 +42,10 @@ interface DataTableQueryResult {
   offset: number;
   page: number;
   perPage: number;
-  /** The quick-search term after normalisation and the length bounds; `''` when there is none. */
+  /**
+   * The quick-search term as typed, after normalisation and the length bounds;
+   * `''` when there is none. Not folded: a match goes through `searchPattern`.
+   */
   search: string;
   buildPageCount: (total: number) => number;
   /** The response `meta` for a list of `total` rows. */
@@ -98,11 +106,11 @@ export function parseDataTableParams<T extends Table>(
 
   let searchWhere: SQL | undefined;
   if (search && searchableColumns?.length) {
-    const escaped = escapeLike(search);
+    const pattern = searchPattern(search, 'contains');
     const conditions: SQL[] = [];
     for (const colName of searchableColumns) {
       const col = getColumn(table, colName);
-      if (col) conditions.push(ilike(col, `%${escaped}%`));
+      if (col) conditions.push(ilike(foldedColumn(col), pattern));
     }
     if (conditions.length > 0) searchWhere = or(...conditions);
   }

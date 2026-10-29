@@ -4,6 +4,8 @@ import { memo } from 'react';
 
 import { cn } from '@/lib/utils';
 
+import { DISPLAY_LOCALE } from '@/utils/format';
+
 import { Popover, PopoverContent } from '@/components/ui/popover';
 
 import { DateActions } from './components/date-actions';
@@ -12,7 +14,7 @@ import { DateRangeInputs } from './components/date-range-inputs';
 import { DateTrigger } from './components/date-trigger';
 import { PresetList } from './components/preset-list';
 import { PresetSelect } from './components/preset-select';
-import { DATE_PLACEHOLDER, DEFAULT_DATE_LOCALE } from './constants';
+import { DATE_PLACEHOLDER } from './constants';
 import { useDateRangeState } from './hooks/use-date-range-state';
 import { formatDateRange } from './utils';
 
@@ -34,7 +36,7 @@ export const DateRangePicker = memo(
     initialDateFrom,
     initialDateTo,
     align = 'center',
-    locale = DEFAULT_DATE_LOCALE,
+    locale = DISPLAY_LOCALE,
     onChange,
     title,
     triggerClassName,

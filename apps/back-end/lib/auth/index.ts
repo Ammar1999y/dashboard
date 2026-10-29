@@ -9,7 +9,7 @@ import {
   USER_ADDITIONAL_FIELDS,
 } from '@app/shared/auth-fields';
 
-import { turnstileSecretKey } from '@/lib/captcha';
+import { turnstileHostnames, turnstileSecretKey } from '@/lib/captcha';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
 
@@ -151,6 +151,7 @@ export const auth = betterAuth({
     captcha({
       provider: 'cloudflare-turnstile',
       secretKey: turnstileSecretKey() ?? '',
+      allowedHostnames: turnstileHostnames(),
       // Exact match: `'/sign-in'` protects nothing; a prefix is `'/sign-in/*'`.
       // TODO: add the proper endpoints — and write each one in full.
       endpoints: ['/sign-in/email'],

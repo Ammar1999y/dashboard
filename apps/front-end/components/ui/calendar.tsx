@@ -12,6 +12,8 @@ import { DayPicker, getDefaultClassNames } from '@daypicker/react';
 import { arSA as ar } from '@daypicker/react/locale';
 import { cn } from '@/lib/utils';
 
+import { formatMonth, formatMonthYear } from '@/utils/format';
+
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 
@@ -21,13 +23,8 @@ const WEEKDAY_ABBREVIATIONS = ['ح', 'ن', 'ث', 'ر', 'خ', 'ج', 'س'];
 
 const DEFAULT_FORMATTERS: React.ComponentProps<typeof DayPicker>['formatters'] =
   {
-    formatMonthDropdown: (date) =>
-      date.toLocaleString('ar-SA-u-ca-gregory', { month: 'short' }),
-    formatCaption: (date) =>
-      date.toLocaleDateString('ar-SA-u-ca-gregory', {
-        month: 'long',
-        year: 'numeric',
-      }),
+    formatMonthDropdown: formatMonth,
+    formatCaption: formatMonthYear,
     formatWeekdayName: (date) => WEEKDAY_ABBREVIATIONS[date.getDay()] ?? '',
   };
 
@@ -162,12 +159,12 @@ function Calendar({
         defaultClassNames.day
       ),
       range_start: cn(
-        'bg-accent ltr:rounded-l-md rtl:rounded-r-md',
+        'bg-accent text-accent-foreground ltr:rounded-l-md rtl:rounded-r-md',
         defaultClassNames.range_start
       ),
       range_middle: cn('rounded-none', defaultClassNames.range_middle),
       range_end: cn(
-        'bg-accent ltr:rounded-r-md rtl:rounded-l-md',
+        'bg-accent text-accent-foreground ltr:rounded-r-md rtl:rounded-l-md',
         defaultClassNames.range_end
       ),
       today: cn(
@@ -222,7 +219,7 @@ function CalendarDayButton({
       ref={ref}
       variant='ghost'
       size='icon'
-      data-day={day.date.toLocaleDateString()}
+      data-day={day.isoDate}
       data-selected-single={
         modifiers.selected &&
         !modifiers.range_start &&

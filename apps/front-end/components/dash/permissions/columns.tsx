@@ -2,7 +2,7 @@ import type { DataTableFeatures } from '@/components/ui/data-table';
 import type { PermissionClient } from '@/types/permission';
 import type { ColumnDef } from '@tanstack/react-table';
 
-import { humanReadableNumber } from '@app/shared/utils';
+import { formatInteger } from '@/utils/format';
 
 import {
   dateColumn,
@@ -36,7 +36,7 @@ export const columns: ColumnDef<DataTableFeatures, PermissionClient>[] = [
         dir='ltr'
         className='bidi-isolate num truncate ps-2 text-base font-normal text-muted-foreground'
       >
-        {humanReadableNumber(row.original.usersCount ?? 0)}
+        {formatInteger(row.original.usersCount ?? 0)}
       </p>
     ),
     size: 210,

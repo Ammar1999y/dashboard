@@ -23,7 +23,7 @@ pre-commit:
     - name: front-end lint
       root: 'apps/front-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs}'
-      run: bun --bun eslint --max-warnings 0 --no-warn-ignored {staged_files}
+      run: bun scripts/lint.mjs --no-warn-ignored {staged_files}
     - name: front-end format
       root: 'apps/front-end/'
       glob: '*.{ts,tsx,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml,css}'
@@ -90,7 +90,12 @@ pre-push: &full_verify
             run: bun run typecheck
           - name: front-end lint
             root: 'apps/front-end/'
-            run: bun --bun eslint . --max-warnings 0
+            run: bun scripts/lint.mjs .
+          # Part of the front-end's `lint` script, which CI runs; the job above
+          # calls ESLint alone.
+          - name: front-end css audit
+            root: 'apps/front-end/'
+            run: bun run audit:css
           - name: front-end format
             root: 'apps/front-end/'
             run: bun run format:check
@@ -146,6 +151,21 @@ pre-push: &full_verify
             fail_text:
               'db/schema.ts has changes db/drizzle/ does not carry (run `bun run
               db:generate` inside apps/back-end)'
+          - name: migration-lint
+            root: 'apps/back-end/'
+            run: bun run lint:migrations
+            fail_text:
+              'a new migration would break the release still serving, or tools
+              not installed (mise install)'
+          # Ten seconds in a parallel group, and the alternative is learning of a
+          # contract change from CI after the push.
+          - name: openapi-drift
+            root: 'apps/back-end/'
+            run: bun run check:openapi-drift
+            fail_text:
+              'the served OpenAPI document differs from openapi.snapshot.json
+              (run `bun run openapi:snapshot` inside apps/back-end, review it,
+              commit it)'
           # `bun dedupe --check` reports only duplicates it could COLLAPSE, so it
           # passes a lockfile holding several incompatible majors of one package.
           # `dependency-parity` covers the half of that which enters through the
@@ -168,21 +188,32 @@ pre-push: &full_verify
           - name: back-end sast
             root: 'apps/back-end/'
             run: mise exec -- semgrep scan --config=p/typescript
-              --config=p/secrets --error --metrics=off
+              --config=p/secrets --config=p/nodejs --error --metrics=off
             fail_text: 'semgrep findings, or tools not installed (mise install)'
           - name: shared sast
             root: 'packages/shared/'
             run: mise exec -- semgrep scan --config=p/typescript
-              --config=p/secrets --error --metrics=off
+              --config=p/secrets --config=p/nodejs --error --metrics=off
             fail_text: 'semgrep findings, or tools not installed (mise install)'
           - name: root sast
             root: 'scripts/'
             run: mise exec -- semgrep scan --config=p/typescript
-              --config=p/secrets --error --metrics=off
+              --config=p/secrets --config=p/nodejs --error --metrics=off
+            fail_text: 'semgrep findings, or tools not installed (mise install)'
+          - name: front-end sast
+            root: 'apps/front-end/'
+            run: mise exec -- semgrep scan --config=p/typescript
+              --config=p/secrets --config=p/react --config=p/nextjs --error
+              --metrics=off
             fail_text: 'semgrep findings, or tools not installed (mise install)'
           - name: workflows
             run: mise exec -- actionlint
             fail_text: 'workflow errors, or tools not installed (mise install)'
+          # actionlint checks that a workflow is valid, zizmor that it is safe:
+          # injection, credential persistence, unpinned actions, risky triggers.
+          - name: workflow security
+            run: mise exec -- zizmor --offline --no-progress .github/workflows
+            fail_text: 'workflow security findings, or tools not installed (mise install)'
     # AFTER the group above, because this tier writes into the back-end tree.
     # The cheap tier only: the database tiers are `bun run test:all` by hand, or
     # the `tests` CI job.
@@ -201,7 +232,7 @@ fix:
       run: bun run format
     - name: front-end lint
       root: 'apps/front-end/'
-      run: bun --bun eslint . --fix
+      run: bun scripts/lint.mjs . --fix
     - name: back-end format
       root: 'apps/back-end/'
       run: bun run format

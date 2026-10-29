@@ -35,7 +35,7 @@ const checkClass =
 const moreClass =
   'absolute top-3 bg-black/55 text-white hover:bg-black/70 hover:text-white rtl:left-3 ltr:right-3';
 
-const metaClass = 'block truncate text-xs text-muted-foreground/70';
+const metaClass = 'block truncate text-xs text-muted-foreground';
 
 /** Where a result lives: its folder's path, or for an unfiled file, when it goes. */
 const Where = memo(({ folder }: { folder: string | null }) => {

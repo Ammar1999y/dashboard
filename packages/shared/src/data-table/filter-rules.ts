@@ -5,6 +5,7 @@ import type { FilterItemSchema, SearchAnchor } from './parsers';
 import { CustomError } from '../error-class';
 import { HTTP_STATUS } from '../http-status';
 import { MSG_INVALID_FILTER, MSG_SHORT_SEARCH } from '../messages/data-table';
+import { searchFold } from '../search-fold';
 import { toCalendarDate, zonedDayStart, zonedNextDayStart } from '../time';
 import {
   isArrayValueOperator,
@@ -26,7 +27,7 @@ const ACCEPTED_PARAM_KEYS: ReadonlySet<string> = new Set(
 );
 
 /** Which edge of the `ILIKE` pattern this operator anchors — see `isTrigramIndexable`. */
-function searchAnchorOf(operator: FilterOperator): SearchAnchor {
+export function searchAnchorOf(operator: FilterOperator): SearchAnchor {
   if (operator === 'startsWith') return 'prefix';
   if (operator === 'endsWith') return 'suffix';
   return 'contains';
@@ -214,15 +215,16 @@ export function assertFilterAllowed(
 
   if (isSearchOperator(filter.operator)) {
     if (typeof filter.value !== 'string') invalidFilter();
+    // Measured on the fold, as quick search is: it is the text the index holds.
+    const term = searchFold(filter.value);
     const min = spec.minSearchLength ?? MIN_SEARCH_LENGTH;
-    if (searchTermLength(filter.value) < min)
-      invalidFilter(MSG_SHORT_SEARCH(min));
+    if (searchTermLength(term) < min) invalidFilter(MSG_SHORT_SEARCH(min));
     // The floor is a proxy; this is the property. Not applied to the scan-only
     // operator, whose predicate can never use the index however the term is
     // spelled — requiring trigrams there would refuse a filter for no gain.
     if (
       !isScanOnlyOperator(filter.operator) &&
-      !isTrigramIndexable(filter.value, searchAnchorOf(filter.operator))
+      !isTrigramIndexable(term, searchAnchorOf(filter.operator))
     )
       invalidFilter(MSG_SHORT_SEARCH(min));
   }

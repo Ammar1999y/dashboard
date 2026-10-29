@@ -686,6 +686,7 @@ function DataTableFilterItemInner<TData extends RowData>({
         <div className='flex flex-col md:flex-row md:gap-2'>
           <Button
             aria-controls={filterItemId}
+            aria-label='حذف التصفية'
             variant='destructiveGhost'
             size='icon'
             className='size-8 rounded text-muted-foreground hover:text-destructive'
@@ -695,6 +696,7 @@ function DataTableFilterItemInner<TData extends RowData>({
           </Button>
           <SortableItemHandle asChild>
             <Button
+              aria-label='نقل التصفية'
               variant='ghost'
               size='icon'
               className='size-8 rounded text-muted-foreground'

@@ -10,6 +10,7 @@ const WRAPPER_CLASS = cn(
   '[&.lyt-activated]:before:bg-[url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAADGCAYAAAAT+OqFAAAAdklEQVQoz42QQQ7AIAgEF/T/D+kbq/RWAlnQyyazA4aoAB4FsBSA/bFjuF1EOL7VbrIrBuusmrt4ZZORfb6ehbWdnRHEIiITaEUKa5EJqUakRSaEYBJSCY2dEstQY7AuxahwXFrvZmWl2rh4JZ07z9dLtesfNj5q0FU3A5ObbwAAAABJRU5ErkJggg==)]',
   'after:block after:pb-[var(--aspect-ratio)] after:content-[""]',
   '[&_>_iframe]:absolute [&_>_iframe]:inset-0 [&_>_iframe]:size-full',
+  // eslint-disable-next-line tailwind/fixed-colors -- YouTube's own player colour, as the package's stylesheet draws it
   '[&_>_.lty-playbtn]:z-[1] [&_>_.lty-playbtn]:h-11 [&_>_.lty-playbtn]:w-16 [&_>_.lty-playbtn]:rounded-[14%] [&_>_.lty-playbtn]:bg-[#212121] [&_>_.lty-playbtn]:opacity-80 [&_>_.lty-playbtn]:[transition:all_0.2s_cubic-bezier(0,_0,_0.2,_1)]',
   '[&:hover_>_.lty-playbtn]:bg-[red] [&:hover_>_.lty-playbtn]:opacity-100',
   // A play triangle points right in either direction.

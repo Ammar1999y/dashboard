@@ -69,7 +69,7 @@ components/
 - **Types location**: root `types/` is for API payloads and cross-cutting app types. A type tied to one component or feature stays with it.
 - **Where a thing lives is decided by what it imports, not by what it is called.** A helper that reaches into app services is not a pure utility, and anything importing `components/` is neither. Keep that direction one-way and lint it.
 
-The concrete folders — which root directories exist and what each may import — are per-project. See the project's own layout skill.
+The concrete folders — which root directories exist and what each may import — are per-project. The project's ESLint import restrictions define them.
 
 ---
 
@@ -321,7 +321,7 @@ work.
   one-off; needed twice, it becomes a token.
 - Direction-dependent utilities must mirror. Whether that means logical
   utilities or `rtl:` / `ltr:` pairs depends on the project's browser targets —
-  the project's layout skill decides.
+  the project's lint rules decide.
 
 Where lint enforces this, the error names the exact replacement; don't restate
 the table here.
@@ -338,5 +338,5 @@ the table here.
 ```typescript
 import { cn } from '@/lib/utils';
 
-<div className={cn('h-4 w-4 rounded', isActive ? 'bg-primary' : 'bg-gray-500', className)} />
+<div className={cn('h-4 w-4 rounded', isActive ? 'bg-primary' : 'bg-muted', className)} />
 ```

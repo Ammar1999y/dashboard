@@ -13,9 +13,9 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api/client';
 import { useEndpointQuery } from '@/lib/api/query';
 
+import { formatDateTime } from '@/utils/format';
 import { settingsSchema, toSettingsForm } from '@/utils/validation/settings';
 
-import { formatDateTime } from '@/components/ui/date/utils';
 import { ErrorState } from '@/components/ui/error-state';
 import { LoadingState } from '@/components/ui/loading-state';
 import { Form } from '@/components/form/form';

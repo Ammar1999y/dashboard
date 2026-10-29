@@ -1,7 +1,6 @@
 import type { FilterOperator } from '../types/data-table';
 
 import { dataTableConfig } from './config';
-import { VALUELESS_OPERATORS } from './parsers';
 
 /**
  * Server-owned description of what may be filtered, and how: column -> DB type
@@ -25,7 +24,7 @@ type ClosedColumnType = 'select' | 'multiSelect';
 
 interface FilterColumnSpecBase {
   /**
-   * Minimum input length for substring-search operators. Below the trigram
+   * Minimum length of a substring-search term, folded. Below the trigram
    * length pg_trgm's GIN index can't be used and the predicate degrades to a
    * full scan — the same floor quick search applies. The length is a proxy;
    * `isTrigramIndexable` is the property, and applies on top of this.
@@ -90,6 +89,9 @@ const OPERATORS_BY_TYPE: Record<
   select: toOperatorSet(dataTableConfig.selectOperators),
   multiSelect: toOperatorSet(dataTableConfig.multiSelectOperators),
 };
+
+/** Operators that are complete without a value. */
+const VALUELESS_OPERATORS = new Set<FilterOperator>(['isEmpty', 'isNotEmpty']);
 
 /** Operators whose value is an array. */
 const ARRAY_VALUE_OPERATORS = new Set<FilterOperator>([

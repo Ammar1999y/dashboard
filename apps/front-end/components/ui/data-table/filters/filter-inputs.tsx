@@ -6,6 +6,7 @@ import type { ChangeEvent } from 'react';
 
 import { useCallback } from 'react';
 
+import { FILTER_OPERATOR_LABELS } from '@app/shared/messages/data-table';
 import { calendarDayInZone, safeDate } from '@app/shared/time';
 import { cn } from '@/lib/utils';
 
@@ -50,6 +51,11 @@ interface FilterInputProps<TData extends RowData> {
   setShowValueSelector?: (value: boolean) => void;
 }
 
+const columnName = (
+  columnMeta: DataTableColumnMeta | undefined,
+  filter: FilterItemSchema
+) => columnMeta?.label ?? filter.id;
+
 function FilterEmptyStateInner<TData extends RowData>({
   inputId,
   columnMeta,
@@ -59,9 +65,7 @@ function FilterEmptyStateInner<TData extends RowData>({
     <div
       id={inputId}
       role='status'
-      aria-label={`${columnMeta?.label} filter is ${
-        filter.operator === 'isEmpty' ? 'empty' : 'not empty'
-      }`}
+      aria-label={`${columnName(columnMeta, filter)}: ${FILTER_OPERATOR_LABELS[filter.operator]}`}
       aria-live='polite'
       className='h-8 w-full'
     />
@@ -87,7 +91,7 @@ function FilterTextInputInner<TData extends RowData>({
     <Input
       id={inputId}
       type={isNumber ? 'number' : 'text'}
-      aria-label={`${columnMeta?.label} filter value`}
+      aria-label={`قيمة تصفية ${columnName(columnMeta, filter)}`}
       aria-describedby={`${inputId}-description`}
       inputMode={isNumber ? 'numeric' : undefined}
       placeholder={columnMeta?.placeholder ?? 'أدخل قيمة...'}
@@ -128,7 +132,7 @@ function FilterBooleanSelectInner<TData extends RowData>({
       <SelectTrigger
         id={inputId}
         aria-controls={inputListboxId}
-        aria-label={`${columnMeta?.label} boolean filter`}
+        aria-label={`قيمة تصفية ${columnName(columnMeta, filter)}`}
         size='sm'
         className={filterField}
       >
@@ -183,7 +187,7 @@ function FilterFacetedSelectInner<TData extends RowData>({
         <Button
           id={inputId}
           aria-controls={inputListboxId}
-          aria-label={`${columnMeta?.label} filter value${multiple ? 's' : ''}`}
+          aria-label={`${multiple ? 'قيم' : 'قيمة'} تصفية ${columnName(columnMeta, filter)}`}
           variant='none'
           size='none'
           className={cn(filterTrigger, 'w-full justify-between')}
@@ -199,7 +203,7 @@ function FilterFacetedSelectInner<TData extends RowData>({
       </FacetedTrigger>
       <FacetedContent id={inputListboxId} className='w-52'>
         <FacetedInput
-          aria-label={`Search ${columnMeta?.label} options`}
+          aria-label={`ابحث في خيارات ${columnName(columnMeta, filter)}`}
           placeholder={columnMeta?.placeholder ?? 'ابحث عن خيار...'}
         />
         <FacetedList>

@@ -28,10 +28,8 @@ jobs:
           persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
       - name: Semgrep OSS scan
-        # The back-end, the shared package it depends on and the root scripts,
-        # each from its own directory so `apps/back-end/.semgrepignore` keeps
-        # applying. The front-end is not in scope here, as it was not before the
-        # monorepo.
+        # Each workspace from its own directory, so `apps/back-end/.semgrepignore`
+        # keeps applying. The rulesets match each workspace's `scan:sast`.
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -40,9 +38,10 @@ jobs:
           if [ -n "${BASE_SHA:-}" ]; then
             args+=(--baseline-commit="$BASE_SHA")
           fi
-          (cd apps/back-end && semgrep scan "${args[@]}")
-          (cd packages/shared && semgrep scan "${args[@]}")
-          (cd scripts && semgrep scan "${args[@]}")
+          (cd apps/back-end && semgrep scan "${args[@]}" --config=p/nodejs)
+          (cd packages/shared && semgrep scan "${args[@]}" --config=p/nodejs)
+          (cd scripts && semgrep scan "${args[@]}" --config=p/nodejs)
+          (cd apps/front-end && semgrep scan "${args[@]}" --config=p/react --config=p/nextjs)
 
   gitleaks:
     runs-on: ubuntu-24.04

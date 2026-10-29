@@ -28,16 +28,25 @@ jobs:
       NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
       DATABASE_URL: postgres://ci:ci@db.example.com/ci?sslmode=require
-      BETTER_AUTH_SECRET: ci-placeholder-better-auth-secret-000000
       SQLITE_DIR: /tmp/ci-sqlite
       PASSWORD_PEPPER_ACTIVE_ID: ci
-      PASSWORD_PEPPER_KEYRING: '{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
       OTP_HMAC_ACTIVE_ID: ci
-      OTP_HMAC_KEYRING: '{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Generate throwaway secrets
+        # Random per run: a production-posture boot refuses a placeholder such
+        # as a literal written here. Not set in any `env:` block below, which
+        # would override these.
+        run: |
+          key() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '='; }
+          {
+            echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)"
+            echo "SQLITE_MAINTENANCE_TOKEN=$(openssl rand -base64 32)"
+            echo "PASSWORD_PEPPER_KEYRING={\"ci\":{\"generation\":1,\"secret\":\"$(key)\"}}"
+            echo "OTP_HMAC_KEYRING={\"ci\":{\"generation\":1,\"secret\":\"$(key)\"}}"
+          } >> "$GITHUB_ENV"
       # No bun-version: the action reads package.json's `packageManager` field,
       # so the version lives in exactly one place and Renovate bumps it there.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -86,7 +95,22 @@ jobs:
         # 0. `bunfig.toml`'s `[test] root` and
         # `tests/unit/harness-layout.test.ts` close it from both ends — the
         # latter fails if any file under `tests/` is in no tier.
-        run: bun run test
+        run: >-
+          bun run test --
+          --reporter=junit --reporter-outfile=reports/junit-unit.xml
+      - name: Publish unit test report
+        # For the `skipped-tests` job, which judges every tier's report.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-unit
+          path: apps/back-end/reports/junit-unit.xml
+          if-no-files-found: warn
+          retention-days: 14
+      - name: OpenAPI contract drift
+        # The published document merges Better Auth's plugin endpoints, so a
+        # dependency bump changes the contract with no source diff here.
+        run: bun run check:openapi-drift
       - name: Schema drift
         # Migration generation is manual, and nothing else here notices that it
         # was skipped: a CHECK constraint, column width, FK action or enum label
@@ -95,6 +119,15 @@ jobs:
         # so it enforces the OLD rule, exactly as a deployed database will.
         # Needs no service container: `drizzle-kit generate` never connects.
         run: bun run check:schema-drift
+      # Squawk only: the other pinned scanners run in their own jobs.
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+        with:
+          install_args: github:sbdchd/squawk
+      - name: Migration lint
+        # A migration runs while the previous release still serves; Squawk
+        # refuses a drop, rename or long lock in any migration newer than the
+        # grandfathered set in the script.
+        run: bun run lint:migrations
       - name: Unreachable files, unused exports and types
         # `scripts/find-unused-files.ts` finds unreachable files, then Knip
         # covers files under `tests/`, which that scanner's import graph treats
@@ -143,8 +176,9 @@ jobs:
         # (`lib/env.ts`), which is what lets this run on a runner at all.
         #
         # A boot on the runner, NOT a run against production: `DATABASE_URL`
-        # stays unreachable, `SQLITE_DIR` is a throwaway temp path, and every
-        # credential below is shaped to pass validation and nothing else. The
+        # stays unreachable, `SQLITE_DIR` is a throwaway temp path, the secrets
+        # are this run's throwaway ones, and every credential below is shaped to
+        # pass validation and nothing else. The
         # boot-refuses-a-missing-variable cases live in
         # `tests/process/startup-gates.test.ts`, which asserts exit codes rather
         # than needing a step per variable.
@@ -152,7 +186,6 @@ jobs:
           NODE_ENV: production
           SMOKE_PORT: 3998
           SQLITE_DIR: /tmp/ci-sqlite-production
-          BETTER_AUTH_SECRET: ci-placeholder-better-auth-secret-000000
           SMTP_USER: ci@example.invalid
           SMTP_PASS: ci-placeholder
           R2_ACCOUNT_ID: ci-placeholder
@@ -165,9 +198,6 @@ jobs:
           R2_PUBLIC_BUCKET: ci-placeholder-public
           R2_PRIVATE_BUCKET: ci-placeholder-private
           R2_PUBLIC_URL: https://ci-placeholder.example.invalid
-          # Required by the production env validation; `smoke` hands the same
-          # value to the server it starts.
-          SQLITE_MAINTENANCE_TOKEN: ci-maintenance-token-0123456789012
         run: bun run smoke
 
   # The deployable artefact itself. Every other job runs from a full checkout,
@@ -187,6 +217,33 @@ jobs:
       - name: Runtime user is not root
         # The UID `reports/coolify-deployment.md` §4 has the volume owned by.
         run: test "$(docker run --rm --entrypoint id back-end:ci -u)" = 1000
+
+  # `verify` typechecks the front-end only as a consumer of `@app/shared`. Its
+  # own lint (with the CSS browserslist audit) and format ran nowhere but a
+  # developer's machine. `tests/` is git-ignored, so the test step runs only the
+  # tracked theme tests under `scripts/lib/`, the per-theme contrast gate among them.
+  front-end:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/front-end
+    env:
+      NEXT_PUBLIC_ENABLED_OTP_CHANNELS: email
+      NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - working-directory: ${{ github.workspace }}
+        run: test -f bun.lock && bun install --frozen-lockfile
+      - name: Lint
+        run: bun run lint
+      - name: Format
+        run: bun run format:check
+      - name: Tests
+        run: bun run test
 
   # The database-backed tiers. Their own job because they need a PostgreSQL
   # service container, and because keeping them out of `verify` means a lint
@@ -236,17 +293,24 @@ jobs:
       NEXT_PUBLIC_ENABLED_OTP_CHANNELS: email
       NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
-      BETTER_AUTH_SECRET: ci-placeholder-better-auth-secret-000000
       SQLITE_DIR: /tmp/ci-sqlite
-      SQLITE_MAINTENANCE_TOKEN: ci-maintenance-token-0123456789012
       PASSWORD_PEPPER_ACTIVE_ID: ci
-      PASSWORD_PEPPER_KEYRING: '{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
       OTP_HMAC_ACTIVE_ID: ci
-      OTP_HMAC_KEYRING: '{"ci":{"generation":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Generate throwaway secrets
+        # As in `verify`, so CI supplies secrets one way only, although these
+        # tiers run as development, where no placeholder is refused.
+        run: |
+          key() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '='; }
+          {
+            echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)"
+            echo "SQLITE_MAINTENANCE_TOKEN=$(openssl rand -base64 32)"
+            echo "PASSWORD_PEPPER_KEYRING={\"ci\":{\"generation\":1,\"secret\":\"$(key)\"}}"
+            echo "OTP_HMAC_KEYRING={\"ci\":{\"generation\":1,\"secret\":\"$(key)\"}}"
+          } >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # Its own step, deliberately. `package.json` was once edited without
       # regenerating `bun.lock`, so every CI install would have failed while
@@ -272,26 +336,30 @@ jobs:
           bun run test:integration --
           --reporter=junit --reporter-outfile=reports/junit-integration.xml
           --coverage
-      - name: Publish integration test report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: junit-integration
-          # The full row's file, then one per focused configuration row.
-          path: apps/back-end/reports/junit-integration*.xml
-          if-no-files-found: warn
-          retention-days: 14
       - name: Process tests
         # Its own step for the same reason `bun run smoke` is separate: every
         # test here owns a real socket, a real child process or a real signal.
         # It is also the tier where the win32-skipped cases actually run.
-        run: bun run test:process
+        run: >-
+          bun run test:process --
+          --reporter=junit --reporter-outfile=reports/junit-process.xml
       - name: Configuration matrix tests
         # The ONLY tier that boots the disabled, TOTP-only, backup-only,
         # passkey-only, OTP-email and OTP-WhatsApp configurations, each of which
         # is decided at MODULE LOAD and therefore unreachable from any other
         # tier. Nothing ran it: `test:all` did, and no gate calls `test:all`.
-        run: bun run test:matrix
+        run: >-
+          bun run test:matrix --
+          --reporter=junit --reporter-outfile=reports/junit-matrix.xml
+      - name: Publish test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-tests
+          # One file per tier, or per configuration row where a tier has rows.
+          path: apps/back-end/reports/junit-*.xml
+          if-no-files-found: warn
+          retention-days: 14
       - name: Coverage floor
         # LAST in this job, and that placement is the point: a coverage dip is a
         # ratchet signal rather than a correctness failure, and sitting ahead of
@@ -303,6 +371,29 @@ jobs:
         # legitimately never loads. See the script's header.
         run: bun scripts/check-coverage.ts
 
+  # A `test.if` case is decided by load-time configuration, so one that every
+  # configuration row skips leaves every tier green. Needs no install: the
+  # script imports nothing outside the repository.
+  skipped-tests:
+    needs: [verify, tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/back-end
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: junit-*
+          merge-multiple: true
+          path: apps/back-end/reports
+      - name: Every conditional test runs somewhere
+        run: bun run check:skipped-tests
+
   workflows:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -313,6 +404,8 @@ jobs:
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
       - name: Lint workflows
         run: actionlint
+      - name: Workflow security
+        run: zizmor --offline --no-progress .github/workflows
 
   audit:
     runs-on: ubuntu-24.04

@@ -44,7 +44,7 @@ export function AlignToolbarButton() {
           {ALIGN_ITEMS.map((item) => (
             <DropdownMenuRadioItem
               aria-label={item.label}
-              className='data-[state=checked]:bg-accent'
+              className='data-[state=checked]:bg-accent data-[state=checked]:text-accent-foreground'
               indicator='check'
               key={item.value}
               value={item.value}

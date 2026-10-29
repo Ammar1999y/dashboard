@@ -15,11 +15,14 @@ import { DataTableHeaderCell } from './header-cell';
 interface HeaderRowProps<TData extends RowData> {
   headers: Header<DataTableFeatures, TData>[];
   pins: TableLayout<TData>['pins'];
+  /** Its `aria-rowindex`, counted from 1 with the body rows after it. */
+  rowIndex: number;
 }
 
 const HeaderRowInner = <TData extends RowData>({
   headers,
   pins,
+  rowIndex,
 }: HeaderRowProps<TData>) => {
   const columnIds = useMemo(
     () => headers.map((header) => header.column.id),
@@ -28,7 +31,12 @@ const HeaderRowInner = <TData extends RowData>({
 
   return (
     <SortableContext items={columnIds} strategy={horizontalListSortingStrategy}>
-      <div data-slot='table-row' className='flex min-h-10 w-fit'>
+      <div
+        role='row'
+        aria-rowindex={rowIndex}
+        data-slot='table-row'
+        className='flex min-h-10 w-fit'
+      >
         {headers.map((header) => {
           const pin = pins[header.column.id];
           return (
@@ -56,11 +64,12 @@ const DataTableHeaderInner = <TData extends RowData>({
   headerGroups,
   layout,
 }: DataTableHeaderProps<TData>) =>
-  headerGroups.map((headerGroup) => (
+  headerGroups.map((headerGroup, index) => (
     <HeaderRow
       key={headerGroup.id}
       headers={headerGroup.headers}
       pins={layout.pins}
+      rowIndex={index + 1}
     />
   ));
 

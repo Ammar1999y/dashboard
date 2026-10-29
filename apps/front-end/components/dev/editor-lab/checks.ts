@@ -1020,7 +1020,7 @@ export const SCENARIOS: Scenario[] = [
       check('tomorrow', formatDateLabel(at(1), now) === 'غداً');
       check(
         'another day',
-        formatDateLabel(at(10), now) === 'October 8, 2026',
+        formatDateLabel(at(10), now) === '8 أكتوبر 2026',
         formatDateLabel(at(10), now)
       );
       check('missing', formatDateLabel(undefined, now) === EMPTY_DATE_LABEL);

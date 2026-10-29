@@ -136,8 +136,9 @@ export function useDragAndDrop(ctx: MediaContext) {
         keys.length > 1 && styles.ghostMulti
       );
       const count = document.createElement('span');
+      // The fill pair inverted; `text-primary` would be the page ink.
       count.className =
-        'grid h-5 min-w-5 place-items-center rounded-full bg-primary-foreground px-1 font-mono text-xs text-primary';
+        'grid h-5 min-w-5 place-items-center rounded-full bg-primary-foreground px-1 font-mono text-xs text-primary-brand';
       count.textContent = String(keys.length);
       const name = document.createElement('span');
       name.className = 'truncate';
@@ -280,7 +281,7 @@ export const DragOverlays = memo(() => {
           style={hintStyle}
           className={cn(
             'pointer-events-none fixed top-0 z-50 max-w-80 rounded-lg bg-primary px-2.5 py-1 text-xs text-primary-foreground shadow-lg ltr:left-0 rtl:left-0',
-            hint.bad && 'bg-destructive text-white'
+            hint.bad && 'bg-destructive text-destructive-foreground'
           )}
         >
           {hint.text}

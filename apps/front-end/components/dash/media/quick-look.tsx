@@ -55,6 +55,7 @@ const zoomed = (view: View, factor: number): View => {
 };
 
 const barButton =
+  // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
   'size-[30px] text-zinc-300 hover:bg-white/10 hover:text-white';
 
 const DocumentStage = memo(({ file }: { file: LibraryFile }) => {
@@ -68,7 +69,10 @@ const DocumentStage = memo(({ file }: { file: LibraryFile }) => {
     [file.id]
   );
   return (
-    <div className='flex flex-col items-center gap-2.5 p-8 text-center text-zinc-100'>
+    <div
+      // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
+      className='flex flex-col items-center gap-2.5 p-8 text-center text-zinc-100'
+    >
       <DocTile
         mimeType={file.mimeType}
         large
@@ -77,7 +81,10 @@ const DocumentStage = memo(({ file }: { file: LibraryFile }) => {
       <h3 className='mt-1.5 font-medium' dir='auto'>
         {file.displayName}
       </h3>
-      <p className='text-zinc-400'>
+      <p
+        // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
+        className='text-zinc-400'
+      >
         {mimeLabel(file.mimeType)} ·{' '}
         <span dir='ltr' className='num bidi-isolate'>
           {formatBytes(file.sizeBytes, 1)}
@@ -158,7 +165,10 @@ const ImageStage = memo(({ file, view, onView }: ImageStageProps) => {
 
   if (image.status === 'failed')
     return (
-      <div className='flex flex-col items-center gap-2.5 text-zinc-100'>
+      <div
+        // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
+        className='flex flex-col items-center gap-2.5 text-zinc-100'
+      >
         <Icon icon='lucide:triangle-alert' className='size-8 opacity-70' />
         <h3>{MSG_PREVIEW_FAILED}</h3>
         <Button
@@ -177,6 +187,7 @@ const ImageStage = memo(({ file, view, onView }: ImageStageProps) => {
         <Icon
           icon='lucide:loader-circle'
           aria-label={MSG_LOADING}
+          // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
           className='size-8 animate-spin text-zinc-300 [grid-area:1/1]'
         />
       )}
@@ -294,15 +305,22 @@ const QuickLookBody = memo(({ keys, start, col }: BodyProps) => {
   if (!file) return null;
   return (
     <div className='flex h-full min-h-0 flex-col' onKeyDown={onKeyDown}>
-      <div className='relative z-[2] flex items-center justify-between gap-3 px-4 py-2.5 text-zinc-100'>
+      <div
+        // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
+        className='relative z-[2] flex items-center justify-between gap-3 px-4 py-2.5 text-zinc-100'
+      >
         <div className='flex min-w-0 flex-wrap items-center gap-2.5'>
           <DialogTitle
+            // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
             className='max-w-[46vw] truncate font-medium text-zinc-100'
             dir='auto'
           >
             {file.displayName}
           </DialogTitle>
-          <span className='text-xs text-zinc-400'>
+          <span
+            // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
+            className='text-xs text-zinc-400'
+          >
             {mimeLabel(file.mimeType)} ·{' '}
             <span dir='ltr' className='num bidi-isolate'>
               {formatBytes(file.sizeBytes, 1)}
@@ -311,7 +329,11 @@ const QuickLookBody = memo(({ keys, start, col }: BodyProps) => {
                 ` · ${file.width} × ${file.height}`}
             </span>
           </span>
-          <span dir='ltr' className='num bidi-isolate text-xs text-zinc-400'>
+          <span
+            dir='ltr'
+            // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
+            className='num bidi-isolate text-xs text-zinc-400'
+          >
             {index + 1} / {keys.length}
           </span>
         </div>
@@ -331,6 +353,7 @@ const QuickLookBody = memo(({ keys, start, col }: BodyProps) => {
               <button
                 type='button'
                 onClick={reset}
+                // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
                 className='h-7 min-w-12 rounded-md font-mono text-xs text-zinc-300 hover:bg-white/10'
               >
                 {Math.round(view.zoom * 100)}%
@@ -376,7 +399,8 @@ const QuickLookBody = memo(({ keys, start, col }: BodyProps) => {
             aria-label='السابق'
             onClick={previous}
             disabled={index === 0}
-            className='absolute top-1/2 z-[3] grid size-11 -translate-y-1/2 place-items-center rounded-full border border-white/20 bg-zinc-900/70 text-white hover:bg-primary disabled:pointer-events-none disabled:opacity-25 ltr:left-3.5 rtl:right-3.5'
+            // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
+            className='absolute top-1/2 z-[3] grid size-11 -translate-y-1/2 place-items-center rounded-full border border-white/20 bg-zinc-900/70 text-white hover:bg-primary hover:text-primary-foreground disabled:pointer-events-none disabled:opacity-25 ltr:left-3.5 rtl:right-3.5'
           >
             <Icon
               icon='lucide:chevron-right'
@@ -388,7 +412,8 @@ const QuickLookBody = memo(({ keys, start, col }: BodyProps) => {
             aria-label='التالي'
             onClick={next}
             disabled={index === keys.length - 1}
-            className='absolute top-1/2 z-[3] grid size-11 -translate-y-1/2 place-items-center rounded-full border border-white/20 bg-zinc-900/70 text-white hover:bg-primary disabled:pointer-events-none disabled:opacity-25 ltr:right-3.5 rtl:left-3.5'
+            // eslint-disable-next-line tailwind/fixed-colors -- the lightbox is black in every theme
+            className='absolute top-1/2 z-[3] grid size-11 -translate-y-1/2 place-items-center rounded-full border border-white/20 bg-zinc-900/70 text-white hover:bg-primary hover:text-primary-foreground disabled:pointer-events-none disabled:opacity-25 ltr:right-3.5 rtl:left-3.5'
           >
             <Icon
               icon='lucide:chevron-left'

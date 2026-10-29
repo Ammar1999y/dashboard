@@ -348,15 +348,14 @@ const selection = forwardedNames[0]
 const REPORTER_OUTFILE = '--reporter-outfile=';
 
 /**
- * A focused row writes its JUnit file beside the full row's, named after the
- * row: each child overwrites the file, so one shared name kept only the last
- * row's results.
+ * Each configuration row writes its JUnit file under its own name: each child
+ * overwrites the file, so one shared name kept only the last row's results.
  */
 function rowReporterFlags(
   flags: readonly string[],
-  row: { name?: string; files?: readonly string[] }
+  row: { name?: string }
 ): readonly string[] {
-  if (!row.files || !row.name) return flags;
+  if (!row.name) return flags;
   const rowName = row.name;
   return flags.map((flag) => {
     if (!flag.startsWith(REPORTER_OUTFILE)) return flag;

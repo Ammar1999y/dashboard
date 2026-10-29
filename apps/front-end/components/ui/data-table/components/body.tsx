@@ -45,13 +45,18 @@ const BodyCell = genericMemo(
 interface BodyRowProps<TData extends RowData> {
   bodyRow: BodyRow<TData>;
   layout: TableLayout<TData>;
+  rowIndex: number | undefined;
 }
 
 const BodyRowInner = <TData extends RowData>({
   bodyRow,
   layout,
+  rowIndex,
 }: BodyRowProps<TData>) => (
-  <TableRow className='group/row transition-colors duration-300 even:bg-muted/50 hover:bg-muted/70'>
+  <TableRow
+    aria-rowindex={rowIndex}
+    className='group/row transition-colors duration-300 even:bg-muted/50 hover:bg-muted/70'
+  >
     {bodyRow.cells.map((cell) => {
       const pin = layout.pins[cell.column.id];
       // Keyed by column, not `cell.id`: a reordered column keeps its cell
@@ -70,10 +75,10 @@ const BodyRowInner = <TData extends RowData>({
 
 // A refetch builds new row objects even for unchanged records; the record
 // itself keeps its identity (React Query's structural sharing). So a row
-// re-renders only when its record changed or a prop it hands a cell would —
-// the column at a position, or a pin placement; hiding a column changes
-// neither (its cells stay, hidden by CSS). Cell renderers must therefore read
-// from the row, never from outside state.
+// re-renders only when its record or its position changed, or a prop it hands
+// a cell would — the column at a position, or a pin placement; hiding a column
+// changes neither (its cells stay, hidden by CSS). Cell renderers must
+// therefore read from the row, never from outside state.
 function sameRow<TData extends RowData>(
   prev: BodyRowProps<TData>,
   next: BodyRowProps<TData>
@@ -82,6 +87,7 @@ function sameRow<TData extends RowData>(
   const after = next.bodyRow.cells;
   if (
     prev.bodyRow.row.original !== next.bodyRow.row.original ||
+    prev.rowIndex !== next.rowIndex ||
     before.length !== after.length
   )
     return false;
@@ -101,6 +107,8 @@ const BodyRowView = genericMemo(BodyRowInner, 'DataTableBodyRow', sameRow);
 interface DataTableBodyProps<TData extends RowData> {
   bodyRows: BodyRow<TData>[];
   layout: TableLayout<TData>;
+  /** The first row's `aria-rowindex`; unset when the page's place is unknown. */
+  firstRowIndex: number | undefined;
   isLoading: boolean;
   error: Error | null;
   refetch: () => void;
@@ -109,17 +117,33 @@ interface DataTableBodyProps<TData extends RowData> {
 const DataTableBodyInner = <TData extends RowData>({
   bodyRows,
   layout,
+  firstRowIndex,
   isLoading,
   error,
   refetch,
 }: DataTableBodyProps<TData>) => {
   if (bodyRows.length > 0)
-    return bodyRows.map((bodyRow) => (
-      <BodyRowView key={bodyRow.row.id} bodyRow={bodyRow} layout={layout} />
+    return bodyRows.map((bodyRow, index) => (
+      <BodyRowView
+        key={bodyRow.row.id}
+        bodyRow={bodyRow}
+        layout={layout}
+        rowIndex={
+          firstRowIndex === undefined ? undefined : firstRowIndex + index
+        }
+      />
     ));
   if (isLoading) return <DataTableSkeleton columnIds={layout.columnIds} />;
-  if (error) return <DataTableErrorState error={error} refetch={refetch} />;
-  return <DataTableEmptyState />;
+  const columnCount = layout.columnIds.length;
+  if (error)
+    return (
+      <DataTableErrorState
+        error={error}
+        refetch={refetch}
+        columnCount={columnCount}
+      />
+    );
+  return <DataTableEmptyState columnCount={columnCount} />;
 };
 
 const DataTableBody = genericMemo(DataTableBodyInner, 'DataTableBody');

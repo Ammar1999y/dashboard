@@ -11,8 +11,9 @@ import {
 } from '@/constants/messages';
 import { deletePasskey, usePasskeys } from '@/lib/account/two-factor';
 
+import { tableFormatDate } from '@/utils/format';
+
 import { Button } from '@/components/ui/button';
-import { tableFormatDate } from '@/components/ui/date/utils';
 import { ErrorState } from '@/components/ui/error-state';
 import { Icon } from '@/components/ui/icon';
 

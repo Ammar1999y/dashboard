@@ -19,10 +19,11 @@ import {
 } from '@/constants/messages';
 import { revokeSessions, useUserSessions } from '@/lib/users/security';
 
+import { formatDateTime } from '@/utils/format';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { formatDateTime } from '@/components/ui/date/utils';
 import { ErrorState } from '@/components/ui/error-state';
 import { Icon } from '@/components/ui/icon';
 import {
@@ -49,7 +50,7 @@ const SessionRow = memo(
     const handleToggle = useCallback(() => onToggle(id), [onToggle, id]);
 
     return (
-      <TableRow className='border-none transition-colors duration-300 even:bg-accent/50 hover:bg-accent'>
+      <TableRow className='border-none transition-colors duration-300 even:bg-muted/50 hover:bg-muted/70'>
         <TableCell className='w-10 py-3 text-center'>
           {!isCurrent && (
             <Checkbox
@@ -249,7 +250,7 @@ export const UserSessions = memo(({ userId, isSelf }: UserSessionsProps) => {
             containerClassName='rounded-md'
           >
             <TableHeader>
-              <TableRow className='bg-accent/50 ltr:[&_th:first-child]:rounded-tl-lg rtl:[&_th:first-child]:rounded-tr-lg ltr:[&_th:last-child]:rounded-tr-lg rtl:[&_th:last-child]:rounded-tl-lg'>
+              <TableRow className='bg-muted/70 ltr:[&_th:first-child]:rounded-tl-lg rtl:[&_th:first-child]:rounded-tr-lg ltr:[&_th:last-child]:rounded-tr-lg rtl:[&_th:last-child]:rounded-tl-lg'>
                 <TableHead className='w-10 text-center'>
                   {revocable.length > 0 && (
                     <Checkbox

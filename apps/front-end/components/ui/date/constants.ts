@@ -13,6 +13,4 @@ export type PresetName = (typeof PRESETS)[number]['name'];
 export const isPresetName = (value: string): value is PresetName =>
   PRESETS.some((preset) => preset.name === value);
 
-export const DEFAULT_DATE_LOCALE = 'ar-u-ca-gregory';
-
 export const DATE_PLACEHOLDER = 'اختر التاريخ';

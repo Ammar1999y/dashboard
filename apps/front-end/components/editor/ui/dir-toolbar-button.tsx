@@ -68,7 +68,7 @@ export function DirToolbarButton() {
         >
           {DIR_VALUES.map((dir) => (
             <DropdownMenuRadioItem
-              className='data-[state=checked]:bg-accent'
+              className='data-[state=checked]:bg-accent data-[state=checked]:text-accent-foreground'
               indicator='check'
               key={dir}
               value={dir}

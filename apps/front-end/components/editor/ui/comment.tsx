@@ -62,7 +62,7 @@ export function AuthorLine({
     <div className='relative flex items-center'>
       <UserAvatar name={name} image={user?.avatarUrl} className='size-5' />
       <h4 className='mx-2 text-sm font-semibold leading-none'>{name}</h4>
-      <div className='text-xs leading-none text-muted-foreground/80'>
+      <div className='text-xs leading-none text-muted-foreground'>
         <span className='me-1'>{formatCommentDate(createdAt)}</span>
         {edited && <span>(معدل)</span>}
       </div>
@@ -242,13 +242,12 @@ function CommentActionButton({
       <div
         className={cn(
           'flex size-5 shrink-0 items-center justify-center rounded-full',
-          tone === 'primary' ? 'bg-primary' : 'bg-primary/40'
+          tone === 'primary'
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-muted text-muted-foreground'
         )}
       >
-        <Icon
-          icon={icon}
-          className='size-3 text-background [&_*]:stroke-[3px]'
-        />
+        <Icon icon={icon} className='size-3 [&_*]:stroke-[3px]' />
       </div>
     </Button>
   );

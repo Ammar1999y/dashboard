@@ -68,28 +68,34 @@ async function discoverAction() {
   );
 }
 
-const action = await discoverAction();
-const response = await fetchText(COMMUNITY_URL, {
-  method: 'POST',
-  headers: {
-    'Next-Action': action,
-    Accept: 'text/x-component',
-    'Content-Type': 'text/plain;charset=UTF-8',
-    Origin: new URL(COMMUNITY_URL).origin,
-  },
-  // Flight's representation of an absent cursor; JSON null is rejected upstream.
-  body: JSON.stringify([
-    'popular',
-    '$undefined',
-    COMMUNITY_LIMIT,
-    'all',
-    [],
-    'all',
-  ]),
-});
-const presets = mergeCommunityPresets(
+async function fetchCommunityThemes() {
+  const action = await discoverAction();
+  const response = await fetchText(COMMUNITY_URL, {
+    method: 'POST',
+    headers: {
+      'Next-Action': action,
+      Accept: 'text/x-component',
+      'Content-Type': 'text/plain;charset=UTF-8',
+      Origin: new URL(COMMUNITY_URL).origin,
+    },
+    // Flight's representation of an absent cursor; JSON null is rejected upstream.
+    body: JSON.stringify([
+      'popular',
+      '$undefined',
+      COMMUNITY_LIMIT,
+      'all',
+      [],
+      'all',
+    ]),
+  });
+  return readCommunityResponse(response);
+}
+
+// `--offline` re-applies the import fixes to the stored registry alone.
+const offline = process.argv.includes('--offline');
+const { presets, dropped } = mergeCommunityPresets(
   themePresets,
-  readCommunityResponse(response)
+  offline ? [] : await fetchCommunityThemes()
 );
 const source = await format(
   `import type { ThemePreset } from './types';\n\nexport const themePresets: Record<string, ThemePreset> = ${JSON.stringify(presets)};\n`,
@@ -103,6 +109,10 @@ try {
 } finally {
   await rm(temporaryPath, { force: true });
 }
+if (dropped.length > 0)
+  console.warn(`Dropped, no contrast fix reads on them: ${dropped.join(', ')}`);
 console.log(
-  `Merged ${COMMUNITY_LIMIT} community themes (${Object.keys(presets).length} themes retained).`
+  offline
+    ? `Re-applied the import fixes (${Object.keys(presets).length} themes).`
+    : `Merged ${COMMUNITY_LIMIT} community themes (${Object.keys(presets).length} themes retained).`
 );

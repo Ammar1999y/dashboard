@@ -1,14 +1,19 @@
-import type { ThemePreset } from '../../components/theme-customizer/types';
+import type {
+  ThemePreset,
+  ThemeStyleProps,
+} from '../../components/theme-customizer/types';
 
 import Color from 'colorjs.io';
 import * as z from 'zod';
 import { PRESET_NAME_MAX } from '@app/shared/validation/constants';
 
+import { resolvePresetStyles } from '../../components/theme-customizer/apply-preset';
 import {
   COMMON_STYLES,
   DEFAULT_THEME_STYLES,
 } from '../../components/theme-customizer/config';
 import { colorFormatter } from '../../utils/color-converter';
+import { ContrastError, fixContrast } from './theme-contrast';
 
 export const COMMUNITY_URL = 'https://tweakcn.com/community';
 export const COMMUNITY_LIMIT = 20;
@@ -140,10 +145,38 @@ export function readCommunityResponse(body: string) {
   return themes;
 }
 
+/**
+ * `preset` with every text color the app draws on its surfaces readable
+ * (`theme-contrast.ts`), the fix written where `resolvePresetStyles` reads it.
+ */
+export function ensurePresetContrast(preset: ThemePreset): ThemePreset {
+  const resolved = resolvePresetStyles(preset);
+  const inks = [resolved.light.foreground, resolved.dark.foreground] as const;
+  const light = fixContrast(resolved.light, 'light', inks);
+  const dark = fixContrast(resolved.dark, 'dark', inks);
+  const keys = Object.keys(light) as (keyof ThemeStyleProps)[];
+  const styles = {
+    light: { ...preset.styles.light },
+    dark: { ...preset.styles.dark },
+  };
+  for (const key of keys)
+    if (light[key] !== resolved.light[key]) styles.light[key] = light[key];
+  // Dark falls back to light, so a light fix must not leak into dark.
+  const inherited = {
+    ...DEFAULT_THEME_STYLES.dark,
+    ...styles.light,
+    ...styles.dark,
+  };
+  for (const key of keys)
+    if (dark[key] !== inherited[key]) styles.dark[key] = dark[key];
+  return { ...preset, styles };
+}
+
+/** `dropped` lists the presets no contrast fix could make readable. */
 export function mergeCommunityPresets(
   existing: Record<string, ThemePreset>,
   themes: ReturnType<typeof readCommunityResponse>
-): Record<string, ThemePreset> {
+): { presets: Record<string, ThemePreset>; dropped: string[] } {
   const presets = new Map(Object.entries(existing));
   for (const theme of themes) {
     const incomingId = `${COMMUNITY_PREFIX}${theme.themeId}`;
@@ -169,5 +202,15 @@ export function mergeCommunityPresets(
       },
     });
   }
-  return Object.fromEntries(presets);
+  const readable: Record<string, ThemePreset> = {};
+  const dropped: string[] = [];
+  for (const [id, preset] of presets) {
+    try {
+      readable[id] = ensurePresetContrast(preset);
+    } catch (error) {
+      if (!(error instanceof ContrastError)) throw error;
+      dropped.push(id);
+    }
+  }
+  return { presets: readable, dropped };
 }

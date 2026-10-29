@@ -50,6 +50,7 @@ import { MSG_FETCHED } from '@app/shared/messages/common';
 import { mediaMsg } from '@app/shared/messages/media';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 import { resolveActionScope } from '@app/shared/permissions/scope';
+import { searchKey } from '@app/shared/search-fold';
 import { validID } from '@app/shared/utils';
 import {
   FOLDER_MAX_CHILDREN,
@@ -407,9 +408,10 @@ function requireOwnFolder(id: EntityID, caller: Caller) {
 }
 
 function searchFolders(term: string) {
+  const key = searchKey(term);
   const hits = folders
     .all()
-    .filter((folder) => folder.name.toLowerCase().includes(term.toLowerCase()))
+    .filter((folder) => searchKey(folder.name).includes(key))
     .sort(byName);
   return {
     folders: hits.slice(0, FOLDER_SEARCH_LIMIT).map((folder) => ({

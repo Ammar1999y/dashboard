@@ -6,7 +6,9 @@ import type {
   JoinOperator,
 } from '../types/data-table';
 
+import { searchFold } from '../search-fold';
 import { OUT_OF_RANGE, positiveInt } from '../utils';
+import { isNoValueOperator, isSearchOperator } from './column-specs';
 import { dataTableConfig } from './config';
 
 export const MAX_SORT_RAW_LENGTH = 4096;
@@ -139,32 +141,46 @@ function isFilterVariant(value: string): value is FilterVariant {
   return validVariants.has(value);
 }
 
-/** Operators that are complete without a value. */
-export const VALUELESS_OPERATORS: ReadonlySet<string> = new Set([
-  'isEmpty',
-  'isNotEmpty',
-]);
-
 const CONTROL_CHARACTERS = /\p{Cc}/gu;
+
+/** The control characters `searchFold` reads as a space. */
+const CONTROL_WHITESPACE = /[\t-\r\u{85}]+/gu;
 
 export function stripControlAndTrim(value: string): string {
   return value.replaceAll(CONTROL_CHARACTERS, '').trim();
 }
 
-/** The quick-search term the server applies; `''` for one it ignores. */
+/**
+ * `stripControlAndTrim` for a search term: a line break or a tab still parts
+ * two words, as it does in the folded text the term is matched against.
+ */
+export function cleanSearchTerm(value: string): string {
+  return stripControlAndTrim(value.replaceAll(CONTROL_WHITESPACE, ' '));
+}
+
+/**
+ * The quick-search term the server applies, as typed; `''` for one it ignores.
+ * Its bounds are measured on `searchFold` of it, the text the index holds:
+ * «ـــ» is three characters typed and none folded.
+ */
 export function effectiveSearchTerm(raw: string): string {
-  const term = stripControlAndTrim(raw);
-  const length = searchTermLength(term);
+  const term = cleanSearchTerm(raw);
+  const folded = searchFold(term);
+  const length = searchTermLength(folded);
   return length >= MIN_SEARCH_LENGTH &&
     length <= MAX_SEARCH_LENGTH &&
-    isTrigramIndexable(term)
+    isTrigramIndexable(folded)
     ? term
     : '';
 }
 
-function safeString(v: unknown, maxLen: number): string | null {
+function safeString(
+  v: unknown,
+  maxLen: number,
+  clean: (value: string) => string = stripControlAndTrim
+): string | null {
   if (typeof v === 'string') {
-    const trimmed = stripControlAndTrim(v);
+    const trimmed = clean(v);
     return trimmed.length > 0 && trimmed.length <= maxLen ? trimmed : null;
   }
   if (typeof v === 'number' && Number.isFinite(v)) {
@@ -266,8 +282,11 @@ export interface FilterItemSchema {
   filterId: string;
 }
 
-function safeValue(v: unknown): string | null {
-  return safeString(v, MAX_VALUE_LENGTH) || null;
+function safeValue(
+  v: unknown,
+  clean?: (value: string) => string
+): string | null {
+  return safeString(v, MAX_VALUE_LENGTH, clean) || null;
 }
 
 /**
@@ -319,10 +338,13 @@ function parseFilterItem(raw: unknown): FilterItemSchema | null {
     if (!values) return null;
     value = values;
   } else {
-    const s = safeValue(obj.value);
+    const s = safeValue(
+      obj.value,
+      isSearchOperator(obj.operator) ? cleanSearchTerm : undefined
+    );
     // The UI submits an empty string for the valueless operators.
     if (s === null) {
-      if (!VALUELESS_OPERATORS.has(obj.operator)) return null;
+      if (!isNoValueOperator(obj.operator)) return null;
       value = '';
     } else {
       value = s;

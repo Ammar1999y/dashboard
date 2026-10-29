@@ -469,7 +469,7 @@ const DeleteBody = memo(({ keys, request, onPending }: BodyProps) => {
             <Line busy>
               {MSG_DELETE_PROGRESS(Math.min(step + 1, runs), runs)}
             </Line>
-            <p className='ps-6 text-xs text-muted-foreground/70'>
+            <p className='ps-6 text-xs text-muted-foreground'>
               {MSG_LONG_OPERATION}
             </p>
           </div>

@@ -26,6 +26,9 @@ import {
   MeasuringStrategy,
 } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
+import { MSG_FETCH_ERROR } from '@app/shared/messages/common';
+import { MSG_LOADING, MSG_NO_RESULTS } from '@/constants/messages';
+import { errorMessage } from '@/lib/toast-error';
 import { cn } from '@/lib/utils';
 
 import {
@@ -88,6 +91,8 @@ interface DataTableViewProps<TData extends RowData> {
   data: TData[] | undefined;
   pageCount: number;
   isLoading: boolean;
+  /** `data` is the previous query's, kept on screen while this one loads. */
+  isPlaceholderData?: boolean;
   error: Error | null;
   refetch: () => void;
   /** Saves the column layout; a table remounted under another key starts over. */
@@ -95,6 +100,12 @@ interface DataTableViewProps<TData extends RowData> {
   defaultSort: ColumnSort[];
   /** Defaults to the `actions` column pinned to the end, when there is one. */
   defaultPinning?: ColumnPinningState;
+  /** The table's accessible name. */
+  label?: string;
+  /** Every row the query matched, across all pages. */
+  rowCount?: number;
+  /** Rows on the pages before this one; unset, the rows carry no position. */
+  rowOffset?: number;
   ref?: Ref<DataTableHandle<TData>>;
 }
 
@@ -120,9 +131,13 @@ const TableFrameInner = <TData extends RowData>({
   data,
   pageCount,
   isLoading,
+  isPlaceholderData = false,
   error,
   refetch,
   defaultSort,
+  label,
+  rowCount,
+  rowOffset,
   ref,
 }: DataTableViewProps<TData>) => {
   const store = useColumnStoreApi();
@@ -135,13 +150,21 @@ const TableFrameInner = <TData extends RowData>({
     tableWidth,
     allColumns,
   } = useTableInstance(columns, data ?? NO_ROWS);
+  const columnLabels = useMemo(
+    () =>
+      new Map(
+        allColumns.map((c) => [c.id, c.columnDef.meta?.label ?? c.id] as const)
+      ),
+    [allColumns]
+  );
   const {
     activeId,
     sensors,
+    accessibility,
     handleDragStart,
     handleDragEnd,
     handleDragCancel,
-  } = useColumnDnd();
+  } = useColumnDnd(columnLabels);
   const tableId = useId();
 
   useImperativeHandle(ref, () => ({ table, store }), [table, store]);
@@ -152,10 +175,26 @@ const TableFrameInner = <TData extends RowData>({
   useEffect(() => mirrorTableToUrl(defaultSort), [defaultSort, tableKey]);
   useClampedPage(pageCount, isLoading);
 
-  const activeLabel = useMemo(() => {
-    const column = allColumns.find((c) => c.id === activeId);
-    return column ? (column.columnDef.meta?.label ?? column.id) : null;
-  }, [activeId, allColumns]);
+  const activeLabel =
+    activeId === null ? null : (columnLabels.get(activeId) ?? null);
+
+  // Header rows come first in the count, and the count covers every page.
+  const headerRowCount = headerGroups.length;
+  const firstRowIndex =
+    rowOffset === undefined ? undefined : headerRowCount + rowOffset + 1;
+  const ariaRowCount =
+    rowCount === undefined || bodyRows.length === 0
+      ? undefined
+      : headerRowCount + rowCount;
+  // In the order the body picks what to show.
+  const status =
+    bodyRows.length > 0
+      ? ''
+      : isLoading
+        ? MSG_LOADING
+        : error
+          ? errorMessage(error, MSG_FETCH_ERROR)
+          : MSG_NO_RESULTS;
 
   return (
     <DndContext
@@ -166,6 +205,7 @@ const TableFrameInner = <TData extends RowData>({
       sensors={sensors}
       collisionDetection={closestCenter}
       measuring={MEASURING}
+      accessibility={accessibility}
     >
       <div
         className={cn(
@@ -186,6 +226,10 @@ const TableFrameInner = <TData extends RowData>({
         >
           <ColumnRules tableId={tableId} rules={columnRules} />
           <div
+            role='table'
+            aria-label={label}
+            aria-rowcount={ariaRowCount}
+            aria-busy={isLoading || isPlaceholderData}
             data-slot='table'
             data-table-id={tableId}
             style={{ width: tableWidth }}
@@ -193,6 +237,7 @@ const TableFrameInner = <TData extends RowData>({
             {/* z-20: above pinned body cells, which `styles/table.css` gives
                 z-index 10 so they cover the columns scrolling under them. */}
             <div
+              role='rowgroup'
               data-slot='table-header'
               className='sticky top-0 z-20 rounded-t-lg bg-background'
             >
@@ -200,10 +245,11 @@ const TableFrameInner = <TData extends RowData>({
                 <DataTableHeader headerGroups={headerGroups} layout={layout} />
               </div>
             </div>
-            <div data-slot='table-body'>
+            <div role='rowgroup' data-slot='table-body'>
               <DataTableBody
                 bodyRows={bodyRows}
                 layout={layout}
+                firstRowIndex={firstRowIndex}
                 isLoading={isLoading}
                 error={error}
                 refetch={refetch}
@@ -217,6 +263,11 @@ const TableFrameInner = <TData extends RowData>({
           <DataTablePagination pageCount={pageCount} />
         ) : null}
       </div>
+      {/* After the frame: inside, `inert` would hide it while loading, and
+          before, it would shift the frame's `space-*` sibling margin. */}
+      <p role='status' className='sr-only'>
+        {status}
+      </p>
       <DragOverlay dropAnimation={DROP_ANIMATION}>
         {activeLabel === null ? null : <DragLabel label={activeLabel} />}
       </DragOverlay>

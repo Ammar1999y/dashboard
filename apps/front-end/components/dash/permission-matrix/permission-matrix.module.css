@@ -6,7 +6,7 @@
  */
 
 .root {
-  --perm-ink: var(--primary-dark);
+  --perm-ink: var(--primary-ink);
   --perm-warn: var(--colors-palette-warning-dark);
   --perm-line: hsl(var(--foreground) / 0.2);
   --perm-radius: calc(var(--radius) - 2px);
@@ -15,7 +15,6 @@
 }
 
 [data-theme='dark'] .root {
-  --perm-ink: var(--primary-light);
   --perm-warn: var(--colors-palette-warning-default);
 }
 
@@ -39,15 +38,15 @@
 }
 
 .head {
-  background-color: hsl(var(--accent) / 0.5);
+  background-color: hsl(var(--muted) / 0.7);
 }
 
 .rows > .row:nth-child(even) {
-  background-color: hsl(var(--accent) / 0.5);
+  background-color: hsl(var(--muted) / 0.5);
 }
 
 .rows > .row:hover {
-  background-color: hsl(var(--accent));
+  background-color: hsl(var(--muted) / 0.7);
 }
 
 .cell {
@@ -133,7 +132,7 @@
 
 .iconButton:hover {
   background-color: hsl(var(--accent));
-  color: hsl(var(--foreground));
+  color: hsl(var(--accent-foreground));
 }
 
 /* One bordered box: the chip, and for a scoped cell its menu chevron. */
@@ -165,7 +164,11 @@
 
 .chipbox[data-level='1'] {
   border-color: hsl(var(--primary) / 0.45);
-  background-color: hsl(var(--primary) / 0.1);
+  /* Over the chip's own background, so the ink never meets a row's stripe. */
+  background-image: linear-gradient(
+    hsl(var(--primary) / 0.1),
+    hsl(var(--primary) / 0.1)
+  );
   color: hsl(var(--perm-ink));
 }
 
@@ -188,6 +191,11 @@
 .chipbox[data-stuck='true']:hover {
   border-color: var(--perm-line);
   color: hsl(var(--muted-foreground));
+}
+
+.chipbox[data-stuck='true'][data-level='1']:hover {
+  border-color: hsl(var(--primary) / 0.45);
+  color: hsl(var(--perm-ink));
 }
 
 .chipbox[data-stuck='true'][data-level='2']:hover {
@@ -300,6 +308,7 @@
 
 .chipbox[data-level='0'] .more:hover {
   background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
 }
 
 .chipbox[data-level='1'] .more {

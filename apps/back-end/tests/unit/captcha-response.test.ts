@@ -11,6 +11,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
 import { verifyTurnstileRequest } from '@/lib/captcha';
+import { PUBLIC_ORIGIN } from '@/lib/env';
+
+const OUR_HOST = new URL(PUBLIC_ORIGIN).hostname;
 
 const HEADER = 'x-captcha-response';
 /* eslint-disable unicorn/no-unnecessary-global-this, unicorn/no-global-object-property-assignment -- the point of these cases IS what `lib/captcha.ts` gets back from the global `fetch`, so the stub has to be installed on the global object and restored from it */
@@ -38,13 +41,19 @@ afterEach(() => {
 });
 
 describe('the siteverify body', () => {
-  test('accepts exactly `success: true`', async () => {
-    answerWith({ success: true });
+  test('accepts exactly `success: true` on our hostname', async () => {
+    answerWith({ success: true, hostname: OUR_HOST });
     expect(await verifyTurnstileRequest(headers())).toBe(true);
   });
 
   test.each([
-    ['a refusal', { success: false }],
+    ['a refusal', { success: false, hostname: OUR_HOST }],
+    [
+      'a token solved on another site',
+      { success: true, hostname: 'evil.example' },
+    ],
+    ['a success with no hostname', { success: true }],
+    ['a non-string hostname', { success: true, hostname: [OUR_HOST] }],
     ['a truthy non-boolean', { success: 'true' }],
     ['a numeric one', { success: 1 }],
     ['no success field', { 'error-codes': ['bad-request'] }],

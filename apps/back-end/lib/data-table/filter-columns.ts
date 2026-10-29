@@ -2,6 +2,7 @@ import type {
   FilterColumnSpec,
   FilterColumnSpecs,
 } from '@app/shared/data-table/column-specs';
+import type { SearchAnchor } from '@app/shared/data-table/parsers';
 import type {
   ExtendedColumnFilter,
   JoinOperator,
@@ -39,6 +40,7 @@ import {
   parseBoolean,
   requireFilterSpec,
   safeNumber,
+  searchAnchorOf,
 } from '@app/shared/data-table/filter-rules';
 
 /**
@@ -62,6 +64,29 @@ export function escapeLike(value: string): string {
   return value.replaceAll(/[%_\\]/g, String.raw`\$&`);
 }
 
+/**
+ * The expression every trigram index over a searchable column is built on
+ * (`db/migrations/`); a pattern matched against the bare column cannot use them.
+ */
+export function foldedColumn(column: Column): SQL {
+  return sql`search_fold(${column})`;
+}
+
+/**
+ * The `ILIKE` pattern for `term` against `foldedColumn`, built in SQL from the
+ * term as typed so that one fold serves both sides
+ * (`db/migrations/011_search_pattern_functions.sql`). NULL, matching nothing,
+ * when the database's fold of the term leaves the index no trigram.
+ */
+export function searchPattern(term: string, anchor: SearchAnchor): SQL {
+  return sql`search_trigram_pattern(${term}, ${anchor})`;
+}
+
+/** `searchPattern` for the scan-only operator, which no index serves anyway. */
+function scanPattern(term: string): SQL {
+  return sql`search_pattern(${term}, 'contains')`;
+}
+
 // Every negated form below adds `or(..., isNull(column))`: under SQL
 // three-valued logic `NULL <> x`, `NULL NOT ILIKE …` and `NULL NOT IN (…)` are
 // NULL, not TRUE, so a row with no value would silently fail a predicate that
@@ -74,20 +99,19 @@ function buildCondition(
   const value = filter.value;
 
   switch (filter.operator) {
-    case 'iLike': {
-      return ilike(column, `%${escapeLike(value as string)}%`);
+    case 'iLike':
+    case 'startsWith':
+    case 'endsWith': {
+      return ilike(
+        foldedColumn(column),
+        searchPattern(value as string, searchAnchorOf(filter.operator))
+      );
     }
     case 'notILike': {
       return or(
-        notIlike(column, `%${escapeLike(value as string)}%`),
+        notIlike(foldedColumn(column), scanPattern(value as string)),
         isNull(column)
       );
-    }
-    case 'startsWith': {
-      return ilike(column, `${escapeLike(value as string)}%`);
-    }
-    case 'endsWith': {
-      return ilike(column, `%${escapeLike(value as string)}`);
     }
 
     case 'eq':
