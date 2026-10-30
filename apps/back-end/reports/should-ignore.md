@@ -212,6 +212,40 @@
     measurements are already recorded; if benchmarks need to be re-run,
     dependencies can be installed on-demand and removed.
 
+68. **Sign-In Racing a Deactivation Keeps Read Access** —
+    `lib/auth/session/hooks.ts` (`session.create.before`),
+    `modules/permissions/item.ts` (role deactivation) — a sign-in whose
+    eligibility read lands a millisecond before an admin deactivates the user
+    or role leaves a session the deactivation missed, and the cookie cache keeps
+    serving reads from it. Rare and almost impossible to hit, and the user
+    already held that read access, so keeping it longer costs nothing real.
+    Writes are still refused. (Audit opus-5.5 #10.)
+
+69. **A Passkey Deleted Mid-Sign-In Still Completes the Second Factor** —
+    `lib/auth/two-factor/passkey.ts` — an assertion in flight while the owner
+    deletes that passkey can still mint a session. A millisecond race, and it
+    gains nothing: a sign-in a moment earlier yields the same session, and
+    deleting a passkey never revoked existing sessions. (Audit opus-5.5 #12.)
+
+70. **User Detail Shows Session IPs for Up to 5 Minutes After `users.edit` Is
+    Removed** — `modules/users/item.ts` (`getUser`) — the detail route reads
+    grants from the cookie cache, so an admin who just lost `users.edit` keeps
+    seeing other users' session IPs and user agents until the cache expires.
+    They already had that view; another few minutes of it is no real exposure.
+    Same reasoning as Known #5. (Audit opus-5.5 #13.)
+
+71. **Two Correct Second Factors Racing Can Make a "Don't Remember Me" Session
+    Persistent** — `lib/auth/two-factor/challenge.ts` (`invalidateChallenge`)
+    — the losing request of two simultaneous correct completions clears the
+    winner's `dont_remember` marker. Rare, and it only lengthens the
+    legitimate owner's own session. (Audit opus-5.5 #16.)
+
+72. **Sign-Out Can Deadlock With an Admin 2FA Reset of the Same User** —
+    `lib/auth/path-policy.ts` (`revokeSignedOutSession`),
+    `modules/users/two-factor.ts` — the two delete session rows and their
+    artifacts in opposite orders. Needs both at the same millisecond; one side
+    gets a retryable 503 and nothing is gained or lost. (Audit opus-5.5 #36.)
+
 # Known Issues — Will Be Fixed Later
 
 1. **Race Condition: Stale Login / OTP Proof Can Issue Session After Credential Rotation**

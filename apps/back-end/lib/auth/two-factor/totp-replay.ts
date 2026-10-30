@@ -105,9 +105,10 @@ export async function consumeTotpCode(
 
 export async function readVerifiedTotpSecret(
   userId: EntityID,
-  key: SymmetricDecryptOptions['key']
+  key: SymmetricDecryptOptions['key'],
+  executor: Executor = db
 ): Promise<string | null> {
-  const [credential] = await db
+  const [credential] = await executor
     .select({
       secret: twoFactorCredentials.secret,
       verified: twoFactorCredentials.verified,

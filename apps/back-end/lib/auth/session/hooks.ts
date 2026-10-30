@@ -35,6 +35,7 @@ import { logSanitized } from '@/utils/log';
 import { authError } from '../errors';
 import { authDatabase } from '../transaction';
 import { roleAllowsLogin } from '../user-eligibility';
+import { evictSessionsBeyondCap } from './cap';
 import { revokeSessionArtifacts } from './rotation';
 
 const SESSION_METHOD_BY_PATH: Readonly<Record<string, string>> = {
@@ -153,9 +154,10 @@ export const sessionDatabaseHooks = {
       };
     },
     /**
-     * The one place `loginSuccess` is written. Best-effort: the session
-     * already exists. The method label is not the factor chain — a
-     * first-factor session is logged before a challenge withdraws it.
+     * The one place `loginSuccess` is written, and where the per-user session
+     * cap is held. Best-effort: the session already exists. The method label is
+     * not the factor chain — a first-factor session is logged before a
+     * challenge withdraws it.
      */
     after: async (session, context) => {
       try {
@@ -187,6 +189,13 @@ export const sessionDatabaseHooks = {
         });
       } catch (error) {
         logSanitized('error', { msg: 'session.loginAudit.failed', error });
+      }
+
+      try {
+        const userId = validID(session.userId);
+        if (userId) await evictSessionsBeyondCap(userId, session.id);
+      } catch (error) {
+        logSanitized('error', { msg: 'session.capEvict.failed', error });
       }
     },
   },

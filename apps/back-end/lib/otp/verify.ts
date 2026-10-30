@@ -6,7 +6,12 @@ import type { OtpChannel, OtpPurpose } from '@app/shared/validation/enums';
 import { and, eq, gt, sql } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
-import { users, verificationCodes, verificationSessions } from '@/db/schema';
+import {
+  otpChallenges,
+  users,
+  verificationCodes,
+  verificationSessions,
+} from '@/db/schema';
 import { TransactionDeadlineError } from '@/db/transaction';
 
 import { OTP_AUTO_VERIFY } from '@app/shared/config';
@@ -39,7 +44,7 @@ import {
  */
 const evaluatedGuesses = new WeakSet<object>();
 
-function markEvaluatedGuess<E extends object>(error: E): E {
+export function markEvaluatedGuess<E extends object>(error: E): E {
   evaluatedGuesses.add(error);
   return error;
 }
@@ -50,7 +55,7 @@ export function otpGuessWasEvaluated(error: unknown): boolean {
   );
 }
 
-interface ProcessOtpVerifyOptions {
+export interface ProcessOtpVerifyOptions {
   userId: EntityID;
   /** Required with `auditMeta`: the block transition's audit row needs it. */
   userEmail?: string;
@@ -77,7 +82,7 @@ interface ProcessOtpVerifyOptions {
   ) => Promise<void>;
 }
 
-async function transactionWithin<T>(
+export async function transactionWithin<T>(
   fn: (tx: Tx) => Promise<T>,
   { deadline, purpose }: Pick<ProcessOtpVerifyOptions, 'deadline' | 'purpose'>
 ): Promise<T> {
@@ -100,20 +105,75 @@ async function transactionWithin<T>(
   }
 }
 
+export type VerifyOutcome =
+  | { kind: 'matched' }
+  | { kind: 'mismatch' }
+  | { kind: 'no-code' }
+  | {
+      kind: 'blocked';
+      blockedUntil: Date | null;
+      /** Whether a submitted code was compared before the block was raised. */
+      evaluated: boolean;
+    };
+
+/**
+ * Spends a matched proof. The cycle closes, so its counters reset: a block
+ * stamped before the compare would lock the slot, and leftover send state would
+ * walk repeat logins into a self-inflicted block. `verifyAttemptDaily` is
+ * REFUNDED, not reset, which keeps it a failure counter. Accepted: a user who
+ * completes verifies is bounded by `otp.send.*` only.
+ */
+export async function consumeProof(
+  tx: Tx,
+  sessionId: string,
+  purpose: OtpPurpose
+): Promise<void> {
+  if (purpose === 'verify_contact') {
+    await tx
+      .delete(verificationSessions)
+      .where(eq(verificationSessions.id, sessionId));
+    return;
+  }
+
+  // Kept as an auditable single-use record; every outstanding code goes,
+  // other requesters' included.
+  await tx
+    .update(verificationSessions)
+    .set({
+      verifiedAt: sql`now()`,
+      consumedAt: sql`now()`,
+      isBlocked: false,
+      blockedUntil: null,
+      attemptNumber: 0,
+      verifyAttemptNumber: 0,
+      verifyAttemptDaily: sql`GREATEST(${verificationSessions.verifyAttemptDaily} - 1, 0)`,
+      nextAllowedAt: null,
+    })
+    .where(eq(verificationSessions.id, sessionId));
+  await tx
+    .delete(verificationCodes)
+    .where(eq(verificationCodes.sessionId, sessionId));
+  await tx.delete(otpChallenges).where(eq(otpChallenges.sessionId, sessionId));
+}
+
+/** Thrown only after the commit, so the counter and block writes persist. */
+export function settleVerifyOutcome(outcome: VerifyOutcome): void {
+  if (outcome.kind === 'matched') return;
+
+  if (outcome.kind === 'no-code')
+    throw new CustomError(otpMsg.codeExpired, HTTP_STATUS.BAD_REQUEST);
+  if (outcome.kind === 'blocked') {
+    const blocked = blockedError(otpMsg.verifyBlocked, outcome.blockedUntil);
+    throw outcome.evaluated ? markEvaluatedGuess(blocked) : blocked;
+  }
+  throw markEvaluatedGuess(
+    new CustomError(otpMsg.codeIncorrect, HTTP_STATUS.BAD_REQUEST)
+  );
+}
+
 export async function processOtpVerify(
   options: ProcessOtpVerifyOptions
 ): Promise<void> {
-  type VerifyOutcome =
-    | { kind: 'matched' }
-    | { kind: 'mismatch' }
-    | { kind: 'no-code' }
-    | {
-        kind: 'blocked';
-        blockedUntil: Date | null;
-        /** Whether a submitted code was compared before the block was raised. */
-        evaluated: boolean;
-      };
-
   const {
     userId,
     userEmail,
@@ -127,7 +187,6 @@ export async function processOtpVerify(
   // Keyed on contact kind, so switching sms -> whatsapp buys no second allowance.
   const contactKind = contactKindOf(channel);
 
-  // Thrown only after the commit, so the counter and block writes persist.
   const outcome = await transactionWithin<VerifyOutcome>(async (tx) => {
     // `users` first: the canonical lock order, and `onVerified` reaches it.
     await tx
@@ -293,35 +352,7 @@ export async function processOtpVerify(
           verificationSessionId: session.id,
         });
 
-      if (purpose === 'verify_contact') {
-        await tx
-          .delete(verificationSessions)
-          .where(eq(verificationSessions.id, session.id));
-      } else {
-        // Kept as an auditable single-use record; the code is dropped. The
-        // cycle closes, so its counters reset: a block stamped before the
-        // compare would lock the slot, and leftover send state would walk
-        // repeat logins into a self-inflicted block. `verifyAttemptDaily` is
-        // REFUNDED, not reset, which keeps it a failure counter. Accepted: a
-        // user who completes verifies is bounded by `otp.send.*` only.
-        await tx
-          .update(verificationSessions)
-          .set({
-            verifiedAt: sql`now()`,
-            consumedAt: sql`now()`,
-            isBlocked: false,
-            blockedUntil: null,
-            attemptNumber: 0,
-            verifyAttemptNumber: 0,
-            verifyAttemptDaily: sql`GREATEST(${verificationSessions.verifyAttemptDaily} - 1, 0)`,
-            nextAllowedAt: null,
-          })
-          .where(eq(verificationSessions.id, session.id));
-
-        await tx
-          .delete(verificationCodes)
-          .where(eq(verificationCodes.sessionId, session.id));
-      }
+      await consumeProof(tx, session.id, purpose);
       return { kind: 'matched' };
     }
 
@@ -332,20 +363,10 @@ export async function processOtpVerify(
     return { kind: 'mismatch' };
   }, options);
 
-  if (outcome.kind === 'matched') return;
-
-  if (outcome.kind === 'no-code')
-    throw new CustomError(otpMsg.codeExpired, HTTP_STATUS.BAD_REQUEST);
-  if (outcome.kind === 'blocked') {
-    const blocked = blockedError(otpMsg.verifyBlocked, outcome.blockedUntil);
-    throw outcome.evaluated ? markEvaluatedGuess(blocked) : blocked;
-  }
-  throw markEvaluatedGuess(
-    new CustomError(otpMsg.codeIncorrect, HTTP_STATUS.BAD_REQUEST)
-  );
+  settleVerifyOutcome(outcome);
 }
 
-type OtpMatch = Parameters<
+export type OtpMatch = Parameters<
   NonNullable<ProcessOtpVerifyOptions['onVerified']>
 >[1];
 

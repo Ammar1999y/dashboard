@@ -32,7 +32,7 @@ import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
-import { flooredBudget, replaceOtpCode } from '../helpers/otp';
+import { flooredBudget, replaceOtpCode, sentRequester } from '../helpers/otp';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -80,9 +80,16 @@ function post(url: string, body: unknown, cookie?: string): Promise<Response> {
 function plantCode(
   userId: string,
   purpose: 'two_factor' | 'passwordless_login',
-  contactKind: 'email' | 'phone'
+  contactKind: 'email' | 'phone',
+  requester?: string
 ): Promise<void> {
-  return replaceOtpCode({ userId, purpose, contactKind, code: RIGHT_CODE });
+  return replaceOtpCode({
+    userId,
+    purpose,
+    contactKind,
+    code: RIGHT_CODE,
+    requester,
+  });
 }
 
 async function signIn(user: SeededUser): Promise<{
@@ -356,13 +363,14 @@ describe('passwordless sign-in for a user with a second factor', () => {
         email: actor().email,
       });
       expect(sent.status).toBe(HTTP_STATUS.OK);
-      await plantCode(actor().userId, 'passwordless_login', 'email');
+      const { requester, cookie } = sentRequester(sent);
+      await plantCode(actor().userId, 'passwordless_login', 'email', requester);
 
-      const verified = await post('/api/auth/passwordless/verify', {
-        channel: 'email',
-        email: actor().email,
-        code: RIGHT_CODE,
-      });
+      const verified = await post(
+        '/api/auth/passwordless/verify',
+        { channel: 'email', email: actor().email, code: RIGHT_CODE },
+        cookie
+      );
 
       // The bypass, closed. Before the fix this answered 200 with a session
       // cookie and `{ loggedIn: true }`.
@@ -395,14 +403,19 @@ describe('passwordless sign-in for a user with a second factor', () => {
         email: plain.email,
       });
       expect(sent.status).toBe(HTTP_STATUS.OK);
-      await plantCode(plain.userId, 'passwordless_login', 'email');
+      const { requester, cookie } = sentRequester(sent);
+      await plantCode(plain.userId, 'passwordless_login', 'email', requester);
 
-      const verified = await post('/api/auth/passwordless/verify', {
-        channel: 'email',
-        email: plain.email,
-        code: RIGHT_CODE,
-        rememberMe: false,
-      });
+      const verified = await post(
+        '/api/auth/passwordless/verify',
+        {
+          channel: 'email',
+          email: plain.email,
+          code: RIGHT_CODE,
+          rememberMe: false,
+        },
+        cookie
+      );
       expect(verified.status).toBe(HTTP_STATUS.OK);
       expect(cookieHeader(verified.headers.getSetCookie())).toContain(
         'dont_remember'

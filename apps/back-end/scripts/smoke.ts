@@ -20,6 +20,7 @@
 import * as z from 'zod';
 
 import { plainProblemSchema, PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
+import { MAINTENANCE_TOKEN_HEADER } from '@app/shared/validation/health';
 
 // Not `@/lib/audit`: that one loads `db/schema` and the OTP config into this
 // parent process for one constant.
@@ -107,7 +108,7 @@ async function waitForBoot(): Promise<Response | null> {
     if (server.exitCode !== null) return null;
     try {
       return await probe('/api/health/storage', {
-        headers: { 'x-maintenance-token': MAINTENANCE_TOKEN },
+        headers: { [MAINTENANCE_TOKEN_HEADER]: MAINTENANCE_TOKEN },
       });
     } catch {
       await Bun.sleep(POLL_INTERVAL_MS);

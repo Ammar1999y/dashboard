@@ -31,14 +31,30 @@ const FLAT_RESEND_PURPOSES: ReadonlySet<OtpPurpose> = new Set(
   FLAT_RESEND_PURPOSE_LIST
 );
 
+export function isFlatResendPurpose(
+  purpose: OtpPurpose
+): purpose is FlatResendPurpose {
+  return FLAT_RESEND_PURPOSES.has(purpose);
+}
+
 export function calculateNextAllowedAt(
   attemptNumber: number,
   purpose: OtpPurpose
 ): Date {
-  const delaySeconds = FLAT_RESEND_PURPOSES.has(purpose)
+  const delaySeconds = isFlatResendPurpose(purpose)
     ? OTP_BASE_RESEND_DELAY_S
     : OTP_BASE_RESEND_DELAY_S * Math.pow(2, attemptNumber - 1);
   return new Date(Date.now() + delaySeconds * 1000);
+}
+
+export function resendWaitError(nextAllowedAt: Date, now: Date): CustomError {
+  const waitSeconds = Math.ceil(
+    (nextAllowedAt.getTime() - now.getTime()) / 1000
+  );
+  return new CustomError(
+    otpMsg.resendWait(waitSeconds),
+    HTTP_STATUS.TOO_MANY_REQUESTS
+  );
 }
 
 export function calculateBlockDuration(): Date {

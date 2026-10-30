@@ -9,6 +9,7 @@ import { app } from '@/app';
 import { db, withTransaction } from '@/db';
 import {
   accounts,
+  otpChallenges,
   users,
   verificationCodes,
   verifications,
@@ -21,6 +22,7 @@ import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
 
 import { credentialAccountOf } from '@/lib/auth/credential-account';
 import { lockUser } from '@/lib/auth/user-eligibility';
+import { PUBLIC_ORIGIN } from '@/lib/env';
 import { RATE_LIMIT_DB_PATH } from '@/lib/env.server';
 import { MINIMUM_RESPONSE_MS } from '@/lib/http/timing-floor';
 import { runDatabaseSweep } from '@/lib/maintenance/database';
@@ -37,7 +39,7 @@ import {
   sentMail,
   settleDelivery,
 } from '../helpers/mailbox';
-import { seedOtpProof } from '../helpers/otp';
+import { otpRequester, seedOtpProof } from '../helpers/otp';
 import { baseHeaders, seedUser } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -95,9 +97,19 @@ async function timed(
   return { status: response.status, elapsed: performance.now() - started };
 }
 
-async function timeSend(email: string): Promise<number> {
+/** The headers a browser holding requester `cookie` sends. */
+const browser = (cookie: string): Record<string, string> => ({
+  cookie,
+  origin: PUBLIC_ORIGIN,
+});
+
+async function timeSend(email: string, cookie: string): Promise<number> {
   const { status, elapsed } = await timed(() =>
-    post('/api/auth/passwordless/send', { channel: 'email', email })
+    post(
+      '/api/auth/passwordless/send',
+      { channel: 'email', email },
+      browser(cookie)
+    )
   );
   expect(status).toBe(HTTP_STATUS.OK);
   return elapsed;
@@ -159,11 +171,14 @@ describe('a slow provider', () => {
   test('does not push the real branch above the floor', async () => {
     delayMail(PROVIDER_DELAY_MS);
 
+    // One browser throughout, as a person resending is: a new requester per
+    // sample would deliver every one of them.
+    const { cookie } = otpRequester();
     const unknown: number[] = [];
     const known: number[] = [];
     for (let i = 0; i < SAMPLES; i++) {
-      unknown.push(await timeSend(`nobody-${i}@gmail.com`));
-      known.push(await timeSend(state.realEmail));
+      unknown.push(await timeSend(`nobody-${i}@gmail.com`, cookie));
+      known.push(await timeSend(state.realEmail, cookie));
     }
 
     for (const elapsed of [...unknown, ...known])
@@ -195,9 +210,13 @@ interface Observed {
   retryAfter: string | null;
 }
 
-async function observe(path: string, body: unknown): Promise<Observed> {
+async function observe(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {}
+): Promise<Observed> {
   const started = performance.now();
-  const response = await post(path, body);
+  const response = await post(path, body, headers);
   const elapsed = performance.now() - started;
   return {
     status: response.status,
@@ -227,10 +246,15 @@ function trackLookups() {
   return {
     async observe(
       route: ContendedRoute,
-      email: string
+      email: string,
+      cookie: string
     ): Promise<Observed & { sinceLookup: number }> {
       lookedUp.delete(email);
-      const observed = await observe(route.path, route.body(email));
+      const observed = await observe(
+        route.path,
+        route.body(email),
+        browser(cookie)
+      );
       const looked = lookedUp.get(email);
       if (looked === undefined)
         throw new Error(`${route.path} never reached the lookup of ${email}`);
@@ -311,15 +335,24 @@ const CONTENDED_VERIFIES: readonly ContendedRoute[] = [
 
 async function issuedCodes(userId: string, purpose: OtpPurpose) {
   return db
-    .select({ id: verificationCodes.id })
-    .from(verificationCodes)
+    .select({ id: otpChallenges.id })
+    .from(otpChallenges)
     .innerJoin(
       verificationSessions,
-      eq(verificationCodes.sessionId, verificationSessions.id)
+      eq(otpChallenges.sessionId, verificationSessions.id)
     )
     .where(
       sql`${verificationSessions.userId} = ${userId} and ${verificationSessions.purpose} = ${purpose}`
     );
+}
+
+/** Each code a proof row holds, by the guesses charged to it. */
+async function guessesOn(sessionId: string): Promise<number[]> {
+  const rows = await db
+    .select({ guesses: otpChallenges.guesses })
+    .from(otpChallenges)
+    .where(eq(otpChallenges.sessionId, sessionId));
+  return rows.map((row) => row.guesses);
 }
 
 /** Polls for the issuance a send finishes after its response. */
@@ -396,7 +429,8 @@ describe('PostgreSQL contention on the known branch', () => {
       try {
         const baseline = await lookups.observe(
           route,
-          'nobody-baseline@gmail.com'
+          'nobody-baseline@gmail.com',
+          proof.cookie
         );
         expect(baseline.status).toBe(HTTP_STATUS.BAD_REQUEST);
 
@@ -411,8 +445,8 @@ describe('PostgreSQL contention on the known branch', () => {
 
         // The code is right: only the answer, never the work, may differ.
         const [known, unknown] = await Promise.all([
-          lookups.observe(route, user.email),
-          lookups.observe(route, 'nobody-contended@gmail.com'),
+          lookups.observe(route, user.email, proof.cookie),
+          lookups.observe(route, 'nobody-contended@gmail.com', proof.cookie),
         ]);
 
         expect(known.status).toBe(HTTP_STATUS.BAD_REQUEST);
@@ -456,12 +490,7 @@ describe('PostgreSQL contention on the known branch', () => {
           verifiedAt: null,
           consumedAt: null,
         });
-        expect(
-          await db
-            .select({ id: verificationCodes.id })
-            .from(verificationCodes)
-            .where(eq(verificationCodes.sessionId, proof.sessionId))
-        ).toHaveLength(1);
+        expect(await guessesOn(proof.sessionId)).toEqual([0]);
         const [after] = await db
           .select({ password: accounts.password })
           .from(accounts)
@@ -599,20 +628,25 @@ describe('a verify queued behind sends for the same user', () => {
       });
       const baseline = await observe(
         verifyPath,
-        verify('nobody-baseline@gmail.com')
+        verify('nobody-baseline@gmail.com'),
+        browser(proof.cookie)
       );
       expect(baseline.status).toBe(HTTP_STATUS.BAD_REQUEST);
 
       // The first send is inside its charge, holding what a send holds; the
       // second queues behind it; the verifies queue behind both.
-      const firstSend = observe(sendPath, send);
+      const firstSend = observe(sendPath, send, browser(proof.cookie));
       await entered.promise;
-      const secondSend = observe(sendPath, send);
+      const secondSend = observe(sendPath, send, browser(proof.cookie));
       await Bun.sleep(QUEUE_SETTLE_MS);
       const [knownFirst, knownSecond, unknown] = await Promise.all([
-        observe(verifyPath, verify(user.email)),
-        observe(verifyPath, verify(user.email)),
-        observe(verifyPath, verify('nobody-contended@gmail.com')),
+        observe(verifyPath, verify(user.email), browser(proof.cookie)),
+        observe(verifyPath, verify(user.email), browser(proof.cookie)),
+        observe(
+          verifyPath,
+          verify('nobody-contended@gmail.com'),
+          browser(proof.cookie)
+        ),
       ]);
 
       for (const known of [knownFirst, knownSecond]) {
@@ -649,12 +683,7 @@ describe('a verify queued behind sends for the same user', () => {
         verifiedAt: null,
         consumedAt: null,
       });
-      expect(
-        await db
-          .select({ id: verificationCodes.id })
-          .from(verificationCodes)
-          .where(eq(verificationCodes.sessionId, proof.sessionId))
-      ).toHaveLength(1);
+      expect(await guessesOn(proof.sessionId)).toEqual([0]);
     } finally {
       spy.mockRestore();
       logged.mockRestore();
@@ -837,12 +866,14 @@ describe('a verify against other writers of its proof rows', () => {
       const other = await seedUser();
       const mine = await spentProof(user, route.purpose);
       const theirs = await spentProof(other, 'passwordless_login');
+      const { cookie } = otpRequester();
       const logged = spyOn(console, 'error').mockImplementation(() => {});
       const lookups = trackLookups();
       try {
         const baseline = await lookups.observe(
           route,
-          'nobody-baseline@gmail.com'
+          'nobody-baseline@gmail.com',
+          cookie
         );
         expect(baseline.status).toBe(HTTP_STATUS.BAD_REQUEST);
 
@@ -871,8 +902,8 @@ describe('a verify against other writers of its proof rows', () => {
 
         try {
           const [known, unknown] = await Promise.all([
-            lookups.observe(route, user.email),
-            lookups.observe(route, 'nobody-contended@gmail.com'),
+            lookups.observe(route, user.email, cookie),
+            lookups.observe(route, 'nobody-contended@gmail.com', cookie),
           ]);
 
           expect(known.status).toBe(HTTP_STATUS.BAD_REQUEST);
@@ -926,7 +957,7 @@ describe('a verify against other writers of its proof rows', () => {
   );
 
   test.each(CONTENDED_VERIFIES.map((route) => [route.name, route] as const))(
-    '%s verify gives up on a proof row held out of lock order at the deadline, not a statement later',
+    '%s verify gives up on a code row held out of lock order at the deadline, not a statement later',
     async (_name, route) => {
       resetSqliteStores();
       const user = await seedUser(route.seed);
@@ -941,7 +972,8 @@ describe('a verify against other writers of its proof rows', () => {
       try {
         const baseline = await lookups.observe(
           route,
-          'nobody-baseline@gmail.com'
+          'nobody-baseline@gmail.com',
+          proof.cookie
         );
         expect(baseline.status).toBe(HTTP_STATUS.BAD_REQUEST);
 
@@ -951,9 +983,9 @@ describe('a verify against other writers of its proof rows', () => {
         const userHold = lockUserRow(user.userId);
         const proofHold = holdUntilReleased((tx) =>
           tx
-            .select({ id: verificationSessions.id })
-            .from(verificationSessions)
-            .where(eq(verificationSessions.id, proof.sessionId))
+            .select({ id: otpChallenges.id })
+            .from(otpChallenges)
+            .where(eq(otpChallenges.sessionId, proof.sessionId))
             .for('update')
         );
         await Promise.all([userHold.acquired, proofHold.acquired]);
@@ -964,8 +996,8 @@ describe('a verify against other writers of its proof rows', () => {
 
         try {
           const [known, unknown] = await Promise.all([
-            lookups.observe(route, user.email),
-            lookups.observe(route, 'nobody-contended@gmail.com'),
+            lookups.observe(route, user.email, proof.cookie),
+            lookups.observe(route, 'nobody-contended@gmail.com', proof.cookie),
           ]);
 
           expect(known.status).toBe(HTTP_STATUS.BAD_REQUEST);
@@ -1001,6 +1033,7 @@ describe('a verify against other writers of its proof rows', () => {
           verifiedAt: null,
           consumedAt: null,
         });
+        expect(await guessesOn(proof.sessionId)).toEqual([0]);
       } finally {
         lookups.restore();
         logged.mockRestore();

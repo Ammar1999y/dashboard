@@ -16,10 +16,15 @@ import {
   ANONYMOUS_SEND_DATA,
   sendAnonymousOtp,
 } from '@/lib/otp/anonymous-send';
+import { verifyRequesterOtpOrAutoVerify } from '@/lib/otp/challenge';
 import { markContactVerified } from '@/lib/otp/contact';
+import {
+  readRequester,
+  REQUESTER_BOUND_VERIFY,
+  REQUESTER_SET_COOKIE,
+  requesterFor,
+} from '@/lib/otp/requester';
 import { invalidOrExpiredCode } from '@/lib/otp/throttle';
-import { verifyOtpOrAutoVerify } from '@/lib/otp/verify';
-import { enforceOtpVerifyQuota } from '@/lib/rate-limit';
 import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
 import { logSanitized } from '@/utils/log';
@@ -90,12 +95,15 @@ export const sendOtpBinding = bind(sendOtp, {
     summary: 'Send a one-time code',
     tags: ['Authentication'],
     publishedBody: PUBLISHED_SEND_BODY,
+    setCookie: REQUESTER_SET_COOKIE,
   },
   handler: async ({ body: input, meta }) => {
+    const { requester, cookie } = requesterFor(meta.headers);
     await sendAnonymousOtp(input, meta.rawRequest, {
       startFloor: meta.startFloor,
       surface: 'verify_contact',
       purpose: 'verify_contact',
+      requester,
       failureLog: OTP_AUTO_VERIFY
         ? 'otp.autoVerify.failed'
         : 'otp.send.deliveryFailed',
@@ -105,7 +113,11 @@ export const sendOtpBinding = bind(sendOtp, {
         : undefined,
     });
 
-    return { message: otpMsg.sendSuccess, data: ANONYMOUS_SEND_DATA };
+    return {
+      message: otpMsg.sendSuccess,
+      data: ANONYMOUS_SEND_DATA,
+      cookies: [cookie],
+    };
   },
 });
 
@@ -118,16 +130,14 @@ export const verifyOtpBinding = bind(verifyOtp, {
   refusals: COLLAPSED_BODY_REFUSALS,
   failure: otpMsg.verifyError,
   mapError: collapsedVerifyError(),
-  detail: { summary: 'Verify a one-time code', tags: ['Authentication'] },
+  detail: {
+    summary: 'Verify a one-time code',
+    description: REQUESTER_BOUND_VERIFY,
+    tags: ['Authentication'],
+  },
   handler: async ({ body: input, meta }) => {
     const { channel, code } = input;
     const identifier = contactIdentifier(input);
-
-    await enforceOtpVerifyQuota({
-      channel,
-      identifier,
-      surface: 'verify_contact',
-    });
 
     const deadline = meta.startFloor();
     const [userData] = await db
@@ -151,14 +161,13 @@ export const verifyOtpBinding = bind(verifyOtp, {
     };
 
     // Under OTP_AUTO_VERIFY a client that still calls verify succeeds idempotently.
-    await verifyOtpOrAutoVerify({
+    await verifyRequesterOtpOrAutoVerify({
       userId: userData.id,
-      userEmail: userData.email,
       channel,
       purpose: 'verify_contact',
       identifier,
       code,
-      auditMeta,
+      requester: readRequester(meta.headers),
       deadline,
       onVerified: (tx) =>
         markContactVerified(tx, {

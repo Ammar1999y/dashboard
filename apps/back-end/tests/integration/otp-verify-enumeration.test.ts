@@ -33,14 +33,16 @@ import { and, eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import { verificationCodes, verificationSessions } from '@/db/schema';
+import { otpChallenges, verificationSessions } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 
-import { OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
+import { PUBLIC_ORIGIN } from '@/lib/env';
+import { OTP_MAX_CHALLENGE_GUESSES } from '@/lib/otp/limits';
 
 import { resetTables } from '../helpers/database';
 import { settleDelivery } from '../helpers/mailbox';
+import { sentRequester } from '../helpers/otp';
 import { baseHeaders, seedUser } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 
@@ -49,11 +51,16 @@ const WRONG_CODE = '000000';
 const UNKNOWN_EMAIL = 'otp.enumeration.nobody@gmail.com';
 const NEW_PASSWORD = 'Harness!Reset1';
 
-function post(path: string, body: unknown): Promise<Response> {
+function post(path: string, body: unknown, cookie?: string): Promise<Response> {
   return app.handle(
     new Request(`http://localhost${path}`, {
       method: 'POST',
-      headers: baseHeaders({ 'content-type': 'application/json' }),
+      headers: baseHeaders({
+        'content-type': 'application/json',
+        // A cookie puts passwordless verify under the library's Origin check.
+        origin: PUBLIC_ORIGIN,
+        ...(cookie && { cookie }),
+      }),
       body: JSON.stringify(body),
     })
   );
@@ -82,16 +89,16 @@ interface Surface {
    *
    * Contact verification needs `emailVerified: false`, and it is the difference
    * between a real test and a vacuous one: `POST /api/auth/otp/send`
-   * short-circuits to the generic 200 for an already-verified contact before
-   * `processOtpSend` runs, so with `seedUser()`'s default no
-   * `verification_sessions` row is written, every attempt below returns the "no
-   * session" 404, and the block passes identically against unfixed code.
+   * short-circuits to the generic 200 for an already-verified contact, so with
+   * `seedUser()`'s default no code is written, every attempt below answers "no
+   * code", and the block passes identically against unfixed code.
    */
   seed?: SeedOptions;
-  /** The proof row the loop must actually drive to its threshold. */
+  /** The proof row whose code the loop must actually drive to its threshold. */
   purpose: OtpPurpose;
   send: (email: string) => Promise<Response>;
-  verify: (email: string) => Promise<Response>;
+  /** Always with the requester's cookie: the unknown address gets the same. */
+  verify: (email: string, cookie: string) => Promise<Response>;
 }
 
 const SURFACES: readonly Surface[] = [
@@ -100,49 +107,53 @@ const SURFACES: readonly Surface[] = [
     seed: { emailVerified: false },
     purpose: 'verify_contact',
     send: (email) => post('/api/auth/otp/send', { channel: 'email', email }),
-    verify: (email) =>
-      post('/api/auth/otp/verify', {
-        channel: 'email',
-        email,
-        code: WRONG_CODE,
-      }),
+    verify: (email, cookie) =>
+      post(
+        '/api/auth/otp/verify',
+        { channel: 'email', email, code: WRONG_CODE },
+        cookie
+      ),
   },
   {
     name: 'password recovery',
     purpose: 'forgot_password',
     send: (email) =>
       post('/api/auth/forgot-password/send', { channel: 'email', email }),
-    verify: (email) =>
-      post('/api/auth/forgot-password/reset', {
-        channel: 'email',
-        email,
-        code: WRONG_CODE,
-        newPassword: NEW_PASSWORD,
-      }),
+    verify: (email, cookie) =>
+      post(
+        '/api/auth/forgot-password/reset',
+        {
+          channel: 'email',
+          email,
+          code: WRONG_CODE,
+          newPassword: NEW_PASSWORD,
+        },
+        cookie
+      ),
   },
   {
     name: 'passwordless login',
     purpose: 'passwordless_login',
     send: (email) =>
       post('/api/auth/passwordless/send', { channel: 'email', email }),
-    verify: (email) =>
-      post('/api/auth/passwordless/verify', {
-        channel: 'email',
-        email,
-        code: WRONG_CODE,
-      }),
+    verify: (email, cookie) =>
+      post(
+        '/api/auth/passwordless/verify',
+        { channel: 'email', email, code: WRONG_CODE },
+        cookie
+      ),
   },
 ];
 
-/** The proof row this surface's loop was supposed to be charging. */
-async function proofRow(userId: string, purpose: OtpPurpose) {
+/** The code this surface's loop was supposed to be charging. */
+async function challengeRow(userId: string, purpose: OtpPurpose) {
   const [row] = await db
-    .select({
-      id: verificationSessions.id,
-      verifyAttemptNumber: verificationSessions.verifyAttemptNumber,
-      isBlocked: verificationSessions.isBlocked,
-    })
-    .from(verificationSessions)
+    .select({ id: otpChallenges.id, guesses: otpChallenges.guesses })
+    .from(otpChallenges)
+    .innerJoin(
+      verificationSessions,
+      eq(verificationSessions.id, otpChallenges.sessionId)
+    )
     .where(
       and(
         eq(verificationSessions.userId, userId),
@@ -152,16 +163,21 @@ async function proofRow(userId: string, purpose: OtpPurpose) {
   return row ?? null;
 }
 
-describe('crossing the proof-attempt threshold reveals nothing', () => {
+/** A real code for `user`, and the cookie its verify must carry. */
+async function sendFor(surface: Surface, email: string): Promise<string> {
+  const sent = await surface.send(email);
+  expect(sent.status).toBe(HTTP_STATUS.OK);
+  await settleDelivery();
+  return sentRequester(sent).cookie;
+}
+
+describe('crossing the code-guess threshold reveals nothing', () => {
   beforeEach(async () => {
-    // A fresh proof row per surface, and a fresh send-cycle: the previous
-    // surface's failures live on their own `(user, contactKind, purpose)` row,
-    // but the send quotas are per destination.
     await resetTables();
-    // And a fresh limiter: this file issues 21 verify and 3 send requests
-    // against FIXED-WINDOW keys derived from `TEST_IP`, which persist across
-    // files in one `bun test` process. A stale counter from a sibling shows up
-    // here as a broken parity assertion rather than as a 429.
+    // This file's verify and send requests use FIXED-WINDOW keys derived from
+    // `TEST_IP`, which persist across files in one `bun test` process. A stale
+    // counter from a sibling shows up here as a broken parity assertion
+    // rather than as a 429.
     resetSqliteStores();
   });
 
@@ -169,45 +185,33 @@ describe('crossing the proof-attempt threshold reveals nothing', () => {
     '%s answers the same past the threshold as for an unknown address',
     async (_name, surface) => {
       const user = await seedUser(surface.seed);
+      const cookie = await sendFor(surface, user.email);
 
-      // A real proof row, so the attempt counters below have something to
-      // charge. The unknown address deliberately gets no send — there is no
-      // account, so there is no row to create, which is the asymmetry the
-      // response must not expose.
-      const sent = await surface.send(user.email);
-      expect(sent.status).toBe(HTTP_STATUS.OK);
-      await settleDelivery();
-
-      // The row has to EXIST before the loop, or every attempt below answers
-      // "no session" and the surface proves nothing.
-      expect(await proofRow(user.userId, surface.purpose)).toMatchObject({
-        verifyAttemptNumber: 0,
-        isBlocked: false,
+      // The code has to EXIST before the loop, or every attempt below answers
+      // "no code" and the surface proves nothing.
+      expect(await challengeRow(user.userId, surface.purpose)).toMatchObject({
+        guesses: 0,
       });
 
       const real: Observed[] = [];
-      for (let attempt = 1; attempt <= OTP_MAX_VERIFY_ATTEMPTS + 1; attempt++)
-        real.push(await observe(await surface.verify(user.email)));
+      for (let attempt = 1; attempt <= OTP_MAX_CHALLENGE_GUESSES + 1; attempt++)
+        real.push(await observe(await surface.verify(user.email, cookie)));
 
-      // The threshold was actually CROSSED. Without this the block is satisfied
-      // by six identical 404s and cannot tell `collapseProofThrottle` from its
-      // absence.
-      expect(await proofRow(user.userId, surface.purpose)).toMatchObject({
-        isBlocked: true,
+      // The threshold was actually CROSSED.
+      expect(await challengeRow(user.userId, surface.purpose)).toMatchObject({
+        guesses: OTP_MAX_CHALLENGE_GUESSES,
       });
 
-      const unknown = await observe(await surface.verify(UNKNOWN_EMAIL));
+      const unknown = await observe(
+        await surface.verify(UNKNOWN_EMAIL, cookie)
+      );
 
-      // The crossing attempt is the one that used to differ.
-      const crossing = real.at(-1);
-      expect(crossing).toEqual(unknown);
-
-      // And every attempt before it, so the answer is constant rather than
-      // merely equal at the boundary.
+      // Every attempt, so the answer is constant rather than merely equal at
+      // the boundary.
       for (const observed of real) expect(observed).toEqual(unknown);
 
-      // Positively: the shared answer is the generic 400 with no backoff hint,
-      // not a 429 that both happen to give.
+      // Positively: the generic 400 with no backoff hint, not a 429 that both
+      // happen to give.
       expect(unknown.status).toBe(HTTP_STATUS.BAD_REQUEST);
       expect(unknown.retryAfter).toBeNull();
     },
@@ -231,7 +235,7 @@ describe('crossing the proof-attempt threshold reveals nothing', () => {
  */
 const REMOVED_KEY_HASH = `o1:removedgen:${'A'.repeat(43)}`;
 
-describe('a proof hashed under a removed key reveals nothing either', () => {
+describe('a code hashed under a removed key reveals nothing either', () => {
   beforeEach(async () => {
     await resetTables();
     resetSqliteStores();
@@ -241,28 +245,32 @@ describe('a proof hashed under a removed key reveals nothing either', () => {
     '%s answers the same as for an unknown address',
     async (_name, surface) => {
       const user = await seedUser(surface.seed);
-      const sent = await surface.send(user.email);
-      expect(sent.status).toBe(HTTP_STATUS.OK);
-      await settleDelivery();
+      const cookie = await sendFor(surface, user.email);
 
-      const row = await proofRow(user.userId, surface.purpose);
+      const row = await challengeRow(user.userId, surface.purpose);
       expect(row).not.toBeNull();
 
-      // The real row, its stored code replaced with one no configured key can
-      // evaluate. Everything else about the request is unchanged.
+      // The real code, replaced with one no configured key can evaluate.
+      // Everything else about the request is unchanged.
       const updated = await db
-        .update(verificationCodes)
+        .update(otpChallenges)
         .set({ code: REMOVED_KEY_HASH })
-        .where(eq(verificationCodes.sessionId, row?.id ?? ''))
-        .returning({ id: verificationCodes.id });
+        .where(eq(otpChallenges.id, row?.id ?? ''))
+        .returning({ id: otpChallenges.id });
       expect(updated).toHaveLength(1);
 
-      const observed = await observe(await surface.verify(user.email));
-      const unknown = await observe(await surface.verify(UNKNOWN_EMAIL));
+      const observed = await observe(await surface.verify(user.email, cookie));
+      const unknown = await observe(
+        await surface.verify(UNKNOWN_EMAIL, cookie)
+      );
 
       expect(observed).toEqual(unknown);
       // Positively: the generic 400, not the 500 the throw used to produce.
       expect(observed.status).toBe(HTTP_STATUS.BAD_REQUEST);
+      // And no guess was charged for a code nobody could evaluate.
+      expect(await challengeRow(user.userId, surface.purpose)).toMatchObject({
+        guesses: 0,
+      });
     },
     120_000
   );

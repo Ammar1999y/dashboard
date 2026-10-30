@@ -157,6 +157,9 @@ describe('the generated document', () => {
       'PUT /api/dash/users/me',
       'POST /api/dash/users/me/change-email',
       'POST /api/dash/users/me/change-email/verify',
+      'POST /api/auth/forgot-password/send',
+      'POST /api/auth/otp/send',
+      'POST /api/auth/passwordless/send',
     ]);
   });
 

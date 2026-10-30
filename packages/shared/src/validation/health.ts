@@ -1,5 +1,7 @@
 import * as z from 'zod';
 
+export const MAINTENANCE_TOKEN_HEADER = 'x-maintenance-token';
+
 /**
  * Not strict, unlike every other query schema: a key the probe does not know
  * is ignored as it always was, so a probe URL with an extra parameter keeps

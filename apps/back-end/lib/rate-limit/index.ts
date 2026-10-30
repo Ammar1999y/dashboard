@@ -167,25 +167,27 @@ export async function enforceOtpGlobalSendBudget(opts: {
 }
 
 /**
- * Verify-side quota against one destination, keyed per surface.
+ * Verify-side quota against one destination, keyed per surface, for the
+ * signed-in and grant-holding verifies only. On an anonymous verify it is a
+ * lever anyone naming the contact pulls on its owner; those are bounded per
+ * requester's code instead (`lib/otp/challenge.ts`).
  *
- * One key across surfaces would let ten junk requests to the anonymous
- * `/api/auth/otp/verify` lock a victim out of `/forgot-password/reset` and
- * `/two-factor/otp/verify` for the window, even with a correct code. Splitting
- * costs no brute-force resistance: the authority on that is the per-proof
- * `OTP_MAX_VERIFY_ATTEMPTS` plus `verification_sessions.verifyAttemptDaily`,
- * both per user, transactional, and reached after this.
- *
- * The 24h verify-FAILURE budget likewise lives only in
- * `verification_sessions.verifyAttemptDaily`, enforced in `processOtpVerify`;
- * a second copy here would need a refund protocol.
+ * Splitting by surface costs no brute-force resistance: the authority on that
+ * is the per-proof `OTP_MAX_VERIFY_ATTEMPTS` plus
+ * `verification_sessions.verifyAttemptDaily`, both per user, transactional,
+ * and reached after this. The 24h verify-FAILURE budget likewise lives only
+ * there, enforced in `processOtpVerify`; a second copy here would need a
+ * refund protocol.
  *
  * `surface` is required: a new verify entry point must choose its budget.
  */
 export async function enforceOtpVerifyQuota(opts: {
   channel: OtpChannel;
   identifier: string;
-  surface: OtpSendSurface;
+  surface: Exclude<
+    OtpSendSurface,
+    'verify_contact' | 'recovery' | 'passwordless'
+  >;
 }): Promise<void> {
   const kind = contactKindOf(opts.channel);
   await enforceRateLimit({

@@ -8,6 +8,7 @@ import {
   ANONYMOUS_SEND_DATA,
   sendAnonymousOtp,
 } from '@/lib/otp/anonymous-send';
+import { REQUESTER_SET_COOKIE, requesterFor } from '@/lib/otp/requester';
 
 import { FIXED_BODY_REFUSAL, PUBLISHED_SEND_BODY } from './anonymous';
 
@@ -28,15 +29,22 @@ export const sendPasswordlessCodeBinding = bind(sendPasswordlessCode, {
     summary: 'Send a passwordless sign-in code',
     tags: ['Authentication'],
     publishedBody: PUBLISHED_SEND_BODY,
+    setCookie: REQUESTER_SET_COOKIE,
   },
   handler: async ({ body: input, meta }) => {
+    const { requester, cookie } = requesterFor(meta.headers);
     await sendAnonymousOtp(input, meta.rawRequest, {
       startFloor: meta.startFloor,
       surface: 'passwordless',
       purpose: 'passwordless_login',
+      requester,
       failureLog: 'passwordless.send.failed',
     });
 
-    return { message: otpMsg.sendSuccess, data: ANONYMOUS_SEND_DATA };
+    return {
+      message: otpMsg.sendSuccess,
+      data: ANONYMOUS_SEND_DATA,
+      cookies: [cookie],
+    };
   },
 });

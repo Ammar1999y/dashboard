@@ -8,7 +8,7 @@
  * credential is rejected — the case an `allowCredentials` hint cannot catch,
  * because a client can ignore that hint.
  */
-import { beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import { beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
 import { and, eq, sql } from 'drizzle-orm';
@@ -38,6 +38,7 @@ import { generateUuidV7 } from '@/lib/id';
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
 import { failTableWrites } from '../helpers/faults';
+import { resetRateLimits } from '../helpers/rate-limit';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
 import { buildRegistrationResponse } from '../helpers/webauthn';
@@ -127,6 +128,8 @@ beforeAll(async () => {
   if (fixture.other)
     await givePasskey(fixture.other.userId, 'harness-credential-two');
 });
+
+beforeEach(resetRateLimits);
 
 describe('registering a passkey', () => {
   const RP_ID = new URL(PUBLIC_ORIGIN).hostname;
@@ -772,6 +775,49 @@ describe('deleting a passkey', () => {
       .from(trustedDevices)
       .where(eq(trustedDevices.userId, user.userId));
     expect(trust).toHaveLength(0);
+  });
+
+  test('deleting one of several passkeys revokes trust only while passkeys are a factor', async () => {
+    // Trust records no factor, and the deleted key may be the lost one; a key
+    // that was no factor earned no trust, so the owner's devices keep theirs.
+    const trustOf = async (userId: string) =>
+      db
+        .select({ id: trustedDevices.id })
+        .from(trustedDevices)
+        .where(eq(trustedDevices.userId, userId));
+
+    for (const asFactor of [true, false]) {
+      const user = await seedUser();
+      const { cookie, grant } = await grantFor(user);
+      // `givePasskey` also records the passkey intent; the second key joins it.
+      await givePasskey(user.userId, `harness-kept-${asFactor}`);
+      await db.insert(passkeys).values({
+        userId: user.userId,
+        credentialID: `harness-lost-${asFactor}`,
+        publicKey: Buffer.from('not-a-real-key').toString('base64'),
+        counter: 0,
+        deviceType: 'singleDevice',
+        backedUp: false,
+      });
+      if (!asFactor)
+        await db
+          .delete(twoFactorMethods)
+          .where(eq(twoFactorMethods.userId, user.userId));
+      await db.insert(trustedDevices).values({
+        userId: user.userId,
+        trustIdentifier: `trust-device-harness-several-${asFactor}`,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      });
+
+      const deleted = await call(
+        'POST',
+        '/api/auth/passkey/delete-passkey',
+        { id: await passkeyRowId(`harness-lost-${asFactor}`), grant },
+        cookie
+      );
+      expect(deleted.status).toBe(HTTP_STATUS.OK);
+      expect(await trustOf(user.userId)).toHaveLength(asFactor ? 0 : 1);
+    }
   });
 
   test('reads the grant from the body, never the query string', async () => {

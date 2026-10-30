@@ -97,13 +97,12 @@ beforeAll(async () => {
 
   for (const channel of ['email', 'sms', 'whatsapp'] as const) {
     await api.enforceOtpGlobalSendBudget({ channel });
-    // Every verify surface, because recovery now has its own key: a sentinel
-    // missing from one of them would leave that key space unchecked.
+    // Every surface that still has a verify quota: a sentinel missing from one
+    // of them would leave that key space unchecked.
     for (const surface of [
-      'verify_contact',
-      'recovery',
-      'passwordless',
       'contact_change',
+      'two_factor',
+      'recovery_second_factor',
     ] as const)
       await api.enforceOtpVerifyQuota({
         channel,

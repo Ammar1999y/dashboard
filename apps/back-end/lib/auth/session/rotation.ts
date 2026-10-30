@@ -44,16 +44,17 @@ export async function revokeSessionArtifacts(
   sessionIds: readonly string[]
 ): Promise<void> {
   if (sessionIds.length === 0) return;
-  await tx.delete(verifications).where(
-    inArray(
-      verifications.identifier,
-      sessionIds.flatMap((id) => [
-        twoFactorProofKey(id),
-        reauthMethodKey(id),
-        reauthPasskeyKey(id),
-      ])
-    )
-  );
+  const keys = sessionIds.flatMap((id) => [
+    twoFactorProofKey(id),
+    reauthMethodKey(id),
+    reauthPasskeyKey(id),
+  ]);
+  // ⚠️ One array parameter, not `inArray`: a list binds one parameter per key,
+  // PostgreSQL refuses a statement past 65,535, and a user can hold enough
+  // sessions to reach it, which would fail every revocation of theirs.
+  await tx
+    .delete(verifications)
+    .where(sql`${verifications.identifier} = any(${sql.param(keys)}::text[])`);
 }
 
 export async function revokeSessionsWhere(

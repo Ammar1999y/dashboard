@@ -1442,10 +1442,20 @@ deployment already holds.
 Command:
 
 ```sh
-curl -fsS -H "x-maintenance-token: $SQLITE_MAINTENANCE_TOKEN" "http://127.0.0.1:3000/api/health/storage" || exit 1
+bun scripts/healthcheck.ts
 ```
 
-`curl` must exist in the image — the HTTP variant required it too.
+`scripts/healthcheck.ts` reads `PORT` and `SQLITE_MAINTENANCE_TOKEN` from the
+container's environment, calls the route over loopback with a 4 s deadline, and
+exits 1 on anything but a 2xx, printing why.
+
+> ⚠️ **A `curl` command with the token cannot be used here.** Coolify validates
+> the command against `^[a-zA-Z0-9 \-_.\/:=@,+]+$`: the `"`, `$` and `|` a
+> `curl -H "x-maintenance-token: $SQLITE_MAINTENANCE_TOKEN" … || exit 1` line
+> needs are refused in the form, and at deploy time the same check falls back to
+> a token-less HTTP probe, which answers 401 forever. The script's command passes
+> that check. If your Coolify predates the validator, the script still works.
+
 [Coolify health checks](https://coolify.io/docs/knowledge-base/health-checks).
 
 > ⚠️ **An HTTP-type check here marks the container unhealthy forever.** It sends
@@ -1565,11 +1575,11 @@ curl -fsS -H "x-maintenance-token: $SQLITE_MAINTENANCE_TOKEN" \
 **Return code** is not a field of a CMD check and never was load-bearing: even
 for the HTTP type, Coolify's generated command uses `curl -f` with a `wget`
 fallback and decides health from the command's exit status — it does not
-interpolate `health_check_return_code`. The command above is explicit about it
-(`-f` plus `|| exit 1`). The external smoke test in §8 is what asserts the exact
-status. That generated command runs INSIDE the container, which is why the
+interpolate `health_check_return_code`. The script above exits 1 on any status
+outside 2xx. The external smoke test in §8 is what asserts the exact status.
+The generated HTTP command runs INSIDE the container, which is why the
 Dockerfile's runtime stage installs `curl`: a slim base image without it makes
-the check fail forever and the container restart-loop with nothing in its logs.
+that check fail forever and the container restart-loop with nothing in its logs.
 [Health checks](https://coolify.io/docs/knowledge-base/health-checks) ·
 [generator source](https://github.com/coollabsio/coolify/blob/v4.x/app/Jobs/ApplicationDeploymentJob.php#L3239-L3283)
 
@@ -2371,8 +2381,9 @@ bucket CORS rule in the Cloudflare console — the API token cannot (measured
 - [ ] `SQLITE_MAINTENANCE_TOKEN` generated with `openssl rand -hex 32`.
       Required in production; a value below 32 characters refuses to boot
       (gate 4).
-- [ ] The health check is the **CMD** form in §7, carrying the token. An
-      HTTP-type check answers 401 on every poll and never turns healthy.
+- [ ] The health check is the **CMD** form in §7, `bun scripts/healthcheck.ts`.
+      An HTTP-type check, or a `curl` line carrying the token, answers 401 on
+      every poll and never turns healthy.
 - [ ] The `sqlite-expiry-sweep` and `postgres-retention-sweep` Coolify tasks
       **deleted** — both sweeps run in-process now and their routes are gone (§9).
 - [ ] Log alerting configured on `scheduled sweep failed`, on
@@ -2410,6 +2421,9 @@ bucket CORS rule in the Cloudflare console — the API token cannot (measured
 - [ ] Disk, task and deploy notifications enabled.
 - [ ] PostgreSQL and SQLite backup/RPO policies recorded; restore tested on
       staging.
+- [ ] PostgreSQL image variant (musl or glibc), `datcollate` and `datctype`
+      recorded (§15). Any later change of them on existing data is a dump and
+      restore or a `REINDEX DATABASE` before traffic, never an in-place swap.
 - [ ] SQLite checks re-run against a copy of the live volume.
 - [ ] Upstash rollback window completed, credentials revoked.
 - [ ] R2: both buckets exist, the token holds Object Read & Write on both, the
@@ -2593,6 +2607,15 @@ musl's answer directly. Two things follow.
   narrowing the class to one libc version's vintage would refuse them on the
   glibc images too; `postgres:18` (glibc) does not have this gap. Deploy on the
   glibc image if the data will contain those scripts.
+- ⚠️ **Choose the image before there is data. Switching later corrupts indexes
+  silently.** musl's `strcoll` is byte order, glibc's `en_US` collation is not,
+  and musl records no collation version for PostgreSQL to warn about. Every text
+  btree built on Alpine — `ux_users_email`, `ux_sessions_token`,
+  `ux_files_r2_key`, `ux_folders_parent_name`, `ux_folders_root_name`,
+  `idx_files_folder_name` — and every `gin_trgm_ops` index is misordered once
+  the same volume runs under glibc: unique checks can admit duplicate emails and
+  lookups miss rows. Any change of libc, image variant or `datcollate`/`datctype`
+  on existing data needs a dump and restore, or `REINDEX DATABASE` before traffic.
 
 ### Arabic search folding (`search_fold`)
 

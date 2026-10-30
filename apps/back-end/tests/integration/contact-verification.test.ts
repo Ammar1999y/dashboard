@@ -30,7 +30,7 @@ beforeAll(async () => {
 // One floored request; the rest of the budget is room for seeding in a busy tier.
 test('the right code verifies the contact', async () => {
   const user = await seedUser({ emailVerified: false });
-  const { code } = await seedOtpProof({
+  const { code, cookie } = await seedOtpProof({
     userId: user.userId,
     identifier: user.email,
     purpose: 'verify_contact',
@@ -40,7 +40,7 @@ test('the right code verifies the contact', async () => {
   const response = await app.handle(
     new Request('http://localhost/api/auth/otp/verify', {
       method: 'POST',
-      headers: baseHeaders({ 'content-type': 'application/json' }),
+      headers: baseHeaders({ 'content-type': 'application/json', cookie }),
       body: JSON.stringify({ channel: 'email', email: user.email, code }),
     })
   );

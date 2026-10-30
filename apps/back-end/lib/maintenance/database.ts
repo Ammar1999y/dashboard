@@ -30,6 +30,7 @@ import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import {
+  otpChallenges,
   sessions,
   trustedDevices,
   users,
@@ -137,6 +138,7 @@ export interface DatabaseSweepResult {
     sessions: SweepCount;
     verificationSessions: SweepCount;
     verificationCodes: SweepCount;
+    otpChallenges: SweepCount;
     verifications: SweepCount;
     trustedDevices: SweepCount;
     files: FileSweepCount;
@@ -200,6 +202,7 @@ type ExpiringTable =
   | typeof sessions
   | typeof trustedDevices
   | typeof verificationCodes
+  | typeof otpChallenges
   | typeof verifications;
 
 /** No grace: the row goes once `expires_at` has passed. */
@@ -208,7 +211,7 @@ const atClock = (clock: SQL): SQL => clock;
 /**
  * Rows whose `expires_at` is before `cutoff` at the given clock.
  *
- * Only `verifications` and `trusted_devices` have an index leading with
+ * Only `verifications`, `trusted_devices` and `otp_challenges` have an index leading with
  * `expires_at`; on `sessions` (`idx_sessions_user_expires_created` leads with
  * `user_id`) and `verification_codes` the select is a sequential scan, knowingly
  * accepted: one nightly job, `LIMIT` stops the scan early whenever there IS
@@ -253,8 +256,9 @@ function sweepExpired(
 }
 
 /**
- * Spent or abandoned OTP proof rows. `verification_codes` cascades from here, so
- * this also removes the code attached to each deleted session.
+ * Spent or abandoned OTP proof rows. `verification_codes` and `otp_challenges`
+ * cascade from here, so this also removes the codes attached to each deleted
+ * session.
  *
  * **This table is state, not a forensic record.** A consumed row is a single-use
  * replay marker whose code is already gone and whose `consumedAt` is set, and
@@ -301,6 +305,11 @@ function sweepVerificationSessions(runStart: SQL): Promise<SweepCount> {
         SELECT 1 FROM ${verificationCodes}
         WHERE ${verificationCodes.sessionId} = ${verificationSessions.id}
           AND ${verificationCodes.expiresAt} > ${clock}
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ${otpChallenges}
+        WHERE ${otpChallenges.sessionId} = ${verificationSessions.id}
+          AND ${otpChallenges.expiresAt} > ${clock}
       )
     )
   `;
@@ -382,6 +391,7 @@ export async function runDatabaseSweep(
     // above leaves behind. `processOtpVerify` filters on `expires_at`, so this
     // only reclaims rows.
     verificationCodes: await sweepExpired(verificationCodes, atClock, runStart),
+    otpChallenges: await sweepExpired(otpChallenges, atClock, runStart),
     // `consumeVerificationValue` deletes a row past its `expiresAt` and returns
     // null, so an unswept row can never be redeemed; this reclaims disk on the
     // fastest-growing table here.
@@ -436,6 +446,7 @@ export async function runDatabaseSweep(
       removed.sessions.hasMore ||
       removed.verificationSessions.hasMore ||
       removed.verificationCodes.hasMore ||
+      removed.otpChallenges.hasMore ||
       removed.verifications.hasMore ||
       removed.trustedDevices.hasMore ||
       removed.files.hasMore ||

@@ -26,6 +26,8 @@
  *  - a transaction is one session: same backend PID, advisory lock visible,
  *    rollback on throw, nested block behaves as a savepoint
  *  - `db.execute()` yields rows as an array, which three call sites read
+ *  - a revocation larger than one statement's 65,535 bind parameters still
+ *    completes, because session artifacts are bound as one array
  *
  * **No hand-authored driver errors and no hand-copied SQL.** A fixture setting
  * `.errno = '23505'` proves only that the reader reads `errno`, so every error
@@ -47,6 +49,7 @@ import {
   eq,
   getTableColumns,
   getTableName,
+  inArray,
   is,
   sql,
 } from 'drizzle-orm';
@@ -66,6 +69,7 @@ import {
   sessions,
   userPreferences,
   users,
+  verifications,
 } from '@/db/schema';
 
 import { MSG_EMAIL_EXISTS } from '@app/shared/messages/users';
@@ -76,6 +80,12 @@ import {
 import { DEFAULT_PREFERENCES } from '@app/shared/validation/preferences';
 
 import { auditLog } from '@/lib/audit';
+import { revokeOtherSessions } from '@/lib/auth/session/rotation';
+import {
+  reauthMethodKey,
+  reauthPasskeyKey,
+  twoFactorProofKey,
+} from '@/lib/auth/verifications';
 import {
   handleUserForeignKeyViolation,
   handleUserUniqueViolation,
@@ -822,4 +832,51 @@ describe('db.execute yields an array, at each call site that reads it', () => {
     // protects a system role from deletion.
     expect(locked[0]).toBeUndefined();
   });
+});
+
+describe('a revocation past the bind-parameter limit', () => {
+  test('removes every session in one statement per table', async () => {
+    // Three artifact keys a session: 21,846 sessions need 65,538 parameters, past
+    // what the wire protocol carries. A user reaches that by signing in, and a
+    // parameter per key then failed every revocation of theirs.
+    const user = await seedUser();
+    const sessionCount = 21_846;
+    await db.execute(sql`
+      insert into sessions (id, token, user_id, expires_at)
+      select gen_random_uuid(), 'driver-contract-' || g || '-' || ${user.userId},
+             ${user.userId}::uuid, now() + interval '1 day'
+        from generate_series(1, ${sessionCount}) as g`);
+    const sample = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.userId, user.userId))
+      .limit(3);
+    const artifactKeys = sample.flatMap(({ id }) => [
+      twoFactorProofKey(id),
+      reauthMethodKey(id),
+      reauthPasskeyKey(id),
+    ]);
+    const strangerKey = twoFactorProofKey(generateUuidV7());
+    await db.insert(verifications).values(
+      [...artifactKeys, strangerKey].map((identifier) => ({
+        identifier,
+        value: user.userId,
+        expiresAt: new Date(Date.now() + 60_000),
+      }))
+    );
+
+    await withTransaction((tx) => revokeOtherSessions(tx, user.userId));
+
+    const artifacts = await db
+      .select({ identifier: verifications.identifier })
+      .from(verifications)
+      .where(inArray(verifications.identifier, [...artifactKeys, strangerKey]));
+    expect(artifacts.map((row) => row.identifier)).toEqual([strangerKey]);
+
+    const left = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.userId, user.userId));
+    expect(left).toHaveLength(0);
+  }, 60_000);
 });

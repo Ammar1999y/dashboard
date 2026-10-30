@@ -31,6 +31,10 @@ import {
 } from 'drizzle-orm';
 
 import {
+  isScanOnlyOperator,
+  isSearchOperator,
+} from '@app/shared/data-table/column-specs';
+import {
   assertFilterAllowed,
   dayBounds,
   dayRangeBounds,
@@ -42,6 +46,7 @@ import {
   safeNumber,
   searchAnchorOf,
 } from '@app/shared/data-table/filter-rules';
+import { MSG_OR_SEARCH_UNINDEXED } from '@app/shared/messages/data-table';
 
 /**
  * ⚠️ TEXT COLUMNS ONLY — see `isStringLike`. A bare boolean expression rather
@@ -249,6 +254,8 @@ export function filterColumns<T extends Table>({
   const joinFn = joinOperator === 'and' ? and : or;
 
   const conditions: SQL[] = [];
+  let guardedSearch = false;
+  let unindexed = false;
   for (const filter of filters) {
     const spec = requireFilterSpec(specs, filter.id);
 
@@ -264,6 +271,11 @@ export function filterColumns<T extends Table>({
     );
     if (decision === 'skip') continue;
 
+    const indexedSearch =
+      isSearchOperator(filter.operator) && !isScanOnlyOperator(filter.operator);
+    if (indexedSearch && !spec.allowScanOnly) guardedSearch = true;
+    if (!indexedSearch) unindexed = true;
+
     const condition = buildCondition(
       column,
       filter as ExtendedColumnFilter<Table>,
@@ -271,6 +283,12 @@ export function filterColumns<T extends Table>({
     );
     if (condition) conditions.push(condition);
   }
+
+  // ⚠️ One disjunct no index serves turns the whole OR into a sequential scan
+  // that folds every row once per search term: the full scan `allowScanOnly`
+  // keeps off a column, reached without its scan-only operator.
+  if (joinOperator === 'or' && guardedSearch && unindexed)
+    invalidFilter(MSG_OR_SEARCH_UNINDEXED);
 
   return conditions.length > 0 ? joinFn(...conditions) : undefined;
 }

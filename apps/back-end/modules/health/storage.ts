@@ -26,12 +26,10 @@ import { applicationPoolUsable, pingDatabase } from '@/db';
 import { getStorageHealth } from '@app/shared/api/health';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
+import { MAINTENANCE_TOKEN_HEADER } from '@app/shared/validation/health';
 
 import { bind } from '@/lib/http/binding';
-import {
-  MAINTENANCE_TOKEN_HEADER,
-  maintenanceTokenMatches,
-} from '@/lib/maintenance/token';
+import { maintenanceTokenMatches } from '@/lib/maintenance/token';
 import {
   admitWindow,
   getRateLimitStore,

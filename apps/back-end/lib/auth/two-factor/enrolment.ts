@@ -304,7 +304,11 @@ export const twoFactorEnrolment = () =>
           await withTransaction(async (tx) => {
             await lockUser(tx, userId);
             const [existing] = await tx
-              .select({ id: twoFactorCredentials.id })
+              .select({
+                id: twoFactorCredentials.id,
+                acknowledgedSetId:
+                  twoFactorCredentials.backupCodesAcknowledgedSetId,
+              })
               .from(twoFactorCredentials)
               .where(eq(twoFactorCredentials.userId, userId))
               .limit(1);
@@ -337,6 +341,11 @@ export const twoFactorEnrolment = () =>
               backupCodesCount: codes.length,
               backupCodesSetId: setId,
             });
+            // Regenerating is what a user does when the sheet leaked, and trust
+            // a leaked code earned would outlive it. Only an acknowledged set
+            // was ever offered at sign-in, so only one could have earned trust.
+            if (existing?.acknowledgedSetId != null)
+              await revokeTwoFactorState(tx, userId);
 
             // The intent row is deliberately kept; `backupCodesReady` answers
             // false until the new set is acknowledged.
@@ -572,6 +581,9 @@ export const twoFactorEnrolment = () =>
               passkeyDeleted: passkeyId,
               passkeysRemaining: owned.length - 1,
             });
+            // The deleted key may be the lost one, and trust records no factor,
+            // so all trust goes. A passkey that was no factor earned none.
+            if (isFactor) await revokeTwoFactorState(tx, userId);
           });
 
           return ctx.json({ data: { deleted: true } });

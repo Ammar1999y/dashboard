@@ -15,12 +15,11 @@ import { app } from '@/app';
 import { db } from '@/db';
 import {
   auditLogs,
+  trustedDevices,
   twoFactorCredentials,
   twoFactorMethods,
   users,
-  verificationCodes,
   verifications,
-  verificationSessions,
 } from '@/db/schema';
 import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 
@@ -29,15 +28,16 @@ import { twoFactorMsg } from '@app/shared/messages/auth';
 import { otpMsg } from '@app/shared/messages/otp';
 
 import { auth } from '@/lib/auth';
+import { TWO_FACTOR_LOCKOUT_MAX_FAILURES } from '@/lib/auth/recovery/second-factor';
 import { totpEnrolmentKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
-import { hashOtpCode } from '@/lib/otp/hash';
+import { getRateLimitStore } from '@/lib/rate-limit/store';
 
 import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
-import { scriptEgress } from '../helpers/egress';
-import { flooredBudget } from '../helpers/otp';
+import { egressCallsTo, scriptEgress } from '../helpers/egress';
+import { flooredBudget, replaceOtpCode, sentRequester } from '../helpers/otp';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { baseHeaders, seedUser, uniquePhone } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
@@ -721,44 +721,92 @@ describe('backup codes', () => {
   });
 });
 
+describe('regenerating backup codes', () => {
+  async function trustOf(userId: string) {
+    return db
+      .select({ id: trustedDevices.id })
+      .from(trustedDevices)
+      .where(eq(trustedDevices.userId, userId));
+  }
+
+  async function generate(user: SeededUser, cookie: string) {
+    const response = await call(
+      'POST',
+      '/api/auth/two-factor/generate-backup-codes',
+      { password: user.password },
+      cookie
+    );
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    return ((await response.json()) as { data?: { setId?: string } }).data
+      ?.setId;
+  }
+
+  async function trustDevice(userId: string) {
+    await db.insert(trustedDevices).values({
+      userId,
+      trustIdentifier: `trust-device-harness-${userId}`,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+  }
+
+  test('revokes trust a replaced, acknowledged set could have earned', async () => {
+    // Regenerating is what a user does when the sheet leaked; trust a leaked
+    // code earned would otherwise outlive it.
+    const user = await seedUser();
+    const cookie = await signInCookie(user, false);
+    const setId = await generate(user, cookie);
+    const acknowledged = await call(
+      'POST',
+      '/api/auth/two-factor/backup-codes/acknowledge',
+      { password: user.password, setId },
+      cookie
+    );
+    expect(acknowledged.status).toBe(HTTP_STATUS.OK);
+    await trustDevice(user.userId);
+
+    await generate(user, cookie);
+    expect(await trustOf(user.userId)).toBeEmpty();
+  });
+
+  test('keeps trust when the replaced set was never offered', async () => {
+    // A set never acknowledged was never a sign-in factor, so it earned no trust.
+    const user = await seedUser();
+    const cookie = await signInCookie(user, false);
+    await trustDevice(user.userId);
+
+    await generate(user, cookie);
+    await generate(user, cookie);
+    expect(await trustOf(user.userId)).toHaveLength(1);
+  });
+});
+
 describe('password recovery against a second factor', () => {
   /** Drives recovery to the point of the reset, with a code this file knows. */
   async function attemptReset(user: SeededUser): Promise<Response> {
-    await call('POST', '/api/auth/forgot-password/send', {
+    const sent = await call('POST', '/api/auth/forgot-password/send', {
       channel: 'email',
       email: user.email,
     });
-    const [proof] = await db
-      .select({ id: verificationSessions.id })
-      .from(verificationSessions)
-      .where(
-        and(
-          eq(verificationSessions.userId, user.userId),
-          eq(verificationSessions.purpose, 'forgot_password')
-        )
-      );
-    if (!proof) throw new Error('no recovery proof row');
-    await db
-      .insert(verificationCodes)
-      .values({
-        sessionId: proof.id,
-        code: hashOtpCode(RIGHT_CODE),
-        expiresAt: new Date(Date.now() + 10 * 60_000),
-      })
-      .onConflictDoUpdate({
-        target: verificationCodes.sessionId,
-        set: {
-          code: hashOtpCode(RIGHT_CODE),
-          expiresAt: new Date(Date.now() + 10 * 60_000),
-        },
-      });
-
-    return call('POST', '/api/auth/forgot-password/reset', {
-      channel: 'email',
-      email: user.email,
+    const { requester, cookie } = sentRequester(sent);
+    await replaceOtpCode({
+      userId: user.userId,
+      purpose: 'forgot_password',
+      contactKind: 'email',
       code: RIGHT_CODE,
-      newPassword: NEW_PASSWORD,
+      requester,
     });
+
+    return call(
+      'POST',
+      '/api/auth/forgot-password/reset',
+      {
+        channel: 'email',
+        email: user.email,
+        code: RIGHT_CODE,
+        newPassword: NEW_PASSWORD,
+      },
+      cookie
+    );
   }
 
   test(
@@ -980,6 +1028,137 @@ describe('password recovery against a second factor', () => {
       .from(verifications)
       .where(eq(verifications.identifier, `recovery-attempts-${grant}`));
     expect(row?.value).toBe('0');
+  }, 30_000);
+
+  test('honours the account-wide 2FA lockout sign-in enforces', async () => {
+    // The lock lives on the credential row both flows verify against. Recovery
+    // ignoring it gave a holder of the recovery mailbox a second, unlocked
+    // guessing budget.
+    const user = await seedUser();
+    const secret = await enrolTotpBySql(user.userId);
+    const started = await attemptReset(user);
+    const grant = ((await started.json()) as { data?: { grant?: string } }).data
+      ?.grant;
+    expect(grant).toBeDefined();
+    const credentialOf = async () => {
+      const [row] = await db
+        .select({
+          count: twoFactorCredentials.failedVerificationCount,
+          lockedUntil: twoFactorCredentials.lockedUntil,
+          lastTotpStep: twoFactorCredentials.lastTotpStep,
+        })
+        .from(twoFactorCredentials)
+        .where(eq(twoFactorCredentials.userId, user.userId));
+      return row;
+    };
+
+    await db
+      .update(twoFactorCredentials)
+      .set({
+        failedVerificationCount: TWO_FACTOR_LOCKOUT_MAX_FAILURES,
+        lockedUntil: new Date(Date.now() + 15 * 60_000),
+      })
+      .where(eq(twoFactorCredentials.userId, user.userId));
+    const lockedBefore = await credentialOf();
+
+    const { code } = await auth.api.generateTOTP({ body: { secret } });
+    const locked = await call('POST', '/api/auth/forgot-password/complete', {
+      grant,
+      option: 'totp',
+      code,
+      newPassword: NEW_PASSWORD,
+    });
+    expect(locked.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+    expect(locked.headers.get('retry-after')).toBeString();
+    // Nothing committed: the password, the grant's budget, the lock and the
+    // TOTP step are all as they were, so the code is still usable later.
+    const withNew = await call('POST', '/api/auth/sign-in/email', {
+      email: user.email,
+      password: NEW_PASSWORD,
+    });
+    expect(withNew.status).not.toBe(HTTP_STATUS.OK);
+    const [attempts] = await db
+      .select({ value: verifications.value })
+      .from(verifications)
+      .where(eq(verifications.identifier, `recovery-attempts-${grant}`));
+    expect(attempts?.value).toBe('0');
+    expect(await credentialOf()).toEqual(lockedBefore);
+
+    // One failure short of the lock, a wrong code reaches it.
+    await db
+      .update(twoFactorCredentials)
+      .set({
+        failedVerificationCount: TWO_FACTOR_LOCKOUT_MAX_FAILURES - 1,
+        lockedUntil: null,
+      })
+      .where(eq(twoFactorCredentials.userId, user.userId));
+    const wrong = await call('POST', '/api/auth/forgot-password/complete', {
+      grant,
+      option: 'totp',
+      code: '000000',
+      newPassword: NEW_PASSWORD,
+    });
+    expect(wrong.status).toBe(HTTP_STATUS.BAD_REQUEST);
+    const after = await credentialOf();
+    expect(after?.count).toBe(TWO_FACTOR_LOCKOUT_MAX_FAILURES);
+    expect(after?.lockedUntil?.getTime()).toBeGreaterThan(Date.now());
+  }, 30_000);
+
+  test('spends the reset hash budget on every completion', async () => {
+    // A completion that compared nothing refunds its grant attempt, so without
+    // this charge one grant replayed the Argon2 hash and breach lookup for free.
+    const user = await seedUser({
+      phoneNumber: uniquePhone(),
+      phoneNumberVerified: true,
+    });
+    await enrol(user.userId, 'otp', 'sms');
+    const started = await attemptReset(user);
+    const grant = ((await started.json()) as { data?: { grant?: string } }).data
+      ?.grant;
+    expect(grant).toBeDefined();
+    const hashBudgetSpent = (): number => {
+      const statement = getRateLimitStore().db.prepare(
+        'SELECT count FROM rate_limit WHERE key LIKE ?'
+      );
+      try {
+        return statement
+          .all<{ count: number }>('%forgot.reset.work.ip%')
+          .reduce((total, row) => total + row.count, 0);
+      } finally {
+        statement.finalize();
+      }
+    };
+    const before = hashBudgetSpent();
+
+    for (let replay = 0; replay < 2; replay++) {
+      const early = await call('POST', '/api/auth/forgot-password/complete', {
+        grant,
+        option: 'otp:phone',
+        code: RIGHT_CODE,
+        newPassword: NEW_PASSWORD,
+      });
+      expect(early.status).not.toBe(HTTP_STATUS.OK);
+    }
+    expect(hashBudgetSpent()).toBe(before + 2);
+
+    // Spent: refused before the breach lookup and the hash, with nothing written.
+    getRateLimitStore().db.exec(
+      "UPDATE rate_limit SET count = 1000 WHERE key LIKE '%forgot.reset.work.ip%'"
+    );
+    const lookups = egressCallsTo('api.pwnedpasswords.com').length;
+    const refused = await call('POST', '/api/auth/forgot-password/complete', {
+      grant,
+      option: 'otp:phone',
+      code: RIGHT_CODE,
+      newPassword: NEW_PASSWORD,
+    });
+    expect(refused.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+    expect(egressCallsTo('api.pwnedpasswords.com')).toHaveLength(lookups);
+    const [attempts] = await db
+      .select({ value: verifications.value })
+      .from(verifications)
+      .where(eq(verifications.identifier, `recovery-attempts-${grant}`));
+    expect(attempts?.value).toBe('0');
   }, 30_000);
 });
 

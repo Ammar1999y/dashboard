@@ -43,6 +43,7 @@ import {
   files,
   folders,
   orphanedObjects,
+  otpChallenges,
   sessions,
   trustedDevices,
   users,
@@ -135,6 +136,7 @@ const proofs = {
   freshWithExpiredCode: '',
   freshWithLiveCode: '',
   oldRowFreshCode: '',
+  oldRowLiveChallenge: '',
 };
 
 function healthy(): Pass {
@@ -186,6 +188,14 @@ async function survivingIdentifiers(
       : trustedDevices.trustIdentifier;
   const rows = await db.select({ identifier: column }).from(table);
   return rows.map((row) => row.identifier).toSorted(compareCodeUnits);
+}
+
+async function challengeCount(sessionId: string): Promise<number> {
+  const rows = await db
+    .select({ id: otpChallenges.id })
+    .from(otpChallenges)
+    .where(eq(otpChallenges.sessionId, sessionId));
+  return rows.length;
 }
 
 async function codeCount(sessionId: string): Promise<number> {
@@ -407,6 +417,22 @@ describe('a pass with a healthy object store', () => {
       .returning({ id: verificationSessions.id });
     proofs.oldRowFreshCode = oldRowFreshCode?.id ?? '';
 
+    // Every activity column three days old, so only its live anonymous code
+    // keeps it: the predicate's second NOT EXISTS, alone.
+    const [oldRowLiveChallenge] = await db
+      .insert(verificationSessions)
+      .values({
+        userId,
+        channel: 'sms',
+        identifier: '966512345681',
+        purpose: 'forgot_password',
+        createdAt: sql`now() - interval '3 days'`,
+        lastSentAt: sql`now() - interval '3 days'`,
+        verifyAttemptWindowStart: sql`now() - interval '3 days'`,
+      })
+      .returning({ id: verificationSessions.id });
+    proofs.oldRowLiveChallenge = oldRowLiveChallenge?.id ?? '';
+
     await db.insert(verificationCodes).values([
       // GOES BY CASCADE: live, on a row that is going anyway.
       {
@@ -432,6 +458,25 @@ describe('a pass with a healthy object store', () => {
         sessionId: proofs.oldRowFreshCode,
         code: 'o1:sweep:resent',
         expiresAt: sql`now() + interval '10 minutes'`,
+      },
+    ]);
+
+    await db.insert(otpChallenges).values([
+      // GOES: expired, on a row that must survive it.
+      {
+        sessionId: proofs.freshWithExpiredCode,
+        requester: 'sweep-expired',
+        code: 'o1:sweep:challenge-expired',
+        expiresAt: sql`now() - interval '1 minute'`,
+        nextAllowedAt: sql`now() - interval '1 minute'`,
+      },
+      // STAYS, and keeps its three-day-old row.
+      {
+        sessionId: proofs.oldRowLiveChallenge,
+        requester: 'sweep-live',
+        code: 'o1:sweep:challenge-live',
+        expiresAt: sql`now() + interval '10 minutes'`,
+        nextAllowedAt: sql`now()`,
       },
     ]);
 
@@ -493,6 +538,7 @@ describe('a pass with a healthy object store', () => {
       sessions: { removed: 1, hasMore: false },
       verificationSessions: { removed: 2, hasMore: false },
       verificationCodes: { removed: 1, hasMore: false },
+      otpChallenges: { removed: 1, hasMore: false },
       verifications: { removed: 1, hasMore: false },
       trustedDevices: { removed: 1, hasMore: false },
       // `stamped: 0`, with an active row in no folder present (`KEY.permanent`):
@@ -553,6 +599,12 @@ describe('a pass with a healthy object store', () => {
   test('an expired code is removed without taking its still-live session', async () => {
     expect(await codeCount(proofs.freshWithExpiredCode)).toBe(0);
     expect(await proofExists(proofs.freshWithExpiredCode)).toBe(true);
+  });
+
+  test('an anonymous code keeps its row as a code does, and goes once expired', async () => {
+    expect(await proofExists(proofs.oldRowLiveChallenge)).toBe(true);
+    expect(await challengeCount(proofs.oldRowLiveChallenge)).toBe(1);
+    expect(await challengeCount(proofs.freshWithExpiredCode)).toBe(0);
   });
 
   test('an expired 2FA challenge is removed; one still in flight stays', async () => {
@@ -654,6 +706,10 @@ describe('a pass whose object-store delete fails', () => {
       hasMore: false,
     });
     expect(r2Down().swept.removed.verificationCodes).toEqual({
+      removed: 0,
+      hasMore: false,
+    });
+    expect(r2Down().swept.removed.otpChallenges).toEqual({
       removed: 0,
       hasMore: false,
     });

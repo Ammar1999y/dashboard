@@ -20,13 +20,7 @@ import { and, eq, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import {
-  auditLogs,
-  twoFactorMethods,
-  users,
-  verificationCodes,
-  verificationSessions,
-} from '@/db/schema';
+import { auditLogs, twoFactorMethods, users } from '@/db/schema';
 import { REGISTERED_BINDINGS } from '@/modules';
 import { generateDocument } from '@/server/elysia/openapi';
 
@@ -41,7 +35,6 @@ import {
 import { BETTER_AUTH_ROUTE_PREFIX } from '@/lib/auth/allowed-paths';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { servedDocument } from '@/lib/http/openapi/serve';
-import { hashOtpCode } from '@/lib/otp/hash';
 import { clearOutbox, readOutbox } from '@/lib/otp/outbox';
 
 import { resetTables } from '../helpers/database';
@@ -52,7 +45,7 @@ import {
   redoclyProblems,
   validateWithSwaggerParser,
 } from '../helpers/openapi-validity';
-import { flooredBudget } from '../helpers/otp';
+import { flooredBudget, replaceOtpCode, sentRequester } from '../helpers/otp';
 import {
   baseHeaders,
   seedUser,
@@ -75,39 +68,6 @@ const METHOD_PATHS: Readonly<Record<string, boolean>> = {
     ENABLED_TWO_FACTOR_METHODS.includes('passkey'),
   '/api/auth/two-factor/otp/send': ENABLED_TWO_FACTOR_METHODS.includes('otp'),
 };
-
-/**
- * Replaces whatever the send path stored with a code this file knows.
- *
- * The proof ROW has to already exist — it carries the purpose binding — so the
- * send runs for real and only the code is overwritten.
- */
-async function plantCode(userId: string): Promise<void> {
-  const [proof] = await db
-    .select({ id: verificationSessions.id })
-    .from(verificationSessions)
-    .where(
-      and(
-        eq(verificationSessions.userId, userId),
-        eq(verificationSessions.purpose, 'passwordless_login')
-      )
-    );
-  if (!proof) throw new Error('no passwordless proof row');
-  await db
-    .insert(verificationCodes)
-    .values({
-      sessionId: proof.id,
-      code: hashOtpCode(RIGHT_CODE),
-      expiresAt: new Date(Date.now() + 10 * 60_000),
-    })
-    .onConflictDoUpdate({
-      target: verificationCodes.sessionId,
-      set: {
-        code: hashOtpCode(RIGHT_CODE),
-        expiresAt: new Date(Date.now() + 10 * 60_000),
-      },
-    });
-}
 
 function cookieHeader(setCookie: string[]): string {
   return setCookie
@@ -283,16 +243,26 @@ describe(`the ${ROW} configuration`, () => {
         password.headers.getSetCookie()
       ).includes('session_token');
 
-      await call('POST', '/api/auth/passwordless/send', {
+      // The send runs for real; only the code it bound to this browser is
+      // replaced with one this file knows.
+      const sent = await call('POST', '/api/auth/passwordless/send', {
         channel: 'email',
         email: user.email,
       });
-      await plantCode(user.userId);
-      const passwordless = await call('POST', '/api/auth/passwordless/verify', {
-        channel: 'email',
-        email: user.email,
+      const { requester, cookie } = sentRequester(sent);
+      await replaceOtpCode({
+        userId: user.userId,
+        purpose: 'passwordless_login',
+        contactKind: 'email',
         code: RIGHT_CODE,
+        requester,
       });
+      const passwordless = await call(
+        'POST',
+        '/api/auth/passwordless/verify',
+        { channel: 'email', email: user.email, code: RIGHT_CODE },
+        cookie
+      );
       const passwordlessBody = (await passwordless.json()) as {
         twoFactorRedirect?: boolean;
       };

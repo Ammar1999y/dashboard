@@ -18,13 +18,13 @@ import {
 import { auditLog } from '@/lib/audit';
 import { verifyTurnstileRequest } from '@/lib/captcha';
 import { timingFloor } from '@/lib/http/timing-floor';
+import { verifyRequesterOtp } from '@/lib/otp/challenge';
 import { markContactVerified } from '@/lib/otp/contact';
+import { readRequester } from '@/lib/otp/requester';
 import {
   collapseProofThrottle,
   invalidOrExpiredCode,
 } from '@/lib/otp/throttle';
-import { processOtpVerify } from '@/lib/otp/verify';
-import { enforceOtpVerifyQuota } from '@/lib/rate-limit';
 import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
 import { logSanitized } from '@/utils/log';
@@ -73,12 +73,6 @@ export const passwordless = () =>
             const identifier = contactIdentifier(input);
             const rememberMe = submittedRememberMe(input);
 
-            await enforceOtpVerifyQuota({
-              channel,
-              identifier,
-              surface: 'passwordless',
-            });
-
             // At the lookup: what precedes it is the same for every address.
             const deadline = floor.start();
             const [userData] = await db
@@ -93,14 +87,13 @@ export const passwordless = () =>
 
             // The code proves control of the contact, so it also satisfies the
             // verification gate in `session.create.before`.
-            await processOtpVerify({
+            await verifyRequesterOtp({
               userId: userData.id,
-              userEmail: userData.email,
               channel,
               purpose: 'passwordless_login',
               identifier,
               code,
-              auditMeta,
+              requester: readRequester(headers),
               deadline,
               onVerified: async (tx, matched) => {
                 await markContactVerified(tx, {

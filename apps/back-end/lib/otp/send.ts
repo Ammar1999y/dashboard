@@ -30,16 +30,17 @@ import {
   blockSession,
   calculateBlockDuration,
   calculateNextAllowedAt,
+  resendWaitError,
   VERIFY_BLOCK_CLEARED_BY_RESEND,
 } from './throttle';
 
-function generateOtpCode() {
+export function generateOtpCode(): string {
   return crypto
     .randomInt(10 ** (OTP_CODE_LENGTH - 1), 10 ** OTP_CODE_LENGTH)
     .toString();
 }
 
-function calculateOtpExpiry(): Date {
+export function calculateOtpExpiry(): Date {
   return new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 }
 
@@ -170,15 +171,8 @@ export async function processOtpSend({
       session = unblocked;
     }
 
-    if (session?.nextAllowedAt && session.nextAllowedAt > now) {
-      const waitSeconds = Math.ceil(
-        (session.nextAllowedAt.getTime() - now.getTime()) / 1000
-      );
-      throw new CustomError(
-        otpMsg.resendWait(waitSeconds),
-        HTTP_STATUS.TOO_MANY_REQUESTS
-      );
-    }
+    if (session?.nextAllowedAt && session.nextAllowedAt > now)
+      throw resendWaitError(session.nextAllowedAt, now);
 
     // Before the increment, which `chk_attempt_number_max` would refuse raw.
     // The throw is deferred so the block commits.
@@ -276,16 +270,42 @@ export async function processOtpSend({
 
   if (deferredError) throw deferredError;
 
-  // After the commit, so provider latency holds no locks. The refund matches
-  // this code only, never a newer send.
   if (!result)
     throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
+  await deliverOrRefund({
+    channel,
+    sendTo,
+    code: otpCode,
+    purpose,
+    deferDelivery,
+    refund: () => refundFailedDelivery(userId, result.sessionId, hashedCode),
+  });
+
+  return {
+    nextAllowedIn: result.nextAllowedIn,
+    attemptsRemaining: result.attemptsRemaining,
+  };
+}
+
+/**
+ * After the commit, so provider latency holds no locks. `refund` must match
+ * this code only, never a newer send.
+ */
+export async function deliverOrRefund(options: {
+  channel: OtpChannel;
+  sendTo: string;
+  code: string;
+  purpose: OtpPurpose;
+  refund: () => Promise<void>;
+  deferDelivery?: (task: () => Promise<void>) => void;
+}): Promise<void> {
+  const { channel, sendTo, code, purpose, refund, deferDelivery } = options;
   const deliver = async () => {
     try {
-      await deliverOtp(channel, sendTo, otpCode, purpose);
+      await deliverOtp(channel, sendTo, code, purpose);
     } catch (error) {
       try {
-        await refundFailedDelivery(userId, result.sessionId, hashedCode);
+        await refund();
       } catch (refundError) {
         logSanitized('error', {
           msg: 'otp.delivery.refundFailed',
@@ -297,9 +317,4 @@ export async function processOtpSend({
   };
   if (deferDelivery) deferDelivery(deliver);
   else await deliver();
-
-  return {
-    nextAllowedIn: result.nextAllowedIn,
-    attemptsRemaining: result.attemptsRemaining,
-  };
 }

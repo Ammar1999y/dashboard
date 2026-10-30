@@ -722,7 +722,7 @@ describe('what the audit trail claims about a login', () => {
     // back unnoticed.
     const code = '424242';
     const user = await seedUser();
-    await seedOtpProof({
+    const { cookie } = await seedOtpProof({
       userId: user.userId,
       identifier: user.email,
       purpose: 'passwordless_login',
@@ -732,7 +732,12 @@ describe('what the audit trail claims about a login', () => {
     const response = await app.handle(
       new Request('http://localhost/api/auth/passwordless/verify', {
         method: 'POST',
-        headers: baseHeaders({ 'content-type': 'application/json' }),
+        // The requester cookie puts the request under the library's Origin check.
+        headers: baseHeaders({
+          'content-type': 'application/json',
+          cookie,
+          origin: PUBLIC_ORIGIN,
+        }),
         body: JSON.stringify({ channel: 'email', email: user.email, code }),
       })
     );

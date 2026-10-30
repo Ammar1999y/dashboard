@@ -77,6 +77,7 @@ import { CREDENTIAL_ISSUER } from '@/lib/auth/credential';
 import { generateUuidV7 as generateId } from '@/lib/id';
 import {
   OTP_MAX_ATTEMPTS,
+  OTP_MAX_CHALLENGE_GUESSES,
   OTP_MAX_DAILY_VERIFY_ATTEMPTS,
   OTP_MAX_VERIFY_ATTEMPTS,
 } from '@/lib/otp/limits';
@@ -510,6 +511,10 @@ export const twoFactorMethods = pgTable(
     // possessions — but only one row of every other method. Both conflict
     // targets in `recordMethodIntent`'s upsert must stay in step with these two
     // predicates.
+    //
+    // ⚠️ None of the three serves `WHERE user_id = $1`, which every sign-in
+    // runs (`readEnrolment`); `idx_two_factor_methods_user` does, built
+    // concurrently in `db/migrations/012_two_factor_methods_user.sql`.
     uniqueIndex('ux_two_factor_methods_user_otp_contact')
       .on(t.userId, t.contactKind)
       .where(sql`method = 'otp'`),
@@ -1044,6 +1049,43 @@ export const verificationCodes = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('ux_verification_codes_session').on(t.sessionId)]
+);
+
+/**
+ * The anonymous purposes' codes (`ANONYMOUS_PURPOSES`, `lib/otp/challenge.ts`),
+ * one per proof row and requesting browser, so a stranger's sends and guesses
+ * spend their own code and never the owner's. The proof row stays the record of
+ * what was proven; `verification_codes` keeps the other purposes.
+ */
+export const otpChallenges = pgTable(
+  'otp_challenges',
+  {
+    id: uuid('id').primaryKey().$defaultFn(generateId),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => verificationSessions.id, { onDelete: 'cascade' }),
+    // SHA-256 of the requester cookie, so a read of this table cannot be
+    // replayed as a browser's binding.
+    requester: varchar('requester', { length: 64 }).notNull(),
+    // Stored as a keyed HMAC envelope via hashOtpCode, never plaintext.
+    code: varchar('code', { length: 255 }).notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    guesses: integer('guesses').notNull().default(0),
+    nextAllowedAt: timestamptz('next_allowed_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('ux_otp_challenges_session_requester').on(
+      t.sessionId,
+      t.requester
+    ),
+    index('idx_otp_challenges_expires_at').on(t.expiresAt),
+    check('chk_otp_challenges_guesses_non_negative', sql`guesses >= 0`),
+    check(
+      'chk_otp_challenges_guesses_max',
+      sql.raw(`guesses <= ${OTP_MAX_CHALLENGE_GUESSES}`)
+    ),
+  ]
 );
 
 export const verificationSessionsRelations = relations(

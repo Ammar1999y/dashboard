@@ -13,6 +13,10 @@
  * Each refusal below is therefore asserted from three sides: the status and the
  * localised body, no session row, and the credential state untouched — a wrong
  * password that charged nothing, a correct code that is still live.
+ *
+ * A browser completing a passwordless sign-in is never cookie-less any more: the
+ * code is bound to its requester cookie (`lib/otp/challenge.ts`), which puts the
+ * verify under the router-level check too. The cookie-less refusals still hold.
  */
 import { beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
@@ -23,9 +27,9 @@ import { app } from '@/app';
 import { db } from '@/db';
 import {
   auditLogs,
+  otpChallenges,
   sessions,
   users,
-  verificationCodes,
   verificationSessions,
 } from '@/db/schema';
 
@@ -48,12 +52,16 @@ const WRONG_PASSWORD = 'Harness!Wr0ngPass';
 
 const CODE = '424242';
 
+type ProofUser = SeededUser & { otpCookie: string };
+
 interface FirstLoginPath {
   path: string;
   /** A body that is VALID for the path, so nothing short of the origin refuses it. */
   body: (user: SeededUser) => Record<string, unknown>;
   /** A body that reaches the credential check and fails it. */
   wrongBody: (user: SeededUser) => Record<string, unknown>;
+  /** What a browser completing this path carries beyond its headers. */
+  browserCookies: (user: ProofUser) => Record<string, string>;
 }
 
 const PATHS: readonly FirstLoginPath[] = [
@@ -61,6 +69,7 @@ const PATHS: readonly FirstLoginPath[] = [
     path: '/sign-in/email',
     body: (user) => ({ email: user.email, password: user.password }),
     wrongBody: (user) => ({ email: user.email, password: WRONG_PASSWORD }),
+    browserCookies: () => ({}),
   },
   {
     path: '/passwordless/verify',
@@ -70,6 +79,7 @@ const PATHS: readonly FirstLoginPath[] = [
       email: user.email,
       code: '000000',
     }),
+    browserCookies: (user) => ({ cookie: user.otpCookie }),
   },
 ];
 
@@ -93,6 +103,7 @@ interface CredentialState {
   auditRows: number;
   /** Live, unconsumed code rows for the user's passwordless proof. */
   liveCodes: number;
+  /** Guesses charged to that code. */
   verifyAttempts: number;
 }
 
@@ -109,27 +120,21 @@ async function credentialState(userId: string): Promise<CredentialState> {
     .select({ id: auditLogs.id })
     .from(auditLogs)
     .where(eq(auditLogs.userId, userId));
-  const proofs = await db
-    .select({
-      id: verificationSessions.id,
-      verifyAttemptNumber: verificationSessions.verifyAttemptNumber,
-    })
-    .from(verificationSessions)
+  const codes = await db
+    .select({ guesses: otpChallenges.guesses })
+    .from(otpChallenges)
+    .innerJoin(
+      verificationSessions,
+      eq(verificationSessions.id, otpChallenges.sessionId)
+    )
     .where(eq(verificationSessions.userId, userId));
-  const codes =
-    proofs.length > 0
-      ? await db
-          .select({ id: verificationCodes.id })
-          .from(verificationCodes)
-          .where(eq(verificationCodes.sessionId, proofs[0]?.id ?? ''))
-      : [];
 
   return {
     failedLoginAttempts: user?.failedLoginAttempts ?? -1,
     sessions: sessionRows.length,
     auditRows: audit.length,
     liveCodes: codes.length,
-    verifyAttempts: proofs[0]?.verifyAttemptNumber ?? -1,
+    verifyAttempts: codes[0]?.guesses ?? -1,
   };
 }
 
@@ -142,15 +147,15 @@ const UNTOUCHED: CredentialState = {
   verifyAttempts: 0,
 };
 
-async function seedUserWithProof(): Promise<SeededUser> {
+async function seedUserWithProof(): Promise<ProofUser> {
   const user = await seedUser();
-  await seedOtpProof({
+  const { cookie } = await seedOtpProof({
     userId: user.userId,
     identifier: user.email,
     purpose: 'passwordless_login',
     code: CODE,
   });
-  return user;
+  return { ...user, otpCookie: cookie };
 }
 
 beforeAll(async () => {
@@ -193,7 +198,7 @@ const REFUSED_HEADERS: readonly [string, Record<string, string>][] = [
 
 describe.each([...PATHS])(
   '$path with no cookie',
-  ({ path, body, wrongBody }) => {
+  ({ path, body, wrongBody, browserCookies }) => {
     test.each(REFUSED_HEADERS)(
       '%s is refused before any credential or database work',
       async (_label, headers) => {
@@ -234,6 +239,7 @@ describe.each([...PATHS])(
       const user = await seedUserWithProof();
 
       const response = await post(path, body(user), {
+        ...browserCookies(user),
         origin: PUBLIC_ORIGIN,
         'sec-fetch-site': 'same-origin',
         'sec-fetch-mode': 'cors',
@@ -258,11 +264,10 @@ describe.each([...PATHS])(
       expect(response.status).toBeGreaterThanOrEqual(HTTP_STATUS.BAD_REQUEST);
       const state = await credentialState(user.userId);
       expect(state.sessions).toBe(0);
-      expect(
-        path === '/sign-in/email'
-          ? state.failedLoginAttempts
-          : state.verifyAttempts
-      ).toBe(1);
+      // A code is reached only with its requester cookie, and carrying one
+      // brings the router-level check: this client gets no guess at all.
+      if (path === '/sign-in/email') expect(state.failedLoginAttempts).toBe(1);
+      else expect(state).toEqual(UNTOUCHED);
     });
 
     test('with a cookie present, an untrusted Origin is refused by the router-level check', async () => {

@@ -16,6 +16,10 @@ import { passkey } from '@better-auth/passkey';
 import { twoFactor } from 'better-auth/plugins/two-factor';
 
 import {
+  TWO_FACTOR_LOCKOUT_MAX_FAILURES,
+  TWO_FACTOR_LOCKOUT_S,
+} from '@/lib/auth/recovery/second-factor';
+import {
   TWO_FACTOR_ALLOWED_ATTEMPTS,
   TWO_FACTOR_CHALLENGE_MAX_AGE_S,
 } from '@/lib/auth/two-factor/challenge';
@@ -120,6 +124,20 @@ describe('the private formats mirrored in two-factor-challenge.ts', () => {
     ])
       expect(await source(PACKAGE_ROOT, file)).toContain('beginAttempt(5)');
     expect(TWO_FACTOR_ALLOWED_ATTEMPTS).toBe(5);
+  });
+
+  test('the account lockout defaults still match the recovery copy', async () => {
+    // Recovery's verifiers lock the same row with their own copy of these
+    // numbers (`lib/auth/recovery/second-factor.ts`); no `accountLockout` is
+    // configured, so the library runs on its defaults.
+    const verify = await source(
+      PACKAGE_ROOT,
+      'plugins/two-factor/verify-two-factor.mjs'
+    );
+    expect(verify).toContain(
+      `maxFailedAttempts ?? ${TWO_FACTOR_LOCKOUT_MAX_FAILURES}`
+    );
+    expect(verify).toContain(`durationSeconds ?? ${TWO_FACTOR_LOCKOUT_S}`);
   });
 
   test('`beginAttempt` still parses the counter with bare `Number`', async () => {

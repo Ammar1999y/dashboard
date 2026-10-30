@@ -2,15 +2,20 @@ import { describe, expect, test } from 'bun:test';
 
 import { PgDialect } from 'drizzle-orm/pg-core';
 
-import { users } from '@/db/schema';
+import { files, users } from '@/db/schema';
 import * as z from 'zod';
 
 import { ENDPOINTS } from '@app/shared/api/all';
+import {
+  MEDIA_FILTER_COLUMNS,
+  USERS_FILTER_COLUMNS,
+} from '@app/shared/data-table/filterable-columns';
 import {
   isTrigramIndexable,
   parseSearchParams,
 } from '@app/shared/data-table/parsers';
 import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_OR_SEARCH_UNINDEXED } from '@app/shared/messages/data-table';
 import { toCalendarDate } from '@app/shared/time';
 import {
   normalizeArabicDigits,
@@ -606,5 +611,87 @@ describe('the search floor admits only terms pg_trgm can index', () => {
     // Legal today and still legal: the fix must not narrow the operator.
     expect(() => filter('a-b', 'iLike')).not.toThrow();
     expect(() => filter('a--', 'startsWith')).not.toThrow();
+  });
+});
+
+describe('an OR cannot pair a guarded search with an unindexed filter', () => {
+  // `allowScanOnly` off keeps a full scan off `displayName`; one unindexed
+  // alternative in an OR would bring it back, folding every row per term.
+  const search = { filterId: 's', id: 'displayName', value: 'report' } as const;
+  const media =
+    (
+      filters: Parameters<typeof filterColumns<typeof files>>[0]['filters'],
+      joinOperator: 'and' | 'or'
+    ) =>
+    () =>
+      filterColumns({
+        table: files,
+        filters,
+        joinOperator,
+        specs: MEDIA_FILTER_COLUMNS,
+      });
+  const size = {
+    filterId: 'z',
+    id: 'sizeBytes',
+    value: '10',
+    variant: 'number',
+    operator: 'gt',
+  } as const;
+
+  test('is refused under OR', () => {
+    expect(
+      media([{ ...search, variant: 'text', operator: 'iLike' }, size], 'or')
+    ).toThrow(
+      expect.objectContaining({
+        status: HTTP_STATUS.UNPROCESSABLE,
+        message: MSG_OR_SEARCH_UNINDEXED,
+      })
+    );
+  });
+
+  test('stays legal under AND, and between indexed searches under OR', () => {
+    expect(
+      media([{ ...search, variant: 'text', operator: 'iLike' }, size], 'and')
+    ).not.toThrow();
+    expect(
+      media(
+        [
+          { ...search, variant: 'text', operator: 'iLike' },
+          {
+            ...search,
+            filterId: 's2',
+            variant: 'text',
+            operator: 'startsWith',
+          },
+        ],
+        'or'
+      )
+    ).not.toThrow();
+  });
+
+  test('leaves columns that allow a scan alone', () => {
+    expect(() =>
+      filterColumns({
+        table: users,
+        filters: [
+          {
+            filterId: 'n',
+            id: 'name',
+            value: 'report',
+            variant: 'text',
+            operator: 'iLike',
+          },
+          {
+            filterId: 'a',
+            id: 'isActive',
+            value: 'true',
+            variant: 'boolean',
+            operator: 'eq',
+          },
+        ],
+        joinOperator: 'or',
+        specs: USERS_FILTER_COLUMNS,
+      })
+    ).not.toThrow();
   });
 });

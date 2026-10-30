@@ -12,7 +12,12 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 
 import { db } from '@/db';
-import { users, verificationCodes, verificationSessions } from '@/db/schema';
+import {
+  otpChallenges,
+  users,
+  verificationCodes,
+  verificationSessions,
+} from '@/db/schema';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -23,12 +28,12 @@ import {
   MAX_FAILED_ATTEMPTS,
   verifyLoginAttempt,
 } from '@/lib/auth/login-guard';
+import { verifyRequesterOtp } from '@/lib/otp/challenge';
 import { processOtpSend } from '@/lib/otp/send';
-import { processOtpVerify } from '@/lib/otp/verify';
 
 import { resetTables } from '../helpers/database';
 import { sentMail, settleDelivery } from '../helpers/mailbox';
-import { seedOtpProof } from '../helpers/otp';
+import { otpRequester, seedOtpProof } from '../helpers/otp';
 import { seedUser } from '../helpers/session';
 import { recordStatements } from '../helpers/statements';
 
@@ -75,20 +80,23 @@ describe('one correct code presented by six requests at once', () => {
   test('is consumed exactly once, and the losers are neither accepted nor charged', async () => {
     const user = await seedUser();
     const code = '135790';
+    const { requester } = otpRequester();
     await seedOtpProof({
       userId: user.userId,
       identifier: user.email,
       purpose: 'passwordless_login',
       code,
+      requester,
     });
 
     const verify = () =>
-      processOtpVerify({
+      verifyRequesterOtp({
         userId: user.userId,
         channel: 'email',
         purpose: 'passwordless_login',
         identifier: user.email,
         code,
+        requester,
       });
     const outcomes = await Promise.allSettled(
       Array.from({ length: 6 }, () => verify())
@@ -96,9 +104,9 @@ describe('one correct code presented by six requests at once', () => {
 
     expect(fulfilled(outcomes)).toHaveLength(1);
 
-    // The row is held FOR UPDATE, so every loser runs after the winner deleted
+    // The user is held FOR UPDATE, so every loser runs after the winner deleted
     // the code and sees "nothing to verify against" — the expired-code answer,
-    // which charges no attempt. Anything else here means two requests compared
+    // which charges no guess. Anything else here means two requests compared
     // the same code.
     const losers = rejected(outcomes);
     expect(losers).toHaveLength(5);
@@ -107,11 +115,15 @@ describe('one correct code presented by six requests at once', () => {
       expect((loser as CustomError).status).toBe(HTTP_STATUS.BAD_REQUEST);
     }
 
-    const { sessions, codes } = await proofRows(user.userId);
+    const { sessions } = await proofRows(user.userId);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.consumedAt).not.toBeNull();
-    expect(sessions[0]?.verifyAttemptNumber).toBe(0);
-    expect(codes).toHaveLength(0);
+    expect(
+      await db
+        .select({ id: otpChallenges.id })
+        .from(otpChallenges)
+        .where(eq(otpChallenges.sessionId, sessions[0]?.id ?? ''))
+    ).toHaveLength(0);
   });
 });
 

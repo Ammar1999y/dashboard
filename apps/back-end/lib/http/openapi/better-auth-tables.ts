@@ -10,6 +10,8 @@ import type * as z from 'zod';
 import { loginSchema } from '@app/shared/validation/auth';
 import { twoFactorPasswordSchema } from '@app/shared/validation/two-factor';
 
+import { REQUESTER_BOUND_VERIFY } from '@/lib/otp/requester';
+
 import { SERVER_FAILURE } from '../refusals';
 
 export const BETTER_AUTH_SUMMARIES: Record<string, string> = {
@@ -213,7 +215,7 @@ export const BETTER_AUTH_RESPONSE_DESCRIPTIONS = {
   '/oauth/google/start': 'Navigate to the returned Google authorization URL.',
   '/oauth/google/callback': `Google sign-in result or local two-factor challenge. A supplied callbackURL receives a redirect; retrieve the result once at /oauth/result. ${CHALLENGE_INSTEAD}`,
   '/oauth/result': `Consume the Google redirect result once. ${CHALLENGE_INSTEAD}`,
-  '/passwordless/verify': `Passwordless sign-in succeeded. ${CHALLENGE_INSTEAD}`,
+  '/passwordless/verify': `Passwordless sign-in succeeded. ${CHALLENGE_INSTEAD} ${REQUESTER_BOUND_VERIFY}`,
   '/two-factor/totp/start': 'A TOTP secret to enrol.',
   '/two-factor/totp/confirm': 'TOTP is enrolled and enabled.',
   '/two-factor/generate-backup-codes':

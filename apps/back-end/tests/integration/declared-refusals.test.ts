@@ -16,7 +16,6 @@ import {
   accounts,
   twoFactorMethods,
   users,
-  verificationCodes,
   verificationSessions,
 } from '@/db/schema';
 
@@ -35,11 +34,11 @@ import {
 } from '@app/shared/validation/otp';
 
 import { generateUuidV7 } from '@/lib/id';
-import { hashOtpCode } from '@/lib/otp/hash';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
 import { expectError } from '../helpers/expect-body';
+import { replaceOtpCode, sentRequester } from '../helpers/otp';
 import {
   authedRequest,
   baseHeaders,
@@ -130,36 +129,35 @@ describe('POST /api/auth/forgot-password/complete', () => {
       .set({ twoFactorEnabled: true })
       .where(eq(users.id, user.userId));
 
-    await send(null, 'POST', '/api/auth/forgot-password/send', {
+    const sent = await send(null, 'POST', '/api/auth/forgot-password/send', {
       channel: 'email',
       email: user.email,
     });
-    const [proof] = await db
-      .select({ id: verificationSessions.id })
-      .from(verificationSessions)
-      .where(
-        and(
-          eq(verificationSessions.userId, user.userId),
-          eq(verificationSessions.purpose, 'forgot_password')
-        )
-      );
-    if (!proof) throw new Error('the reset code was not issued');
+    const { requester, cookie } = sentRequester(sent);
     // The delivered code is not readable here; a known one replaces it.
-    const known = {
-      code: hashOtpCode(CODE),
-      expiresAt: new Date(Date.now() + 600_000),
-    };
-    await db
-      .insert(verificationCodes)
-      .values({ sessionId: proof.id, ...known })
-      .onConflictDoUpdate({ target: verificationCodes.sessionId, set: known });
-
-    const reset = await send(null, 'POST', '/api/auth/forgot-password/reset', {
-      channel: 'email',
-      email: user.email,
+    await replaceOtpCode({
+      userId: user.userId,
+      purpose: 'forgot_password',
+      contactKind: 'email',
       code: CODE,
-      newPassword: NEW_PASSWORD,
+      requester,
     });
+
+    const reset = await app.handle(
+      new Request(
+        new URL('/api/auth/forgot-password/reset', 'http://localhost'),
+        {
+          method: 'POST',
+          headers: baseHeaders({ ...JSON_HEADERS, cookie }),
+          body: JSON.stringify({
+            channel: 'email',
+            email: user.email,
+            code: CODE,
+            newPassword: NEW_PASSWORD,
+          }),
+        }
+      )
+    );
     expect(reset.status).toBe(HTTP_STATUS.OK);
     const { data } = (await reset.json()) as { data: { grant: string } };
     return { userId: user.userId, grant: data.grant };

@@ -109,6 +109,7 @@ import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
 import { expectData, expectError } from '../helpers/expect-body';
 import { sentMail, settleDelivery } from '../helpers/mailbox';
+import { sentRequester } from '../helpers/otp';
 import {
   authedRequest,
   baseHeaders,
@@ -170,10 +171,13 @@ async function bodyOf(response: Response): Promise<unknown> {
   return response.json();
 }
 
-function anonPost(url: string, body: unknown): Request {
+function anonPost(url: string, body: unknown, cookie?: string): Request {
   return new Request(new URL(url, 'http://localhost'), {
     method: 'POST',
-    headers: baseHeaders({ 'content-type': 'application/json' }),
+    headers: baseHeaders({
+      'content-type': 'application/json',
+      ...(cookie && { cookie }),
+    }),
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 }
@@ -1211,16 +1215,21 @@ describe('POST /api/auth/forgot-password/reset', () => {
       })
     );
     expect(sent.status).toBe(HTTP_STATUS.OK);
+    const { cookie } = sentRequester(sent);
     const issued = await delivered();
     expect(issued.to).toBe(subject('forgot').email);
 
     const reset = await app.handle(
-      anonPost(FORGOT_RESET, {
-        channel: 'email',
-        email: subject('forgot').email,
-        code: issued.code,
-        newPassword: RESET_PASSWORD,
-      })
+      anonPost(
+        FORGOT_RESET,
+        {
+          channel: 'email',
+          email: subject('forgot').email,
+          code: issued.code,
+          newPassword: RESET_PASSWORD,
+        },
+        cookie
+      )
     );
 
     expect(await expectData(reset, resetPassword)).toEqual({
@@ -1243,12 +1252,16 @@ describe('POST /api/auth/forgot-password/reset', () => {
 
     // Single use: the consumed proof stays as a record, its code does not.
     const replay = await app.handle(
-      anonPost(FORGOT_RESET, {
-        channel: 'email',
-        email: subject('forgot').email,
-        code: issued.code,
-        newPassword: 'Harness!Reset0wo',
-      })
+      anonPost(
+        FORGOT_RESET,
+        {
+          channel: 'email',
+          email: subject('forgot').email,
+          code: issued.code,
+          newPassword: 'Harness!Reset0wo',
+        },
+        cookie
+      )
     );
     await expectError(replay, HTTP_STATUS.BAD_REQUEST, otpMsg.invalidOrExpired);
 

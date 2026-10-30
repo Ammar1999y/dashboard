@@ -411,8 +411,9 @@ async function upgradePasswordHash({
   });
 }
 
-// Authenticated callers only: on anonymous sign-in it would reveal the account exists.
-function accountTemporarilyLocked(lockedUntil: Date): CustomError {
+// Only for callers who already proved the account (a session, a recovery
+// grant): on anonymous sign-in it would reveal the account exists.
+export function accountTemporarilyLocked(lockedUntil: Date): CustomError {
   const error = new CustomError(
     userMsg.accountTemporarilyLocked,
     HTTP_STATUS.TOO_MANY_REQUESTS

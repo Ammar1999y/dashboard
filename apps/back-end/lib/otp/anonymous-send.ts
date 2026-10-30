@@ -9,9 +9,7 @@ import type * as z from 'zod';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 
-import { CONTACT_LABEL } from '@app/shared/messages/otp';
 import { OTP_BASE_RESEND_DELAY_S } from '@app/shared/validation/constants';
-import { contactKindOf } from '@app/shared/validation/enums';
 
 import { enqueueAfterResponse } from '@/lib/http/after-response';
 import { enforceOtpSurfaceSendQuota } from '@/lib/rate-limit';
@@ -19,7 +17,7 @@ import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
 
 import { logSanitized } from '@/utils/log';
 
-import { processOtpSend } from './send';
+import { sendRequesterOtp } from './challenge';
 
 // Exact only because these purposes' resend delay is flat (`./throttle.ts`).
 export const ANONYMOUS_SEND_DATA = { nextAllowedIn: OTP_BASE_RESEND_DELAY_S };
@@ -34,6 +32,8 @@ interface AnonymousSendOptions {
   startFloor: StartTimingFloor;
   surface: OtpSendSurface;
   purpose: FlatResendPurpose;
+  /** From `requesterFor`, before the lookup. */
+  requester: string;
   failureLog: string;
   /** Resolves `undefined` for an identifier that gets nothing. */
   findRecipient?: (
@@ -78,16 +78,16 @@ export async function sendAnonymousOtp(
     startFloor,
     surface,
     purpose,
+    requester,
     failureLog,
     findRecipient = findActiveRecipient,
     issue = ({ userId, channel, identifier }) =>
-      processOtpSend({
+      sendRequesterOtp({
         userId,
         identifier,
         channel,
         purpose,
-        sendTo: identifier,
-        entityName: CONTACT_LABEL[contactKindOf(channel)],
+        requester,
         deferDelivery: (task) => enqueueAfterResponse(request, task),
       }),
   }: AnonymousSendOptions

@@ -48,14 +48,17 @@ import {
   ANONYMOUS_SEND_DATA,
   sendAnonymousOtp,
 } from '@/lib/otp/anonymous-send';
+import { verifyRequesterOtp } from '@/lib/otp/challenge';
 import { OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
-import { invalidOrExpiredCode } from '@/lib/otp/throttle';
-import { otpGuessWasEvaluated, processOtpVerify } from '@/lib/otp/verify';
 import {
-  enforceOtpVerifyQuota,
-  enforceRateLimit,
-  ipIdentifier,
-} from '@/lib/rate-limit';
+  readRequester,
+  REQUESTER_BOUND_VERIFY,
+  REQUESTER_SET_COOKIE,
+  requesterFor,
+} from '@/lib/otp/requester';
+import { invalidOrExpiredCode } from '@/lib/otp/throttle';
+import { otpGuessWasEvaluated } from '@/lib/otp/verify';
+import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
 import {
   activeUserWithContact,
   contactIdentifier,
@@ -69,8 +72,9 @@ import {
   PUBLISHED_SEND_BODY,
 } from './anonymous';
 
-// Argon2id hashes per IP per minute. Must stay above the OTP verify quota, so a
-// user retyping a code hits that quota first.
+// Argon2id hashes per IP per minute, one budget for `/reset` and `/complete`.
+// Must stay above the OTP verify quota, so a user retyping a code hits that
+// quota first.
 const RESET_HASH_BUDGET_PER_MINUTE = OTP_MAX_VERIFY_ATTEMPTS * 3;
 
 /**
@@ -99,16 +103,23 @@ export const sendPasswordResetCodeBinding = bind(sendPasswordResetCode, {
     summary: 'Send a password-reset code',
     tags: ['Authentication'],
     publishedBody: PUBLISHED_SEND_BODY,
+    setCookie: REQUESTER_SET_COOKIE,
   },
   handler: async ({ body: input, meta }) => {
+    const { requester, cookie } = requesterFor(meta.headers);
     await sendAnonymousOtp(input, meta.rawRequest, {
       startFloor: meta.startFloor,
       surface: 'recovery',
       purpose: 'forgot_password',
+      requester,
       failureLog: 'forgot.send.failed',
     });
 
-    return { message: otpMsg.sendSuccess, data: ANONYMOUS_SEND_DATA };
+    return {
+      message: otpMsg.sendSuccess,
+      data: ANONYMOUS_SEND_DATA,
+      cookies: [cookie],
+    };
   },
 });
 
@@ -134,8 +145,7 @@ export const resetPasswordBinding = bind(resetPassword, {
       : collapseResetError(error),
   detail: {
     summary: 'Reset a forgotten password',
-    description:
-      'A 403 follows a correct code when every second factor the account has is one this flow cannot check or sits on the contact the code arrived on; the password is unchanged, and an administrator’s two-factor reset is the way back.',
+    description: `${REQUESTER_BOUND_VERIFY} A 403 follows a correct code when every second factor the account has is one this flow cannot check or sits on the contact the code arrived on; the password is unchanged, and an administrator’s two-factor reset is the way back.`,
     spentInput:
       'a retry with the same code can find it already spent; request a new code.',
     tags: ['Authentication'],
@@ -143,8 +153,6 @@ export const resetPasswordBinding = bind(resetPassword, {
   handler: async ({ body: input, meta }) => {
     const { channel, code, newPassword } = input;
     const identifier = contactIdentifier(input);
-
-    await enforceOtpVerifyQuota({ channel, identifier, surface: 'recovery' });
 
     // Prices the HIBP call and hash below apart from admission, so cheap
     // refusals cannot spend the expensive allowance. Per IP: no existence oracle.
@@ -181,14 +189,13 @@ export const resetPasswordBinding = bind(resetPassword, {
       secondFactor: null,
     };
 
-    await processOtpVerify({
+    await verifyRequesterOtp({
       userId: userData.id,
-      userEmail: userData.email,
       channel,
       purpose: 'forgot_password',
       identifier,
       code,
-      auditMeta,
+      requester: readRequester(meta.headers),
       deadline,
       onVerified: async (tx, matched) => {
         // Refused, not gated: a second factor on the contact this code
@@ -365,6 +372,15 @@ export const completePasswordResetBinding = bind(completePasswordReset, {
     const resolved = await resolveRecoveryOption(grantToken, requested);
     if (!resolved) throw invalidOrExpiredCode();
     const { grant, option } = resolved;
+
+    // The reset route's allowance, shared: an attempt that compared nothing is
+    // refunded below, so without it one grant replays this hash for free.
+    await enforceRateLimit({
+      scope: 'forgot.reset.work.ip',
+      identifier: ipIdentifier(meta.headers),
+      limit: RESET_HASH_BUDGET_PER_MINUTE,
+      failClosed: true,
+    });
 
     // Before the attempt is spent, so a rejection here costs no attempt.
     await checkPasswordCompromise(newPassword);
