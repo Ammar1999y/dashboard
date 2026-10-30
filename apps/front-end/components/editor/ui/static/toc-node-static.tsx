@@ -24,7 +24,7 @@ function getHeadingList(editor: SlateEditor) {
     ...editor.api.nodes<TElement>({ at: [], match: (n) => !!isHeading(n) }),
   ].flatMap(([node, path]) => {
     const title = NodeApi.string(node);
-    return title ? [{ depth: HEADING_DEPTH[node.type] ?? 1, path, title }] : [];
+    return title ? { depth: HEADING_DEPTH[node.type] ?? 1, path, title } : [];
   });
 }
 

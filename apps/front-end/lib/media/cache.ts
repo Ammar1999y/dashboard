@@ -324,8 +324,11 @@ function adjustCounts(
   };
   patchPages(queryClient, (page) => {
     const { context } = page;
-    if (context.scope === 'unfiled') return page;
-    if (!context.folders.some(({ id }) => changes.has(id))) return page;
+    if (
+      context.scope === 'unfiled' ||
+      !context.folders.some(({ id }) => changes.has(id))
+    )
+      return page;
     // Narrowed apart so each keeps its own folder type.
     if (context.scope === 'folder')
       return {
@@ -437,9 +440,12 @@ export function cacheFolderCreated(
 ) {
   patchPages(queryClient, (page) => {
     const { context } = page;
-    if (context.scope !== 'folder' || folderOf(page) !== folder.parentId)
+    if (
+      context.scope !== 'folder' ||
+      folderOf(page) !== folder.parentId ||
+      context.folders.some(({ id }) => id === folder.id)
+    )
       return page;
-    if (context.folders.some(({ id }) => id === folder.id)) return page;
     return {
       ...page,
       context: { ...context, folders: sorted([...context.folders, folder]) },

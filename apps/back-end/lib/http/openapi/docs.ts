@@ -93,7 +93,7 @@ export function attachFieldDocs(entry: DocsEntry): void {
     if (description === undefined) continue;
     const field: unknown = entry.schema.shape[key];
     if (!(field instanceof z.ZodType))
-      throw new Error(`Field docs name "${key}", which the schema lacks.`);
+      throw new TypeError(`Field docs name "${key}", which the schema lacks.`);
     describe(field, description, `Field "${key}"`);
   }
 }

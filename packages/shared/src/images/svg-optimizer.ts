@@ -303,9 +303,6 @@ function isOwnPaint(value: string): boolean {
   );
 }
 
-/** What `sites` counts: marker vertices, marker elements, painted shapes. */
-type SiteKind = 'marker' | 'single-marker' | 'painted';
-
 /**
  * Counts what `SVG_MAX_ELEMENTS` cannot see: every reference that renders its
  * target's content again (`<use>`, `<feImage>`, pattern templates, masks, clip
@@ -322,6 +319,9 @@ function renderedNodeCount(
   root: Element,
   limit: number
 ): number {
+  /** What `sites` counts: marker vertices, marker elements, painted shapes. */
+  type SiteKind = 'marker' | 'single-marker' | 'painted';
+
   const byId = new Map<string, Element>();
   for (const element of doc.querySelectorAll('*')) {
     const id = attributeValue(element, 'id');
@@ -644,8 +644,8 @@ const CSS_ESCAPE = /\\(?:([0-9a-f]{1,6})[ \t\n\f\r]?|([\s\S]))/gi;
 function decodeCssEscapes(value: string): string {
   return value.replaceAll(
     CSS_ESCAPE,
-    (_escape, hex: string | undefined, raw: string | undefined) => {
-      if (hex === undefined) return raw ?? '';
+    (_escape, hex: string | undefined, raw = '') => {
+      if (hex === undefined) return raw;
       const code = Number.parseInt(hex, 16);
       // Null, surrogates and out-of-range are what a CSS parser replaces.
       return !code || (code >= 0xd8_00 && code <= 0xdf_ff) || code > 0x10_ff_ff

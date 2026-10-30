@@ -77,7 +77,7 @@ export function useDragAndDrop(ctx: MediaContext) {
       keys.flatMap((key) => {
         const item = findItem(ctx.queryClient, key);
         return item
-          ? [{ key, parent: itemParent(item), name: itemName(item) }]
+          ? { key, parent: itemParent(item), name: itemName(item) }
           : [];
       });
 

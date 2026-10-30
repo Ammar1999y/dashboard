@@ -754,14 +754,14 @@ describe('the delete and its preview', () => {
       store.mockRestore();
     }
     expect(await folderRow(folder)).toBeNull();
-    const [first] = legacy;
-    expect(await fileRow(first ?? '')).toEqual({
+    const [first = ''] = legacy;
+    expect(await fileRow(first)).toEqual({
       status: 'deleting',
       folderId: null,
     });
     let sweep = await sweepFiles();
     while (sweep.hasMore) sweep = await sweepFiles();
-    expect(await fileRow(first ?? '')).toBeNull();
+    expect(await fileRow(first)).toBeNull();
   });
 
   test('a file the sweep finishes while the delete clears its objects is still reported deleted', async () => {

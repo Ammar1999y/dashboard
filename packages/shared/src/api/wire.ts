@@ -89,9 +89,9 @@ export function successEnvelope<
   D extends z.ZodType,
   M extends z.ZodType | undefined = undefined,
 >(data: D, meta?: M): Envelope<D, M> {
-  const envelope = meta
-    ? z.object({ message: z.string(), data, meta })
-    : z.object({ message: z.string(), data });
+  const envelope = z.object(
+    meta ? { message: z.string(), data, meta } : { message: z.string(), data }
+  );
   return envelope as Envelope<D, M>;
 }
 

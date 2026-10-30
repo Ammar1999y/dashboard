@@ -109,7 +109,7 @@ async function uploadInto(
     const folderId = ids.get(dirs.join('/'));
     if (!folderId) return [];
     const name = dirs[dirs.length - 1];
-    return [{ file, folderId, folderName: name ?? targetName }];
+    return { file, folderId, folderName: name ?? targetName };
   });
   enqueueUploads(ctx.queryClient, entries);
 }

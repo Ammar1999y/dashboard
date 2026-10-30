@@ -51,7 +51,7 @@ describe('pool acquisition bound', () => {
       } catch (error) {
         caught = error;
       } finally {
-        held.release();
+        await held.release();
       }
       const waited = performance.now() - started;
 
@@ -97,7 +97,7 @@ describe('pool acquisition bound', () => {
 
   test('a connection freed while waiting is taken, and a throw rolls back and releases it', async () => {
     const held = await pool.reserve();
-    setTimeout(() => held.release(), BOUND_MS / 3);
+    setTimeout(() => void held.release(), BOUND_MS / 3);
     expect(await withTransaction(async () => 'served')).toBe('served');
 
     await expect(

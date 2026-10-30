@@ -492,11 +492,11 @@ describe('Google sign-in through the routed OAuth exchange', () => {
     // The loser either finds the state already consumed (the lost-state 302) or
     // reads it first and loses the once-marker (401); which is timing.
     const responses = await Promise.all([flow.callback(), flow.callback()]);
-    const [won, lost] = responses
+    const [won, lost = 0] = responses
       .map((response) => response.status)
       .toSorted((a, b) => a - b);
     expect(won).toBe(200);
-    expect([302, 401]).toContain(lost ?? 0);
+    expect([302, 401]).toContain(lost);
     const state = await userState(owner.userId);
     expect(
       state.accounts.filter((account) => account.providerId === 'google')

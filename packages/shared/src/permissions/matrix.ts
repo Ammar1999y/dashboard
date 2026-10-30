@@ -58,9 +58,8 @@ export function sanitizePermissions(
     const pagePerms = {} as Record<PermissionAction, boolean>;
 
     for (const action of ALL_ACTIONS) {
-      pagePerms[action] = availableActions.includes(action)
-        ? rawPerms[action] === true
-        : false;
+      pagePerms[action] =
+        availableActions.includes(action) && rawPerms[action] === true;
     }
 
     sanitized[perm.pageName] = pagePerms;

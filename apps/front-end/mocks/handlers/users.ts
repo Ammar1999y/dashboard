@@ -223,9 +223,9 @@ function editUserAsAdmin({
   // Only on a change: a deactivated role keeps its members, and an edit that
   // restates it must still reach them.
   const assigned =
-    !isCustomRole && input.roleId !== target.roleId
-      ? assignableRole(input.roleId)
-      : undefined;
+    isCustomRole || input.roleId === target.roleId
+      ? undefined
+      : assignableRole(input.roleId);
 
   assertRoleWithinScope(actorPermissions, currentMatrix, 'reachability');
 

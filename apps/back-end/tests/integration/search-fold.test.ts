@@ -317,7 +317,7 @@ const dialect = new PgDialect();
 /** A bound value as a literal, for `EXECUTE`'s arguments. */
 function literal(value: unknown): string {
   if (typeof value === 'number') return String(value);
-  if (typeof value !== 'string') throw new Error('unexpected parameter');
+  if (typeof value !== 'string') throw new TypeError('unexpected parameter');
   return `'${value.replaceAll("'", "''")}'`;
 }
 
@@ -603,7 +603,7 @@ describe('searchKey matches what the database matches', () => {
       const ctypeGap = [...row.term_fold, ...row.text_fold].some((c) =>
         lowersElsewhere.has(c)
       );
-      return versionGap || ctypeGap ? [] : [{ ...pair, inMemory }];
+      return versionGap || ctypeGap ? [] : { ...pair, inMemory };
     });
 
     expect(rows).toHaveLength(pairs.length);

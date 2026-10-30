@@ -259,7 +259,7 @@ export function transactionRunner(
         ? await transactionOn(reserved, fn, config)
         : await runWithinDeadline(reserved, deadline, fn);
     } finally {
-      reserved.release();
+      await reserved.release();
     }
   }
   return withTransaction;

@@ -26,9 +26,6 @@ import TurnstileWidget from './turnstile';
 
 const contactFormSchema = sendOtp.body.and(z.object(captchaField));
 
-type ContactInput = z.input<typeof contactFormSchema>;
-type ContactOutput = z.output<typeof contactFormSchema>;
-
 /** Where a code is sent: the schema every anonymous send takes, as the server reads it. */
 export type OtpContact = z.output<typeof sendOtp.body>;
 
@@ -101,6 +98,9 @@ export const ContactForm = memo(
     submitLabel,
     pendingLabel,
   }: ContactFormProps) => {
+    type ContactInput = z.input<typeof contactFormSchema>;
+    type ContactOutput = z.output<typeof contactFormSchema>;
+
     const [firstChannel] = channels;
     const methods = useForm<ContactInput, unknown, ContactOutput>({
       resolver: zodResolver(contactFormSchema),

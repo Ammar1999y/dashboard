@@ -47,9 +47,6 @@ const resetSchema = codeCaptchaFormSchema.extend({
   newPassword: passwordSchema,
 });
 
-type ResetInput = z.input<typeof resetSchema>;
-type ResetOutput = z.output<typeof resetSchema>;
-
 const CHANNELS = channelList(ENABLED_OTP_CHANNELS);
 
 interface RecoveryGrant {
@@ -70,6 +67,9 @@ interface ResetFormProps {
 
 const ResetForm = memo(
   ({ contact, onResend, onSecondFactor }: ResetFormProps) => {
+    type ResetInput = z.input<typeof resetSchema>;
+    type ResetOutput = z.output<typeof resetSchema>;
+
     const { replace } = useRouter();
     const methods = useForm<ResetInput, unknown, ResetOutput>({
       resolver: zodResolver(resetSchema),

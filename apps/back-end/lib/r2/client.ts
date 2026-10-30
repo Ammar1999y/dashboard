@@ -373,7 +373,7 @@ export async function listObjectsInR2(params: {
   return {
     objects: (page.Contents ?? []).flatMap((entry) =>
       typeof entry.Key === 'string'
-        ? [{ key: entry.Key, size: entry.Size ?? 0 }]
+        ? { key: entry.Key, size: entry.Size ?? 0 }
         : []
     ),
     nextContinuationToken: page.IsTruncated

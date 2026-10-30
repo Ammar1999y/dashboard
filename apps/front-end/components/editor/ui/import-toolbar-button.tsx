@@ -20,13 +20,6 @@ import { Icon } from '@/components/ui/icon';
 import { ToolbarButton } from '@/components/ui/toolbar';
 import { deserializeEditorHtml } from '@/components/editor/export';
 
-/**
- * `useFilePicker`'s config is a union discriminated on `readAs`/`readFilesContent`,
- * so omitting those leaves `onFilesSelected` without a contextual type. Only
- * `plainFiles` is read here, and it is absent on the error branch.
- */
-type PickedFiles = { plainFiles?: File[] };
-
 const PARSERS = {
   html: deserializeEditorHtml,
   markdown: (editor: PlateEditor, text: string) =>
@@ -34,6 +27,13 @@ const PARSERS = {
 };
 
 function useImportPicker(accept: string[], parse: keyof typeof PARSERS) {
+  /**
+   * `useFilePicker`'s config is a union discriminated on `readAs`/`readFilesContent`,
+   * so omitting those leaves `onFilesSelected` without a contextual type. Only
+   * `plainFiles` is read here, and it is absent on the error branch.
+   */
+  type PickedFiles = { plainFiles?: File[] };
+
   const editor = useEditorRef();
   return useFilePicker({
     accept,

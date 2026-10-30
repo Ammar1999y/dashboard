@@ -38,8 +38,6 @@ import { userEntity } from './entity';
 import { UserFields } from './fields';
 import { UserSecurity } from './security';
 
-type Payload = BodyOf<typeof userEntity.endpoints.update>;
-
 /**
  * Your own account is edited on the account page, where each change asks for
  * the proof it needs: this page's form is the administrator's, and its
@@ -91,6 +89,8 @@ const UserEditForm = memo(({ record }: { record: UserDetail }) => {
   // must not move what "changed" is measured against.
   const onSubmit = useCallback(
     (data: UpdateUserOutput) => {
+      type Payload = BodyOf<typeof userEntity.endpoints.update>;
+
       // A phone the deployment does not serve is neither sent nor compared:
       // its field is not on the form.
       const payload: Payload = {

@@ -289,7 +289,7 @@ function referencedSchemas(root: unknown, schemas: JsonSchema): JsonSchema {
     const names = frontier.flatMap((node) =>
       JSON.stringify(node)
         .matchAll(SCHEMA_REF)
-        .map(([, name]) => name ?? '')
+        .map(([, name = '']) => name)
         .toArray()
     );
     frontier = [];

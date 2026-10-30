@@ -110,7 +110,6 @@ export function serializeSetCookie(cookie: HandlerCookie): string {
   const o = cookie.options ?? {};
   const parts = [`${cookie.name}=${cookie.value}`];
 
-  // eslint-disable-next-line unicorn/no-immediate-mutation -- eight optional attributes, each behind its own condition and one behind a comment; a single literal would read worse than the chain
   if (o.maxAge !== undefined && Number.isFinite(o.maxAge))
     parts.push(`Max-Age=${Math.trunc(o.maxAge)}`);
   if (o.domain) parts.push(`Domain=${o.domain}`);

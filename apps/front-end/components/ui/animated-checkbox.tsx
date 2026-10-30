@@ -29,14 +29,14 @@ type AnimatedCheckboxProps = React.ComponentProps<
 function AnimatedCheckbox({
   className,
   checked: checkedProp,
-  defaultChecked,
+  defaultChecked = false,
   onCheckedChange,
   ...props
 }: AnimatedCheckboxProps) {
   // Radix keeps its own state private, and the path animation needs it.
   const [checked, setChecked] = useControllableState({
     prop: checkedProp,
-    defaultProp: defaultChecked ?? false,
+    defaultProp: defaultChecked,
     onChange: onCheckedChange,
     caller: 'AnimatedCheckbox',
   });

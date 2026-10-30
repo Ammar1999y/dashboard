@@ -139,7 +139,6 @@ const Finding = ({
 const NONE: ReadonlySet<ItemKey> = new Set();
 
 type FolderItem = Extract<Item, { kind: 'folder' }>;
-type FileItem = Extract<Item, { kind: 'file' }>;
 
 const EMPTY_PREVIEW: DeletePreview = {
   folders: 0,
@@ -239,6 +238,7 @@ interface BodyProps {
 }
 
 const DeleteBody = memo(({ keys, request, onPending }: BodyProps) => {
+  type FileItem = Extract<Item, { kind: 'file' }>;
   const ctx = useMedia();
   const open = deleteDialog.useIsOpen();
   const found = useItems(keys);

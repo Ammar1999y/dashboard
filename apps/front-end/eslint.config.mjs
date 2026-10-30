@@ -33,7 +33,7 @@ const eslintConfig = [
   },
   ...nextVitals,
   ...nextTs,
-  eslintPluginUnicorn.configs['flat/recommended'],
+  eslintPluginUnicorn.configs.recommended,
   ...compat.extends(
     'plugin:import/recommended',
     'plugin:import/typescript',
@@ -78,6 +78,9 @@ const eslintConfig = [
       'unicorn/consistent-function-scoping': 'off',
       'unicorn/name-replacements': 'off',
       'unicorn/single-line-block-comment-style': 'off',
+      // JSDoc keeps its `*` gutter, the form editors continue and TypeScript
+      // strips for hovers; the rule would rewrite every doc comment here.
+      'unicorn/no-asterisk-prefix-in-documentation-comments': 'off',
       'unicorn/catch-error-name': 'off',
       'unicorn/consistent-boolean-name': 'off',
       'unicorn/no-array-reduce': 'off',
@@ -87,6 +90,10 @@ const eslintConfig = [
       'unicorn/no-computed-property-existence-check': 'off',
       'unicorn/prefer-ternary': 'off',
       'unicorn/prefer-early-return': 'off',
+      // A parameter names what the call site supplies, even when every caller
+      // supplies the same value today; the fix moves that value into the
+      // helper and edits every call.
+      'unicorn/no-unnecessary-parameters': 'off',
 
       // Schema and action values follow the same verb-based naming as handlers.
       'unicorn/no-non-function-verb-prefix': 'off',

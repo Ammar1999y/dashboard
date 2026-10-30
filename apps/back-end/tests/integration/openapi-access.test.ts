@@ -99,9 +99,9 @@ describe('the statuses it publishes are the ones the routes answer', () => {
   type Operation = {
     responses: Record<string, { description?: string } | undefined>;
   };
-  type Document = { paths: Record<string, Record<string, Operation>> };
 
   async function operation(path: string, method: string): Promise<Operation> {
+    type Document = { paths: Record<string, Record<string, Operation>> };
     const response = await app.handle(authedRequest(admin(), URL_PATH));
     const document = (await response.json()) as Document;
     const found = document.paths[path]?.[method];

@@ -35,7 +35,7 @@ function readStored(): string[] {
       )
       .flatMap((entry) => {
         const color = colorSchema.safeParse(entry);
-        return color.success && color.data ? [color.data] : [];
+        return color.success && color.data ? color.data : [];
       })
       .slice(0, MAX_CUSTOM_COLORS);
   } catch {

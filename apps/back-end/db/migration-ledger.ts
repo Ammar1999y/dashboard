@@ -592,8 +592,8 @@ function concurrentForm(
 function indexNames(rows: readonly unknown[]): string[] {
   return rows.flatMap((row) => {
     if (typeof row !== 'object' || row === null || !('name' in row))
-      return [JSON.stringify(row)];
-    return row.name === null ? [] : [String(row.name)];
+      return JSON.stringify(row);
+    return row.name === null ? [] : String(row.name);
   });
 }
 
@@ -733,7 +733,7 @@ export async function applySqlMigrations(
           );
         await record(reserved);
       } finally {
-        reserved.release();
+        await reserved.release();
       }
     } else {
       // `unsafe` because these files are multi-statement and carry no

@@ -81,8 +81,8 @@ export type MediaRefusalReason =
 
 /** Type/subtype only, lowercased: `Application/PDF; charset=x` → `application/pdf`. */
 export function normalizeMimeType(declared: string): string {
-  const [essence] = declared.split(';', 1);
-  return (essence ?? '').trim().toLowerCase();
+  const [essence = ''] = declared.split(';', 1);
+  return essence.trim().toLowerCase();
 }
 
 export function mimeTypesOfKind(kind: FileKind): string[] {

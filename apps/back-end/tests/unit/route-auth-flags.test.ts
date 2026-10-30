@@ -141,7 +141,8 @@ describe('every route declares the gates its handler reaches', () => {
 describe('the analyzer, on one fixture function per shape', () => {
   const gatesOf = (name: string) => {
     const result = fixture.get(name);
-    if (!(result instanceof Set)) throw new Error(`${name}: ${String(result)}`);
+    if (!(result instanceof Set))
+      throw new TypeError(`${name}: ${String(result)}`);
     return sorted(result);
   };
 

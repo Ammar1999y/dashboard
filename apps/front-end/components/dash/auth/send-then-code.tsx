@@ -9,10 +9,6 @@ import { useResendCooldown } from '@/hooks/use-resend-cooldown';
 
 import { ContactForm } from './contact-form';
 
-type Stage =
-  | { name: 'send'; contact?: OtpContact }
-  | { name: 'code'; contact: OtpContact };
-
 interface SendThenCodeProps {
   endpoint: SendEndpoint;
   channels: ChannelList;
@@ -41,6 +37,9 @@ export function SendThenCode({
   onSent,
   children,
 }: SendThenCodeProps) {
+  type Stage =
+    | { name: 'send'; contact?: OtpContact }
+    | { name: 'code'; contact: OtpContact };
   const [stage, setStage] = useState<Stage>({ name: 'send', contact: initial });
   const cooldown = useResendCooldown();
 

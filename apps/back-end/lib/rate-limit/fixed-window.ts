@@ -126,7 +126,7 @@ export async function rateLimit(opts: {
       };
     }
 
-    const used = Number(admitted.count);
+    const used = admitted.count;
     return {
       success: true,
       limit: opts.limit,

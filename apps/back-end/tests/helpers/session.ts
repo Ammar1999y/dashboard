@@ -375,8 +375,8 @@ export function mergeCookies(jar: string, setCookie: string[]): string {
     if (name) map.set(name, rest.join('='));
   }
   for (const raw of setCookie) {
-    const [pair] = raw.split(';', 1);
-    const [name, ...rest] = (pair ?? '').split('=');
+    const [pair = ''] = raw.split(';', 1);
+    const [name, ...rest] = pair.split('=');
     if (!name) continue;
     const value = rest.join('=');
     if (value === '') map.delete(name);

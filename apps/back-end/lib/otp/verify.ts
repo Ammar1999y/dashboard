@@ -100,20 +100,20 @@ async function transactionWithin<T>(
   }
 }
 
-type VerifyOutcome =
-  | { kind: 'matched' }
-  | { kind: 'mismatch' }
-  | { kind: 'no-code' }
-  | {
-      kind: 'blocked';
-      blockedUntil: Date | null;
-      /** Whether a submitted code was compared before the block was raised. */
-      evaluated: boolean;
-    };
-
 export async function processOtpVerify(
   options: ProcessOtpVerifyOptions
 ): Promise<void> {
+  type VerifyOutcome =
+    | { kind: 'matched' }
+    | { kind: 'mismatch' }
+    | { kind: 'no-code' }
+    | {
+        kind: 'blocked';
+        blockedUntil: Date | null;
+        /** Whether a submitted code was compared before the block was raised. */
+        evaluated: boolean;
+      };
+
   const {
     userId,
     userEmail,

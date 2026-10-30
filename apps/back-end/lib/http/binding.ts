@@ -353,19 +353,19 @@ function assertAgrees(
     entry.policy.auth === 'public' && options.rateLimit?.by === 'user'
       ? 'no per-user limit on a public route'
       : null,
-    entry.bodyKind !== 'json' && options.maxJsonBodyBytes !== undefined
-      ? 'a JSON ceiling only on a JSON body'
-      : null,
+    entry.bodyKind === 'json' || options.maxJsonBodyBytes === undefined
+      ? null
+      : 'a JSON ceiling only on a JSON body',
     [options.permission?.orSelf, options.permission?.notSelf].every(
       (name) =>
         typeof name !== 'string' || entry.path.split('/').includes(`:${name}`)
     )
       ? null
       : 'its self parameter among the path parameters',
-    options.permission?.orSelf !== undefined &&
-    options.permission.notSelf !== undefined
-      ? 'the caller either exempted or refused as its own target, not both'
-      : null,
+    options.permission?.orSelf === undefined ||
+    options.permission.notSelf === undefined
+      ? null
+      : 'the caller either exempted or refused as its own target, not both',
     options.permission?.handlerAsksReauth && !entry.policy.reauth
       ? 'a handler-asked re-authentication window only on a `reauth` policy'
       : null,

@@ -17,8 +17,6 @@ import {
   reportOutsideContract,
 } from './http';
 
-type Method = Lowercase<ClientEndpoint['method']>;
-
 /** What a resolver is handed: the request as the server's gate sees it. */
 export interface MockRequest<E extends ClientEndpoint> {
   /** The path's segments as sent; a handler checks them as the server does. */
@@ -59,6 +57,8 @@ export function mock<E extends ClientEndpoint>(
   entry: E,
   resolve: (request: MockRequest<E>) => MockAnswer<E> | Promise<MockAnswer<E>>
 ) {
+  type Method = Lowercase<ClientEndpoint['method']>;
+
   const key = `${entry.method} ${entry.path}`;
   const method = entry.method.toLowerCase() as Method;
   const handler = http[method](api(entry.path), async ({ request, params }) => {

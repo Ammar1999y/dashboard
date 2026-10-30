@@ -61,7 +61,7 @@ export const TWO_FACTOR_OTP_AVAILABLE =
 
 export const TWO_FACTOR_OTP_CHANNELS = ENABLED_TWO_FACTOR_OTP_CHANNELS;
 
-// eslint-disable-next-line unicorn/no-top-level-side-effects -- refusing to load is this gate's contract; see the root CLAUDE.md
+// Refusing to load is this gate's contract; see the root CLAUDE.md.
 assertTwoFactorListsCoherent(
   ENABLED_TWO_FACTOR_METHODS,
   ENABLED_TWO_FACTOR_OTP_CHANNELS

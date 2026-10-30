@@ -71,12 +71,6 @@ interface ComboboxBaseProps
   required?: boolean;
 }
 
-type ComboboxValue<T extends ComboboxType = 'single'> = T extends 'single'
-  ? string
-  : T extends 'multiple'
-    ? string[]
-    : never;
-
 interface ComboboxSingleProps {
   type: 'single';
   value?: string;
@@ -100,14 +94,14 @@ const Combobox = React.forwardRef(
       type = 'single' as T,
       open: openProp,
       onOpenChange,
-      defaultOpen,
+      defaultOpen = false,
       modal,
       children,
       value: valueProp,
       defaultValue,
       onValueChange,
       inputValue: inputValueProp,
-      defaultInputValue,
+      defaultInputValue = '',
       onInputValueChange,
       onInputBlur,
       disabled,
@@ -116,6 +110,11 @@ const Combobox = React.forwardRef(
     }: ComboboxProps,
     ref: React.ForwardedRef<React.ElementRef<typeof CommandPrimitive>>
   ) => {
+    type ComboboxValue<T extends ComboboxType = 'single'> = T extends 'single'
+      ? string
+      : T extends 'multiple'
+        ? string[]
+        : never;
     const [value, setValue] = useControllableState<ComboboxValue<T>>({
       prop: valueProp as ComboboxValue<T>,
       defaultProp: ((defaultValue ?? type === 'multiple')
@@ -125,11 +124,11 @@ const Combobox = React.forwardRef(
     });
     const [inputValue, setInputValue] = useControllableState({
       prop: inputValueProp,
-      defaultProp: defaultInputValue ?? '',
+      defaultProp: defaultInputValue,
     });
     const [open, setOpen] = useControllableState({
       prop: openProp,
-      defaultProp: defaultOpen ?? false,
+      defaultProp: defaultOpen,
       onChange: onOpenChange,
     });
     const [currentTabStopId, setCurrentTabStopId] = React.useState<

@@ -81,6 +81,7 @@ export const contactKindOf = (channel: OtpChannel): ContactKind =>
  */
 export function optionId(
   method: TwoFactorMethod,
+  // eslint-disable-next-line unicorn/prefer-default-parameters -- callers pass `null`, which a default would not replace
   contactKind: ContactKind | null
 ): string {
   return method === 'otp' ? `otp:${contactKind ?? 'unknown'}` : method;
@@ -90,5 +91,5 @@ export function optionId(
 export const TWO_FACTOR_OPTION_IDS = TWO_FACTOR_METHODS.flatMap((method) =>
   method === 'otp'
     ? CONTACT_KINDS.map((kind) => optionId(method, kind))
-    : [optionId(method, null)]
+    : optionId(method, null)
 );

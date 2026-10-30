@@ -25,8 +25,6 @@ import { cacheRoleChanged, cacheRoleOption } from './cache';
 import { permissionEntity } from './entity';
 import { PermissionFields } from './fields';
 
-type Payload = BodyOf<typeof permissionEntity.endpoints.update>;
-
 export default function EditPermission() {
   return (
     <RequireGrant resource='permissions' action='edit'>
@@ -55,6 +53,8 @@ const PermissionEditForm = memo(({ record }: { record: PermissionDetail }) => {
   // must not move what "changed" is measured against.
   const onSubmit = useCallback(
     (data: UpdatePermissionOutput) => {
+      type Payload = BodyOf<typeof permissionEntity.endpoints.update>;
+
       const payload: Payload = {
         roleName: data.roleName,
         description: data.description,

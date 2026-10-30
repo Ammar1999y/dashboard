@@ -215,12 +215,10 @@ export function contactChangeStrands(
       ...state,
       capability: {
         ...state.capability,
-        emailVerified: contactKinds.includes('email')
-          ? false
-          : state.capability.emailVerified,
-        phoneVerified: contactKinds.includes('phone')
-          ? false
-          : state.capability.phoneVerified,
+        emailVerified:
+          !contactKinds.includes('email') && state.capability.emailVerified,
+        phoneVerified:
+          !contactKinds.includes('phone') && state.capability.phoneVerified,
       },
     }).length === 0
   );

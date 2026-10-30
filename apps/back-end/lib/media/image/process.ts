@@ -38,9 +38,8 @@ export function validateMagicBytes(
   buffer: Buffer,
   mimeType: string
 ): { valid: boolean; animated?: boolean } {
-  if (mimeType === 'image/svg+xml') return { valid: true };
-
-  if (!hasRasterSignature(mimeType)) return { valid: true };
+  if (mimeType === 'image/svg+xml' || !hasRasterSignature(mimeType))
+    return { valid: true };
   if (!matchesMagicBytes(buffer, mimeType)) return { valid: false };
   if (isAnimatedRaster(buffer, mimeType))
     return { valid: false, animated: true };

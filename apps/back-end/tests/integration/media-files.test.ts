@@ -263,7 +263,7 @@ async function auditActions(id: string): Promise<string[]> {
 function deletedBucketsFor(key: string): string[] {
   return storeOpsOf('DeleteObjects')
     .filter((op) => (op.keys ?? []).includes(key))
-    .flatMap((op) => (op.bucket === undefined ? [] : [op.bucket]))
+    .flatMap((op) => (op.bucket === undefined ? [] : op.bucket))
     .toSorted(compareCodeUnits);
 }
 
@@ -1957,7 +1957,7 @@ describe('publish and unpublish', () => {
             signal: AbortSignal.timeout(1000),
           });
           spare.reserved = true;
-          connection.release();
+          await connection.release();
           return sweepOrphanedObjects();
         });
         return { election, calls, spareConnection: spare.reserved };

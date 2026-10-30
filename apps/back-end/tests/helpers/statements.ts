@@ -33,7 +33,8 @@ function intercept<T extends object>(
   before: (self: T) => void
 ): () => void {
   const original: unknown = Reflect.get(target, name);
-  if (typeof original !== 'function') throw new Error(`${name} is no method`);
+  if (typeof original !== 'function')
+    throw new TypeError(`${name} is no method`);
   Object.defineProperty(target, name, {
     configurable: true,
     writable: true,

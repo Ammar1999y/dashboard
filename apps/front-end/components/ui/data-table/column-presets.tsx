@@ -30,13 +30,9 @@ interface TextColumnOptions {
 export function textColumn<TData extends RowData>(
   id: StringKey<TData>,
   label: string,
-  { size, cellClassName, dir }: TextColumnOptions = {}
+  { size, cellClassName = 'ps-2 font-medium', dir }: TextColumnOptions = {}
 ): ColumnDef<DataTableFeatures, TData> {
-  const className = cn(
-    'truncate',
-    dir && 'bidi-isolate',
-    cellClassName ?? 'ps-2 font-medium'
-  );
+  const className = cn('truncate', dir && 'bidi-isolate', cellClassName);
   return {
     id,
     accessorKey: id,

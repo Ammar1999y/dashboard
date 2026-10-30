@@ -10,7 +10,11 @@ Paths are relative to `apps/back-end`. Read `CLAUDE.md` before anything else and
 - Lenses, not boundaries — report anything material you can prove: security, privacy, correctness, contracts, validation, types, races, stale or invalid state, edge cases, transactions, data integrity, lifecycle, resources, error handling, queries, indexes, performance, architecture, layering and import direction, consistency, duplication, boilerplate, dead code, naming, tooling, config, CI, deployment, dependencies.
 - Latent risks count when the trigger is provable, not only live bugs.
 - The published OpenAPI document is the contract with the front-end, which is built in parallel. "The front-end doesn't handle this" is not a finding; a behaviour change is one only when OpenAPI doesn't describe it.
-- The entries the orchestrator pasted from `reports/should-ignore.md`, `TODO.md` and `reports/performance-audit.md` are the owner's decisions and deferrals. Skip them unless new evidence changes their impact, disproves their reasoning, or reveals a distinct problem.
+- The entries the orchestrator pasted from `reports/should-ignore.md`, `TODO.md` and `reports/performance-audit.md` are the owner's decisions and deferrals, but many were written against older code. One excludes a suspect only once you have confirmed it still describes the current code: what it names exists where it says and behaves as it says. Then skip it unless new evidence changes its impact, disproves its reasoning, or reveals a distinct problem. Return every pasted entry that no longer matches, with what changed: fixed, moved (to where), or no longer true.
+
+## When your share is too big
+
+Size your share before you read it. If you cannot read all of it in full and still have room to trace its flows and run its probes, give part of it to helper subagents instead of skimming. Split early: when your context fills, it compacts and silently drops what you read. Dispatch each helper as `general-purpose` with no `model` override; give it its files and the pasted entries that touch them, and tell it to read this brief first and not to delegate further. Pass their suspects and unresolved points back verbatim with their evidence, and list the files each one read in full. If a helper cannot be started, return the files you did not read.
 
 ## Nothing is right because it exists
 
@@ -18,7 +22,7 @@ Existing code proves nothing about itself: not its comments, not how often it re
 
 - **Defects:** what is wrong now, or provably reachable.
 - **Approach:** whether the design is the right one. Does the code need to exist at all? Does an existing helper, Elysia, Better Auth, Drizzle, zod, Bun, Postgres (a constraint or one statement in place of app code) or an installed dependency already do it, on the installed version? Does a dependency do what Bun or a few lines would? Would another design close a class of bugs, remove a duplicated concern or cut a measured cost? Name the alternative and what it costs: contract, schema and migration, call sites, risk.
-- **Shape:** whether the area has its best form: names; location and layering, including the shared boundary, decided by what the code is rather than by who imports it today; files that mix unrelated jobs; near-copies that must change together; layers that only pass calls through; options and config nobody sets. The remedy may be to rename, move, merge, split, delete or restructure. Split by job, never by length. Call sites that re-validate, cast, adapt or work around an interface are evidence against it.
+- **Shape:** whether the area has its best form: names; location and layering, including the shared boundary, decided by what the code is rather than by who imports it today; files that mix unrelated jobs; near-copies that must change together; layers that only pass calls through; options and config nobody sets, and settings nobody reads, `.env` keys included (compare names; never print a value). The remedy may be to rename, move, merge, split, delete or restructure. Split by job, never by length. Call sites that re-validate, cast, adapt or work around an interface are evidence against it.
 
 An improvement (a better approach or shape, a shared helper, a sensible default, centralized boilerplate) is a suspect only when it removes something real: duplication that exists now, a risk, code or concepts the behaviour does not need, or a measured cost. No speculative layers, no taste. Simpler means fewer concepts and fewer places to change, not fewer characters. An alternative counts only if it keeps every behaviour callers rely on — validation, error handling, edge cases, the contract — checked on the installed version, not assumed.
 
@@ -56,14 +60,17 @@ Report performance issues and opportunities, each backed by a count or measureme
 
 ## Writes and reads
 
-- You make no persistent change. This overrides `CLAUDE.md`'s allowance for retained test files.
+- You make no persistent change to the repository. This overrides `CLAUDE.md`'s allowance for retained test files.
+- Until real data exists, Postgres and R2 hold only test data, and any command against them is allowed: reads, writes, deletes, schema changes, bulk seeding. The dev server, the test harness and other sessions share them, so do destructive or bulky work in a database you create and then drop, keep R2 objects under a `probe/` prefix, and remove what you created. Never print a credential, a key or a signed URL.
 - Verification may use `bun -e`, a REPL, targeted existing tests, read-only commands, and temporary files deleted before you finish.
-- `reports/`: read only `should-ignore.md`, and `coolify-deployment.md` when a server/VPS/Coolify/proxy/Cloudflare suspect needs checking against it. Never edit either.
+- `reports/`: read only `should-ignore.md`, and `coolify-deployment.md` when your prompt hands it to you or a server/VPS/Coolify/proxy/Cloudflare suspect needs checking against it. Never edit either.
 - `docs/`: read only files explicitly shared with you or referenced.
 
 ## Traps in this repo
 
-- Bun loads `.env`, which holds live R2 and Upstash credentials. A probe that writes to either uses a `probe/` key prefix and deletes what it wrote; nothing else calls an external or paid service.
+- Bun loads `.env`, so a probe run from `apps/back-end` reaches the live R2 buckets. Apart from Postgres and R2, call no external or paid service.
+- A content search across the repository also reads both apps' `.env` files and prints their secrets: exclude `.env*` from it.
+- R2 has no edge purge configured: a deleted object's public URL can serve from cache for up to an hour, so check a deletion against the bucket, not the public URL.
 - Other sessions share the working tree. Name temporary files uniquely, never delete or overwrite a file you did not create, and treat a lint or `ENOENT` failure on someone else's `*-probe-*` file as theirs.
 - `tests/helpers/run.ts` takes forwarded flags only as `--flag=value`; a separate value is read as a file filter.
 - The integration, process and matrix tiers run with `NODE_ENV=development`, and captcha, dev routes, security headers and response checks branch on it. A behaviour claimed for production is checked under production's environment.
@@ -73,4 +80,4 @@ Report performance issues and opportunities, each backed by a count or measureme
 
 ## Return
 
-Unless your prompt asks for something else, for each suspect: whether it is a defect or an improvement; the claim; `file:line` and symbol, or the flow; evidence (the path traced, and any command with its output); for a defect, a concrete failure scenario, and for an improvement, what the code costs now and what the change gains; every site in its class; a remediation. A defect's remediation is the smallest change that fixes the whole class, preferably one that deletes code or reuses what exists, and it changes behaviour only to fix the defect. An improvement's is the alternative and what it costs, and for a shape change the target shape and every call site it reaches. Then the files you read in full, what you checked and found clean, and what you could not resolve, with what you tried.
+Unless your prompt asks for something else, for each suspect: whether it is a defect or an improvement; the claim; `file:line` and symbol, or the flow; evidence (the path traced, and any command with its output); for a defect, a concrete failure scenario, and for an improvement, what the code costs now and what the change gains; every site in its class; a remediation. A defect's remediation is the smallest change that fixes the whole class, preferably one that deletes code or reuses what exists, and it changes behaviour only to fix the defect. An improvement's is the alternative and what it costs, and for a shape change the target shape and every call site it reaches. Then the files you and your helpers read in full, the pasted entries that no longer match, what you checked and found clean, and what you could not resolve, with what you tried.

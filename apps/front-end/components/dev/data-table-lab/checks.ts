@@ -299,9 +299,7 @@ function checkLayout(
       text.includes(`[data-column="${c.id}"]{`)
     );
     if (found.length === 1 && found[0]?.includes(expected)) return [];
-    return [
-      `${c.id}: ${found.join(' | ') || '(no rule)'}, expected ${expected}`,
-    ];
+    return `${c.id}: ${found.join(' | ') || '(no rule)'}, expected ${expected}`;
   });
   if (drift.length > 0)
     out.push({ check: 'column rules', detail: drift.join('; ') });

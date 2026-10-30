@@ -20,9 +20,6 @@ import TurnstileWidget from './turnstile';
 
 const startSchema = z.object(captchaField);
 
-type StartInput = z.input<typeof startSchema>;
-type StartOutput = z.output<typeof startSchema>;
-
 interface GoogleStartProps {
   rememberMe: boolean;
   onBack: () => void;
@@ -33,6 +30,9 @@ interface GoogleStartProps {
  * issues the address, which is why this is a step of its own and not a button.
  */
 export default function GoogleStart({ rememberMe, onBack }: GoogleStartProps) {
+  type StartInput = z.input<typeof startSchema>;
+  type StartOutput = z.output<typeof startSchema>;
+
   const methods = useForm<StartInput, unknown, StartOutput>({
     resolver: zodResolver(startSchema),
     defaultValues: { captcha: '' },

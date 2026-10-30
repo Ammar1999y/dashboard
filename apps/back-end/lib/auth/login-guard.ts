@@ -79,8 +79,6 @@ export interface VerifiedPasswordProof {
  */
 export type AcceptedPasswordHashes = readonly [string, ...string[]];
 
-type RejectedOutcome = 'reject_unknown_or_inactive' | 'reject_bad_password';
-
 interface PendingPasswordUpgrade {
   accountId: EntityID;
   userId: EntityID;
@@ -89,15 +87,6 @@ interface PendingPasswordUpgrade {
   previousPepperId: string;
   activePepperId: string;
 }
-
-type AttemptResult =
-  | {
-      outcome: 'success';
-      passwordProof: VerifiedPasswordProof;
-      passwordUpgrade?: PendingPasswordUpgrade;
-    }
-  | { outcome: RejectedOutcome; passwordCostPaid: boolean }
-  | { outcome: 'reject_locked'; passwordCostPaid: false; lockedUntil: Date };
 
 /**
  * The throw and timing guard run AFTER the transaction commits, so the
@@ -113,6 +102,16 @@ export function verifyLoginAttempt(
 export async function verifyLoginAttempt(
   options: VerifyAttemptOptions
 ): Promise<AcceptedPasswordHashes | VerifiedPasswordProof> {
+  type RejectedOutcome = 'reject_unknown_or_inactive' | 'reject_bad_password';
+  type AttemptResult =
+    | {
+        outcome: 'success';
+        passwordProof: VerifiedPasswordProof;
+        passwordUpgrade?: PendingPasswordUpgrade;
+      }
+    | { outcome: RejectedOutcome; passwordCostPaid: boolean }
+    | { outcome: 'reject_locked'; passwordCostPaid: false; lockedUntil: Date };
+
   const {
     password,
     email,

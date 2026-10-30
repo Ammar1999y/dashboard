@@ -158,7 +158,7 @@ export function getAcceptedFormats(accept: AcceptMap): string[] {
       return extensions.map((ext) => ext.replace(/^\./, ''));
     // A wildcard with no extensions names no concrete format.
     if (mime.includes('*')) return [];
-    return [mime.slice(mime.indexOf('/') + 1).replace(/\+.*$/, '')];
+    return mime.slice(mime.indexOf('/') + 1).replace(/\+.*$/, '');
   });
   return [
     ...new Set(formats.filter(Boolean).map((format) => format.toUpperCase())),

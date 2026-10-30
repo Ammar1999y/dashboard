@@ -49,7 +49,7 @@ import {
 export const ColumnElement = withHOC(
   ResizableProvider,
   function ColumnElement(props: PlateElementProps<TColumnElement>) {
-    const { width } = props.element;
+    const { width = '100%' } = props.element;
     const readOnly = useReadOnly();
     const isSelectionAreaVisible = usePluginOption(
       BlockSelectionPlugin,
@@ -69,7 +69,7 @@ export const ColumnElement = withHOC(
     });
 
     return (
-      <div className={COLUMN_WRAPPER_CLASS} style={{ width: width ?? '100%' }}>
+      <div className={COLUMN_WRAPPER_CLASS} style={{ width }}>
         {!readOnly && !isSelectionAreaVisible && (
           <div
             className={cn(

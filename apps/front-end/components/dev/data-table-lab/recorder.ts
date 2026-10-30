@@ -121,7 +121,7 @@ function diagnose(
       rendered.length === 0
         ? `no ${region} component rendered`
         : `rendered: ${rendered.join(', ')}`;
-    return [`${region}: ${dom}; ${who}`];
+    return `${region}: ${dom}; ${who}`;
   });
 }
 

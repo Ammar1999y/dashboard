@@ -150,7 +150,7 @@ describe('the readiness probe against a silent PostgreSQL peer', () => {
     expect(Number(closed.closeMs)).toBeLessThan(deadline + SLACK_MS);
     const outstanding = closed.outstanding as { result: unknown; ms: number };
     expectUnreachable(outstanding.result);
-    expect(Number(outstanding.ms)).toBeLessThan(deadline + SLACK_MS);
+    expect(outstanding.ms).toBeLessThan(deadline + SLACK_MS);
     expect(closed.open).toBe(0);
   }, 60_000);
 });

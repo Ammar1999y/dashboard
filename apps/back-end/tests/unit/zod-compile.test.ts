@@ -105,7 +105,7 @@ describe('strict compilation', () => {
       z.compile(schema, { strict: true });
       return [];
     } catch (error) {
-      return [{ name, error }];
+      return { name, error };
     }
   });
 

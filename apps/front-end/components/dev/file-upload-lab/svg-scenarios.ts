@@ -509,7 +509,7 @@ function readStored(markup: string) {
   const references = [...doc.querySelectorAll('*')].flatMap((el) =>
     [...el.attributes].flatMap(({ name, value }) => {
       if (name === 'href' || name.endsWith(':href'))
-        return value.startsWith('#') ? [value.slice(1)] : [];
+        return value.startsWith('#') ? value.slice(1) : [];
       return /^url\((["']?)#([^"')]+)\1\)$/.exec(value)?.slice(2, 3) ?? [];
     })
   );

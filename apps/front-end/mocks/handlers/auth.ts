@@ -97,10 +97,11 @@ export const authHandlers = [
   // then whether a second factor stands between it and a session.
   http.post(api('/api/auth/sign-in/email'), async ({ request }) => {
     requireUnspentCaptcha(request);
-    const { email, password, rememberMe } = await readJsonBody(
-      request,
-      loginSchema.omit({ captcha: true })
-    );
+    const {
+      email,
+      password,
+      rememberMe = true,
+    } = await readJsonBody(request, loginSchema.omit({ captcha: true }));
     const known = emailOwner(email);
     if (known) admitSession(known);
     const user =
@@ -108,7 +109,7 @@ export const authHandlers = [
 
     const outcome = issueChallenge(user, {
       firstFactor: 'password',
-      rememberMe: rememberMe ?? true,
+      rememberMe,
     });
     if (outcome.kind === 'refused') throw twoFactorUnavailable();
     if (outcome.kind === 'challenge') return HttpResponse.json(outcome.body);

@@ -51,14 +51,19 @@ function decodeLenient(value: string): string {
 
 /** A same-origin path to return to after sign-in, or `fallback`. */
 export function validateRedirectPath(path: string, fallback = '/dash'): string {
-  if (!path || typeof path !== 'string') return fallback;
-  if (DANGEROUS_CHARACTERS.test(path)) return fallback;
+  if (!path || typeof path !== 'string' || DANGEROUS_CHARACTERS.test(path))
+    return fallback;
 
   const trimmed = path.trim();
-  if (!trimmed || trimmed.length > MAX_LENGTH) return fallback;
-  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return fallback;
-  // Browsers read `\` as `/`.
-  if (trimmed.includes('\\')) return fallback;
+  if (
+    !trimmed ||
+    trimmed.length > MAX_LENGTH ||
+    !trimmed.startsWith('/') ||
+    trimmed.startsWith('//') ||
+    // Browsers read `\` as `/`.
+    trimmed.includes('\\')
+  )
+    return fallback;
 
   const pathEnd = trimmed.search(/[?#]/);
   const rawPath = pathEnd === -1 ? trimmed : trimmed.slice(0, pathEnd);

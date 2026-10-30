@@ -131,7 +131,7 @@ let swapped = async () => {};
 export const viaDestructuringWrite = () => swapped();
 
 const queued: Array<() => unknown> = [];
-// eslint-disable-next-line unicorn/no-immediate-mutation, unicorn/no-top-level-side-effects -- the shape under test
+// eslint-disable-next-line unicorn/no-immediate-mutation -- the shape under test
 queued.push(() => requireReauthWindow('user', 'session'));
 
 export const viaIndexedCollection = () => queued[0]?.();
@@ -161,7 +161,6 @@ export function inject(next: () => Promise<void>) {
   injected = next;
 }
 
-// eslint-disable-next-line unicorn/no-top-level-side-effects -- the shape under test
 inject(async () => {
   await requireReauthWindow('user', 'session');
 });
@@ -180,7 +179,7 @@ export const setters = { replace };
 export const viaEscapedSetter = () => replaced();
 
 const assigned = { run: async () => {} };
-// eslint-disable-next-line unicorn/no-immediate-mutation, unicorn/no-top-level-side-effects -- the shape under test
+// eslint-disable-next-line unicorn/no-immediate-mutation -- the shape under test
 Object.assign(assigned, {
   run: async () => {
     await requireReauthWindow('user', 'session');

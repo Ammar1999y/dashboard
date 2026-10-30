@@ -58,7 +58,7 @@ function droppedKeys(wire: unknown, parsed: unknown, path: string): string[] {
   return Object.entries(wire).flatMap(([key, value]) =>
     kept.has(key)
       ? droppedKeys(value, kept.get(key), `${path}.${key}`)
-      : [`${path}.${key}`]
+      : `${path}.${key}`
   );
 }
 

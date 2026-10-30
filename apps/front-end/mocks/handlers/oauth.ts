@@ -94,8 +94,8 @@ export const oauthHandlers = [
   mock(contract.oauthResult, () => {
     const result = oauthResult.get();
     oauthResult.set(null);
-    if (!result || Date.parse(result.expiresAt) <= Date.now()) throw denied();
-    if (!result.body) throw denied();
+    if (!result || Date.parse(result.expiresAt) <= Date.now() || !result.body)
+      throw denied();
     return { raw: result.body };
   }),
 ];

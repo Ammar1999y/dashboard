@@ -41,7 +41,7 @@ export const useSession = () => {
 
   return {
     ...session,
-    isPending: settled ? false : session.isPending,
+    isPending: !settled && session.isPending,
     error: session.data ? null : error,
   };
 };

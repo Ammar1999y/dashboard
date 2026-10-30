@@ -14,8 +14,6 @@ import { NEXT_THEME_ATTRIBUTES, NEXT_THEME_STORAGE_KEY } from './theme-script';
 import { saveThemeSnapshot } from './theme-snapshot';
 import { applyCssVars, computeRootVars, computeThemeVars } from './theme-vars';
 
-type Point = { x: number; y: number };
-
 // `THEME_SCRIPT` in `_document` does this script's work under a CSP hash. A
 // data-block type keeps the browser from running next-themes' copy, whose
 // bundled text has no stable hash.
@@ -77,6 +75,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useThemeMode() {
+  type Point = { x: number; y: number };
+
   const { resolvedTheme, setTheme } = useNextTheme();
 
   const setMode = useCallback(

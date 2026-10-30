@@ -61,8 +61,8 @@ const defaultFilter: FilterFn = (
     [value, ...keywords, group, label].filter(Boolean)
   );
 
-  return [...uniqueTerms].some((keyword) =>
-    keyword ? filterWords(keyword, search) : false
+  return [...uniqueTerms].some(
+    (keyword) => keyword !== undefined && filterWords(keyword, search)
   );
 };
 

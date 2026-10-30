@@ -38,7 +38,7 @@ export async function runElected<T>(
     return { elected: true, result: await run() };
   } finally {
     if (held) await unlock(connection, key, name);
-    else connection.release();
+    else await connection.release();
   }
 }
 
@@ -53,7 +53,7 @@ async function unlock(
       () => false
     );
   if (released) {
-    connection.release();
+    await connection.release();
     return;
   }
 

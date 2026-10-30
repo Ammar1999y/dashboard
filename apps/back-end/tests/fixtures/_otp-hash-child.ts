@@ -12,7 +12,7 @@ import { canEvaluateOtp, hashOtpCode, verifyOtpCode } from '@/lib/otp/hash';
 const CODE = '123456';
 const WRONG = '654321';
 
-const [mode, argument] = process.argv.slice(2);
+const [mode, argument = ''] = process.argv.slice(2);
 
 switch (mode) {
   case 'roundtrip': {
@@ -32,16 +32,14 @@ switch (mode) {
   }
 
   case 'verify': {
-    console.log(
-      JSON.stringify({ valid: await verifyOtpCode(CODE, argument ?? '') })
-    );
+    console.log(JSON.stringify({ valid: await verifyOtpCode(CODE, argument) }));
     break;
   }
 
   case 'evaluable': {
     // The question the anonymous verification boundary asks BEFORE it charges an
     // attempt: can this stored value be compared at all?
-    console.log(JSON.stringify({ evaluable: canEvaluateOtp(argument ?? '') }));
+    console.log(JSON.stringify({ evaluable: canEvaluateOtp(argument) }));
     break;
   }
 

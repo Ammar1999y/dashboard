@@ -33,7 +33,7 @@ function coseP256PublicKey(
 ): Uint8Array {
   const jwk = publicKey.export({ format: 'jwk' });
   if (typeof jwk.x !== 'string' || typeof jwk.y !== 'string')
-    throw new Error('Missing EC coordinates.');
+    throw new TypeError('Missing EC coordinates.');
   // COSE_Key: kty EC2, alg ES256, crv P-256, then the two coordinates.
   return isoCBOR.encode(
     new Map<number, number | Uint8Array>([

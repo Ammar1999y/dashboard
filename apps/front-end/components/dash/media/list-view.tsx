@@ -158,7 +158,7 @@ const pathNoteClass =
   'ms-2 max-w-[40%] shrink-0 truncate text-xs text-muted-foreground';
 
 const PathNote = memo(({ folder }: { folder: EntityID | null }) => {
-  const { text, error } = useFolderPathText(folder);
+  const { text = '…', error } = useFolderPathText(folder);
   if (error)
     return (
       <span
@@ -170,7 +170,7 @@ const PathNote = memo(({ folder }: { folder: EntityID | null }) => {
     );
   return (
     <span dir='auto' className={pathNoteClass}>
-      {text ?? '…'}
+      {text}
     </span>
   );
 });

@@ -63,8 +63,13 @@ export function writeUrl(
  * `router.replace` that changes only the query therefore stays the same page.
  */
 function readPage(state: unknown): string | undefined {
-  if (typeof state !== 'object' || state === null) return undefined;
-  if (!('key' in state) || !('as' in state)) return undefined;
+  if (
+    typeof state !== 'object' ||
+    state === null ||
+    !('key' in state) ||
+    !('as' in state)
+  )
+    return undefined;
   const { key, as } = state;
   return typeof key === 'string' && typeof as === 'string'
     ? `${key} ${new URL(as, location.origin).pathname}`

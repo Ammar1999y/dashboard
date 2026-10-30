@@ -118,8 +118,8 @@ const state: {
  */
 const PRESIGNED_HOST = 'https://signed.example.invalid';
 
-function objectId(bucket: string | undefined, key: string | undefined) {
-  return `${bucket ?? ''}/${key ?? ''}`;
+function objectId(bucket = '', key = '') {
+  return `${bucket}/${key}`;
 }
 
 export function storeOps(): readonly StoreOp[] {
@@ -283,7 +283,7 @@ function record(cmd: Command): void {
     key: 'Key' in input ? input.Key : undefined,
     ...(cmd.kind === 'DeleteObjects' && {
       keys: (cmd.input.Delete?.Objects ?? []).flatMap((entry) =>
-        typeof entry.Key === 'string' ? [entry.Key] : []
+        typeof entry.Key === 'string' ? entry.Key : []
       ),
     }),
     contentType: 'ContentType' in input ? input.ContentType : undefined,

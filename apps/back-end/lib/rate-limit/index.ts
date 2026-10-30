@@ -23,9 +23,7 @@ import { rateLimit } from './fixed-window';
  * sufficient discriminator.
  */
 function ipBucket(ip: string): string {
-  if (!ip.includes(':')) return ip;
-
-  if (ip.includes('.')) return ip;
+  if (!ip.includes(':') || ip.includes('.')) return ip;
 
   // Expand "::" so exactly four hextets are taken from a compressed address.
   const hasDoubleColon = ip.includes('::');

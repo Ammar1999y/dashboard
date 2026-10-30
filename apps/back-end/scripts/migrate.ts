@@ -93,7 +93,7 @@ async function journalWithHashes(): Promise<
       ? raw.entries
       : undefined;
   if (!Array.isArray(entries))
-    throw new Error('meta/_journal.json has no entries');
+    throw new TypeError('meta/_journal.json has no entries');
 
   return Promise.all(
     entries.map(async (entry: unknown) => {
@@ -103,7 +103,9 @@ async function journalWithHashes(): Promise<
         typeof when !== 'number' ||
         typeof tag !== 'string'
       )
-        throw new Error(`malformed journal entry: ${JSON.stringify(entry)}`);
+        throw new TypeError(
+          `malformed journal entry: ${JSON.stringify(entry)}`
+        );
       /* eslint-disable-next-line security/detect-non-literal-fs-filename -- the
          tag comes from this repository's own journal, under a fixed in-repo
          directory; the same file the migrator itself reads */

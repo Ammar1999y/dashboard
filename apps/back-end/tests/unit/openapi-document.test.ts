@@ -362,13 +362,13 @@ describe('the field docs', () => {
       .flatMap(({ docs }) => docs)
       .flatMap((entry) =>
         'description' in entry
-          ? [entry.description]
+          ? entry.description
           : Object.values(entry.docs).filter((text) => text !== undefined)
       );
     const named = sentences.flatMap((sentence) =>
       sentence
         .matchAll(/\{\{(\w+)\}\}/g)
-        .map(([, name]) => name ?? '')
+        .map(([, name = '']) => name)
         .toArray()
     );
     expect(sorted(new Set(named))).toEqual(sorted(Object.keys(DOCS_VALUES)));

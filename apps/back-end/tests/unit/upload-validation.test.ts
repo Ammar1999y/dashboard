@@ -2235,11 +2235,7 @@ function riffChunk(fourcc: string, payload: Buffer): Buffer {
   const header = Buffer.alloc(8);
   header.write(fourcc, 0, 'ascii');
   header.writeUInt32LE(payload.length, 4);
-  return Buffer.concat([
-    header,
-    payload,
-    payload.length % 2 ? Buffer.alloc(1) : Buffer.alloc(0),
-  ]);
+  return Buffer.concat([header, payload, Buffer.alloc(payload.length % 2)]);
 }
 
 /** `RIFF | uint32le size | <body starting with the "WEBP" FourCC>`. */
@@ -3917,7 +3913,7 @@ describe('ids and the references that name them, through the whole upload pipeli
       [...element.attributes].flatMap(({ name, value }) => {
         if (name === 'id') return [];
         if (name === 'href' || name.endsWith(':href'))
-          return [value.replace(/^#/, '')];
+          return value.replace(/^#/, '');
         return /^url\((["']?)#([^"')]+)\1\)$/.exec(value)?.slice(2, 3) ?? [];
       })
     );

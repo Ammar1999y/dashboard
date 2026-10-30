@@ -39,7 +39,7 @@ const metaClass = 'block truncate text-xs text-muted-foreground';
 
 /** Where a result lives: its folder's path, or for an unfiled file, when it goes. */
 const Where = memo(({ folder }: { folder: string | null }) => {
-  const { text, error } = useFolderPathText(folder);
+  const { text = '…', error } = useFolderPathText(folder);
   if (error)
     return (
       <span
@@ -51,7 +51,7 @@ const Where = memo(({ folder }: { folder: string | null }) => {
     );
   return (
     <span className={metaClass} dir='auto'>
-      {text ?? '…'}
+      {text}
     </span>
   );
 });

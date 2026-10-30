@@ -290,7 +290,7 @@ export const COMMANDS: readonly Command[] = [
     run: (ctx, s) =>
       void downloadFiles(
         ctx,
-        s.items.flatMap((item) => (item.kind === 'file' ? [item.file.id] : []))
+        s.items.flatMap((item) => (item.kind === 'file' ? item.file.id : []))
       ),
   },
   {

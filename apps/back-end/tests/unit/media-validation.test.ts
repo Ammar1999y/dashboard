@@ -40,7 +40,14 @@ describe('folder names', () => {
   });
 
   test('refuse separators, control and format characters, and the two dot names', () => {
-    for (const bad of ['a/b', String.raw`a\b`, 'zero​width', 'bell', '.', '..'])
+    for (const bad of [
+      'a/b',
+      String.raw`a\b`,
+      'zero\u{200B}width',
+      'bell',
+      '.',
+      '..',
+    ])
       expect(
         firstMessage(folderNameSchema.safeParse(bad)),
         JSON.stringify(bad)

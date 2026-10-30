@@ -1,4 +1,3 @@
-/* eslint-disable unicorn/no-top-level-side-effects -- the load-time crash IS this module's contract */
 import path from 'node:path';
 
 import {

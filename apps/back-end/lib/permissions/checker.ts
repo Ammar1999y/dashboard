@@ -320,7 +320,7 @@ async function liveGrants(
   const permissionRows = rows.flatMap((r) =>
     r.pageName == null
       ? []
-      : [{ pageName: r.pageName, permissions: r.pagePermissions }]
+      : { pageName: r.pageName, permissions: r.pagePermissions }
   );
 
   const live = {

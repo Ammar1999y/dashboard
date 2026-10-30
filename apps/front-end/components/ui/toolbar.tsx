@@ -264,17 +264,17 @@ function ToolbarGroup({
   );
 }
 
-type TooltipProps<T extends React.ElementType> = {
-  tooltip?: React.ReactNode;
-  tooltipContentProps?: Omit<
-    React.ComponentProps<typeof TooltipContent>,
-    'children'
-  >;
-  tooltipProps?: Omit<React.ComponentProps<typeof Tooltip>, 'children'>;
-  tooltipTriggerProps?: React.ComponentProps<typeof TooltipTrigger>;
-} & React.ComponentProps<T>;
-
 function withTooltip<T extends React.ElementType>(Component: T) {
+  type TooltipProps<T extends React.ElementType> = {
+    tooltip?: React.ReactNode;
+    tooltipContentProps?: Omit<
+      React.ComponentProps<typeof TooltipContent>,
+      'children'
+    >;
+    tooltipProps?: Omit<React.ComponentProps<typeof Tooltip>, 'children'>;
+    tooltipTriggerProps?: React.ComponentProps<typeof TooltipTrigger>;
+  } & React.ComponentProps<T>;
+
   return function ExtendComponent({
     tooltip,
     tooltipContentProps,

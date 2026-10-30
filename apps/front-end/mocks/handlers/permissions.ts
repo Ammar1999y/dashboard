@@ -128,8 +128,8 @@ export const permissionsHandlers = [
 
   mock(getPermission, ({ params }) => {
     const { userId, scope } = requirePermission('permissions', 'view');
-    const role = ownedStandardRole(requireId(params.id), scope, userId);
-    const { id, roleName, description, isActive, permissions } = role;
+    const { id, roleName, description, isActive, permissions } =
+      ownedStandardRole(requireId(params.id), scope, userId);
     return {
       message: MSG_FETCHED,
       data: { id, roleName, description, isActive, permissions },
@@ -200,7 +200,7 @@ export const permissionsHandlers = [
         description: input.description,
       }),
       isActive: input.isActive,
-      ...(!!input.permissions?.length && { permissions: input.permissions }),
+      ...(input.permissions?.length && { permissions: input.permissions }),
       updatedAt,
     });
     if (updated) syncUsers(updated);

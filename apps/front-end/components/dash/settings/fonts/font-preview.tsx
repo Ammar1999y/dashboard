@@ -13,8 +13,6 @@ interface FontPreviewProps {
   dir?: 'rtl' | 'ltr' | 'auto';
 }
 
-type LoadState = 'idle' | 'loading' | 'loaded' | 'failed';
-
 const DEFAULT_PREVIEW_TEXT = 'اكتب هنا لمعاينة الخط...';
 const BASE_FONT_SIZE_PX = 16;
 
@@ -61,6 +59,7 @@ export const FontPreview = memo(
     fontSizeMultiplier,
     dir = 'auto',
   }: FontPreviewProps) => {
+    type LoadState = 'idle' | 'loading' | 'loaded' | 'failed';
     const [previewText, setPreviewText] = useState(DEFAULT_PREVIEW_TEXT);
     const [loadState, setLoadState] = useState<LoadState>('idle');
 

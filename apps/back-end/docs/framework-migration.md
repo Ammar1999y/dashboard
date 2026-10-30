@@ -6,8 +6,9 @@ would touch. The decisions behind it, their costs and the record of each phase
 are in `docs/http-layer-plan.md` at the repository root; the `Dn`, `Fn`, `Sn`
 and `Xn` ids below are that document's.
 
-Framework: `elysia@2.0.0-rc.0` on Bun, pinned exactly together with
-`@elysia/cors@2.0.0-rc.0` and `@elysia/openapi@2.0.0-rc.0` (D2). Elysia 2 is
+Framework: `elysia@2.0.0-rc.1` on Bun, pinned exactly together with
+`@elysia/cors@2.0.0-rc.0` and `@elysia/openapi@2.0.0-rc.0`, which have no
+rc.1 (D2). Elysia 2 is
 documented at next.elysiajs.com (`docs/elysia-llms.md`); elysiajs.com is 1.4.
 Where the docs and the installed package (its types and source) disagree, the
 package is the evidence.

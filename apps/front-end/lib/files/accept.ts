@@ -99,7 +99,7 @@ export function preparationsOf(accept: AcceptMap): Preparation[] {
     ...new Set(
       Object.keys(accept).flatMap((mimeType) => {
         const preparation = INPUT_TYPES.get(mimeType)?.preparation;
-        return preparation ? [preparation] : [];
+        return preparation ?? [];
       })
     ),
   ];

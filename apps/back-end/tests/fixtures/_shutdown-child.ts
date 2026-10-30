@@ -17,7 +17,7 @@ const server = app.server;
 if (!server) throw new Error('child listener did not start');
 const { port } = server;
 if (typeof port !== 'number')
-  throw new Error('child listener bound no TCP port');
+  throw new TypeError('child listener bound no TCP port');
 
 /**
  * Longer than `SHUTDOWN_POLICY.gracefulStopMs`, so the stop below has to decide
@@ -53,9 +53,8 @@ async function slowRequest(): Promise<string> {
 
 let inflight: Promise<string> | null = null;
 if (mode === 'slow-request') {
-  /* eslint-disable-next-line unicorn/prefer-top-level-await -- awaiting it here
-     is the one thing this case must not do: the request has to be IN FLIGHT
-     when the stop runs. It is awaited after the stop returns. */
+  /* Not awaited here, the one thing this case must not do: the request has to
+     be IN FLIGHT when the stop runs. It is awaited after the stop returns. */
   inflight = slowRequest();
   // Long enough for the request to be accepted and counted in flight.
   await Bun.sleep(300);

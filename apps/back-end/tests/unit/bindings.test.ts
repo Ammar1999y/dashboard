@@ -176,7 +176,7 @@ describe.each(cases)('%s', (key, binding) => {
       !(published instanceof z.ZodUnion) ||
       !(entry.body instanceof z.ZodUnion)
     )
-      throw new Error(`${key} narrows a body that is not a union`);
+      throw new TypeError(`${key} narrows a body that is not a union`);
     const validated: readonly unknown[] = entry.body.options;
     expect(published.options.length).toBeGreaterThan(0);
     for (const option of published.options) expect(validated).toContain(option);

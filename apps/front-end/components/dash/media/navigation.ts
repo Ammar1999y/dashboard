@@ -465,7 +465,7 @@ export function setView(view: View) {
 export function setSort(id: SortId, desc?: boolean) {
   const { sort } = getBrowser();
   useBrowser.setState({
-    sort: { id, desc: desc ?? (sort.id === id ? !sort.desc : false) },
+    sort: { id, desc: desc ?? (sort.id === id && !sort.desc) },
   });
 }
 

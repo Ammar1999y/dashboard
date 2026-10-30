@@ -217,10 +217,8 @@ const withoutComments = (css: string) =>
 
 /** CSS escapes: a hex escape (Tailwind writes `,` as `\2c `) or a plain `\x`. */
 const unescapeCss = (text: string) =>
-  text.replaceAll(
-    /\\([\da-f]{1,6}) ?|\\(.)/gi,
-    (_, hex?: string, char?: string) =>
-      hex ? String.fromCodePoint(Number.parseInt(hex, 16)) : (char ?? '')
+  text.replaceAll(/\\([\da-f]{1,6}) ?|\\(.)/gi, (_, hex?: string, char = '') =>
+    hex ? String.fromCodePoint(Number.parseInt(hex, 16)) : char
   );
 
 // Run on our own built stylesheet, not user input: backtracking is no risk.
@@ -231,8 +229,8 @@ async function stylesheetClasses(urls: string[]) {
   const names = new Set<string>();
   for (const url of urls) {
     const css = withoutComments(await fetch(url).then((r) => r.text()));
-    for (const [, raw] of css.matchAll(CLASS_SELECTOR)) {
-      names.add(unescapeCss(raw ?? ''));
+    for (const [, raw = ''] of css.matchAll(CLASS_SELECTOR)) {
+      names.add(unescapeCss(raw));
     }
   }
   return names;
@@ -253,7 +251,7 @@ function styleDiff(
 
 const topTypes = (nodes: readonly Descendant[]) =>
   nodes.flatMap((node) =>
-    'type' in node && typeof node.type === 'string' ? [node.type] : []
+    'type' in node && typeof node.type === 'string' ? node.type : []
   );
 
 const currentTheme = (): ThemeMode =>

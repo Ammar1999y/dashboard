@@ -84,7 +84,7 @@ const headOf = (columnId: string) =>
     ?.closest<HTMLElement>('[data-slot="table-head"]');
 
 const click = (el: Element | null | undefined, what: string) => {
-  if (!(el instanceof HTMLElement)) throw new Error(`${what} not found`);
+  if (!(el instanceof HTMLElement)) throw new TypeError(`${what} not found`);
   el.click();
 };
 
@@ -229,7 +229,9 @@ function sortByName(note: NoteFn) {
   );
   const { sort, actions } = useDataTableStore.getState();
   const current = sort.find((s) => s.id === 'name');
-  actions.setSorting([{ id: 'name', desc: current ? !current.desc : false }]);
+  actions.setSorting([
+    { id: 'name', desc: current !== undefined && !current.desc },
+  ]);
 }
 
 async function dragResize(columnId: string, deltaPx: number) {
@@ -436,7 +438,7 @@ async function remount(note: NoteFn) {
   await stopTrace();
 }
 
-const DEFAULT_ORDER = labColumns.flatMap((c) => (c.id ? [c.id] : []));
+const DEFAULT_ORDER = labColumns.flatMap((c) => c.id || []);
 
 const isDefaultLayout = () => {
   const state = columnStore().getState();

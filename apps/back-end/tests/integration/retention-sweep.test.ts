@@ -208,7 +208,7 @@ function deletedObjectKeys(ops: readonly StoreOp[]): string[] {
         op.kind === 'DeleteObjects'
           ? (op.keys ?? [])
           : op.kind === 'DeleteObject'
-            ? [op.key ?? '(no key)']
+            ? (op.key ?? '(no key)')
             : []
       )
     ),
@@ -219,7 +219,7 @@ function deletedObjectKeys(ops: readonly StoreOp[]): string[] {
 function deletedBuckets(ops: readonly StoreOp[]): string[] {
   return ops
     .flatMap((op) =>
-      op.kind === 'DeleteObjects' && op.bucket !== undefined ? [op.bucket] : []
+      op.kind === 'DeleteObjects' && op.bucket !== undefined ? op.bucket : []
     )
     .toSorted(compareCodeUnits);
 }
