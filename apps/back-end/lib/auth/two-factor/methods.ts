@@ -44,6 +44,8 @@ export interface EnrolmentState {
   capability: {
     totpVerified: boolean;
     backupCodesReady: boolean;
+    /** Ready, and the user confirmed saving this set; a replacing set is offered before that. */
+    backupCodesConfirmed: boolean;
     hasPasskey: boolean;
     emailVerified: boolean;
     phoneVerified: boolean;
@@ -133,6 +135,7 @@ export async function readEnrolment(
       secret: twoFactorCredentials.secret,
       verified: twoFactorCredentials.verified,
       acknowledgedSetId: twoFactorCredentials.backupCodesAcknowledgedSetId,
+      acknowledgedAt: twoFactorCredentials.backupCodesAcknowledgedAt,
       setId: twoFactorCredentials.backupCodesSetId,
       remaining: twoFactorCredentials.backupCodesRemaining,
       hasPasskey:
@@ -162,6 +165,12 @@ export async function readEnrolment(
         isDefault: row.isDefault === true,
       });
   const totpSecret = (first?.verified === true && first.secret) || null;
+  // ⚠️ Dropping any condition advertises codes the user does not have. The
+  // null check matters: a row with no set has both ids NULL.
+  const backupCodesReady =
+    first?.acknowledgedSetId != null &&
+    first.acknowledgedSetId === first.setId &&
+    (first.remaining ?? 0) > 0;
 
   return {
     state: {
@@ -169,12 +178,8 @@ export async function readEnrolment(
       intent,
       capability: {
         totpVerified: totpSecret !== null,
-        // ⚠️ Dropping any condition advertises codes the user does not have. The
-        // null check matters: a row with no set has both ids NULL.
-        backupCodesReady:
-          first?.acknowledgedSetId != null &&
-          first.acknowledgedSetId === first.setId &&
-          (first.remaining ?? 0) > 0,
+        backupCodesReady,
+        backupCodesConfirmed: backupCodesReady && first?.acknowledgedAt != null,
         hasPasskey: first?.hasPasskey === true,
         emailVerified: first?.emailVerified === true,
         phoneVerified: first?.phoneNumberVerified === true,
@@ -295,12 +300,13 @@ export async function contactChangeStrandsTwoFactor(
 ): Promise<boolean> {
   if (contactKinds.length === 0) return false;
   const state = await readEnrolmentState(userId, executor);
-  if (!state.enabled || offeredMethods(state).length === 0) return false;
+  const confirmed = leftToRelyOn(state);
+  if (!state.enabled || offeredMethods(confirmed).length === 0) return false;
 
   const stranded: EnrolmentState = {
-    ...state,
+    ...confirmed,
     capability: {
-      ...state.capability,
+      ...confirmed.capability,
       emailVerified:
         !contactKinds.includes('email') && state.capability.emailVerified,
       phoneVerified:
@@ -310,6 +316,22 @@ export async function contactChangeStrandsTwoFactor(
   return offeredMethods(stranded).length === 0;
 }
 
+/**
+ * What the user relies on, for a removal or contact change: backup codes only
+ * once confirmed saved, though a replacing set is offered at sign-in before
+ * that. "Already at zero" is measured here too, so a change that takes nothing
+ * relied on is never refused.
+ */
+function leftToRelyOn(state: EnrolmentState): EnrolmentState {
+  return {
+    ...state,
+    capability: {
+      ...state.capability,
+      backupCodesReady: state.capability.backupCodesConfirmed,
+    },
+  };
+}
+
 // Against the offered set, not intent rows: an unusable row must not stand in
 // for the last usable method. False for a user already at zero.
 export function removalStrandsTwoFactor(
@@ -317,9 +339,10 @@ export function removalStrandsTwoFactor(
   method: TwoFactorMethod,
   contactKind: ContactKind | null
 ): boolean {
-  if (offeredMethods(state).length === 0) return false;
+  const confirmed = leftToRelyOn(state);
+  if (offeredMethods(confirmed).length === 0) return false;
   const remaining: EnrolmentState = {
-    ...state,
+    ...confirmed,
     intent: state.intent.filter(
       (entry) => !matchesEnrolment(entry, method, contactKind)
     ),

@@ -103,13 +103,14 @@ function normalizeActionsForPage(
 ): z.output<typeof rawPagePermissionSchema> {
   const { name, permissions } = value;
   const available = getAvailablePermissions(name);
-  // Safe to write by key: `permissionSchema` is `.strict()` over
+  // The cast below is safe: `permissionSchema` is `.strict()` over
   // `PERMISSION_ACTION_NAMES`, so every surviving key is one of ours.
   const kept: Partial<Record<PermissionAction, boolean>> = {};
 
-  for (const [action, granted] of Object.entries(permissions)) {
-    if (available.includes(action as PermissionAction)) {
-      kept[action as PermissionAction] = granted;
+  for (const [key, granted] of Object.entries(permissions)) {
+    const action = key as PermissionAction;
+    if (available.includes(action)) {
+      kept[action] = granted;
       continue;
     }
     if (granted !== true) continue;

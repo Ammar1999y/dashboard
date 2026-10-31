@@ -195,27 +195,26 @@ describe('the SQL folds the column and the term as typed', () => {
 
   test('quick search, over every searchable column', () => {
     const { where, search } = parseDataTableParams(users, {
-      url: `https://example.test/api/dash/users?search=${encodeURIComponent('أحمد')}`,
+      query: { search: 'أحمد' },
       filterableColumns: USERS_FILTER_COLUMNS,
       searchableColumns: ['name', 'email'],
     });
     if (!where) throw new Error('no condition');
     expect(search).toBe('أحمد');
     expect(dialect.sqlToQuery(where)).toMatchObject({
-      sql: '(search_fold("users"."name") ilike search_trigram_pattern($1, $2) or search_fold("users"."email") ilike search_trigram_pattern($3, $4))',
+      sql: '("users"."name_folded" ilike search_trigram_pattern($1, $2) or "users"."email_folded" ilike search_trigram_pattern($3, $4))',
       params: ['أحمد', 'contains', 'أحمد', 'contains'],
     });
   });
 
-  const indexed =
-    'search_fold("users"."name") ilike search_trigram_pattern($1, $2)';
+  const indexed = '"users"."name_folded" ilike search_trigram_pattern($1, $2)';
   test.each([
     ['iLike', indexed, ['أحمد', 'contains']],
     ['startsWith', indexed, ['أحمد', 'prefix']],
     ['endsWith', indexed, ['أحمد', 'suffix']],
     [
       'notILike',
-      `(search_fold("users"."name") not ilike search_pattern($1, 'contains') or "users"."name" is null)`,
+      `("users"."name_folded" not ilike search_pattern($1, 'contains') or "users"."name" is null)`,
       ['أحمد'],
     ],
   ] as const)('%s', (operator, text, params) => {

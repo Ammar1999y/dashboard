@@ -9,7 +9,7 @@ import { orphanedObjects } from '@/db/schema';
 import { purgeUrls } from '@/lib/cloudflare/purge';
 import { deleteFromR2, getPublicUrl, hasPublicUrl } from '@/lib/r2/client';
 
-import { errorTypeOf, logLine, logSanitized } from '@/utils/log';
+import { errorClassOf, logLine, logSanitized } from '@/utils/log';
 
 /**
  * Each demand costs an R2 delete; the pass shares its purges, one call per
@@ -29,29 +29,33 @@ const TIMEOUT_STREAK_LIMIT = 3;
 /**
  * What a maintenance pass may still spend on R2. A pass checks `spent()`
  * before each call and leaves what it did not reach marked for the next run;
- * `signal` ends a call still in flight when the time runs out.
+ * `signal` ends a call still in flight when the time runs out or the process
+ * is `stopping`.
  */
 export interface PassBudget {
   readonly signal: AbortSignal;
-  spent(): 'time' | 'store timing out' | null;
+  spent(): 'stopping' | 'time' | 'store timing out' | null;
   /** `undefined` for a call that succeeded. */
   record(error?: unknown): void;
 }
 
-export function passBudget(): PassBudget {
+export function passBudget(stopping?: AbortSignal): PassBudget {
   const deadline = Date.now() + PASS_BUDGET_MS;
-  const signal = AbortSignal.timeout(PASS_BUDGET_MS);
+  const timer = AbortSignal.timeout(PASS_BUDGET_MS);
+  const signal = stopping ? AbortSignal.any([stopping, timer]) : timer;
   let timeouts = 0;
   return {
     signal,
     spent: () =>
-      timeouts >= TIMEOUT_STREAK_LIMIT
-        ? 'store timing out'
-        : signal.aborted || Date.now() >= deadline
-          ? 'time'
-          : null,
+      stopping?.aborted
+        ? 'stopping'
+        : timeouts >= TIMEOUT_STREAK_LIMIT
+          ? 'store timing out'
+          : timer.aborted || Date.now() >= deadline
+            ? 'time'
+            : null,
     record: (error) => {
-      timeouts = errorTypeOf(error) === 'TimeoutError' ? timeouts + 1 : 0;
+      timeouts = errorClassOf(error) === 'TimeoutError' ? timeouts + 1 : 0;
     },
   };
 }
@@ -62,7 +66,8 @@ export function logPassStopped(
   reason: NonNullable<ReturnType<PassBudget['spent']>>,
   left: number
 ): void {
-  logLine('error', {
+  // A shutdown asked for the stop; the others are the store or the clock.
+  logLine(reason === 'stopping' ? 'log' : 'error', {
     msg: 'media.maintenance pass stopped early',
     pass,
     reason,
@@ -92,7 +97,7 @@ export async function deleteStoredObject(
     budget?.record(error);
     logSanitized('error', {
       msg: 'media.transition cleanup failed',
-      errorClass: errorTypeOf(error),
+      errorClass: errorClassOf(error),
     });
     return false;
   }
@@ -188,7 +193,7 @@ export async function removeOrphanedObject(
  * ⚠️ Least recently touched first, and a failure is restamped: oldest-first
  * starves everything behind one batch of persistent failures.
  */
-export async function sweepOrphanedObjects(): Promise<{
+export async function sweepOrphanedObjects(stopping?: AbortSignal): Promise<{
   removed: number;
   failed: number;
   hasMore: boolean;
@@ -204,7 +209,7 @@ export async function sweepOrphanedObjects(): Promise<{
     .orderBy(orphanedObjects.updatedAt, orphanedObjects.id)
     .limit(ORPHAN_DRAIN_BATCH);
 
-  const budget = passBudget();
+  const budget = passBudget(stopping);
   const reached: typeof due = [];
   const deleted: typeof due = [];
   for (const row of due) {

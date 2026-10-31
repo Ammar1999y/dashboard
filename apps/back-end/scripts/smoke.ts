@@ -78,8 +78,14 @@ interface Check {
   detail: string;
 }
 
-/** The DEPLOYED command, flag for flag; keep it in step with `package.json`'s `start`. */
-const SERVER_COMMAND = ['bun', '--bun', 'server.ts'] as const;
+/**
+ * The DEPLOYED command, flag for flag; keep it in step with `package.json`'s
+ * `start`. `SMOKE_SERVER_BINARY` names an executable from
+ * `scripts/build-binary.ts` to boot instead.
+ */
+const SERVER_COMMAND = process.env.SMOKE_SERVER_BINARY
+  ? [process.env.SMOKE_SERVER_BINARY]
+  : ['bun', '--bun', 'server.ts'];
 
 const server = Bun.spawn([...SERVER_COMMAND], {
   env: {

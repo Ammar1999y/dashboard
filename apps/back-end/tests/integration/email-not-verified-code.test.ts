@@ -32,10 +32,7 @@ import {
   twoFactorMsg,
 } from '@app/shared/messages/auth';
 
-import {
-  localisedAuthBody,
-  localiseReturnedAuthError,
-} from '@/lib/auth/errors';
+import { localiseReturnedAuthError } from '@/lib/auth/errors';
 
 const RUNNER = 'tests/fixtures/_email-not-verified-child.ts';
 
@@ -79,10 +76,6 @@ test('the login gate answers its own message under its own code, and does not lo
 
 test("Better Auth's own EMAIL_NOT_VERIFIED is the same message, not a second wording", () => {
   expect(betterAuthMsg.EMAIL_NOT_VERIFIED).toBe(MSG_EMAIL_NOT_VERIFIED);
-  expect(localisedAuthBody(EMAIL_NOT_VERIFIED_CODE)).toEqual({
-    message: MSG_EMAIL_NOT_VERIFIED,
-    code: EMAIL_NOT_VERIFIED_CODE,
-  });
 });
 
 test.each([

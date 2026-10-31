@@ -28,8 +28,8 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import { otpSubjectFor, otpTextFor } from '@app/shared/messages/otp';
 import {
   ENABLED_TWO_FACTOR_METHODS,
+  ENABLED_TWO_FACTOR_OTP_CHANNELS,
   TWO_FACTOR_ENABLED,
-  TWO_FACTOR_OTP_CHANNELS,
 } from '@app/shared/validation/two-factor';
 
 import { BETTER_AUTH_ROUTE_PREFIX } from '@/lib/auth/allowed-paths';
@@ -371,10 +371,10 @@ describe(`delivery in the ${ROW} configuration`, () => {
     flooredBudget(2)
   );
 
-  test.if(TWO_FACTOR_OTP_CHANNELS.length > 0)(
+  test.if(ENABLED_TWO_FACTOR_OTP_CHANNELS.length > 0)(
     'a second-factor code reaches every enabled 2FA channel, labelled as one',
     async () => {
-      for (const channel of TWO_FACTOR_OTP_CHANNELS) {
+      for (const channel of ENABLED_TWO_FACTOR_OTP_CHANNELS) {
         clearOutbox();
         const user = await seedUser({
           phoneNumber: uniquePhone(),

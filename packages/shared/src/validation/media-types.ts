@@ -77,7 +77,13 @@ export const KNOWN_MIME_TYPES: readonly string[] = MEDIA_TYPES.map(
  * - `encrypted`: password-protected, so its contents cannot be checked.
  */
 export type MediaRefusalReason =
-  'signature' | 'container' | 'mismatch' | 'macros' | 'embedded' | 'encrypted';
+  | 'signature'
+  | 'container'
+  | 'mismatch'
+  | 'macros'
+  | 'embedded'
+  | 'encrypted'
+  | 'complex';
 
 /** Type/subtype only, lowercased: `Application/PDF; charset=x` → `application/pdf`. */
 export function normalizeMimeType(declared: string): string {

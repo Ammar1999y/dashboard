@@ -18,6 +18,7 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { passkeys, twoFactorCredentials } from '@/db/schema';
 import { passkey } from '@better-auth/passkey';
+import { createOTP } from '@better-auth/utils/otp';
 import { symmetricDecrypt } from 'better-auth/crypto';
 import { twoFactor } from 'better-auth/plugins/two-factor';
 
@@ -28,7 +29,6 @@ import { MSG_NOT_FOUND } from '@app/shared/messages/common';
 import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 import { userMsg } from '@app/shared/messages/users';
 
-import { auth } from '@/lib/auth';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { generateUuidV7 } from '@/lib/id';
 
@@ -126,7 +126,7 @@ beforeAll(async () => {
     key: process.env.BETTER_AUTH_SECRET ?? '',
     data: credential.secret,
   });
-  const { code } = await auth.api.generateTOTP({ body: { secret } });
+  const code = await createOTP(secret).totp();
   const confirmed = await call(
     'POST',
     '/two-factor/totp/confirm',
@@ -378,6 +378,7 @@ const UNREACHABLE: Readonly<Record<string, string>> = {
   PREVIOUSLY_REGISTERED: 'raised by the browser client, not by an endpoint',
   REGISTRATION_CANCELLED: 'raised by the browser client, not by an endpoint',
   AUTH_CANCELLED: 'raised by the browser client, not by an endpoint',
+  UNKNOWN_ERROR: 'raised by the browser client, not by an endpoint',
   RESOLVE_USER_REQUIRED:
     'registration requires a session; `resolveUser` is unset',
   RESOLVED_USER_INVALID:

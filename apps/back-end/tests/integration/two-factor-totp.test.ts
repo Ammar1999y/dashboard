@@ -31,6 +31,7 @@ import {
   twoFactorMethods,
   users,
 } from '@/db/schema';
+import { createOTP } from '@better-auth/utils/otp';
 import {
   generateRandomString,
   symmetricDecrypt,
@@ -39,7 +40,6 @@ import {
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 
-import { auth } from '@/lib/auth';
 import { decodeBackupCodes } from '@/lib/auth/two-factor/backup-codes';
 import {
   consumeTotpCode,
@@ -116,10 +116,9 @@ function post(
   );
 }
 
-/** A live code for `secret`, through the plugin's own generator. */
+/** A live code for `secret`, from the generator the plugin's verifier uses. */
 async function totpCode(secret: string): Promise<string> {
-  const { code } = await auth.api.generateTOTP({ body: { secret } });
-  return code;
+  return createOTP(secret).totp();
 }
 
 const TOTP_PERIOD_MS = 30_000;
@@ -234,7 +233,7 @@ beforeAll(async () => {
     );
 
   // Read the stored secret and decrypt it, rather than pulling it out of the
-  // `totpURI`: the URI carries `base32.encode(secret)` while `generateTOTP` and
+  // `totpURI`: the URI carries `base32.encode(secret)` while `createOTP` and
   // the plugin's own verifier both take the RAW value, so the query parameter
   // produces codes that never match.
   const [credential] = await db
@@ -958,13 +957,14 @@ describe('signing in with no second factor', () => {
     expect(remembered.cookie).not.toContain('dont_remember');
   });
 
-  test('costs one enrolment read and only the login guard transaction', async () => {
+  test('costs one enrolment read and only the login guard transactions', async () => {
     const user = await seedUser();
     const recorder = recordStatements();
     const signedIn = await signInRaw(user).finally(recorder.stop);
     expect(signedIn.status).toBe(HTTP_STATUS.OK);
     expect(recorder.matching(ENROLMENT_TABLES)).toHaveLength(1);
-    expect(recorder.transactions()).toBe(1);
+    // The charge before Argon2 and its settlement after.
+    expect(recorder.transactions()).toBe(2);
   });
 });
 
@@ -1029,9 +1029,9 @@ describe('what a TOTP sign-in costs', () => {
   });
 
   test('audit rows written outside a mutation open no transaction of their own', async () => {
-    // Step one keeps the login guard's; step two keeps the challenge's.
+    // Step one keeps the login guard's two; step two keeps the challenge's.
     const { challenge, verify } = await recordTotpSignIn();
-    expect(challenge.transactions()).toBe(1);
+    expect(challenge.transactions()).toBe(2);
     expect(verify.transactions()).toBe(1);
   });
 

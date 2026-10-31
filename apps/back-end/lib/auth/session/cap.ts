@@ -5,9 +5,10 @@ import { and, count, desc, eq, gt, ne, notInArray, sql } from 'drizzle-orm';
 import { db, withTransaction } from '@/db';
 import { sessions } from '@/db/schema';
 
+import { lockUser } from '@/lib/users/lock-order';
+
 import { logLine } from '@/utils/log';
 
-import { lockUser } from '../user-eligibility';
 import { revokeSessionsWhere } from './rotation';
 
 /**

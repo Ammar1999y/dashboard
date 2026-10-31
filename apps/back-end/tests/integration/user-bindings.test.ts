@@ -375,16 +375,16 @@ describe('GET /api/dash/users/:id/sessions, its query', () => {
 });
 
 describe('POST /api/dash/users/:id/two-factor/reset', () => {
-  test('a malformed id reads like an id that matched nothing', async () => {
+  test('a malformed id is the id refusal its sibling routes give', async () => {
     const response = await app.handle(
       authedRequest(admin(), '/api/dash/users/not-an-id/two-factor/reset', {
         method: 'POST',
       })
     );
-    await expectError(response, HTTP_STATUS.NOT_FOUND, MSG_NOT_FOUND);
+    await expectError(response, HTTP_STATUS.UNPROCESSABLE, idRequired);
   });
 
-  test('a well-formed id that names nobody is the same 404', async () => {
+  test('a well-formed id that names nobody is a 404', async () => {
     const response = await app.handle(
       authedRequest(
         admin(),

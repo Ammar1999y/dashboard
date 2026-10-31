@@ -2,14 +2,6 @@
  * The 24-hour OTP verify-FAILURE budget: ONE budget per identity, enforced
  * transactionally in `verification_sessions.verify_attempt_daily`.
  *
- * Ported from `scripts/probe/dev-live/database/otp-verify-budget.dev-probe.ts`,
- * which is the specification for what is asserted here. Three things the port
- * removed rather than translated: the probe's own user/role seeding (`seedUser`),
- * its `PROBE_STAMP`-derived identifiers (the database is per-worker and
- * truncated, so a unique-per-run address buys nothing) and its `afterAll`
- * row-by-row cleanup (`resetTables` in `beforeAll` replaces it, and the old form
- * could not clean up after a failure between its own inserts).
- *
  * **It is an ANCHORED FIXED window, never a rolling one.** Each proof row
  * anchors its own 24-hour period at `verify_attempt_window_start`, and the bound
  * is the SUM of those independently-anchored counters. The row keeps no

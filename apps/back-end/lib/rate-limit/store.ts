@@ -14,7 +14,7 @@ import { RATE_LIMIT_DB_PATH } from '@/lib/env.server';
 import { BUSY_TIMEOUT_MS, withoutBusyWait } from '@/lib/sqlite/database';
 import { isSqliteBusy } from '@/lib/sqlite/driver';
 import { lazyStore } from '@/lib/sqlite/store';
-import { sweepInBatches } from '@/lib/sqlite/sweep';
+import { prepareExpirySweep, sweepExpiredRows } from '@/lib/sqlite/sweep';
 
 /** Readiness compares the file's `user_version` against this. */
 export const RATE_LIMIT_SCHEMA_VERSION = 3;
@@ -100,20 +100,6 @@ const SQL_CONSUME = `
      OR rate_limit.count + excluded.count <= ?
   RETURNING count, window_start`;
 
-/**
- * Bounded, so a large backlog never holds the sole writer lock for long. A
- * scan, deliberately: `SQL_CONSUME` sets `expires_at` on every admission, so
- * an index on it doubled each admission's WAL writes and with them the
- * auto-checkpoint stalls, to speed up a job that runs every 15 minutes.
- */
-const SQL_SWEEP_RATE_LIMIT = `DELETE FROM rate_limit WHERE expires_at <= ? LIMIT ?`;
-/**
- * `EXISTS` stops the scan at the first expired row. One row is ALWAYS
- * returned, so read `present` rather than testing the row.
- */
-const SQL_ANY_EXPIRED = `
-  SELECT EXISTS(SELECT 1 FROM rate_limit WHERE expires_at <= ?) AS present`;
-
 interface ConsumeRow {
   count: number;
   window_start: number;
@@ -127,8 +113,10 @@ const limiterStore = lazyStore(
   },
   (db) => ({
     consume: db.prepare(SQL_CONSUME),
-    sweepRateLimit: db.prepare(SQL_SWEEP_RATE_LIMIT),
-    anyExpired: db.prepare(SQL_ANY_EXPIRED),
+    // A walk by key, not an `expires_at` index: `SQL_CONSUME` sets
+    // `expires_at` on every admission, so the index doubled each admission's
+    // WAL writes to speed up a job that runs every 15 minutes.
+    sweep: prepareExpirySweep(db, 'rate_limit'),
   })
 );
 
@@ -187,11 +175,9 @@ export async function admitWindowWithoutBlocking(
  * sweep never makes an expired row readable. Must run as ONE scheduled job
  * (`lib/maintenance/schedule.ts`), not per process.
  */
-export function rateLimitSweepExpired(now = Date.now()): Promise<SweepResult> {
-  return sweepInBatches(getRateLimitStore().sweepRateLimit, now);
-}
-
-export function rateLimitHasExpiredRows(now = Date.now()): boolean {
-  const row = getRateLimitStore().anyExpired.get<{ present: number }>(now);
-  return Boolean(row?.present);
+export function rateLimitSweepExpired(
+  now = Date.now(),
+  stopping?: AbortSignal
+): Promise<SweepResult> {
+  return sweepExpiredRows(getRateLimitStore().sweep, now, stopping);
 }

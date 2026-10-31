@@ -4,9 +4,9 @@ import { IP_ADDRESS_MAX } from '@/lib/audit/constants';
 
 /**
  * Trusted edge headers. Shared with Better Auth
- * (`advanced.ipAddress.ipAddressHeaders`) so our limiters, Better Auth's limiter
- * and session IP metadata all read the same source instead of Better Auth
- * defaulting to `x-forwarded-for`. A header nothing in front of the origin sets
+ * (`advanced.ipAddress.ipAddressHeaders`) so our limiters and the session IP
+ * metadata it records read the same source instead of Better Auth defaulting to
+ * `x-forwarded-for`. A header nothing in front of the origin sets
  * is attack surface: a forged value is accepted on syntax alone.
  *
  * TODO(proxy-trust): nothing checks that the socket peer is the expected

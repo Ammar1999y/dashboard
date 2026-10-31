@@ -1,4 +1,7 @@
-import { runDatabaseSweep } from '@/lib/maintenance/database';
+import {
+  runDatabaseSweep,
+  runVerificationSweep,
+} from '@/lib/maintenance/database';
 import { runElected } from '@/lib/maintenance/election';
 import { runMaintenanceSweep } from '@/lib/maintenance/sqlite';
 import { reconcileObjectStore } from '@/lib/media/reconcile';
@@ -23,7 +26,11 @@ interface ScheduledJob {
    * runs only where it wins `runElected`.
    */
   readonly shared: boolean;
-  readonly run: () => Promise<SweepOutcome>;
+  /**
+   * `stopping` aborts at shutdown: the run ends at its next batch or R2 call
+   * and leaves the rest to the next firing.
+   */
+  readonly run: (stopping: AbortSignal) => Promise<SweepOutcome>;
 }
 
 const JOBS: readonly ScheduledJob[] = [
@@ -31,13 +38,19 @@ const JOBS: readonly ScheduledJob[] = [
     name: 'sqlite-expiry-sweep',
     expression: '*/15 * * * *',
     shared: false,
-    run: runMaintenanceSweep,
+    run: (stopping) => runMaintenanceSweep(Date.now(), stopping),
+  },
+  {
+    name: 'verification-expiry-sweep',
+    expression: '*/15 * * * *',
+    shared: true,
+    run: (stopping) => runVerificationSweep(Date.now(), stopping),
   },
   {
     name: 'database-retention-sweep',
     expression: '30 3 * * *',
     shared: true,
-    run: runDatabaseSweep,
+    run: (stopping) => runDatabaseSweep(Date.now(), stopping),
   },
   // Read-only and weekly, because it pages the whole bucket. The report is
   // what a human acts on; nothing here deletes.
@@ -45,8 +58,8 @@ const JOBS: readonly ScheduledJob[] = [
     name: 'object-store-reconcile',
     expression: '0 4 * * 0',
     shared: true,
-    run: async () => {
-      const report = await reconcileObjectStore();
+    run: async (stopping) => {
+      const report = await reconcileObjectStore(Date.now(), stopping);
       logLine('log', { msg: 'object store reconciled', ...report });
       return {
         status: 'ok',
@@ -81,7 +94,17 @@ function logSkipped(name: string): void {
   });
 }
 
-function logFailure(name: string, error: unknown): void {
+function logFailure(name: string, error: unknown, stopping: AbortSignal): void {
+  // The shutdown's own abort, surfacing from a connection wait or an R2 call
+  // the run did not catch: the stop it asked for, not a failure.
+  if (stopping.aborted && errorClassOf(error) === 'AbortError') {
+    logLine('log', {
+      msg: 'scheduled sweep cancelled',
+      job: name,
+      reason: 'shutting down',
+    });
+    return;
+  }
   logLine('error', {
     msg: 'scheduled sweep failed',
     job: name,
@@ -90,6 +113,12 @@ function logFailure(name: string, error: unknown): void {
 }
 
 export interface ScheduleHandle {
+  /**
+   * Synchronous: no firing starts once it returns, and a running one is asked
+   * to stop. Shutdown calls it before draining requests, which can take
+   * minutes, so a cron boundary inside that drain starts nothing.
+   */
+  halt: () => void;
   /**
    * Prevents further firings AND waits up to `timeoutMs` for a callback
    * already running; `true` when nothing is still in flight. Stopping the cron
@@ -126,18 +155,18 @@ export function startSchedule(
         const run = (async () => {
           try {
             if (!job.shared) {
-              logRun(job.name, await job.run());
+              logRun(job.name, await job.run(stopping.signal));
               return;
             }
             const election = await runElected(
               job.name,
-              job.run,
+              () => job.run(stopping.signal),
               stopping.signal
             );
             if (election.elected) logRun(job.name, election.result);
             else logSkipped(job.name);
           } catch (error) {
-            logFailure(job.name, error);
+            logFailure(job.name, error, stopping.signal);
           }
         })();
         inFlight.add(run);
@@ -173,12 +202,17 @@ export function startSchedule(
     })),
   });
 
+  // Also aborts a firing still waiting for its lock connection, which must not
+  // start a whole sweep after shutdown began.
+  const halt = () => {
+    for (const handle of handles) handle.stop();
+    stopping.abort();
+  };
+
   return {
+    halt,
     stopAndDrain: async (timeoutMs: number) => {
-      for (const handle of handles) handle.stop();
-      // A firing still waiting for its lock connection must not start a whole
-      // sweep after shutdown began.
-      stopping.abort();
+      halt();
       if (inFlight.size === 0) return true;
 
       logLine('log', {

@@ -21,9 +21,10 @@ import {
   revokePendingProofs,
   unlinkGoogle,
 } from '@/lib/auth/session/rotation';
-import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
+import { clearTwoFactorEnrolment } from '@/lib/auth/two-factor/methods';
 import { notFoundError } from '@/lib/http/response';
 import { destroyCustomRole } from '@/lib/permissions/roles';
+import { lockTargetAndActor } from '@/lib/users/lock-order';
 
 import {
   assertTargetUserReachable,
@@ -85,7 +86,7 @@ export async function softDeleteUser(opts: {
       isSelf: false,
       roleId: lockedUser.role_id,
       createdBy: lockedUser.created_by,
-      role: { roleName: lockedUser.role_name, scope: lockedUser.role_scope },
+      role: { scope: lockedUser.role_scope },
       actorUserId: actor.userId,
       scope: deleteScope,
       actorPermissions,
@@ -118,6 +119,7 @@ export async function softDeleteUser(opts: {
     await unlinkGoogle(tx, userId, actor, auditMeta);
     await tx.delete(accounts).where(eq(accounts.userId, userId));
     // The FK cascade never fires: the row is soft-deleted, never purged.
+    await clearTwoFactorEnrolment(tx, userId, { deletePasskeys: true });
     await tx.delete(userPreferences).where(eq(userPreferences.userId, userId));
     if (lockedUser.role_scope === CUSTOM_ROLE_VALUE)
       await destroyCustomRole(tx, {

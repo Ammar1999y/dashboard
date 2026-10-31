@@ -17,6 +17,7 @@ import {
   verifications,
   verificationSessions,
 } from '@/db/schema';
+import { createOTP } from '@better-auth/utils/otp';
 import { symmetricEncrypt } from 'better-auth/crypto';
 import * as z from 'zod';
 
@@ -184,7 +185,9 @@ test.each(['self-service', 'administrator'])(
       .where(eq(users.id, owner.userId));
     expect(user?.email).toBe(newEmail);
     expect(user?.authRevokedAt).toBeInstanceOf(Date);
-    // The actor is whoever changed the email; the owner is the record's.
+    // The actor is whoever changed the email, named by the email they held
+    // when they did, as the change's own audit row names them; the owner is
+    // the record's.
     const unlinks = await db
       .select()
       .from(auditLogs)
@@ -194,7 +197,7 @@ test.each(['self-service', 'administrator'])(
     expect(unlinks).toHaveLength(1);
     expect(unlinks[0]).toMatchObject({
       userId: actor.userId,
-      userEmail: mode === 'self-service' ? newEmail : actor.email,
+      userEmail: actor.email,
       newData: {
         identityLinked: false,
         reason: 'google_identity_unlinked',
@@ -423,11 +426,8 @@ test.each(['otp', 'passkey', 'totp', 'backup_code'] as const)(
           response: assertion,
         });
     } else {
-      const generated =
-        method === 'totp'
-          ? await auth.api.generateTOTP({ body: { secret } })
-          : null;
-      const code = generated?.code ?? backupCode;
+      const code =
+        method === 'totp' ? await createOTP(secret).totp() : backupCode;
       const path = method === 'totp' ? 'verify-totp' : 'verify-backup-code';
       const invalid = await call(`/api/auth/two-factor/${path}`, cookie, {
         code: code === '000000' ? '111111' : '000000',

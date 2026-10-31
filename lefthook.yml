@@ -157,6 +157,13 @@ pre-push: &full_verify
             fail_text:
               'a new migration would break the release still serving, or tools
               not installed (mise install)'
+          - name: doc-references
+            root: 'apps/back-end/'
+            run: bun run check:doc-refs
+            fail_text:
+              'a document or comment cites a path that no longer exists, or a
+              line past the end of its file (cite where it went, or list a
+              deliberate citation in ABSENT_ON_PURPOSE)'
           # Ten seconds in a parallel group, and the alternative is learning of a
           # contract change from CI after the push.
           - name: openapi-drift

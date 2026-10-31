@@ -8,8 +8,8 @@ import { CustomError } from '@app/shared/error-class';
 import { sanitizeFilename } from '@app/shared/filename';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { SVG_MIME_TYPE } from '@app/shared/images/config';
-import { sanitizeSvg } from '@app/shared/images/svg-optimizer';
 import { svgRefusalMessage } from '@app/shared/images/svg-refusal';
+import { sanitizeSvg } from '@app/shared/images/svg-sanitizer';
 import { optimizeSvg } from '@app/shared/images/svgo-config';
 import {
   MSG_ANIMATED_NOT_ALLOWED,

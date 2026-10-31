@@ -4,7 +4,7 @@
  * `readBoundedText` bounds the routes it reads for, which is every route in the
  * table — and not `/api/auth/*`, which hands the raw `Request` to
  * `auth.handler`. Those endpoints kept the server-wide `maxRequestBodySize`
- * (12 MiB), in front of the captcha plugin and the pre-auth limiter, and they
+ * (12 MiB), in front of the captcha check and the pre-auth limiter, and they
  * are the amplification surface: `/sign-in/email`, `/two-factor/verify-*`,
  * `/passkey/verify-registration`, `/reauth/*`. The bound is now a property of the
  * REQUEST rather than of the reader a route happens to use: `app.ts`'s
@@ -13,9 +13,9 @@
  * ceiling for the chunked case that declares no length.
  *
  * What each case here proves that a unit test cannot: the refusal happens
- * BEFORE the request reaches the mount. The captcha plugin performs an outbound
- * Turnstile call, so its absence from the egress log is the evidence — a 413
- * issued after the plugin ran would look identical from the status alone.
+ * BEFORE the request reaches the mount. The mount's captcha check performs an
+ * outbound Turnstile call, so its absence from the egress log is the evidence —
+ * a 413 issued after the check ran would look identical from the status alone.
  */
 import { describe, expect, test } from 'bun:test';
 
@@ -68,11 +68,11 @@ function post(
 describe('an oversized JSON body is refused before the mount that would read it', () => {
   const oversized = 2 * 1024 * 1024;
 
-  test('POST /api/auth/sign-in/email answers 413 and never reaches the captcha plugin', async () => {
+  test('POST /api/auth/sign-in/email answers 413 and never reaches the captcha check', async () => {
     // No reader bounds this path: `/api/auth/*` hands the raw request to
     // `auth.handler`, which reads it with the library's own parser. Before the
     // boundary, this body was buffered and parsed under the 12 MiB server-wide
-    // ceiling, in front of the captcha plugin's outbound verify.
+    // ceiling, in front of the outbound captcha verify.
     const response = await app.handle(
       post('/api/auth/sign-in/email', jsonBody(oversized), 'application/json')
     );

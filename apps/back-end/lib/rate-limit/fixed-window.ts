@@ -22,9 +22,9 @@ interface StoreFailureLog {
  *
  * `scope` is the identifier's prefix, safe because every scope is a
  * compile-time constant or an interpolation of a closed union, and none
- * contains a colon. `tests/unit/rate-limit-log-boundary.test.ts` derives the
- * full set from the bindings and asserts it; a scope built from request data would
- * break that.
+ * contains a colon. `tests/unit/rate-limit-log-boundary.test.ts` checks the
+ * pre-auth scopes and the OTP scopes it charges, not the binding scopes; a scope
+ * built from request data would break the rule without failing it.
  */
 export function describeStoreFailure(
   error: unknown,

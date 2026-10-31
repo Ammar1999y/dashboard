@@ -8,8 +8,9 @@
  *   different rows behind.
  * - **A Turnstile REFUSAL.** The egress fake answers `{ success: true }` by
  *   default, so until now no test had ever seen the endpoint decline one.
- * - **The bound on outbound siteverify calls.** Admission runs before Better
- *   Auth plugins, so request N+1 cannot buy siteverify call N+1.
+ * - **The bound on outbound siteverify calls.** The mount's per-path limit
+ *   runs before its captcha check, so request N+1 cannot buy siteverify call
+ *   N+1.
  * - **The attributes of the cookie sign-in sets.** `tests/helpers/session.ts`
  *   has exposed `setCookie` "for assertions about attributes" with no caller.
  */
@@ -30,12 +31,11 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { auditLogs, roles, sessions, users } from '@/db/schema';
 
-import { authProblemSchema, PROBLEM_MEDIA_TYPE } from '@app/shared/api/wire';
-import { CUSTOM_AUTH_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { betterAuthMsg } from '@app/shared/messages/auth';
+import { otpMsg } from '@app/shared/messages/otp';
 import { PASSWORD_MAX } from '@app/shared/validation/constants';
 
+import { auth } from '@/lib/auth';
 import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
 import {
   LOCK_DURATION_SECONDS,
@@ -77,7 +77,7 @@ const UNKNOWN_EMAIL = 'harness.no.such.account@gmail.com';
  * when a describe's `beforeAll` executes — so an override installed by the last
  * test of the PREVIOUS describe is still in force there. Not hypothetical: the
  * `{ success: false }` flood below leaked into the cookie fixture's sign-in and
- * answered it `403 VERIFICATION_FAILED`. A fixture that signs in states the
+ * answered it `403` `captchaFailed`. A fixture that signs in states the
  * captcha answer it needs rather than inheriting one.
  */
 function acceptCaptcha(): void {
@@ -381,7 +381,7 @@ describe('lockout state on an account that cannot sign in', () => {
     expect(await sessionCount(actor().userId)).toBe(0);
   });
 
-  test('a correct password does not clear the counter for an ineligible account', async () => {
+  test('a correct password is charged like a wrong one on an ineligible account', async () => {
     await attempt(actor().email, WRONG_PASSWORD);
     const charged = await lockRow(actor().userId);
     expect(charged.failedLoginAttempts).toBeGreaterThan(0);
@@ -392,7 +392,10 @@ describe('lockout state on an account that cannot sign in', () => {
     // The oracle: a correct candidate reset the counter and a wrong one did
     // not, so an attacker could tell them apart by whether the account went on
     // to lock — on an account that cannot sign in at all.
-    expect(await lockRow(actor().userId)).toEqual(charged);
+    expect(await lockRow(actor().userId)).toEqual({
+      failedLoginAttempts: charged.failedLoginAttempts + 1,
+      lockedUntil: null,
+    });
   });
 
   test('the counter still locks the account at the threshold', async () => {
@@ -422,25 +425,20 @@ describe('a refused or unavailable Turnstile verification', () => {
     scriptEgress(TURNSTILE_HOST, () => Response.json({ success: false }));
 
     const response = await attempt(actor().email, actor().password);
-    const body = await response.text();
+    const body = await response.clone().text();
 
-    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
-    // The captcha plugin answers from `onRequest`, upstream of every Better Auth
-    // hook, so its raw English body and framework code would reach the client
-    // untranslated. `toAuthProblem` in the exit step is the only position
-    // downstream of the whole plugin chain, and it words them there.
-    expect(response.headers.get('content-type')).toBe(PROBLEM_MEDIA_TYPE);
-    expect(authProblemSchema.parse(JSON.parse(body))).toMatchObject({
-      status: HTTP_STATUS.FORBIDDEN,
-      detail: betterAuthMsg.VERIFICATION_FAILED,
-      message: betterAuthMsg.VERIFICATION_FAILED,
-      code: CUSTOM_AUTH_CODE,
-    });
+    // The bindings' refusal, from the mount, ahead of every Better Auth plugin
+    // and hook.
+    await expectAuthError(
+      response,
+      HTTP_STATUS.FORBIDDEN,
+      otpMsg.captchaFailed
+    );
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(egressCallsTo(TURNSTILE_HOST).length).toBe(1);
 
     // The credentials were CORRECT. An untouched counter and no session row are
-    // what prove the captcha plugin short-circuited upstream of
+    // what prove the captcha check short-circuited upstream of
     // `verifyLoginAttempt`, rather than a password check having failed.
     expect(await lockRow(actor().userId)).toEqual({
       failedLoginAttempts: 0,
@@ -459,22 +457,20 @@ describe('a refused or unavailable Turnstile verification', () => {
 
     const response = await attempt(actor().email, actor().password);
 
-    // Worded like the other two captcha outcomes; the STATUS is the
-    // fail-closed assertion and it is unchanged.
-    expect(
-      await expectAuthError(
-        response,
-        HTTP_STATUS.INTERNAL_ERROR,
-        betterAuthMsg.UNKNOWN_ERROR
-      )
-    ).toMatchObject({ code: CUSTOM_AUTH_CODE });
+    // The same refusal as a declined token: an outage is the caller's 403,
+    // never a 500, as on every binding.
+    await expectAuthError(
+      response,
+      HTTP_STATUS.FORBIDDEN,
+      otpMsg.captchaFailed
+    );
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await sessionCount(actor().userId)).toBe(0);
     expect(egressCallsTo(TURNSTILE_HOST).length).toBe(1);
   });
 
   test('a siteverify that never answers is bounded, and refuses', async () => {
-    // The route honours the abort rather than hanging for ever: the plugin
+    // The route honours the abort rather than hanging for ever: the verifier
     // passes its own `AbortSignal` into `fetch`, and the guard's
     // `new Request(input, init)` carries it through (measured).
     scriptEgress(
@@ -491,17 +487,15 @@ describe('a refused or unavailable Turnstile verification', () => {
     const response = await attempt(actor().email, actor().password);
     const elapsed = Date.now() - started;
 
-    expect(response.status).toBe(HTTP_STATUS.INTERNAL_ERROR);
+    expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await sessionCount(actor().userId)).toBe(0);
 
     // Fail-closed is only half of it. The other half is the cost: one inbound
-    // request pins an outbound socket for the plugin's whole deadline —
-    // `CAPTCHA_VERIFY_TIMEOUT_MS = 10_000` in
-    // `better-auth/dist/plugins/captcha/constants.mjs`. NOT `lib/captcha.ts`'s
-    // 3 s bound, which this endpoint does not use.
-    expect(elapsed).toBeGreaterThanOrEqual(9000);
-    expect(elapsed).toBeLessThan(20_000);
+    // request pins an outbound socket for `lib/captcha.ts`'s deadline, 3 s,
+    // not Better Auth's captcha plugin's 10 s.
+    expect(elapsed).toBeGreaterThanOrEqual(2900);
+    expect(elapsed).toBeLessThan(9000);
   }, 40_000);
 });
 
@@ -522,15 +516,13 @@ describe('outbound captcha admission', () => {
     );
 
     // The most common client error on this endpoint — a stale page, a blocked
-    // `challenges.cloudflare.com`, a native client. It used to answer in English
-    // with a raw framework code and NO `content-type`.
-    expect(
-      await expectAuthError(
-        response,
-        HTTP_STATUS.BAD_REQUEST,
-        betterAuthMsg.MISSING_RESPONSE
-      )
-    ).toMatchObject({ code: CUSTOM_AUTH_CODE });
+    // `challenges.cloudflare.com`, a native client — answered as every
+    // binding answers it.
+    await expectAuthError(
+      response,
+      HTTP_STATUS.FORBIDDEN,
+      otpMsg.captchaFailed
+    );
     expect(egressCallsTo(TURNSTILE_HOST)).toEqual([]);
   });
 
@@ -539,10 +531,8 @@ describe('outbound captcha admission', () => {
 
     // The sign-in budget, not `PRE_AUTH_LIMIT`: admission for this path is the
     // `preAuthLimit` its own `BETTER_AUTH_ENDPOINTS` record declares, applied in
-    // the prefix handler ahead of the captcha plugin's `onRequest`. That
-    // ordering is the whole assertion — the plugin's outbound `siteverify`
-    // carries a 10 s timeout and had no bound of any kind while Better Auth's
-    // own rule for this path was `false`.
+    // the prefix handler ahead of its captcha check. That ordering is the whole
+    // assertion: each outbound `siteverify` holds a socket for up to 3 s.
     const limit =
       BETTER_AUTH_ENDPOINTS.find(
         (endpoint) => endpoint.path === '/sign-in/email'
@@ -785,6 +775,48 @@ describe('what the audit trail claims about a login', () => {
     expect(rows.filter((row) => row.data.loginSuccess === true)).toEqual([]);
   });
 
+  test('an IPv6 client has one address on its session and every audit row', async () => {
+    // Better Auth's own value is `2001:0db8:0001:0002:0000:0000:0000:0000`: the
+    // /64, expanded, which joins no row `getClientIp` wrote.
+    const ip = '2001:db8:1:2:aaaa:bbbb:cccc:dddd';
+    const user = await seedUser();
+    const response = await app.handle(
+      new Request(SIGN_IN_URL, {
+        method: 'POST',
+        headers: baseHeaders({
+          'content-type': 'application/json',
+          'cf-connecting-ip': ip,
+        }),
+        body: JSON.stringify({ email: user.email, password: user.password }),
+      })
+    );
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    // Turnstile scores the whole address too, not Better Auth's /64.
+    const verified = egressCallsTo(TURNSTILE_HOST);
+    expect(verified).toHaveLength(1);
+    expect(new URLSearchParams(verified[0]?.body).get('remoteip')).toBe(ip);
+
+    const sessionRows = await db
+      .select({ ipAddress: sessions.ipAddress })
+      .from(sessions)
+      .where(eq(sessions.userId, user.userId));
+    expect(sessionRows).toEqual([{ ipAddress: ip }]);
+
+    const auditRows = await db
+      .select({ ipAddress: auditLogs.ipAddress, newData: auditLogs.newData })
+      .from(auditLogs)
+      .where(eq(auditLogs.userId, user.userId));
+    const issued = auditRows.filter(
+      (row) => (row.newData as { loginSuccess?: unknown }).loginSuccess
+    );
+    expect(issued).toHaveLength(1);
+    // The proof, written from `getClientIp`, and the issuance, from the session.
+    expect(auditRows.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(auditRows.map((row) => row.ipAddress))).toEqual(
+      new Set([ip])
+    );
+  });
+
   test('a wrong password records neither', async () => {
     const user = await seedUser();
 
@@ -800,16 +832,15 @@ describe('what the audit trail claims about a login', () => {
 });
 
 /**
- * `callbackURL`, which the sign-in before-hook does NOT strip.
+ * `callbackURL`, which the contract does not publish and the sign-in
+ * before-hook strips.
  *
- * The hook returns a body naming only `email`, `password` and `rememberMe`, so
- * it reads as a replacement. It is not: `runBeforeHooks` merges it with
- * `defuReplaceArrays`, so every key the hook omits keeps the caller's value —
- * `callbackURL` included, and Better Auth's email sign-in echoes that into
- * `Location` and `url`. What makes that safe is the library's global
- * `originCheckMiddleware` plus this deployment configuring no `trustedOrigins`
- * beyond `baseURL`. Both halves are asserted here, because both are one edit
- * away from turning a login page's `?next=` into an open redirect.
+ * The hook's returned body is merged with `defuReplaceArrays`, so a key it
+ * omits would keep the caller's value, and Better Auth's email sign-in echoes
+ * `callbackURL` into `Location` and `url`. The hook deletes it from the
+ * caller's body instead. A foreign one is still refused first, by the
+ * library's global `originCheckMiddleware`, with this deployment configuring
+ * no `trustedOrigins` beyond `baseURL`. Both halves are asserted here.
  */
 describe('the callbackURL a sign-in body may carry', () => {
   function signInWithCallback(
@@ -853,16 +884,55 @@ describe('the callbackURL a sign-in body may carry', () => {
     });
   });
 
-  test('a same-origin path is honoured — which is what proves the key survives the hook', async () => {
-    // If the hook's body actually replaced the caller's, this would be a plain
-    // 200 with no redirect at all, and every refusal above would be vacuous.
+  test('a same-origin path is ignored: the sign-in answers no redirect', async () => {
     const user = await seedUser();
     const response = await signInWithCallback(user, '/dash');
 
     expect(response.status).toBe(HTTP_STATUS.OK);
-    expect(response.headers.get('location')).toBe('/dash');
-    expect((await response.json()) as { url?: string }).toMatchObject({
-      url: '/dash',
+    expect(response.headers.get('location')).toBeNull();
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ redirect: false });
+    expect(body).not.toHaveProperty('url');
+  });
+
+  test('so is one in a form-encoded body', async () => {
+    const user = await seedUser();
+    const response = await app.handle(
+      new Request(SIGN_IN_URL, {
+        method: 'POST',
+        headers: baseHeaders({
+          'content-type': 'application/x-www-form-urlencoded',
+        }),
+        body: new URLSearchParams({
+          email: user.email,
+          password: user.password,
+          callbackURL: '/dash',
+        }).toString(),
+      })
+    );
+
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    expect(response.headers.get('location')).toBeNull();
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      redirect: false,
+    });
+  });
+
+  test('so is one passed in process, where no request carries the body', async () => {
+    const user = await seedUser();
+    const response = await auth.api.signInEmail({
+      body: {
+        email: user.email,
+        password: user.password,
+        callbackURL: '/dash',
+      },
+      asResponse: true,
+    });
+
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    expect(response.headers.get('location')).toBeNull();
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      redirect: false,
     });
   });
 });

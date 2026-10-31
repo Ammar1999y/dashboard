@@ -13,6 +13,7 @@ export const MAX_IMAGE_PIXELS = 25_000_000;
  */
 export const MAX_IMAGE_EDGE = 16_383;
 export const SERVER_MAX_IMAGE_SIZE = 0.2;
+export const NAME_MIN = 2;
 export const NAME_MAX = 150;
 
 export const MAX_DOCUMENT_SIZE_MB = 10;

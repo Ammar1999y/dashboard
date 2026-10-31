@@ -3,7 +3,7 @@ import type { AuditMeta } from '@/lib/audit';
 import type { PermissionRows } from '@app/shared/permissions/matrix';
 import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
-import type { adminUpdateUserBodySchema } from '@app/shared/validation/auth';
+import type { adminUpdateUserBodySchema } from '@app/shared/validation/users';
 
 import { eq, sql } from 'drizzle-orm';
 
@@ -37,17 +37,18 @@ import {
   unlinkGoogle,
 } from '@/lib/auth/session/rotation';
 import { removeMethodIntent } from '@/lib/auth/two-factor/methods';
-import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
 import { notFoundError } from '@/lib/http/response';
 import { auditCustomRolePermissions } from '@/lib/permissions/audit';
 import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
-  createCustomRole,
   destroyCustomRole,
+  mintCustomRole,
+  rewriteCustomRoleMatrix,
   validateAssignableRole,
 } from '@/lib/permissions/roles';
 import { validateRolePermissionScope } from '@/lib/permissions/scope';
 import { refreshUserSessions } from '@/lib/permissions/session-refresh';
+import { lockTargetAndActor } from '@/lib/users/lock-order';
 
 import { assertContactChangeKeepsFactor } from './contact-change';
 import { liveUser } from './filters';
@@ -124,7 +125,6 @@ async function assertTargetEditable(opts: {
     .select({
       createdBy: users.createdBy,
       roleId: users.roleId,
-      roleName: roles.roleName,
       roleScope: roles.scope,
     })
     .from(users)
@@ -138,7 +138,7 @@ async function assertTargetEditable(opts: {
     isSelf: false,
     roleId: target.roleId,
     createdBy: target.createdBy,
-    role: { roleName: target.roleName, scope: target.roleScope },
+    role: { scope: target.roleScope },
     actorUserId: opts.actorUserId,
     scope: opts.editScope,
     actorPermissions: opts.actorPermissions,
@@ -199,7 +199,6 @@ export async function editUserAsAdmin(opts: {
         roleId: users.roleId,
         isActive: users.isActive,
         createdBy: users.createdBy,
-        roleName: roles.roleName,
         roleScope: roles.scope,
         roleCreatedBy: roles.createdBy,
       })
@@ -216,7 +215,7 @@ export async function editUserAsAdmin(opts: {
       isSelf: false,
       roleId: lockedUser.roleId,
       createdBy: lockedUser.createdBy,
-      role: { roleName: lockedUser.roleName, scope: lockedUser.roleScope },
+      role: { scope: lockedUser.roleScope },
       actorUserId: actor.userId,
       scope: editScope,
     });
@@ -232,7 +231,6 @@ export async function editUserAsAdmin(opts: {
     if (assignsStandardRole || (!isCustomRole && isCurrentlyCustom))
       await validateAssignableRole(input.roleId, tx);
 
-    // A 403 here would reveal "exists and outranks me" beside the 404s.
     await validateRolePermissionScope(
       actorPermissions,
       lockedUser.roleId,
@@ -302,12 +300,11 @@ export async function editUserAsAdmin(opts: {
 
     if (newPermsForAudit && suppliedMatrix) {
       if (isCurrentlyCustom) {
-        assignedRoleId = customPermsChanged
-          ? await createCustomRole(tx, suppliedMatrix, lockedUser.roleId)
-          : lockedUser.roleId;
+        assignedRoleId = lockedUser.roleId;
 
         // The user audit row shows no change, so the matrix is recorded separately.
         if (customPermsChanged) {
+          await rewriteCustomRoleMatrix(tx, assignedRoleId, suppliedMatrix);
           const roleIdForAudit = assignedRoleId;
           const oldPermissions = oldPermsForAudit ?? [];
           customRoleAudit = () =>
@@ -322,12 +319,7 @@ export async function editUserAsAdmin(opts: {
             });
         }
       } else {
-        assignedRoleId = await createCustomRole(
-          tx,
-          suppliedMatrix,
-          null,
-          actor.userId
-        );
+        assignedRoleId = await mintCustomRole(tx, suppliedMatrix, actor.userId);
 
         const roleIdForAudit = assignedRoleId;
         customRoleAudit = () =>

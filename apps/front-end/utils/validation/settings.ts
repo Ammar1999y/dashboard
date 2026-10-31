@@ -3,12 +3,9 @@ import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';
 import {
-  getColorSchema,
   idSchema,
   sanitizeStrict,
   sanitizeStrictSingleLine,
-  slugSchema,
-  trimed,
 } from '@app/shared/validation/rules';
 import {
   MSG_CONTACT_INFO_INVALID,
@@ -37,7 +34,13 @@ import {
 
 import { numberOr } from '@/utils/number';
 
-import { optionalTextSchema, orderedListSchema } from './rules';
+import {
+  getColorSchema,
+  optionalTextSchema,
+  orderedListSchema,
+  slugSchema,
+  trimed,
+} from './rules';
 
 const SITE_TITLE_MAX = 100;
 const DESCRIPTION_MAX = 500;

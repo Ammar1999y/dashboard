@@ -15,6 +15,9 @@ import { FIXED_BODY_REFUSAL, PUBLISHED_SEND_BODY } from './anonymous';
 // Always a real code: OTP_AUTO_VERIFY never auto-issues a login.
 export const sendPasswordlessCodeBinding = bind(sendPasswordlessCode, {
   enabled: OTP_ENABLED && PASSWORDLESS_ENABLED,
+  // No pre-auth limit: no other route shares its scope, so it would refuse
+  // nothing the tighter per-IP limit below admits.
+  preAuthIpLimit: false,
   // Before the captcha, bounding siteverify; pre-lookup, so its 429 reveals nothing.
   rateLimit: {
     scope: 'passwordless.send.ip',

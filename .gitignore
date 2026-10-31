@@ -3,8 +3,6 @@
 *.tsbuildinfo
 .DS_Store
 
-# Same convention as the workspaces: agent instructions stay local.
-
 # Never commit environment files or the archived pre-monorepo checkouts.
 .env
 .env.*

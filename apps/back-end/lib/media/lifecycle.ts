@@ -111,7 +111,8 @@ export interface DoomedRow {
  * still stored.
  */
 export async function finishDeleting(
-  rows: readonly DoomedRow[]
+  rows: readonly DoomedRow[],
+  stopping?: AbortSignal
 ): Promise<{ removed: string[]; retained: string[] }> {
   if (rows.length === 0) return { removed: [], retained: [] };
   const keys = rows.map((row) => row.r2Key);
@@ -119,7 +120,11 @@ export async function finishDeleting(
   const goneFrom = new Map<BucketType, ReadonlySet<string>>();
   for (const bucketType of ENABLED_VISIBILITIES) {
     try {
-      const outcome = await deleteObjectsFromR2({ keys, bucketType });
+      const outcome = await deleteObjectsFromR2({
+        keys,
+        bucketType,
+        signal: stopping,
+      });
       goneFrom.set(bucketType, new Set(outcome.deleted));
     } catch {
       // Count only. A key is a row id, but the error text is provider-controlled.
@@ -254,7 +259,16 @@ async function reapUnfiled(): Promise<{
  * `degraded` is only a retained row or a refused reap, so the job can tell a
  * store outage from an ordinary backlog (`hasMore`).
  */
-export async function sweepFiles(): Promise<FileSweepCount> {
+export async function sweepFiles(
+  stopping?: AbortSignal
+): Promise<FileSweepCount> {
+  if (stopping?.aborted)
+    return {
+      removed: 0,
+      unfiled: { stamped: 0, reaped: 0 },
+      hasMore: true,
+      degraded: false,
+    };
   const expiredBefore = sql`now() - ${PENDING_FILE_TTL}::interval`;
   const expired = () =>
     and(
@@ -284,17 +298,25 @@ export async function sweepFiles(): Promise<FileSweepCount> {
   const stamped = await stampUnfiled();
   const reap = await reapUnfiled();
 
-  const doomed = await db
-    .select({ id: files.id, r2Key: files.r2Key, bucketType: files.bucketType })
-    .from(files)
-    .where(eq(files.status, 'deleting'))
-    .limit(SWEEP_BATCH_SIZE);
+  // At shutdown the R2 half waits for the next run; the rows stay `deleting`.
+  const doomed = stopping?.aborted
+    ? []
+    : await db
+        .select({
+          id: files.id,
+          r2Key: files.r2Key,
+          bucketType: files.bucketType,
+        })
+        .from(files)
+        .where(eq(files.status, 'deleting'))
+        .limit(SWEEP_BATCH_SIZE);
 
-  const { removed, retained } = await finishDeleting(doomed);
+  const { removed, retained } = await finishDeleting(doomed, stopping);
   return {
     removed: removed.length,
     unfiled: { stamped, reaped: reap.reaped },
     hasMore:
+      stopping?.aborted === true ||
       marked.length === SWEEP_BATCH_SIZE ||
       doomed.length === SWEEP_BATCH_SIZE ||
       reap.hasMore ||

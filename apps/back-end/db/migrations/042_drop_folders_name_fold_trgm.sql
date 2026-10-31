@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_folders_name_fold_trgm;

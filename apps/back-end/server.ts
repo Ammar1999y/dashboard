@@ -143,6 +143,7 @@ const schedule = scheduleWhenOwner(writerLock, claimWriterLock);
 const shutdown = createShutdown(
   {
     stopServer,
+    haltSweeps: schedule.halt,
     stopSweeps: schedule.stopAndDrain,
     drainAfterResponse,
     pendingAfterResponse,

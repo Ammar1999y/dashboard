@@ -152,7 +152,8 @@ export function describeDatabase(db: SqliteConnection): {
 export function quickCheck(db: SqliteConnection): string {
   // Finalized here because this runs per manual health poll; left to the
   // connection, one statement per call would accumulate for the process.
-  const statement = db.prepare('PRAGMA quick_check');
+  // `(1)`: one row, as `get` requires; the check stops at its first error.
+  const statement = db.prepare('PRAGMA quick_check(1)');
   try {
     const row = statement.get<Record<string, unknown>>();
     const value = row ? Object.values(row)[0] : undefined;

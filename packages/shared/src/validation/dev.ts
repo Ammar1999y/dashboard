@@ -1,7 +1,7 @@
 import * as z from 'zod';
 
-import { selfUpdateUserBodySchema } from './auth';
 import { emailSchema, passwordSchema } from './rules';
+import { selfUpdateUserBodySchema } from './users';
 
 /** `POST /api/dev/sign-up`, a route production does not register. */
 export const devSignUpSchema = z.object({

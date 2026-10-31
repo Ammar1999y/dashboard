@@ -17,6 +17,7 @@ import { files } from '@/db/schema';
 import { CustomError } from '@app/shared/error-class';
 import { sanitizeFilename } from '@app/shared/filename';
 import { HTTP_STATUS } from '@app/shared/http-status';
+import { isAnimatedRaster } from '@app/shared/images/raster-bytes';
 import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
 import {
   MAX_DOCUMENT_SIZE_MB,
@@ -37,7 +38,7 @@ import {
 } from '@/lib/r2/client';
 import { enforceRateLimit, userIdentifier } from '@/lib/rate-limit';
 
-import { bestEffort, errorTypeOf, logSanitized } from '@/utils/log';
+import { bestEffort, errorClassOf, logSanitized } from '@/utils/log';
 
 import { auditAs } from './actor';
 import { fileTypeFor } from './allowlist';
@@ -51,11 +52,7 @@ import {
 import { FILE_COLUMNS, matchesRow } from './files';
 import { objectHeaders } from './headers';
 import { measureEncodeCost } from './image/optimize';
-import {
-  processImage,
-  validateMagicBytes,
-  validateSvgUpload,
-} from './image/process';
+import { processImage, validateSvgUpload } from './image/process';
 import { objectKey } from './keys';
 import { requirePublishGrant } from './policy';
 
@@ -218,7 +215,7 @@ function inspect(spec: FileTypeSpec, bytes: Buffer): DetectResult {
     logSanitized('error', {
       msg: 'media.detect threw',
       extension: spec.extension,
-      errorClass: errorTypeOf(error),
+      errorClass: errorClassOf(error),
     });
     return { ok: false, reason: 'container' };
   }
@@ -252,15 +249,9 @@ export async function admitUpload(
 
   if (spec.kind !== 'image') return { file: entry, buffer, mimeType, spec };
 
-  // The signature check cannot see animation, and the sanitiser is an SVG's
-  // only check.
-  const magic = validateMagicBytes(buffer, mimeType);
-  if (!magic.valid)
-    throw contentRefused(
-      magic.animated
-        ? uploadMsg.animatedNotAllowed(safeName)
-        : uploadMsg.contentMismatch(safeName)
-    );
+  // `detect` reads the signature only, and the sanitiser is an SVG's only check.
+  if (isAnimatedRaster(buffer, mimeType))
+    throw contentRefused(uploadMsg.animatedNotAllowed(safeName));
   const validatedSvg =
     mimeType === 'image/svg+xml'
       ? await validateSvgUpload(buffer, entry.name)

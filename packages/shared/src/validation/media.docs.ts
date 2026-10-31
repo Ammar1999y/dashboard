@@ -30,11 +30,11 @@ const UPLOAD_LIMITS =
   `Exactly one file. Images (${mimeTypesOfKind('image').join(', ')}): at most ${MAX_IMAGE_SIZE} MiB, ` +
   `${MAX_IMAGE_PIXELS.toLocaleString('en-US')} decoded pixels and ${MAX_IMAGE_EDGE.toLocaleString('en-US')} pixels on either edge; ` +
   `PNG is re-encoded to WebP, SVG is sanitised. Documents (${mimeTypesOfKind('document').join(', ')}): at most ${MAX_DOCUMENT_SIZE_MB} MiB, ` +
-  'byte-inspected: macro-enabled, template, encrypted and object-embedding variants are refused; field codes, external links and DDE are not inspected, and documents are always served as attachments, never rendered. ' +
+  'byte-inspected: macro-enabled, template, encrypted and object-embedding variants are refused. Embedding is judged by the package relationships, so a linked OLE object (a chart linked to an outside workbook included), an ActiveX control and any imported alternative-format chunk (altChunk) are refused too, as is a package whose relationship parts are unusually large. Field codes, hyperlinks, external templates and DDE are not inspected, and documents are always served as attachments, never rendered. ' +
   'Upload several files as sequential single-file requests with bounded concurrency and honour `Retry-After` on 429.';
 
 const NAME_DESCRIPTION =
-  'Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected';
+  'Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected, and so is a name made only of invisible characters (default-ignorable code points, whitespace and U+2800 BRAILLE PATTERN BLANK)';
 
 const NOT_EMPTY =
   'At least one property must be present; an empty object is rejected.';

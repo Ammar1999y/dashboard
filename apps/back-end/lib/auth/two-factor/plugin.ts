@@ -36,7 +36,7 @@ import { PUBLIC_ORIGIN } from '@/lib/env';
 import { logSanitized } from '@/utils/log';
 
 import { authAuditMeta, bodyRecord, recordingFaults } from '../context';
-import { authError } from '../errors';
+import { authError, sessionRequired } from '../errors';
 import { RP_ID } from '../passkey-assertion';
 import { expireDontRememberMarker } from '../session/cookie';
 import { submittedRememberMe } from '../session/remember-me';
@@ -51,7 +51,11 @@ import {
   withTwoFactorChallengeTransaction,
 } from './challenge';
 import { TOTP_ISSUER, twoFactorEnrolment } from './enrolment';
-import { issueTwoFactorChallenge, twoFactorUnavailableError } from './issue';
+import {
+  abandonFirstFactorSession,
+  issueTwoFactorChallenge,
+  twoFactorUnavailableError,
+} from './issue';
 import { auditLifecycle, recordPasskeyEnrolment } from './lifecycle';
 import { twoFactorOtp } from './otp';
 import { twoFactorPasskey } from './passkey';
@@ -181,6 +185,11 @@ function registeredPasskeyId(returned: unknown): EntityID | null {
  * ⚠️ Installed unconditionally, even with no methods enabled:
  * `/passwordless/verify` calls the issuer directly, so this path must keep
  * asking it too. `issueTwoFactorChallenge` owns the empty-list decision.
+ *
+ * Unlike passwordless and Google, the session and challenge here are not
+ * written under the user lock against `authRevokedAt`: Better Auth inserts the
+ * session after the password proof is checked, so a rotation between the two
+ * is not refused (accepted: `reports/should-ignore.md` #77).
  */
 const twoFactorSignInGuard = () =>
   ({
@@ -194,17 +203,29 @@ const twoFactorSignInGuard = () =>
             if (!newSession) return;
 
             const rememberMe = submittedRememberMe(ctx.body);
-            const outcome = await issueTwoFactorChallenge(ctx, {
+            const params = {
               userId: newSession.user.id,
               userEmail: newSession.user.email,
-              session: {
-                id: newSession.session.id,
-                token: newSession.session.token,
-              },
-              firstFactor: 'password',
-              rememberMe,
+              session: { id: newSession.session.id },
               auditMeta: authAuditMeta(ctx, ctx.path ?? '/sign-in/email'),
-            });
+            };
+            let outcome: Awaited<ReturnType<typeof issueTwoFactorChallenge>>;
+            try {
+              outcome = await issueTwoFactorChallenge(ctx, {
+                ...params,
+                firstFactor: 'password',
+                rememberMe,
+              });
+            } catch (error) {
+              // The library committed the session; `newSession` is cleared
+              // once the challenge has withdrawn it.
+              if (ctx.context.newSession)
+                await abandonFirstFactorSession(ctx, {
+                  ...params,
+                  reason: 'two_factor_check_failed',
+                });
+              throw error;
+            }
 
             if (outcome.kind === 'refused') throw twoFactorUnavailableError();
             if (outcome.kind === 'proceed') {
@@ -326,7 +347,7 @@ const twoFactorAuth = () => {
           handler: createAuthMiddleware(async (ctx) => {
             if (isAPIError(ctx.context.returned)) return;
             const requestSession = await resolveRequestSession(ctx);
-            if (!requestSession) throw challengeMissingError();
+            if (!requestSession) throw sessionRequired();
             await auditLifecycle(db, ctx, requestSession, {
               twoFactorSecretDisclosed: true,
             });

@@ -81,7 +81,11 @@ interface SvgWorkerOptions {
  * job starts a fresh one.
  */
 export function createSvgWorker(options: SvgWorkerOptions) {
-  const acquire = createAdmission(options.queueLimit);
+  // One slot: a thread holds a single `pending` job.
+  const acquire = createAdmission({
+    slots: 1,
+    queueLimit: options.queueLimit,
+  });
   const state: { thread: Thread | null; nextId: number } = {
     thread: null,
     nextId: 0,
@@ -211,6 +215,7 @@ export function createSvgWorker(options: SvgWorkerOptions) {
  * box, and up to 6 s for the thread to load its libraries.
  */
 const svgWorker = createSvgWorker({
+  // `scripts/build-binary.ts` lists the worker as an entry under this name.
   url: new URL('svg-worker.ts', import.meta.url),
   queueLimit: 4,
   startTimeoutMs: 30_000,

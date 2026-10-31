@@ -22,7 +22,7 @@ import type * as z from 'zod';
 
 import { CACHE_DB_PATH } from '@/lib/env.server';
 import { lazyStore } from '@/lib/sqlite/store';
-import { sweepInBatches } from '@/lib/sqlite/sweep';
+import { prepareExpirySweep, sweepExpiredRows } from '@/lib/sqlite/sweep';
 
 import { logLine } from '@/utils/log';
 
@@ -59,7 +59,6 @@ const SQL_DELETE = `DELETE FROM cache WHERE key = ?`;
 const SQL_DELETE_PREFIX = `DELETE FROM cache WHERE key >= ? AND key < ?`;
 /** For a prefix with no successor: every key at or after it matches. */
 const SQL_DELETE_FROM = `DELETE FROM cache WHERE key >= ?`;
-const SQL_SWEEP = `DELETE FROM cache WHERE expires_at <= ? LIMIT ?`;
 /**
  * An existence probe, not a count: `COUNT(*)` or `SUM(length(value))` is an
  * unbounded scan that grows with the cache, and payload length is not the disk
@@ -75,7 +74,7 @@ const cacheStore = lazyStore(
     del: db.prepare(SQL_DELETE),
     delPrefix: db.prepare(SQL_DELETE_PREFIX),
     delFrom: db.prepare(SQL_DELETE_FROM),
-    sweep: db.prepare(SQL_SWEEP),
+    sweep: prepareExpirySweep(db, 'cache'),
     anyExpired: db.prepare(SQL_ANY_EXPIRED),
   })
 );
@@ -164,7 +163,7 @@ export function cacheDeletePrefix(prefix: string): void {
 
 /** @knipignore */
 export function cacheSweepExpired(now = Date.now()): Promise<SweepResult> {
-  return sweepInBatches(getStore().sweep, now);
+  return sweepExpiredRows(getStore().sweep, now);
 }
 
 /** @knipignore */

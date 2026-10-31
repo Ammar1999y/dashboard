@@ -88,7 +88,6 @@ export const moveMediaFilesBinding = bind(moveMediaFiles, {
   permission: { resource: 'media', action: 'edit' },
   rateLimit: { ...MOVE_LIMIT, failClosed: true, by: 'user' },
   failure: mediaMsg.updateError,
-  mapError: handleFolderForeignKeyViolation,
   detail: {
     summary: 'Move media files into a folder',
     deprecated: true,
@@ -178,7 +177,6 @@ export const updateMediaFileBinding = bind(updateMediaFile, {
     by: 'user',
   },
   failure: mediaMsg.updateError,
-  mapError: handleFolderForeignKeyViolation,
   refusals: FILE_ID_REFUSALS,
   detail: { summary: 'Rename or move a media file', tags: ['Media'] },
   handler: async ({ params, body, actor, meta }) => {

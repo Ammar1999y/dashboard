@@ -15,8 +15,8 @@ import {
   MSG_REAUTH_REQUIRED,
 } from '@app/shared/messages/auth';
 
-import { authenticationStartedAt } from '../session/authentication-time';
 import { lockSessionOwner } from '../session/live';
+import { rotatedSince } from '../session/rotation';
 import {
   adminReauthKey,
   expiresIn,
@@ -34,17 +34,17 @@ export async function mintAdminReauth(
     method = 'password',
     executor,
     startedAt,
-  }: { method?: ReauthMethod; executor?: Tx; startedAt?: number } = {}
+  }: {
+    method?: ReauthMethod;
+    executor?: Tx;
+    /** `authenticationStartedAt()` read before the proof was checked. */
+    startedAt: number;
+  }
 ): Promise<{ expiresIn: number }> {
-  const proofStartedAt = startedAt ?? (await authenticationStartedAt(executor));
   const write = async (tx: Tx) => {
     const user = await lockSessionOwner(tx, actorUserId, sessionId);
     const available = await availableReauthMethods(actorUserId, tx);
-    if (
-      !user ||
-      !available.includes(method) ||
-      (user.authRevokedAt && user.authRevokedAt.getTime() >= proofStartedAt)
-    )
+    if (!user || !available.includes(method) || rotatedSince(user, startedAt))
       throw new CustomError(MSG_INVALID_CREDENTIALS, HTTP_STATUS.UNAUTHORIZED);
     // Valued by the actor so rotation finds it by value, including windows on
     // sessions it preserves.

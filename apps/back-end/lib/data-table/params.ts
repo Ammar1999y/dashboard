@@ -1,17 +1,14 @@
 import type { FilterColumnSpecs } from '@app/shared/data-table/column-specs';
+import type { DataTableQuery } from '@app/shared/data-table/query';
 import type { PaginationMeta } from '@app/shared/types/api';
 import type { ExtendedColumnSort } from '@app/shared/types/data-table';
 import type { SQL, Table } from 'drizzle-orm';
 
 import { and, asc, desc, ilike, or } from 'drizzle-orm';
 
-import {
-  assertDataTableParamKeys,
-  invalidFilter,
-} from '@app/shared/data-table/filter-rules';
+import { invalidFilter } from '@app/shared/data-table/filter-rules';
 import {
   effectiveSearchTerm,
-  MAX_PER_PAGE,
   parseSearchParams,
 } from '@app/shared/data-table/parsers';
 
@@ -23,7 +20,11 @@ import {
 } from './filter-columns';
 
 interface DataTableQueryParams<T extends Table> {
-  url: string;
+  /**
+   * The query as `bind()` validated it, which already refused an unknown or
+   * repeated key. A route's own keys beside these are not read.
+   */
+  query: DataTableQuery;
   /**
    * Server-owned descriptors for every filterable/sortable column. Its keys
    * ARE the allowlist — a column with no descriptor can be neither filtered
@@ -31,7 +32,7 @@ interface DataTableQueryParams<T extends Table> {
    */
   filterableColumns: FilterColumnSpecs;
   /** Columns to match against for quick search (?search=) */
-  searchableColumns?: string[];
+  searchableColumns?: readonly Extract<keyof T['_']['columns'], string>[];
   defaultSort?: ExtendedColumnSort<T>;
 }
 
@@ -40,14 +41,11 @@ interface DataTableQueryResult {
   orderBy: ReturnType<typeof asc>[];
   limit: number;
   offset: number;
-  page: number;
-  perPage: number;
   /**
    * The quick-search term as typed, after normalisation and the length bounds;
    * `''` when there is none. Not folded: a match goes through `searchPattern`.
    */
   search: string;
-  buildPageCount: (total: number) => number;
   /** The response `meta` for a list of `total` rows. */
   paginationMeta: (total: number) => PaginationMeta;
 }
@@ -55,23 +53,16 @@ interface DataTableQueryResult {
 export function parseDataTableParams<T extends Table>(
   table: T,
   {
-    url,
+    query,
     filterableColumns,
     searchableColumns,
     defaultSort,
   }: DataTableQueryParams<T>
 ): DataTableQueryResult {
-  const { searchParams } = new URL(url);
-
-  assertDataTableParamKeys(searchParams);
-
-  const params: Record<string, string | undefined> =
-    Object.fromEntries(searchParams);
-
   // A filter the parser could not read is a client error, not a filter to
   // ignore: dropping it silently broadens an `and` query and narrows an `or`
   // one, so the caller gets rows they never asked for with a 200.
-  const parsed = parseSearchParams<T>(params, {
+  const parsed = parseSearchParams<T>(query, {
     defaultSort,
     // The allowlist, handed to the parser rather than applied to its output:
     // its `defaultSort` fallback has to run AFTER unknown ids are dropped, or a
@@ -80,8 +71,6 @@ export function parseDataTableParams<T extends Table>(
     sortableColumnIds: Object.keys(filterableColumns),
     onFilterDropped: () => invalidFilter(),
   });
-
-  const safePerPage = Math.min(parsed.perPage, MAX_PER_PAGE);
 
   // `filterColumns` turns an unknown column, an operator the column's type
   // can't support, or a sub-trigram search term into a 422.
@@ -102,7 +91,7 @@ export function parseDataTableParams<T extends Table>(
   // character URL is a compatibility case, not an attack. A term that clears
   // the floor but yields no trigram — `!!!`, `😀😀😀` — is dropped by the same
   // rule, for the scan it would otherwise force.
-  const search = effectiveSearchTerm(searchParams.get('search') ?? '');
+  const search = effectiveSearchTerm(query.search ?? '');
 
   let searchWhere: SQL | undefined;
   if (search && searchableColumns?.length) {
@@ -110,9 +99,11 @@ export function parseDataTableParams<T extends Table>(
     const conditions: SQL[] = [];
     for (const colName of searchableColumns) {
       const col = getColumn(table, colName);
-      if (col) conditions.push(ilike(foldedColumn(col), pattern));
+      if (!col)
+        throw new Error(`Searchable column "${colName}" is not on the table`);
+      conditions.push(ilike(foldedColumn(col), pattern));
     }
-    if (conditions.length > 0) searchWhere = or(...conditions);
+    searchWhere = or(...conditions);
   }
 
   // Filters and search are mutually exclusive on the client; both are
@@ -147,24 +138,19 @@ export function parseDataTableParams<T extends Table>(
     return orderBy;
   }
 
-  const offset = (parsed.page - 1) * safePerPage;
-  const buildPageCount = (total: number) =>
-    Math.max(1, Math.ceil(total / safePerPage));
+  const { page, perPage } = parsed;
 
   return {
     where,
     orderBy: applySorting(table),
-    limit: safePerPage,
-    offset,
-    page: parsed.page,
-    perPage: safePerPage,
+    limit: perPage,
+    offset: (page - 1) * perPage,
     search,
-    buildPageCount,
     paginationMeta: (total: number) => ({
-      page: parsed.page,
-      perPage: safePerPage,
+      page,
+      perPage,
       total,
-      pageCount: buildPageCount(total),
+      pageCount: Math.max(1, Math.ceil(total / perPage)),
     }),
   };
 }

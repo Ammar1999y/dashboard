@@ -398,29 +398,34 @@ describe('the trigram indexes serve the folded predicates', () => {
     ]
   > = [
     [
-      'idx_users_name_fold_trgm',
+      'idx_users_name_folded_trgm',
       SEEDS.users,
       users,
       users.name,
       isNull(users.deletedAt),
     ],
     [
-      'idx_users_email_fold_trgm',
+      'idx_users_email_folded_trgm',
       SEEDS.users,
       users,
       users.email,
       isNull(users.deletedAt),
     ],
-    ['idx_roles_role_name_fold_trgm', SEEDS.roles, roles, roles.roleName],
-    ['idx_roles_description_fold_trgm', SEEDS.roles, roles, roles.description],
+    ['idx_roles_role_name_folded_trgm', SEEDS.roles, roles, roles.roleName],
     [
-      'idx_files_display_name_active_fold_trgm',
+      'idx_roles_description_folded_trgm',
+      SEEDS.roles,
+      roles,
+      roles.description,
+    ],
+    [
+      'idx_files_display_name_active_folded_trgm',
       SEEDS.files,
       files,
       files.displayName,
       sql`${files.status} = 'active'`,
     ],
-    ['idx_folders_name_fold_trgm', SEEDS.folders, folders, folders.name],
+    ['idx_folders_name_folded_trgm', SEEDS.folders, folders, folders.name],
   ];
 
   test.each(
@@ -452,7 +457,7 @@ describe('the trigram indexes serve the folded predicates', () => {
       USERS_FILTER_COLUMNS,
       ['name', 'email'],
       isNull(users.deletedAt),
-      ['idx_users_name_fold_trgm', 'idx_users_email_fold_trgm'],
+      ['idx_users_name_folded_trgm', 'idx_users_email_folded_trgm'],
     ],
     [
       'permissions',
@@ -461,7 +466,7 @@ describe('the trigram indexes serve the folded predicates', () => {
       PERMISSIONS_FILTER_COLUMNS,
       ['roleName', 'description'],
       undefined,
-      ['idx_roles_role_name_fold_trgm', 'idx_roles_description_fold_trgm'],
+      ['idx_roles_role_name_folded_trgm', 'idx_roles_description_folded_trgm'],
     ],
     [
       'media',
@@ -470,7 +475,7 @@ describe('the trigram indexes serve the folded predicates', () => {
       MEDIA_FILTER_COLUMNS,
       ['displayName'],
       eq(files.status, 'active'),
-      ['idx_files_display_name_active_fold_trgm'],
+      ['idx_files_display_name_active_folded_trgm'],
     ],
   ] as const)(
     "the %s list's quick search",
@@ -483,8 +488,9 @@ describe('the trigram indexes serve the folded predicates', () => {
       base,
       indexes
     ) => {
-      const { where } = parseDataTableParams(table, {
-        url: `https://example.test/?search=${encodeURIComponent('مُحَمَّد')}`,
+      // `Table`: the three tables share no searchable key.
+      const { where } = parseDataTableParams<Table>(table, {
+        query: { search: 'مُحَمَّد' },
         filterableColumns,
         searchableColumns: [...searchableColumns],
       });
@@ -504,7 +510,7 @@ describe('the trigram indexes serve the folded predicates', () => {
       analyze: true,
     });
     expect(generic).toInclude(
-      'Bitmap Index Scan on idx_users_name_fold_trgm (actual rows=0.00 '
+      'Bitmap Index Scan on idx_users_name_folded_trgm (actual rows=0.00 '
     );
   });
 });

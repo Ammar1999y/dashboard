@@ -14,7 +14,7 @@ import { useForm } from 'react-hook-form';
 import { PHONE_ENABLED } from '@app/shared/config';
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
 import { validID } from '@app/shared/utils';
-import { adminUpdateUserBodySchema } from '@app/shared/validation/auth';
+import { adminUpdateUserBodySchema } from '@app/shared/validation/users';
 import { markDetailStale } from '@/lib/api/query-cache';
 import { clearCachedSessions } from '@/lib/users/security';
 

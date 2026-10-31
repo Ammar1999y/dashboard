@@ -12,7 +12,11 @@ export function recordResponseMismatch(problem: string): void {
   pending.push(problem);
 }
 
-/** The mismatches recorded since the last call. */
+/**
+ * The mismatches recorded since the last call.
+ *
+ * @internal
+ */
 export function takeResponseMismatches(): string[] {
   return pending.splice(0);
 }

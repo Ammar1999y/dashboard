@@ -18,7 +18,7 @@ import type { OtpChannel } from '@app/shared/validation/enums';
 import { and, eq, gt, lt, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
-import { otpChallenges, users, verificationSessions } from '@/db/schema';
+import { otpChallenges, verificationSessions } from '@/db/schema';
 
 import { OTP_AUTO_VERIFY } from '@app/shared/config';
 import { CustomError } from '@app/shared/error-class';
@@ -26,9 +26,9 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import { otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 
-import { lockUser } from '@/lib/auth/user-eligibility';
 import { generateUuidV7 } from '@/lib/id';
 import { enforceOtpGlobalSendBudget } from '@/lib/rate-limit';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { logLine } from '@/utils/log';
 
@@ -198,11 +198,7 @@ export async function verifyRequesterOtp(
 
     // `users` before the row lock below: the canonical order, and
     // `onVerified` reaches it.
-    await tx
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.id, options.userId))
-      .for('update');
+    await lockUser(tx, options.userId);
 
     const [challenge] = await requesterChallenge(tx, {
       ...options,

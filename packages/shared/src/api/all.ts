@@ -31,12 +31,15 @@ export type PluginEndpoint = (typeof betterAuth)[keyof typeof betterAuth];
 export type PluginPath<P extends string = PluginEndpoint['path']> =
   P extends `${typeof BETTER_AUTH_PREFIX}${infer Path}` ? Path : never;
 
-/** A plugin endpoint's path under the prefix, which Better Auth routes by. */
-export const pluginPathOf = <P extends string>(path: P): PluginPath<P> => {
-  if (!path.startsWith(`${BETTER_AUTH_PREFIX}/`))
-    throw new Error(`${path} is not under ${BETTER_AUTH_PREFIX}`);
-  return path.slice(BETTER_AUTH_PREFIX.length) as PluginPath<P>;
-};
+/**
+ * A plugin endpoint's path under the prefix, which Better Auth routes by. The
+ * prefix is checked by the parameter's type, so this module never throws at load.
+ */
+export const pluginPathOf = <
+  P extends `${typeof BETTER_AUTH_PREFIX}/${string}`,
+>(
+  path: P
+): PluginPath<P> => path.slice(BETTER_AUTH_PREFIX.length) as PluginPath<P>;
 
 /** Any plugin endpoint, for code that handles every one alike. */
 export type AnyPluginEndpoint = AnyEndpoint & {

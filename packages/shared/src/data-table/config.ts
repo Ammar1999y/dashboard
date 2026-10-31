@@ -4,8 +4,6 @@ import {
   SORT_ORDER_LABELS,
 } from '../messages/data-table';
 
-export type DataTableConfig = typeof dataTableConfig;
-
 const operators = [
   'iLike',
   'notILike',
@@ -103,12 +101,10 @@ const dataTableConfig = {
     'isNotEmpty',
   ]),
   booleanOperators: operatorOptions(['eq', 'ne']),
-  // Published as `FilterOperator` although the values are `SortOrder`s; narrowing
-  // it would break a consumer that relies on the published type.
-  sortOrders: [
-    { label: SORT_ORDER_LABELS.asc, value: 'asc' as FilterOperator },
-    { label: SORT_ORDER_LABELS.desc, value: 'desc' as FilterOperator },
-  ],
+  sortOrders: options<SortOrder>([
+    { label: SORT_ORDER_LABELS.asc, value: 'asc' },
+    { label: SORT_ORDER_LABELS.desc, value: 'desc' },
+  ]),
   filterVariants,
   operators,
   joinOperators,

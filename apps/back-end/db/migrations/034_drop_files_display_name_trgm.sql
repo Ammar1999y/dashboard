@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_files_display_name_active_trgm;

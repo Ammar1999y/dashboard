@@ -8,7 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { selfUpdateUserBodySchema } from '@app/shared/validation/auth';
+import { selfUpdateUserBodySchema } from '@app/shared/validation/users';
 import { renameSelf } from '@/lib/users/rename';
 
 import { Form } from '@/components/form/form';

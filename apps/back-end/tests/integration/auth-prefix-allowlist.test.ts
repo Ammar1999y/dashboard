@@ -17,17 +17,22 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { app } from '@/app';
 import { BINDINGS } from '@/modules';
+import { APIError } from 'better-auth/api';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
+import { otpMsg } from '@app/shared/messages/otp';
+import { CAPTCHA_HEADER } from '@app/shared/validation/auth';
 
+import { auth } from '@/lib/auth';
 import { BETTER_AUTH_ENDPOINTS } from '@/lib/auth/allowed-paths';
 import { PRE_AUTH_LIMIT } from '@/lib/http/pre-auth';
+import { generateUuidV7 } from '@/lib/id';
 import { getRateLimitStore } from '@/lib/rate-limit/store';
 
 import { compareCodeUnits } from '@/utils/text';
 
-import { egressCallsTo } from '../helpers/egress';
+import { egressCallsTo, scriptEgress } from '../helpers/egress';
 import { expectAuthError, expectError } from '../helpers/expect-body';
 import { baseHeaders } from '../helpers/session';
 import { resetSqliteStores } from '../helpers/sqlite';
@@ -70,11 +75,17 @@ function randomSubPaths(count: number): string[] {
   return [...paths];
 }
 
-function callAuth(subPath: string, method: string = 'POST') {
+function callAuth(
+  subPath: string,
+  method: string = 'POST',
+  { captcha = true }: { captcha?: boolean } = {}
+) {
+  const headers = baseHeaders({ 'content-type': 'application/json' });
+  if (!captcha) delete headers[CAPTCHA_HEADER];
   return app.handle(
     new Request(`http://localhost/api/auth${subPath}`, {
       method,
-      headers: baseHeaders({ 'content-type': 'application/json' }),
+      headers,
       ...(method === 'POST' && { body: '{}' }),
     })
   );
@@ -286,6 +297,23 @@ describe('a sub-path outside the allowlist', () => {
   });
 });
 
+test('a server-only endpoint called in process is refused like any other path', async () => {
+  // Every one reports the same placeholder path, so an exemption for one
+  // would be one condition away from `viewBackupCodes`, which returns any
+  // user's decrypted recovery codes.
+  const answers = await Promise.allSettled([
+    auth.api.generateTOTP({ body: { secret: 'server-only-probe' } }),
+    auth.api.viewBackupCodes({ body: { userId: generateUuidV7() } }),
+  ]);
+  expect(
+    answers.map((answer) =>
+      answer.status === 'rejected' && answer.reason instanceof APIError
+        ? answer.reason.statusCode
+        : answer.status
+    )
+  ).toEqual([HTTP_STATUS.NOT_FOUND, HTTP_STATUS.NOT_FOUND]);
+});
+
 describe('the budget an unknown sub-path draws on', () => {
   test('rotating the path multiplies neither the budget nor the keyspace', async () => {
     // One more request than the coarse budget, each on a DIFFERENT invented
@@ -364,4 +392,61 @@ describe('the budget an allowlisted sub-path draws on', () => {
     expect(scopes).toContain('preauth.auth.two-factor.methods.disable');
     expect(scopes).not.toContain('preauth.auth.two-factor');
   }, 120_000);
+});
+
+/**
+ * The row's `captcha` flag, which publishes the header, is also what the mount
+ * enforces: a flagged path refuses a missing token as the bindings do, before
+ * Better Auth runs, and an unflagged one never asks for one.
+ */
+describe('Turnstile on an allowlisted sub-path', () => {
+  const routes = (captcha: boolean) =>
+    BETTER_AUTH_ENDPOINTS.filter(
+      (endpoint) => endpoint.captcha === captcha
+    ).flatMap((endpoint) =>
+      endpoint.methods.map((method) => [method, endpoint.path] as const)
+    );
+
+  test('the flagged set is not empty, so the refusals below are not vacuous', () => {
+    expect(routes(true).map(([, path]) => path)).toContain('/sign-in/email');
+  });
+
+  test.each(routes(true))(
+    '%s %s without a token is refused 403 before Better Auth',
+    async (method, path) => {
+      const response = await callAuth(path, method, { captcha: false });
+      await expectAuthError(
+        response,
+        HTTP_STATUS.FORBIDDEN,
+        otpMsg.captchaFailed
+      );
+      expect(egressCallsTo(TURNSTILE_HOST)).toEqual([]);
+    }
+  );
+
+  // Turnstile tokens are single-use, so a second verification further in
+  // (a handler checking its own) would refuse every real user.
+  test.each(routes(true))(
+    '%s %s with a token verifies it exactly once',
+    async (method, path) => {
+      let verified = 0;
+      scriptEgress(TURNSTILE_HOST, () =>
+        Response.json({ success: (verified += 1) === 1 })
+      );
+      const response = await callAuth(path, method);
+      const text = await response.text();
+      expect(text).not.toContain(otpMsg.captchaFailed);
+      expect(egressCallsTo(TURNSTILE_HOST)).toHaveLength(1);
+    }
+  );
+
+  test.each(routes(false))(
+    '%s %s without a token is not refused for it',
+    async (method, path) => {
+      const response = await callAuth(path, method, { captcha: false });
+      const text = await response.text();
+      expect(text).not.toContain(otpMsg.captchaFailed);
+      expect(egressCallsTo(TURNSTILE_HOST)).toEqual([]);
+    }
+  );
 });

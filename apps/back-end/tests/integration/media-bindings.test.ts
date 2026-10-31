@@ -5,18 +5,20 @@
  * leaves the body's 422 alone, the strict media queries, and the upload admission limiter charged by the handler, after the
  * checks the gate cannot make.
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import { deflateSync } from 'node:zlib';
 import type { SignedInSession } from '../helpers/session';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import { folders } from '@/db/schema';
+import { files, folders } from '@/db/schema';
 
 import { listMedia } from '@app/shared/api/media';
 import {
   FILE_NOT_FOUND_CODE,
   FILE_TYPE_NOT_ALLOWED_CODE,
   FOLDER_NOT_FOUND_CODE,
+  IMAGE_TOO_LARGE_CODE,
 } from '@app/shared/error-codes';
 import { sanitizeFilename } from '@app/shared/filename';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -32,9 +34,11 @@ import {
   mediaValidationMsg,
   MSG_UNRECOGNIZED_KEYS,
 } from '@app/shared/messages/validation';
+import { MAX_IMAGE_EDGE } from '@app/shared/validation/constants';
 
 import { MAX_JSON_BODY_BYTES } from '@/lib/http/request';
 import { generateUuidV7 } from '@/lib/id';
+import * as optimize from '@/lib/media/image/optimize';
 import { getRateLimitStore } from '@/lib/rate-limit/store';
 
 import { resetTables } from '../helpers/database';
@@ -73,14 +77,19 @@ beforeAll(async () => {
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
-/** Records which body readers a layer called on this request. */
-function watchFormData(request: Request): string[] {
+/**
+ * Records each time a layer takes this request's body stream, which the lazy
+ * reader does once to count it against the ceiling before parsing a copy.
+ */
+function watchBody(request: Request): string[] {
   const reads: string[] = [];
-  const formData = request.formData.bind(request);
-  Object.defineProperty(request, 'formData', {
-    value: () => {
-      reads.push('formData');
-      return formData();
+  const stream = Object.getOwnPropertyDescriptor(Request.prototype, 'body');
+  if (!stream?.get) throw new Error('Request.prototype.body has no getter');
+  const getStream = stream.get;
+  Object.defineProperty(request, 'body', {
+    get(this: Request): unknown {
+      reads.push('body');
+      return getStream.call(this);
     },
   });
   return reads;
@@ -165,7 +174,7 @@ describe('the library upload’s form, read only after admission', () => {
       method: 'POST',
       body: new FormData(),
     });
-    return { request, reads: watchFormData(request) };
+    return { request, reads: watchBody(request) };
   };
 
   test('an admitted request reads it once, through the lazy reader', async () => {
@@ -175,7 +184,8 @@ describe('the library upload’s form, read only after admission', () => {
       HTTP_STATUS.BAD_REQUEST,
       uploadMsg.noFiles
     );
-    expect(reads).toEqual(['formData']);
+    expect(reads).toEqual(['body']);
+    expect(request.bodyUsed).toBe(true);
   });
 
   test.each([
@@ -435,5 +445,75 @@ describe('the upload admission limiter, charged by the handler', () => {
       uploadMsg.noFiles
     );
     expect(charged(caller)).toBe(2);
+  });
+});
+
+describe('an image longer on one side than WebP can hold', () => {
+  /** Flat greyscale, so it deflates far under the image byte limit. */
+  function flatPng(width: number, height: number): Buffer {
+    const chunk = (type: string, data: Buffer) => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(data.length);
+      const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(Bun.hash.crc32(body) >>> 0);
+      return Buffer.concat([length, body, crc]);
+    };
+    const header = Buffer.alloc(13);
+    header.writeUInt32BE(width, 0);
+    header.writeUInt32BE(height, 4);
+    header[8] = 8;
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', header),
+      chunk('IDAT', deflateSync(Buffer.alloc((width + 1) * height, 0x40))),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+  }
+
+  const charged = (session: SignedInSession, scope: string): number => {
+    const statement = getRateLimitStore().db.prepare(
+      'SELECT count FROM rate_limit WHERE key LIKE ?'
+    );
+    try {
+      return statement
+        .all<{ count: number }>(`%${scope}:user:${session.user.userId}`)
+        .reduce((total, row) => total + row.count, 0);
+    } finally {
+      statement.finalize();
+    }
+  };
+
+  test('is refused from its header, uncharged and outside the encoder queue', async () => {
+    const caller = await signedInUser({
+      permissions: { media: { view: true, create: true } },
+    });
+    const form = new FormData();
+    form.append(
+      'file',
+      new File([Uint8Array.from(flatPng(20_000, 10))], 'banner.png', {
+        type: 'image/png',
+      })
+    );
+    const stored = await db.$count(files);
+    const encodes = spyOn(optimize, 'optimizeImage');
+    try {
+      const problem = await expectError(
+        await app.handle(
+          authedRequest(caller, `/api/dash/media/files?folder=${folderId()}`, {
+            method: 'POST',
+            body: form,
+          })
+        ),
+        HTTP_STATUS.UNPROCESSABLE,
+        uploadMsg.edgeTooLong(MAX_IMAGE_EDGE)
+      );
+      expect(problem.code).toBe(IMAGE_TOO_LARGE_CODE);
+      expect(encodes).not.toHaveBeenCalled();
+    } finally {
+      encodes.mockRestore();
+    }
+    expect(charged(caller, 'upload.image')).toBe(0);
+    expect(await db.$count(files)).toBe(stored);
   });
 });

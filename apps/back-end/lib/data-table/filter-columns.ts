@@ -30,6 +30,8 @@ import {
   sql,
 } from 'drizzle-orm';
 
+import { files, folders, roles, users } from '@/db/schema';
+
 import {
   isScanOnlyOperator,
   isSearchOperator,
@@ -65,16 +67,26 @@ function isNotEmpty(column: Column) {
   return sql<boolean>`(${column} is not null and ${column} <> '')`;
 }
 
-export function escapeLike(value: string): string {
-  return value.replaceAll(/[%_\\]/g, String.raw`\$&`);
-}
-
 /**
- * The expression every trigram index over a searchable column is built on
- * (`db/migrations/`); a pattern matched against the bare column cannot use them.
+ * Each searchable column's stored `search_fold`, the column its trigram index
+ * is on (`foldedText` in `db/schema.ts`). Matching the bare column, or
+ * `search_fold(column)` recomputed per row, re-folds every candidate.
  */
-export function foldedColumn(column: Column): SQL {
-  return sql`search_fold(${column})`;
+const FOLDED_COLUMNS: ReadonlyMap<Column, Column> = new Map<Column, Column>([
+  [users.name, users.nameFolded],
+  [users.email, users.emailFolded],
+  [roles.roleName, roles.roleNameFolded],
+  [roles.description, roles.descriptionFolded],
+  [files.displayName, files.displayNameFolded],
+  [folders.name, folders.nameFolded],
+]);
+
+/** A column outside `FOLDED_COLUMNS` is a server mismatch, never an unindexed search. */
+export function foldedColumn(column: Column): Column {
+  const folded = FOLDED_COLUMNS.get(column);
+  if (!folded)
+    throw new Error(`Column "${column.name}" has no folded search column`);
+  return folded;
 }
 
 /**

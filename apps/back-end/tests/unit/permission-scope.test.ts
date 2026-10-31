@@ -7,8 +7,10 @@ import type {
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_NOT_FOUND } from '@app/shared/messages/common';
-import { MSG_CANNOT_GRANT_UNOWNED_PERMISSIONS } from '@app/shared/messages/permissions';
+import {
+  MSG_CANNOT_GRANT_UNOWNED_PERMISSIONS,
+  MSG_INSUFFICIENT_PERMISSIONS,
+} from '@app/shared/messages/permissions';
 import {
   DASHBOARD_PAGE_NAMES,
   OWN_ACTION_MAP,
@@ -148,19 +150,11 @@ describe('caller-supplied keys cannot reach the prototype', () => {
   });
 });
 
-describe('the reachability collapse both role write paths must give', () => {
+describe('the reachability answer both role write paths must give', () => {
   /**
-   * `RoleScopeCheck` says the distinction is "a disclosure boundary, not a style
-   * choice": every neighbouring unreachable-target gate answers `404
-   * MSG_NOT_FOUND`, and answering `403 "you cannot GRANT permissions you don't
-   * own"` instead tells a caller without `permissions.view` that a role exists
-   * and outranks them.
-   *
-   * `DELETE /api/dash/permissions/:id` bypassed the helper that makes that
-   * decision — it called `validatePermissionScope` directly, to avoid re-reading
-   * `role_permissions` it already held `FOR SHARE` — so a deletion, which grants
-   * nothing, answered 403 where the neighbouring PUT on the same role answered
-   * 404. `assertRowsReachable` is the collapse both now share.
+   * A write on a target that outranks the caller grants nothing, so it is
+   * refused with the insufficient-permissions message, not the grant one.
+   * `assertRowsReachable` is the answer both role write paths share.
    */
   const outranking = [
     {
@@ -196,22 +190,22 @@ describe('the reachability collapse both role write paths must give', () => {
     );
   });
 
-  test('collapsed, it is indistinguishable from a nonexistent role', () => {
+  test('as reachability, it is the 403 insufficient-permissions answer', () => {
     const rows = outranking.map(({ name, permissions }) => ({
       pageName: name,
       permissions,
     }));
     expect(() => assertRowsReachable(actor, rows)).toThrow(
       expect.objectContaining({
-        status: HTTP_STATUS.NOT_FOUND,
-        message: MSG_NOT_FOUND,
+        status: HTTP_STATUS.FORBIDDEN,
+        message: MSG_INSUFFICIENT_PERMISSIONS,
       })
     );
   });
 
-  test('a non-CustomError is rethrown untouched, not turned into a 404', () => {
-    // Collapsing an unexpected fault would hide a real bug behind a routine
-    // "not found".
+  test('a non-CustomError is rethrown untouched, not turned into a 403', () => {
+    // Converting an unexpected fault would hide a real bug behind a routine
+    // refusal.
     const bug = new TypeError('unrelated');
     const rows = [
       {

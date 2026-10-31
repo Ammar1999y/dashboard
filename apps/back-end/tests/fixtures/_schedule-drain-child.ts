@@ -11,18 +11,29 @@
  * than the deadline, `timeout` gives it more, `elected` registers the job
  * twice as `shared`, so both firings contend for its PostgreSQL lock, and
  * `throws` fails the first firing and drains during the second, a minute later.
+ * `halted` halts the schedule before its first firing and waits past it.
  */
 /* eslint-disable unicorn/no-process-exit -- this fixture IS a process entry
    point: its stdout and exit code are the assertion. */
 import { startSchedule } from '@/lib/maintenance/schedule';
 
-const MODES = ['drain', 'timeout', 'elected', 'throws'] as const;
+const MODES = ['drain', 'timeout', 'elected', 'throws', 'halted'] as const;
 const mode =
   MODES.find((candidate) => candidate === process.argv[2]) ?? 'drain';
-const JOB_MS = { drain: 300, timeout: 5000, elected: 3000, throws: 300 }[mode];
-const DRAIN_MS = { drain: 5000, timeout: 300, elected: 10_000, throws: 5000 }[
-  mode
-];
+const JOB_MS = {
+  drain: 300,
+  timeout: 5000,
+  elected: 3000,
+  throws: 300,
+  halted: 300,
+}[mode];
+const DRAIN_MS = {
+  drain: 5000,
+  timeout: 300,
+  elected: 10_000,
+  throws: 5000,
+  halted: 5000,
+}[mode];
 
 class ProbeSweepError extends Error {
   override name = 'ProbeSweepError';
@@ -52,6 +63,17 @@ const probe = {
 };
 
 const schedule = startSchedule(mode === 'elected' ? [probe, probe] : [probe]);
+
+// What shutdown does before draining requests: past this, the next boundary
+// must start nothing, however long the drain that follows takes.
+if (mode === 'halted') {
+  schedule.halt();
+  await Bun.sleep(60_000 - (Date.now() % 60_000) + 2000);
+  const drained = await schedule.stopAndDrain(DRAIN_MS);
+  emit('drain returned', { mode, drained });
+  emit(drained ? 'stores closed' : 'stores left open for forced exit');
+  process.exit(0);
+}
 
 // Up to one minute, two for `throws`: `Bun.cron` fires on the next boundary
 // and offers no way to trigger a job by hand.

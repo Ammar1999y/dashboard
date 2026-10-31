@@ -129,6 +129,7 @@ export const mediaMsg = {
       macros: `الملف "${isolate(name)}" يحتوي على وحدات ماكرو وغير مسموح به`,
       embedded: `الملف "${isolate(name)}" يحتوي على عناصر مضمنة وغير مسموح به`,
       encrypted: `الملف "${isolate(name)}" محمي بكلمة مرور ولا يمكن التحقق منه`,
+      complex: `الملف "${isolate(name)}" معقّد جداً ولا يمكن التحقق منه. قسّمه إلى ملفات أصغر أو قلّل عدد الروابط فيه ثم ارفعه مرة أخرى`,
     })[reason],
 
   uploadFailed: MSG_UPLOAD_FAILED,
@@ -149,8 +150,6 @@ export const uploadMsg = {
     `محتوى الملف ${isolate(name)} لا يتطابق مع نوعه المعلن`,
   animatedNotAllowed: MSG_ANIMATED_NOT_ALLOWED,
   uploadFailed: 'حدث خطأ في رفع الملفات',
-  invalidMimeType: (type: string) =>
-    `نوع الملف غير مسموح: ${type}. الأنواع المسموحة: PNG, WebP, SVG`,
   svgOptimizeFailed: MSG_SVG_OPTIMIZE_FAILED,
   tooManyPixels: MSG_IMAGE_TOO_MANY_PIXELS,
   edgeTooLong: MSG_IMAGE_EDGE_TOO_LONG,

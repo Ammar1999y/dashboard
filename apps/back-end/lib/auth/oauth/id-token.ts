@@ -13,13 +13,20 @@ const GOOGLE_CERTS_URL = new URL('https://www.googleapis.com/oauth2/v3/certs');
 
 const ID_TOKEN_ALGORITHMS = ['RS256'];
 
+/** On `exp` and `iat`: a server clock behind Google's must not refuse every sign-in. */
+const CLOCK_TOLERANCE_S = 30;
+
 /**
  * Shared, so jose's cache and its de-duplication of concurrent fetches apply:
  * it refetches when stale or on an unknown `kid` outside its cooldown.
  */
 const signingKeys = { resolver: createRemoteJWKSet(GOOGLE_CERTS_URL) };
 
-/** For tests that serve their own key set: the next verification fetches it. */
+/**
+ * For tests that serve their own key set: the next verification fetches it.
+ *
+ * @internal
+ */
 export function forgetGoogleSigningKeys(): void {
   signingKeys.resolver = createRemoteJWKSet(GOOGLE_CERTS_URL);
 }
@@ -96,6 +103,9 @@ export async function verifyGoogleIdToken(params: {
       issuer: [GOOGLE_ISSUER, 'accounts.google.com'],
       audience: params.audience,
       maxTokenAge: '1h',
+      // Otherwise `exp` is validated only when present.
+      requiredClaims: ['exp'],
+      clockTolerance: CLOCK_TOLERANCE_S,
     }));
   } catch (cause) {
     // An empty set answers every token as one no key matches.
@@ -107,10 +117,6 @@ export async function verifyGoogleIdToken(params: {
   }
   if (
     claims.nonce !== params.nonce ||
-    // `jwtVerify` validates exp when present, but does not require the claim.
-    typeof claims.exp !== 'number' ||
-    !Number.isSafeInteger(claims.exp) ||
-    claims.exp <= Math.floor(Date.now() / 1000) ||
     (claims.azp !== undefined && claims.azp !== params.audience)
   )
     throw denied();

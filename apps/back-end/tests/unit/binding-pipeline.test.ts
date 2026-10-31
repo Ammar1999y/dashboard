@@ -535,11 +535,15 @@ describe('a multipart binding with a deferred limiter', () => {
       method: 'POST',
       body: form,
     });
-    const formData = request.formData.bind(request);
-    Object.defineProperty(request, 'formData', {
-      value: () => {
+    // The stream, not `formData`: the reader takes it to count against the
+    // ceiling and parses a counted copy.
+    const stream = Object.getOwnPropertyDescriptor(Request.prototype, 'body');
+    if (!stream?.get) throw new Error('Request.prototype.body has no getter');
+    const getStream = stream.get;
+    Object.defineProperty(request, 'body', {
+      get(this: Request): unknown {
         seen.reads += 1;
-        return formData();
+        return getStream.call(this);
       },
     });
     return request;

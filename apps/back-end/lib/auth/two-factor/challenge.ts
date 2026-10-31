@@ -8,11 +8,7 @@ import type { OfferedOption } from './methods';
 import type { AttemptSpend } from './pending-proof';
 import type { Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
-import type {
-  ContactKind,
-  OtpChannel,
-  TwoFactorMethod,
-} from '@app/shared/validation/enums';
+import type { OtpChannel, TwoFactorMethod } from '@app/shared/validation/enums';
 
 import { and, eq, isNull } from 'drizzle-orm';
 
@@ -42,7 +38,6 @@ import { withAuthTransaction } from '../transaction';
 import { lockEligibleAuthUser } from '../user-eligibility';
 import { twoFactorAttemptsKey, twoFactorStateKey } from '../verifications';
 import {
-  asContactKind,
   defaultOption,
   offeredMethodNames,
   offeredMethods,
@@ -71,7 +66,6 @@ export interface ChallengeState {
   options: string[];
   defaultMethod: string | null;
   firstFactor: FirstFactor;
-  excludeContactKind: ContactKind | null;
   rememberMe: boolean;
 }
 
@@ -90,7 +84,6 @@ function parseChallengeState(raw: string): ChallengeState | null {
         : record.firstFactor === 'passwordless'
           ? 'passwordless'
           : 'password',
-    excludeContactKind: asContactKind(record.excludeContactKind),
     rememberMe: record.rememberMe === true,
   };
 }

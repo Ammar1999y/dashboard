@@ -1,21 +1,11 @@
 /**
  * The transaction boundary in `processOtpSend`: delivery runs AFTER the commit.
  *
- * Ported from `scripts/probe/dev-live/database/otp-send-boundary.dev-probe.ts`,
- * which is the first of the five dev probes to move because the harness's SMTP
- * stub broke it: that probe depended on a REAL SMTP connection failing fast
- * because `SMTP_USER`/`SMTP_PASS` were unset, and carried
- * `skipIf(SMTP_CONFIGURED)` so it would not mail a live address. With
- * `mock.module('nodemailer')` installed by the base preload it stopped failing,
- * so `bun run probe:db` reported `delivery failure still surfaces to the caller`
- * as a genuine failure. `failNextMail()` is the seam that replaces it — the
- * failure is now requested rather than depended on, so the `skipIf` is gone and
- * the assertion runs everywhere instead of only on a machine with no SMTP
- * credentials.
+ * `failNextMail()` requests the delivery failure rather than depending on a
+ * real SMTP connection failing, so the assertion runs on every machine, with or
+ * without SMTP credentials.
  *
- * ---
- *
- * The contract these tests pin, which is the CURRENT one:
+ * The contract these tests pin:
  *
  *  - `processOtpSend` throws, so the caller and the client see the failure
  *  - the spent attempt and the cooldown are REFUNDED (`attemptNumber` back to 0,
@@ -31,16 +21,9 @@
  * still runs after the commit — it cannot be rolled back, which is why the refund
  * is a compensating write rather than part of the transaction.
  *
- * (The header here used to state the opposite — that the attempt was burnt and
- * the code survived — and warned that adding a compensating decrement would make
- * these assertions fail. The decrement was added, the assertions were updated,
- * and the warning was not: this paragraph exists so the next reader knows the
- * drift warning is now pointed at the property above.)
- *
- * Two things the port removed rather than translated: the `PROBE_STAMP`-derived
- * email (the database is per-worker and truncated, so a unique-per-run address
- * buys nothing) and the `afterAll` row-by-row cleanup (`resetTables` replaces it,
- * and the old version could not clean up after a failure between its inserts).
+ * The database is per-worker and `resetTables` empties it, so the fixture's
+ * email needs no per-run stamp, and a failure between inserts leaves nothing
+ * behind.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 
@@ -56,7 +39,6 @@ import {
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { CONTACT_LABEL } from '@app/shared/messages/otp';
 
 import { generateUuidV7 } from '@/lib/id';
 import { processOtpSend } from '@/lib/otp/send';
@@ -107,8 +89,6 @@ beforeAll(async () => {
       identifier: EMAIL,
       channel: 'email',
       purpose: 'verify_contact',
-      sendTo: EMAIL,
-      entityName: CONTACT_LABEL.email,
     });
   } catch (error) {
     fixture.threw = error;

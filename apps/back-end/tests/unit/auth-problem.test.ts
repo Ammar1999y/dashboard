@@ -11,6 +11,7 @@ import {
   PROBLEM_MEDIA_TYPE,
   problemBody,
 } from '@app/shared/api/wire';
+import { CustomError } from '@app/shared/error-class';
 import {
   CUSTOM_AUTH_CODE,
   EMAIL_NOT_VERIFIED_CODE,
@@ -21,7 +22,7 @@ import {
   MSG_INVALID_INPUT,
 } from '@app/shared/messages/common';
 
-import { toAuthProblem } from '@/lib/auth/errors';
+import { toAuthApiError, toAuthProblem } from '@/lib/auth/errors';
 
 const json = (body: unknown, status: number, headers?: HeadersInit) =>
   Response.json(body, { status, headers });
@@ -134,5 +135,35 @@ describe('a refusal under the prefix', () => {
   ])('%s passes through untouched', async (_label, make) => {
     const response = make();
     expect(await toAuthProblem(response)).toBe(response);
+  });
+});
+
+describe('toAuthApiError', () => {
+  const failure = (status: number | undefined) => {
+    const error = new CustomError('raiser copy', status);
+    error.responseHeaders = { 'Retry-After': '7' };
+    return toAuthApiError(error, 'generic copy');
+  };
+
+  test.each([500, 502, undefined])(
+    'a server failure (%p) stays a 500 with its own message',
+    (status) => {
+      const answer = failure(status);
+      expect(answer.statusCode).toBe(500);
+      expect(answer.body).toMatchObject({ message: 'raiser copy' });
+    }
+  );
+
+  test.each([429, 503])('%p keeps its message and headers', (status) => {
+    const answer = failure(status);
+    expect(answer.statusCode).toBe(status);
+    expect(answer.body).toMatchObject({ message: 'raiser copy' });
+    expect(new Headers(answer.headers).get('retry-after')).toBe('7');
+  });
+
+  test('any other client error collapses to the generic 400', () => {
+    const answer = failure(404);
+    expect(answer.statusCode).toBe(400);
+    expect(answer.body).toMatchObject({ message: 'generic copy' });
   });
 });

@@ -59,7 +59,6 @@ export async function assertTargetUserVisibleUnlocked(
     .select({
       roleId: users.roleId,
       createdBy: users.createdBy,
-      roleName: roles.roleName,
       roleScope: roles.scope,
     })
     .from(users)
@@ -71,7 +70,7 @@ export async function assertTargetUserVisibleUnlocked(
     isSelf: opts.targetId === opts.actorUserId,
     roleId: target.roleId,
     createdBy: target.createdBy,
-    role: { roleName: target.roleName, scope: target.roleScope },
+    role: { scope: target.roleScope },
     actorUserId: opts.actorUserId,
     scope: opts.scope,
   });

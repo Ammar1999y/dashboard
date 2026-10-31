@@ -16,12 +16,7 @@ import { files, folders } from '@/db/schema';
 
 import { normalizeMimeType } from '@app/shared/validation/media-types';
 
-import {
-  checksumSha256Of,
-  getPresignedUrl,
-  getPublicUrl,
-  hasPublicUrl,
-} from '@/lib/r2/client';
+import { checksumSha256Of, getPublicUrl, hasPublicUrl } from '@/lib/r2/client';
 import { userNames } from '@/lib/users/names';
 
 import { auditAs, withinScope } from './actor';
@@ -31,6 +26,7 @@ import { requireFolder } from './folders';
 import { getContentDisposition } from './headers';
 import { distinctIds } from './ids';
 import {
+  presignInWindow,
   PRIVATE_IMAGE_CACHE_CONTROL,
   signingWindow,
   UNCACHED,
@@ -250,7 +246,7 @@ function fileUrl(
 ): Promise<string> | string {
   if (row.bucketType === 'public' && hasPublicUrl())
     return getPublicUrl(row.r2Key);
-  return getPresignedUrl({
+  return presignInWindow({
     key: row.r2Key,
     bucketType: row.bucketType,
     ...window,
@@ -270,7 +266,7 @@ export function downloadUrl(
   row: Pick<MediaFileRow, 'r2Key' | 'bucketType' | 'displayName' | 'mimeType'>,
   window: SigningWindow = signingWindow(Date.now())
 ): Promise<string> {
-  return getPresignedUrl({
+  return presignInWindow({
     key: row.r2Key,
     bucketType: row.bucketType,
     ...window,
@@ -293,7 +289,7 @@ export function previewUrl(
   window: SigningWindow = signingWindow(Date.now())
 ): Promise<string> | null {
   if (normalizeMimeType(row.mimeType) !== PREVIEWED) return null;
-  return getPresignedUrl({
+  return presignInWindow({
     key: row.r2Key,
     bucketType: row.bucketType,
     ...window,

@@ -1,24 +1,13 @@
 /**
  * `PUT` and `DELETE` on a role that outranks the caller must answer the SAME
- * thing, through the real route table.
+ * thing, through the real route table: the reachability refusal, 403 with the
+ * insufficient-permissions message, not the grant message "you cannot grant
+ * permissions you don't own", which names something neither request does.
  *
- * The distinction is a disclosure boundary, not a style choice: every
- * neighbouring unreachable-target gate answers `404 MSG_NOT_FOUND`, so answering
- * `403 "you cannot GRANT permissions you don't own"` instead tells a caller who
- * holds no `permissions.view` that a role EXISTS and that it outranks them — an
- * exact, authenticated oracle over the role table, from an account that cannot
- * list it.
- *
- * `DELETE` had that divergence: it read `role_permissions` `FOR SHARE` for its
- * own audit payload and then called `validatePermissionScope` directly, skipping
- * the helper that makes the reachability-versus-grant decision, while the
- * neighbouring `PUT` on the same role answered 404.
- *
- * `tests/unit/permission-scope.test.ts` covers `collapseToNotFound` in
- * isolation, which is not the same statement: reverting the handler to the bare
- * `validatePermissionScope` call leaves every one of those cases green, because
- * they never touch the handler. What only a request can show is that BOTH routes
- * still route through it.
+ * `DELETE` once diverged: it called `validatePermissionScope` directly,
+ * skipping the helper that makes the reachability-versus-grant decision.
+ * `tests/unit/permission-scope.test.ts` covers `assertRowsReachable` in
+ * isolation, which cannot show that BOTH routes still go through it.
  *
  * The PUT deliberately carries NO `permissions` array. With one, the handler
  * runs the `grant` check before the transaction and 403 is the correct answer;
@@ -28,10 +17,15 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { SeededUser, SignedInSession } from '../helpers/session';
 
+import { eq } from 'drizzle-orm';
+
 import { app } from '@/app';
+import { db } from '@/db';
+import { roles } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_NOT_FOUND } from '@app/shared/messages/common';
+import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, seedUser, signedInUser } from '../helpers/session';
@@ -110,23 +104,28 @@ beforeAll(async () => {
 });
 
 describe('a role that outranks the caller', () => {
-  test('answers 404 identically on PUT and on DELETE', async () => {
+  test('answers the same 403 on PUT and on DELETE, and keeps the role', async () => {
     const roleId = roleOf('outranking');
+    const stored = () =>
+      db
+        .select({ roleName: roles.roleName })
+        .from(roles)
+        .where(eq(roles.id, roleId));
+    const before = await stored();
 
     const edited = await observe(await put(roleId));
     const deleted = await observe(await remove(roleId));
 
     expect(edited).toEqual(deleted);
-    // Positively the unreachable-target answer, not a 403 both happen to give.
     expect(edited).toEqual({
-      status: HTTP_STATUS.NOT_FOUND,
-      detail: MSG_NOT_FOUND,
+      status: HTTP_STATUS.FORBIDDEN,
+      detail: MSG_INSUFFICIENT_PERMISSIONS,
     });
+    expect(before).toHaveLength(1);
+    expect(await stored()).toEqual(before);
   });
 
-  test('a nonexistent role is indistinguishable from it', async () => {
-    // The comparison that makes the collapse mean something: the same pair of
-    // requests against an id that names no role at all.
+  test('a nonexistent role is the 404 instead', async () => {
     const absent = '01860f1c-0000-7000-8000-00000000dead';
 
     expect(await observe(await put(absent))).toEqual({
@@ -141,7 +140,7 @@ describe('a role that outranks the caller', () => {
 });
 
 describe('a role within the caller authority', () => {
-  test('is reachable, so the 404 above is about authority and not about the route', async () => {
+  test('is reachable, so the 403 above is about authority and not about the route', async () => {
     const edited = await put(roleOf('reachable'));
 
     expect(edited.status).toBe(HTTP_STATUS.OK);

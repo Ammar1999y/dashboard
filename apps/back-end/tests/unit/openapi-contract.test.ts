@@ -46,15 +46,17 @@ import { isTwoFactorMethodEnabled } from '@app/shared/validation/two-factor';
 import { auth } from '@/lib/auth';
 import {
   BETTER_AUTH_ENDPOINTS,
-  BETTER_AUTH_KNOWN_PATHS,
+  BETTER_AUTH_KNOWN_ENDPOINTS,
   BETTER_AUTH_ROUTE_PREFIX,
   betterAuthServes,
 } from '@/lib/auth/allowed-paths';
+import { FORCED_BODY_FIELDS } from '@/lib/auth/path-policy';
 import {
   BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
+  BETTER_AUTH_SET_COOKIE,
   BETTER_AUTH_SPENT_INPUT_REMEDIES,
   BETTER_AUTH_TRUSTED_RESPONSES,
-  LIBRARY_VERIFIER_PATHS,
+  LIBRARY_VERIFIER_DESCRIPTIONS,
 } from '@/lib/http/openapi/better-auth-tables';
 import { finalizeDocument } from '@/lib/http/openapi/finalize';
 import { isSafeMethod } from '@/lib/http/origin';
@@ -1331,9 +1333,6 @@ describe('the Better Auth surface, per endpoint', () => {
       ])
     );
 
-    const signOut = operationOf(document, '/api/auth/sign-out', 'post');
-    expect(signOut.requestBody).toMatchObject({ required: false });
-
     for (const endpoint of BETTER_AUTH_ENDPOINTS) {
       const operation = operationOf(
         document,
@@ -1371,6 +1370,95 @@ describe('the Better Auth surface, per endpoint', () => {
     // here unless `session.deferSessionRefresh` is enabled, which it is not.
     expect(betterAuthServes('/get-session', 'POST')).toBe(false);
     expect(betterAuthServes('/not-an-endpoint', 'GET')).toBe(false);
+  });
+
+  test('publishes no library body field the server overwrites or never reads', () => {
+    // A client sending `trustDevice: true` was answered 200, and the device
+    // was silently not trusted.
+    const document = development();
+    for (const [authPath, forced] of FORCED_BODY_FIELDS) {
+      const properties = Object.keys(
+        objectProperty(
+          requestSchemaOf(document, `/api/auth${authPath}`, 'post'),
+          'properties'
+        )
+      );
+      expect(properties.length).toBeGreaterThan(0);
+      expect([
+        authPath,
+        properties.filter((name) => Object.hasOwn(forced, name)),
+      ]).toEqual([authPath, []]);
+    }
+    // Its every field drives a social provider's logout, and none is configured.
+    expect(
+      operationOf(document, '/api/auth/sign-out', 'post').requestBody
+    ).toBeUndefined();
+  });
+
+  test('the sign-in and sign-out answers publish no redirect the server never sends', () => {
+    const document = development();
+    const signIn = responseSchemaOf(
+      document,
+      '/api/auth/sign-in/email',
+      'post',
+      '200'
+    ) as { anyOf?: Record<string, unknown>[] };
+    const session = objectProperty(signIn.anyOf?.[0] ?? {}, 'properties');
+    expect(Object.keys(session).toSorted(compareCodeUnits)).toEqual([
+      'redirect',
+      'token',
+      'user',
+    ]);
+    expect(session.redirect).toMatchObject({ enum: [false] });
+    const signInAnswer = (
+      operationOf(document, '/api/auth/sign-in/email', 'post')
+        .responses as Record<string, Record<string, unknown>>
+    )['200'];
+    expect(String(signInAnswer?.description)).not.toContain('redirect');
+    expect(signIn.anyOf?.[0]?.description).toBeUndefined();
+    const signOut = responseSchemaOf(
+      document,
+      '/api/auth/sign-out',
+      'post',
+      '200'
+    );
+    expect(Object.keys(objectProperty(signOut, 'properties'))).toEqual([
+      'success',
+    ]);
+  });
+
+  test('an answer that sets a cookie of its own publishes `Set-Cookie`', () => {
+    const document = development();
+    const served = BETTER_AUTH_ENDPOINTS.filter(({ path }) =>
+      Object.hasOwn(BETTER_AUTH_SET_COOKIE, path)
+    );
+    // Named here rather than read from the table: each sets a cookie of its own
+    // on success (the WebAuthn challenge one is set by the passkey plugin).
+    expect(served.map(({ path }) => path)).toEqual(
+      expect.arrayContaining([
+        '/sign-in/email',
+        '/two-factor/verify-totp',
+        '/two-factor/verify-backup-code',
+        '/two-factor/passkey/verify',
+        '/two-factor/trust-device',
+        '/passkey/generate-register-options',
+        '/sign-out',
+      ])
+    );
+    for (const { path: authPath, methods } of served) {
+      const responses = operationOf(
+        document,
+        `/api/auth${authPath}`,
+        methods[0]?.toLowerCase() ?? ''
+      ).responses as Record<string, Record<string, unknown>>;
+      const published = Object.entries(BETTER_AUTH_SET_COOKIE[authPath] ?? {});
+      for (const [status, description] of published)
+        expect(objectProperty(responses[status] ?? {}, 'headers')).toEqual(
+          expect.objectContaining({
+            'Set-Cookie': { description, schema: { type: 'string' } },
+          })
+        );
+    }
   });
 });
 
@@ -1431,6 +1519,7 @@ describe('the refusals an operation declares for its own authorisation', () => {
       type: 'apiKey',
       in: 'cookie',
       name: context.authCookies.sessionToken.name,
+      description: expect.stringContaining('`Set-Cookie`'),
     });
 
     for (const binding of DEVELOPMENT_BINDINGS)
@@ -1634,14 +1723,14 @@ describe('the statuses each Better Auth operation declares', () => {
    * and not this deployment (it calls `/get-session` `["GET","POST"]`, where
    * POST answers 405). What each observation was:
    *
-   *   400  POST /sign-in/email with no `x-captcha-response`; POST /sign-out with
-   *        a body Better Auth's own validation refuses
+   *   400  POST /sign-out with a body Better Auth's own validation refuses
    *   401  POST /sign-in/email on rejected credentials (`lib/auth/index.ts` maps
    *        `LoginRejected`) and from the `session.create` hook both
    *        session-issuing paths run — asserted against a real database in
    *        `tests/integration/sign-in-controls.test.ts`
-   *   403  POST /sign-out from an untrusted origin; captcha VERIFICATION_FAILED
-   *        and the unverified-contact gates on the session-issuing paths
+   *   403  POST /sign-out from an untrusted origin; a missing or refused
+   *        captcha (`server/elysia/auth-mount.ts`) and the unverified-contact
+   *        gates on the session-issuing paths
    *   404  the allowlist `before` hook, and an endpoint whose channel is off
    *   422  POST /sign-in/email with a body `loginSchema` rejects
    *   429  the 301st GET /get-session from one IP (its `preAuthLimit` is 300)
@@ -2040,11 +2129,18 @@ describe('the statuses each Better Auth operation declares', () => {
     return problems;
   }
 
+  const LIBRARY_VERIFIER_PATHS: ReadonlySet<string> = new Set(
+    Object.keys(LIBRARY_VERIFIER_DESCRIPTIONS)
+  );
+  const KNOWN_PATHS: ReadonlySet<string> = new Set(
+    BETTER_AUTH_KNOWN_ENDPOINTS.map((endpoint) => endpoint.path)
+  );
+
   test('every Better Auth path takes its 200 from exactly one source', () => {
     expect(
-      successSourceProblems(BETTER_AUTH_KNOWN_PATHS, [
+      successSourceProblems(KNOWN_PATHS, [
         ['PLUGIN_ENDPOINTS', new Set(PLUGIN_ENDPOINTS.keys())],
-        ['LIBRARY_VERIFIER_PATHS', LIBRARY_VERIFIER_PATHS],
+        ['LIBRARY_VERIFIER_DESCRIPTIONS', LIBRARY_VERIFIER_PATHS],
         ['BETTER_AUTH_TRUSTED_RESPONSES', BETTER_AUTH_TRUSTED_RESPONSES],
       ])
     ).toEqual([]);

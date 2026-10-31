@@ -8,6 +8,7 @@ import { users } from '@/db/schema';
 import { sendOtp, verifyOtp } from '@app/shared/api/auth';
 import { OTP_AUTO_VERIFY } from '@app/shared/config';
 import { otpMsg } from '@app/shared/messages/otp';
+import { contactKindOf } from '@app/shared/validation/enums';
 import { OTP_ENABLED } from '@app/shared/validation/otp';
 
 import { getAuditMeta } from '@/lib/audit';
@@ -17,7 +18,6 @@ import {
   sendAnonymousOtp,
 } from '@/lib/otp/anonymous-send';
 import { verifyRequesterOtpOrAutoVerify } from '@/lib/otp/challenge';
-import { markContactVerified } from '@/lib/otp/contact';
 import {
   readRequester,
   REQUESTER_BOUND_VERIFY,
@@ -25,9 +25,11 @@ import {
   requesterFor,
 } from '@/lib/otp/requester';
 import { invalidOrExpiredCode } from '@/lib/otp/throttle';
-import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
-
-import { logSanitized } from '@/utils/log';
+import {
+  activeUserWithContact,
+  contactIdentifier,
+  markContactVerified,
+} from '@/lib/users/contact';
 
 import {
   COLLAPSED_BODY_REFUSALS,
@@ -65,15 +67,9 @@ function autoVerifyContact(
   return withTransaction((tx) =>
     markContactVerified(tx, {
       userId,
-      channel,
+      kind: contactKindOf(channel),
       auditMeta: getAuditMeta(meta),
       onMissing: () => {
-        // User vanished mid-flow: logged apart, answered generically.
-        logSanitized('error', {
-          msg: 'otp.send.autoVerify.userVanished',
-          userId,
-          channel,
-        });
         throw invalidOrExpiredCode();
       },
     })
@@ -104,9 +100,7 @@ export const sendOtpBinding = bind(sendOtp, {
       surface: 'verify_contact',
       purpose: 'verify_contact',
       requester,
-      failureLog: OTP_AUTO_VERIFY
-        ? 'otp.autoVerify.failed'
-        : 'otp.send.deliveryFailed',
+      failureLog: OTP_AUTO_VERIFY ? 'otp.autoVerify.failed' : 'otp.send.failed',
       findRecipient: findUnverifiedRecipient,
       issue: OTP_AUTO_VERIFY
         ? (target) => autoVerifyContact(meta, target)
@@ -150,16 +144,6 @@ export const verifyOtpBinding = bind(verifyOtp, {
 
     const auditMeta = getAuditMeta(meta);
 
-    const onMissing = (): never => {
-      // User vanished mid-flow: logged apart, answered generically.
-      logSanitized('error', {
-        msg: 'otp.verify.userVanished',
-        userId: userData.id,
-        channel,
-      });
-      throw invalidOrExpiredCode();
-    };
-
     // Under OTP_AUTO_VERIFY a client that still calls verify succeeds idempotently.
     await verifyRequesterOtpOrAutoVerify({
       userId: userData.id,
@@ -172,9 +156,11 @@ export const verifyOtpBinding = bind(verifyOtp, {
       onVerified: (tx) =>
         markContactVerified(tx, {
           userId: userData.id,
-          channel,
+          kind: contactKindOf(channel),
           auditMeta,
-          onMissing,
+          onMissing: () => {
+            throw invalidOrExpiredCode();
+          },
         }),
     });
 

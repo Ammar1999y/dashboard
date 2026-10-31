@@ -9,8 +9,6 @@ import {
   passwordSchema,
   phoneSchema,
   reauthPasswordSchema,
-  SLUG_MAX,
-  slugSchema,
 } from './rules';
 
 /**
@@ -18,13 +16,13 @@ import {
  *
  * `z.toJSONSchema` sees neither preprocess, so every `min`/`max` on a sanitized
  * leaf describes the string AFTER stripping and trimming while the document
- * presents it as a rule about the raw input. Both sanitizers only ever SHORTEN,
+ * presents it as a rule about the raw input. Both sanitizers mostly SHORTEN,
  * which decides what each published keyword is worth:
  *
- *  - `minLength` cannot refuse a valid request — a raw value shorter than the
- *    floor cannot grow past it — so it stays. It is merely lax: `"a "` against
- *    `minLength: 2` passes the document and is refused by the server, which
- *    keeps one character.
+ *  - `minLength: 1` cannot refuse a valid request — nothing grows an empty
+ *    value — so it stays. A higher floor can: NFC decomposes a
+ *    composition-excluded character (U+0958) into two, so one raw character can
+ *    meet a floor of 2. That floor travels as prose (`strictTextLength`).
  *  - `maxLength` can, and so it goes. A hundred and fifty characters plus two
  *    spaces is trimmed to 150 and ACCEPTED, while a validator measures 152
  *    against `maxLength: 150` and refuses a request the server would have
@@ -39,10 +37,10 @@ import {
  * `otpCodeSchema` and the media names.
  */
 export const STRICT_TEXT_DESCRIPTION =
-  'Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] \' " ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed';
+  'Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] \' " ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed';
 
 /** `sanitizeStrictSingleLine` additionally folds every whitespace run to one space. */
-export const STRICT_SINGLE_LINE_DESCRIPTION = `${STRICT_TEXT_DESCRIPTION}. Line breaks and repeated spaces are collapsed to a single space.`;
+export const STRICT_SINGLE_LINE_DESCRIPTION = `${STRICT_TEXT_DESCRIPTION}. Every whitespace run, line breaks included, is then collapsed to a single space.`;
 
 /**
  * The ceiling, as prose, for a leaf whose `maxLength` cannot be published — and
@@ -50,6 +48,10 @@ export const STRICT_SINGLE_LINE_DESCRIPTION = `${STRICT_TEXT_DESCRIPTION}. Line 
  */
 export const strictTextMaximum = (max: number) =>
   `After that it must be at most ${max} characters.`;
+
+/** Both bounds as prose, for a leaf whose floor is above 1. */
+export const strictTextLength = (min: number, max: number) =>
+  `After that it must be ${min} to ${max} characters.`;
 
 /**
  * The whole rule as prose, because the normalisation leaves no published
@@ -87,9 +89,5 @@ export const docs = [
     PHONE_ENABLED
       ? OPTIONAL_PHONE
       : `${OPTIONAL_PHONE} Phone input is disabled; omit this field or clear it.`
-  ),
-  schemaDocs(
-    slugSchema.out,
-    `Lowercased, trimmed, and whitespace and repeated hyphens collapsed to single hyphens before validation, so it may be sent as typed. ${strictTextMaximum(SLUG_MAX)}`
   ),
 ];

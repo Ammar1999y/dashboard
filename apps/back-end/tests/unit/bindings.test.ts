@@ -12,7 +12,7 @@ import * as z from 'zod';
 
 import { ENDPOINTS } from '@app/shared/api/all';
 import { getPermission, listPermissions } from '@app/shared/api/permissions';
-import { DATA_TABLE_PARAM_KEYS } from '@app/shared/data-table/parsers';
+import { DATA_TABLE_PARAMS } from '@app/shared/data-table/parsers';
 import { dataTableQuerySchema } from '@app/shared/data-table/query';
 
 import { actorOf, GateSkipped } from '@/lib/http/admit';
@@ -344,7 +344,7 @@ describe('the gate', () => {
 test('the data-table query schema accepts exactly the keys its parser reads', () => {
   expect(
     Object.keys(dataTableQuerySchema.shape).toSorted(compareCodeUnits)
-  ).toEqual([...DATA_TABLE_PARAM_KEYS, 'search'].toSorted(compareCodeUnits));
+  ).toEqual(Object.values(DATA_TABLE_PARAMS).toSorted(compareCodeUnits));
   // Strings only, digits for the counts: never a coerced number.
   expect(dataTableQuerySchema.safeParse({ page: '0x10' }).success).toBe(false);
   expect(dataTableQuerySchema.safeParse({ page: '' }).success).toBe(false);

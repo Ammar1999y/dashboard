@@ -17,10 +17,10 @@ import {
 } from '@app/shared/validation/otp';
 
 import { getAuditMeta } from '@/lib/audit';
+import { refreshSessionCookies } from '@/lib/auth/session/read';
 import { bind } from '@/lib/http/binding';
 import { handleUserUniqueViolation } from '@/lib/http/constraint-errors';
 import { verifyOtpOrAutoVerify } from '@/lib/otp/verify';
-import { refreshSessionCookies } from '@/lib/permissions/checker';
 import { enforceOtpVerifyQuota } from '@/lib/rate-limit';
 import {
   authorizeContactChange,

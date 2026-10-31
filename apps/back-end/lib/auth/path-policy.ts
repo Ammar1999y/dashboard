@@ -1,5 +1,6 @@
 import type { HookContext } from './context';
 import type { AcceptedPasswordHashes } from './login-guard';
+import type { RoutePrefixPath } from '@/lib/http/routing';
 import type { EntityID } from '@app/shared/types';
 import type { TwoFactorMethod } from '@app/shared/validation/enums';
 import type { APIError } from 'better-auth/api';
@@ -30,7 +31,10 @@ import {
 
 import { exceedsCodePoints } from '@/utils/text';
 
-import { BETTER_AUTH_ALLOWED_PATH_SET } from './allowed-paths';
+import {
+  BETTER_AUTH_ALLOWED_PATH_SET,
+  BETTER_AUTH_ENDPOINTS,
+} from './allowed-paths';
 import { authAuditMeta, bodyRecord } from './context';
 import { credentialAccountOf } from './credential-account';
 import { authError, reauthenticationRequired, sessionRequired } from './errors';
@@ -66,40 +70,23 @@ export const PASSWORD_PROOF_PATHS: ReadonlySet<string> = new Set([
   '/two-factor/get-totp-uri',
 ]);
 
+const pathsNeeding = (
+  session: RoutePrefixPath['session']
+): ReadonlySet<string> =>
+  new Set(
+    BETTER_AUTH_ENDPOINTS.filter(
+      (endpoint) => endpoint.session === session
+    ).map((endpoint) => endpoint.path)
+  );
+
 // The library's session middlewares answer from the cookie cache and ignore
-// `is_active` / `deleted_at`, so a suspended user would otherwise keep access.
-const LIVE_SESSION_PATHS: ReadonlySet<string> = new Set([
-  '/reauth/methods',
-  '/reauth/passkey/options',
-  '/reauth/passkey/verify',
-  '/two-factor/disable',
-  '/two-factor/get-totp-uri',
-  '/two-factor/generate-backup-codes',
-  '/two-factor/totp/start',
-  '/two-factor/totp/confirm',
-  '/two-factor/trust-device',
-  '/two-factor/trusted-devices',
-  '/two-factor/trusted-devices/revoke',
-  '/two-factor/methods',
-  '/two-factor/methods/disable',
-  '/two-factor/methods/default',
-  '/two-factor/backup-codes/acknowledge',
-  '/two-factor/passkey/grant',
-  // A suspended user could otherwise register a credential that survives every
-  // later revocation.
-  '/passkey/generate-register-options',
-  '/passkey/verify-registration',
-  '/passkey/list-user-passkeys',
-  '/passkey/delete-passkey',
-  '/passkey/update-passkey',
-]);
+// `is_active` / `deleted_at`, so a suspended user would otherwise keep access,
+// or register a passkey that survives every later revocation.
+const LIVE_SESSION_PATHS = pathsNeeding('session');
 
 // Enrolment and sign-in on one path: liveness only when a session is present,
 // since the sign-in branch holds just a challenge cookie.
-const DUAL_MODE_LIVE_SESSION_PATHS: ReadonlySet<string> = new Set([
-  '/two-factor/otp/send',
-  '/two-factor/otp/verify',
-]);
+const DUAL_MODE_LIVE_SESSION_PATHS = pathsNeeding('session-or-challenge');
 
 // Their library bodies cannot carry a password; they spend a
 // `/two-factor/passkey/grant` grant instead.
@@ -119,68 +106,56 @@ const PASSKEY_ID_PATHS: ReadonlySet<string> = new Set([
   '/passkey/delete-passkey',
 ]);
 
-const TRUST_DEVICE_STRIPPED_PATHS: ReadonlySet<string> = new Set(
-  Object.keys(PLUGIN_VERIFIER_METHOD)
-);
-
 /**
- * A session minted here completes no second factor, and `recordPasskeyEnrolment`
- * would delete it after its cookie was set, leaving a cached token for a
- * missing row.
+ * Library body fields this hook overwrites, by path; the document leaves them
+ * out. On a sign-in verification, trusting is `/two-factor/trust-device`'s, and
+ * `disableSession` would spend a backup code without completing the challenge.
+ * A registration's session completes no second factor, and
+ * `recordPasskeyEnrolment` would delete it after its cookie was set, leaving a
+ * cached token for a missing row.
  */
-const SESSION_CREATION_STRIPPED_PATHS: ReadonlySet<string> = new Set([
-  '/passkey/verify-registration',
+export const FORCED_BODY_FIELDS: ReadonlyMap<
+  string,
+  Readonly<Record<string, unknown>>
+> = new Map<string, Readonly<Record<string, unknown>>>([
+  ...Object.keys(PLUGIN_VERIFIER_METHOD).map(
+    (path) => [path, { trustDevice: false, disableSession: false }] as const
+  ),
+  ['/passkey/verify-registration', { createSession: false }],
 ]);
-
-// Better Call's path for an endpoint declared without one. Upstream drift fails
-// closed: our `auth.api.*` server-only calls answer 404.
-const SERVER_ONLY_VIRTUAL_PATH = '/';
-
-/**
- * By `auth.api` key. ⚠️ Never a blanket pass on `'/'`: every server-only
- * endpoint reports it, including `viewBackupCodes`, which returns any user's
- * decrypted recovery codes.
- */
-const SERVER_ONLY_OPERATIONS: ReadonlySet<string> = new Set(['generateTOTP']);
 
 export async function enforcePathPolicy(
   ctx: HookContext
 ): Promise<{ context: unknown } | undefined> {
+  // Both conditions: `!ctx.request` alone would exempt every `auth.api.*` call,
+  // including `viewBackupCodes`, which returns any user's recovery codes.
   const internalSchemaGeneration =
     ctx.path === '/open-api/generate-schema' && !ctx.request;
-  // All three conditions are required: `!ctx.request` alone would exempt every
-  // `auth.api.*` call, the placeholder alone a request for `/api/auth/`.
-  const serverOnlyEndpoint =
-    ctx.path === SERVER_ONLY_VIRTUAL_PATH &&
-    !ctx.request &&
-    SERVER_ONLY_OPERATIONS.has(
-      String(('operationId' in ctx ? ctx.operationId : undefined) ?? '')
-    );
-  if (
-    !internalSchemaGeneration &&
-    !serverOnlyEndpoint &&
-    !BETTER_AUTH_ALLOWED_PATH_SET.has(ctx.path)
-  )
+  if (!internalSchemaGeneration && !BETTER_AUTH_ALLOWED_PATH_SET.has(ctx.path))
     throw authError(HTTP_STATUS.NOT_FOUND, MSG_PAGE_NOT_FOUND);
 
   if (FIRST_LOGIN_PATHS.has(ctx.path)) await formCsrfMiddleware(ctx);
 
   rejectOverlongPassword(ctx);
 
-  const twoFactorContext = await enforceTwoFactorPathPolicy(ctx);
-  queueSessionReadCookies(ctx);
-  if (twoFactorContext) return twoFactorContext;
+  try {
+    const twoFactorContext = await enforceTwoFactorPathPolicy(ctx);
+    if (twoFactorContext) return twoFactorContext;
 
-  if (ctx.path === '/sign-in/email') return await signInContext(ctx);
-  if (ctx.path === '/sign-out') await revokeSignedOutSession(ctx);
+    if (ctx.path === '/sign-in/email') return await signInContext(ctx);
+    if (ctx.path === '/sign-out') await revokeSignedOutSession(ctx);
+  } finally {
+    queueSessionReadCookies(ctx);
+  }
 }
 
 /**
  * ⚠️ Better Auth replaces a before hook's response headers with the endpoint's
- * once the endpoint runs, and the session read here memoises, so the
- * endpoint's own read sets nothing. The read's cookies (the sliding refresh, a
- * re-minted cache) go to the response's exit queue instead, where a cookie the
- * endpoint sets itself wins its name.
+ * once the endpoint runs, and answers a hook's throw with the error's own
+ * headers alone. The session read here memoises, so the endpoint's own read
+ * sets nothing. The read's cookies (the sliding refresh, a re-minted cache) go
+ * to the response's exit queue instead, refusals included, where a cookie the
+ * response sets itself wins its name.
  */
 function queueSessionReadCookies(ctx: HookContext): void {
   const cookies = ctx.responseHeaders?.getSetCookie() ?? [];
@@ -204,17 +179,21 @@ async function revokeSignedOutSession(ctx: HookContext): Promise<void> {
 
 /**
  * ⚠️ The returned body is MERGED with the caller's (`defuReplaceArrays`), so an
- * omitted key survives. `callbackURL` is kept from being an open redirect by the
- * library's `originCheckMiddleware`, not by this return.
+ * omitted key survives, and an `undefined` one does not override.
  */
 async function signInContext(ctx: HookContext): Promise<{ context: unknown }> {
-  const { email, password, rememberMe } = bodyRecord(ctx);
+  const submitted = bodyRecord(ctx);
+  // Deleted from the caller's body itself, the object the merge starts from.
+  // The library would answer it as `Location` and `url`; nothing here
+  // redirects after a sign-in.
+  delete submitted.callbackURL;
+  const { email, password, rememberMe } = submitted;
 
   const { success, data } = loginSchema.safeParse({
     email,
     password,
     rememberMe,
-    // Already verified by the captcha plugin's `onRequest`, ahead of every hook.
+    // Verified by the mount (`server/elysia/auth-mount.ts`) before Better Auth.
     captcha: 'success',
   });
 
@@ -251,8 +230,8 @@ async function enforceTwoFactorPathPolicy(
   assertPasskeyInputBounds(ctx, path);
   const needsProof = PASSWORD_PROOF_PATHS.has(path);
   const needsLiveSession = LIVE_SESSION_PATHS.has(path);
-  const stripsTrustDevice = TRUST_DEVICE_STRIPPED_PATHS.has(path);
-  const stripsSessionCreation = SESSION_CREATION_STRIPPED_PATHS.has(path);
+  // Overwritten, not deleted: the body is merged.
+  const forced = FORCED_BODY_FIELDS.get(path);
   const dualMode = DUAL_MODE_LIVE_SESSION_PATHS.has(path);
   const needsGrant = REAUTH_GRANT_PATHS.has(path);
 
@@ -275,22 +254,10 @@ async function enforceTwoFactorPathPolicy(
     } else if (needsGrant) throw sessionRefused(ctx);
   }
 
-  if (
-    !needsProof &&
-    !needsLiveSession &&
-    !stripsTrustDevice &&
-    !stripsSessionCreation
-  )
-    return undefined;
+  if (!needsProof && !needsLiveSession && !forced) return undefined;
 
   const body = bodyRecord(ctx);
-
-  // Overwritten, not deleted: the body is merged. `disableSession` on a sign-in
-  // verification spends a backup code without completing the challenge.
-  const patch: Record<string, unknown> = {
-    ...(stripsTrustDevice && { trustDevice: false, disableSession: false }),
-    ...(stripsSessionCreation && { createSession: false }),
-  };
+  const patch = forced ?? {};
 
   if (!needsProof && !needsLiveSession)
     return withBody(ctx, { ...body, ...patch });

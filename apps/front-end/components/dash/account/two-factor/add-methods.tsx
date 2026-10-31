@@ -8,8 +8,8 @@ import { memo, useCallback } from 'react';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { contactKindOf } from '@app/shared/validation/enums';
 import {
+  ENABLED_TWO_FACTOR_OTP_CHANNELS,
   isTwoFactorMethodEnabled,
-  TWO_FACTOR_OTP_CHANNELS,
 } from '@app/shared/validation/two-factor';
 import {
   MSG_ADD_BACKUP_CODES,
@@ -145,7 +145,9 @@ const unverifiedReason = (verified: boolean) =>
 
 const offersCodeTo = (kind: ContactKind) =>
   isTwoFactorMethodEnabled('otp') &&
-  TWO_FACTOR_OTP_CHANNELS.some((channel) => contactKindOf(channel) === kind);
+  ENABLED_TWO_FACTOR_OTP_CHANNELS.some(
+    (channel) => contactKindOf(channel) === kind
+  );
 
 interface AddMethodsCardProps {
   methods: readonly EnrolledMethod[];

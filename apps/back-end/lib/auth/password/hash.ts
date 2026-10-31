@@ -2,9 +2,10 @@ import * as argon2 from 'argon2';
 
 import { normalizePasswordInput } from '@app/shared/validation/rules';
 
-import { logLine } from '@/utils/log';
+import { KEY_ID_PATTERN } from '@/lib/crypto/keyring';
 
-import { KEY_ID_PATTERN } from '../keyring';
+import { errorClassOf, logLine } from '@/utils/log';
+
 import { getActivePasswordPepper, getPasswordPepper } from './pepper';
 
 const ARGON2_OPTIONS = {
@@ -119,7 +120,7 @@ export async function verifyPasswordDetailed({
   } catch (error) {
     logLine('error', {
       msg: 'auth.password.hash unevaluatable',
-      errorClass: error instanceof Error ? error.name : 'UnknownError',
+      errorClass: errorClassOf(error),
       // Safe to log: neither error class puts a key or hash in its message.
       detail: error instanceof Error ? error.message : null,
     });
@@ -135,7 +136,7 @@ export async function verifyPasswordDetailed({
     // No `detail`: the PHC parser can echo fragments of the stored value.
     logLine('error', {
       msg: 'auth.password.hash unevaluatable',
-      errorClass: error instanceof Error ? error.name : 'UnknownError',
+      errorClass: errorClassOf(error),
     });
     return { valid: false, needsRehash: false, costPaid: false };
   }

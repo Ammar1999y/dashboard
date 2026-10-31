@@ -14,15 +14,18 @@ import type { Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { ContactKind } from '@app/shared/validation/enums';
 
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, inArray } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
-import { verifications } from '@/db/schema';
+import { users, verifications } from '@/db/schema';
 
 import { validID } from '@app/shared/utils';
 
+import { lockUser } from '@/lib/users/lock-order';
+
 import { bestEffort } from '@/utils/log';
 
+import { rotatedSince } from '../session/rotation';
 import {
   asContactKind,
   readEnrolmentState,
@@ -55,15 +58,28 @@ interface RecoveryGrantState {
   options: string[];
 }
 
+/**
+ * `null` when a credential rotation landed at or after `startedAt`: written
+ * after it, the grant would outlive the sweep that should have taken it.
+ */
 export async function issueRecoveryGrant(params: {
   userId: EntityID;
   excludeContactKind: ContactKind;
   options: OfferedOption[];
-}): Promise<string> {
+  /** Read under the lock that consumed the recovery proof. */
+  startedAt: number;
+}): Promise<string | null> {
   const token = randomToken(GRANT_BYTES);
   const expiresAt = expiresIn(RECOVERY_GRANT_MAX_AGE_S);
 
-  await withTransaction(async (tx) => {
+  return withTransaction(async (tx) => {
+    await lockUser(tx, params.userId);
+    const [user] = await tx
+      .select({ authRevokedAt: users.authRevokedAt })
+      .from(users)
+      .where(eq(users.id, params.userId));
+    if (!user || rotatedSince(user, params.startedAt)) return null;
+
     await tx.insert(verifications).values([
       {
         identifier: recoveryStateKey(token),
@@ -85,9 +101,8 @@ export async function issueRecoveryGrant(params: {
         expiresAt,
       },
     ]);
+    return token;
   });
-
-  return token;
 }
 
 /** Unlike the sign-in challenge's, the excluded contact kind is required. */
@@ -108,29 +123,24 @@ async function readRecoveryGrant(
 ): Promise<RecoveryGrantState | null> {
   if (typeof token !== 'string' || token.length === 0) return null;
 
-  const [holder] = await db
-    .select({ value: verifications.value })
+  const rows = await db
+    .select({
+      identifier: verifications.identifier,
+      value: verifications.value,
+    })
     .from(verifications)
     .where(
       and(
-        eq(verifications.identifier, recoveryKey(token)),
+        inArray(verifications.identifier, [
+          recoveryKey(token),
+          recoveryStateKey(token),
+        ]),
         gt(verifications.expiresAt, new Date())
       )
-    )
-    .limit(1);
-  if (!holder) return null;
-
-  const [state] = await db
-    .select({ value: verifications.value })
-    .from(verifications)
-    .where(
-      and(
-        eq(verifications.identifier, recoveryStateKey(token)),
-        gt(verifications.expiresAt, new Date())
-      )
-    )
-    .limit(1);
-  if (!state) return null;
+    );
+  const holder = rows.find((row) => row.identifier === recoveryKey(token));
+  const state = rows.find((row) => row.identifier === recoveryStateKey(token));
+  if (!holder || !state) return null;
 
   const parsed = parseState(state.value);
   // A user mismatch is corruption or a rotation caught mid-flight.
@@ -199,10 +209,12 @@ export async function consumeRecoveryGrant(
 
   await tx
     .delete(verifications)
-    .where(eq(verifications.identifier, recoveryStateKey(token)));
-  await tx
-    .delete(verifications)
-    .where(eq(verifications.identifier, recoveryAttemptsKey(token)));
+    .where(
+      inArray(verifications.identifier, [
+        recoveryStateKey(token),
+        recoveryAttemptsKey(token),
+      ])
+    );
   return true;
 }
 
@@ -210,15 +222,14 @@ export async function consumeRecoveryGrant(
 // can no longer complete.
 async function invalidateRecoveryGrant(token: string): Promise<void> {
   await bestEffort('recovery.grant.invalidateFailed', () =>
-    withTransaction(async (tx) => {
-      for (const identifier of [
-        recoveryKey(token),
-        recoveryStateKey(token),
-        recoveryAttemptsKey(token),
-      ])
-        await tx
-          .delete(verifications)
-          .where(eq(verifications.identifier, identifier));
-    })
+    db
+      .delete(verifications)
+      .where(
+        inArray(verifications.identifier, [
+          recoveryKey(token),
+          recoveryStateKey(token),
+          recoveryAttemptsKey(token),
+        ])
+      )
   );
 }

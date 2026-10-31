@@ -24,13 +24,6 @@ type ClosedColumnType = 'select' | 'multiSelect';
 
 interface FilterColumnSpecBase {
   /**
-   * Minimum length of a substring-search term, folded. Below the trigram
-   * length pg_trgm's GIN index can't be used and the predicate degrades to a
-   * full scan — the same floor quick search applies. The length is a proxy;
-   * `isTrigramIndexable` is the property, and applies on top of this.
-   */
-  minSearchLength?: number;
-  /**
    * Allow operators that can never use an index (`notILike`). Off by default:
    * up to MAX_FILTER_ITEMS of them multiply into a very expensive query.
    */

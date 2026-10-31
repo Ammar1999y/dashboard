@@ -30,7 +30,7 @@ import {
 } from './admit';
 import { queryKeysOf } from './binding';
 import { refusalsOf } from './refusals';
-import { buildRequestMeta, UnreadableBody, withBodyPolicy } from './request';
+import { buildRequestMeta, lazyFormData, UnreadableBody } from './request';
 import { apiError, apiRaw, handleApiError, invalidResponse } from './response';
 import {
   checkSuccess,
@@ -56,8 +56,6 @@ export async function runBinding(
       inputRefusal(binding, 'query', MSG_INVALID_INPUT, false),
       'input'
     );
-  const requestMeta = buildRequestMeta(request);
-  const { params: _params, query: _query, ...meta } = requestMeta;
   const floor = options.timingFloor ? timingFloor() : undefined;
   let charged: Promise<void> | undefined;
 
@@ -67,7 +65,7 @@ export async function runBinding(
       ...input,
       actor,
       meta: {
-        ...meta,
+        ...buildRequestMeta(request),
         ...(floor && { startFloor: floor.start }),
         ...(options.rateLimit?.deferred && {
           chargeRateLimit: () =>
@@ -75,7 +73,7 @@ export async function runBinding(
         }),
         // The lazy reader, so the handler reads the form after its own checks.
         ...(entry.bodyKind === 'multipart' && {
-          readFormData: withBodyPolicy(requestMeta, 'multipart').readFormData,
+          readFormData: lazyFormData(request),
         }),
       },
     });

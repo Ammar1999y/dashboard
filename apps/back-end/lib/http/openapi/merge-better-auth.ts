@@ -30,6 +30,7 @@ import {
   BETTER_AUTH_ENDPOINTS,
   BETTER_AUTH_ROUTE_PREFIX,
 } from '@/lib/auth/allowed-paths';
+import { FORCED_BODY_FIELDS } from '@/lib/auth/path-policy';
 import { TWO_FACTOR_COOKIE_NAME } from '@/lib/auth/two-factor/challenge';
 import { TOTP_ENROLMENT_MAX_AGE_S } from '@/lib/auth/two-factor/enrolment';
 
@@ -45,12 +46,16 @@ import {
   BETTER_AUTH_PASSWORD_LOCKOUT_PATHS,
   BETTER_AUTH_PATH_STATUSES,
   BETTER_AUTH_RESPONSE_DESCRIPTIONS,
+  BETTER_AUTH_SET_COOKIE,
   BETTER_AUTH_SPENT_INPUT_REMEDIES,
   BETTER_AUTH_STATUS_DESCRIPTIONS,
   BETTER_AUTH_SUMMARIES,
+  BETTER_AUTH_TRUSTED_RESPONSES,
   CHALLENGE_INSTEAD,
   LIBRARY_REQUEST_BODIES,
+  LIBRARY_SUCCESS_DESCRIPTIONS,
   LIBRARY_SUCCESS_PROPERTIES,
+  LIBRARY_UNUSED_BODY_FIELDS,
   LIBRARY_VERIFIER_DESCRIPTIONS,
   REDIRECTING_PLUGIN_PATHS,
   TWO_FACTOR_CHALLENGE_PATHS,
@@ -62,8 +67,17 @@ import {
   publishedSchema,
   requestBody,
   RESPONSE_HEADERS,
+  setCookieHeader,
 } from './finalize';
-import { isJsonSchema, normalizeOpenApi31 } from './json-schema';
+import {
+  isJsonSchema,
+  jsonBodySchema,
+  normalizeOpenApi31,
+  referencedComponents,
+  refName,
+  withJsonBodySchema,
+  withRequiredKeys,
+} from './json-schema';
 
 /** Every refusal under the prefix, the library's and the route's own alike. */
 const errorResponse = (
@@ -141,17 +155,9 @@ function withAlternative(
 ): JsonSchema {
   if (!isJsonSchema(response))
     return { content: { 'application/json': { schema: extra } } };
-  const content = isJsonSchema(response.content) ? response.content : {};
-  const json = isJsonSchema(content['application/json'])
-    ? content['application/json']
-    : {};
   return {
-    ...response,
+    ...withJsonBodySchema(response, (schema) => ({ anyOf: [schema, extra] })),
     description: sentence(response.description, detail),
-    content: {
-      ...content,
-      'application/json': { ...json, schema: { anyOf: [json.schema, extra] } },
-    },
   };
 }
 
@@ -164,6 +170,11 @@ async function libraryDocument() {
   const normalized = normalizeOpenApi31(generated);
   if (!isJsonSchema(normalized) || !isJsonSchema(normalized.paths))
     throw new Error('Better Auth generated no OpenAPI paths.');
+  // `/sign-out` is published without the provider logout these would enable.
+  if (context.socialProviders.length > 0)
+    throw new Error(
+      'Better Auth social providers are configured; publish what /sign-out answers with them.'
+    );
   const components = isJsonSchema(normalized.components)
     ? normalized.components
     : {};
@@ -236,15 +247,40 @@ function successResponse(
     : verifierResponse(library, verifier);
 }
 
+/** `schema` without `names`, from `properties` and `required` alike. */
+function withoutProperties(
+  schema: JsonSchema,
+  names: readonly string[]
+): JsonSchema {
+  if (names.length === 0) return schema;
+  const properties = isJsonSchema(schema.properties) ? schema.properties : {};
+  const { required, ...rest } = schema;
+  const kept = Array.isArray(required)
+    ? required.filter((name) => !names.includes(name))
+    : [];
+  return {
+    ...rest,
+    properties: Object.fromEntries(
+      Object.entries(properties).filter(([name]) => !names.includes(name))
+    ),
+    ...(kept.length > 0 && { required: kept }),
+  };
+}
+
 /**
  * The library's own 200, with the properties its generator declares wrongly
- * replaced (`LIBRARY_SUCCESS_PROPERTIES`).
+ * replaced (`LIBRARY_SUCCESS_PROPERTIES`). Only a path that names it as its
+ * source publishes it.
  */
 function librarySuccess(
   library: Library,
   path: string,
   method: HttpMethod
 ): JsonSchema {
+  if (!BETTER_AUTH_TRUSTED_RESPONSES.has(path))
+    throw new Error(
+      `${method} ${path} has no source for its 200: no plugin entry, verifier or trusted library answer.`
+    );
   const generated = libraryOperation(library, path, method)?.responses;
   const generatedAnswer = isJsonSchema(generated)
     ? generated['200']
@@ -253,30 +289,35 @@ function librarySuccess(
     throw new Error(
       `Better Auth's document no longer answers ${method} ${path} 200.`
     );
-  const answer = storedRequired(library, generatedAnswer);
+  const stored = storedRequired(library, generatedAnswer);
+  const description = LIBRARY_SUCCESS_DESCRIPTIONS[path];
+  const answer =
+    description === undefined
+      ? stored
+      : withJsonBodySchema(
+          { ...stored, description },
+          ({ description: _generated, ...schema }) => schema
+        );
   const corrections = LIBRARY_SUCCESS_PROPERTIES[path];
   if (!corrections) return answer;
-  const content = isJsonSchema(answer.content) ? answer.content : {};
-  const json = isJsonSchema(content['application/json'])
-    ? content['application/json']
-    : {};
-  const schema = isJsonSchema(json.schema) ? json.schema : {};
-  const properties = isJsonSchema(schema.properties) ? schema.properties : {};
-  for (const name of Object.keys(corrections))
-    if (!Object.hasOwn(properties, name))
-      throw new Error(
-        `Better Auth's ${method} ${path} 200 no longer declares '${name}'.`
-      );
-  return {
-    ...answer,
-    content: {
-      ...content,
-      'application/json': {
-        ...json,
-        schema: { ...schema, properties: { ...properties, ...corrections } },
+  return withJsonBodySchema(answer, (schema) => {
+    const properties = isJsonSchema(schema.properties) ? schema.properties : {};
+    for (const name of Object.keys(corrections))
+      if (!Object.hasOwn(properties, name))
+        throw new Error(
+          `Better Auth's ${method} ${path} 200 no longer declares '${name}'.`
+        );
+    const replaced = Object.entries(corrections).filter(
+      (correction): correction is [string, JsonSchema] => correction[1] !== null
+    );
+    return withoutProperties(
+      {
+        ...schema,
+        properties: { ...properties, ...Object.fromEntries(replaced) },
       },
-    },
-  };
+      Object.keys(corrections).filter((name) => corrections[name] === null)
+    );
+  });
 }
 
 const REDIRECTING: ReadonlySet<string> = new Set(REDIRECTING_PLUGIN_PATHS);
@@ -353,6 +394,22 @@ function responsesOf(
       headers: { Location: { schema: { type: 'string', format: 'uri' } } },
     };
 
+  const cookies = Object.entries(BETTER_AUTH_SET_COOKIE[path] ?? {});
+  for (const [status, description] of cookies) {
+    const response = responses[status];
+    if (!isJsonSchema(response))
+      throw new Error(
+        `${method} ${path} sets cookies on an unpublished ${status}.`
+      );
+    responses[status] = {
+      ...response,
+      headers: {
+        ...(isJsonSchema(response.headers) && response.headers),
+        ...setCookieHeader(description),
+      },
+    };
+  }
+
   return responses;
 }
 
@@ -365,17 +422,30 @@ function grantConstraints(): JsonSchema {
   return constraints;
 }
 
+/** A plugin entry's query, one parameter per field, as a binding's is published. */
+function queryParameters(schema: z.ZodType): JsonSchema[] {
+  const converted = withRequiredKeys(schema, publishedSchema(schema, 'input'));
+  const properties = isJsonSchema(converted.properties)
+    ? converted.properties
+    : {};
+  const required = Array.isArray(converted.required) ? converted.required : [];
+  return Object.entries(properties)
+    .filter((field): field is [string, JsonSchema] => isJsonSchema(field[1]))
+    .map(([name, { description, ...fieldSchema }]) => ({
+      name,
+      in: 'query',
+      required: required.includes(name),
+      ...(typeof description === 'string' && { description }),
+      schema: fieldSchema,
+    }));
+}
+
 function parametersOf(
-  library: Library,
   endpoint: RoutePrefixPath,
   method: HttpMethod
 ): JsonSchema[] {
-  const generated = libraryOperation(library, endpoint.path, method);
-  const parameters: JsonSchema[] =
-    endpoint.path === '/oauth/google/callback' &&
-    Array.isArray(generated?.parameters)
-      ? generated.parameters.filter(isJsonSchema)
-      : [];
+  const query = PLUGIN_ENDPOINTS.get(endpoint.path)?.query;
+  const parameters = query ? queryParameters(query) : [];
   if (method === 'GET' && endpoint.path === '/get-session')
     parameters.push(
       {
@@ -409,40 +479,50 @@ function parametersOf(
 
 /**
  * A body is published on POST only. A path with no schema of ours keeps the
- * library's; registration also takes the `grant` `path-policy.ts` spends.
+ * library's, less the fields `path-policy.ts` overwrites and those no feature
+ * here reads; registration also takes the `grant` `path-policy.ts` spends.
  */
 function requestBodyOf(library: Library, path: string): JsonSchema | undefined {
   const schema = publishedBodyOf(path);
   if (schema) return requestBody(schema, 'json');
   const body = libraryOperation(library, path, 'POST')?.requestBody;
-  if (path !== '/passkey/verify-registration' || !isJsonSchema(body))
-    return isJsonSchema(body) ? body : undefined;
-  const content = isJsonSchema(body.content) ? body.content : {};
-  const json = isJsonSchema(content['application/json'])
-    ? content['application/json']
-    : {};
-  const root = isJsonSchema(json.schema) ? json.schema : {};
-  const properties = isJsonSchema(root.properties) ? root.properties : {};
-  const grant = {
-    ...grantConstraints(),
-    description:
-      'The token POST /two-factor/passkey/grant answered with. Required here or as the `grant` query parameter.',
-  };
-  return {
-    ...body,
-    content: {
-      ...content,
-      'application/json': {
-        ...json,
-        schema: { ...root, properties: { ...properties, grant } },
+  if (!isJsonSchema(body)) return undefined;
+  const dropped = [
+    ...Object.keys(FORCED_BODY_FIELDS.get(path) ?? {}),
+    ...(LIBRARY_UNUSED_BODY_FIELDS[path] ?? []),
+  ];
+  const added: JsonSchema =
+    path === '/passkey/verify-registration'
+      ? {
+          grant: {
+            ...grantConstraints(),
+            description:
+              'The token POST /two-factor/passkey/grant answered with. Required here or as the `grant` query parameter.',
+          },
+        }
+      : {};
+  if (dropped.length === 0 && Object.keys(added).length === 0) return body;
+  const edited = withJsonBodySchema(body, (root) =>
+    withoutProperties(
+      {
+        ...root,
+        properties: {
+          ...(isJsonSchema(root.properties) && root.properties),
+          ...added,
+        },
       },
-    },
-  };
+      dropped
+    )
+  );
+  const { properties } = jsonBodySchema(edited);
+  return isJsonSchema(properties) && Object.keys(properties).length > 0
+    ? edited
+    : undefined;
 }
 
 function pathItem(library: Library, endpoint: RoutePrefixPath): JsonSchema {
   const operation = (method: HttpMethod): JsonSchema => {
-    const parameters = parametersOf(library, endpoint, method);
+    const parameters = parametersOf(endpoint, method);
     const body =
       method === 'POST' ? requestBodyOf(library, endpoint.path) : undefined;
     return {
@@ -545,10 +625,7 @@ function storedRequired(library: Library, schema: JsonSchema): JsonSchema {
     const visited = Object.fromEntries(
       Object.entries(value).map(([key, child]) => [key, visit(child)])
     );
-    const name =
-      typeof value.$ref === 'string'
-        ? /^#\/components\/schemas\/(.+)$/.exec(value.$ref)?.[1]
-        : undefined;
+    const name = refName(value.$ref);
     const model = name === undefined ? undefined : library.schemas[name];
     if (
       name === undefined ||
@@ -607,22 +684,6 @@ function referencedLibrarySchemas(
   library: Library,
   paths: JsonSchema
 ): JsonSchema {
-  const referenced = new Set<string>();
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) for (const item of value) visit(item);
-    if (!isJsonSchema(value)) return;
-    const name =
-      typeof value.$ref === 'string'
-        ? /^#\/components\/schemas\/(.+)$/.exec(value.$ref)?.[1]
-        : undefined;
-    if (name && !referenced.has(name) && isJsonSchema(library.schemas[name])) {
-      referenced.add(name);
-      visit(library.schemas[name]);
-    }
-    for (const child of Object.values(value)) visit(child);
-  };
-  visit(paths);
-
   const narrowed: Record<string, JsonSchema> = {
     User: {
       id: UUID,
@@ -652,11 +713,12 @@ function referencedLibrarySchemas(
     },
   };
   return Object.fromEntries(
-    [...referenced].map((name) => {
-      const schema = library.schemas[name];
-      if (!isJsonSchema(schema)) return [name, schema];
-      return [name, asStored(name, schema, narrowed[name])];
-    })
+    Object.entries(referencedComponents(paths, library.schemas)).map(
+      ([name, schema]) =>
+        isJsonSchema(schema)
+          ? [name, asStored(name, schema, narrowed[name])]
+          : [name, schema]
+    )
   );
 }
 
@@ -683,6 +745,8 @@ export async function mergeBetterAuth(): Promise<MergedPaths> {
         type: 'apiKey',
         in: 'cookie',
         name: library.sessionCookie,
+        description:
+          'Any operation that reads the session can answer `Set-Cookie` without publishing it: the read extends a session near its expiry and re-signs the cookie cache, and the cookies of a session that no longer holds are expired. An operation publishes `Set-Cookie` where it sets a cookie of its own.',
       },
       ...(challenged && {
         twoFactorChallengeCookie: {

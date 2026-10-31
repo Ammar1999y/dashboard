@@ -1,4 +1,4 @@
-import type { Executor, Tx } from '@/db';
+import type { Tx } from '@/db';
 import type {
   PermissionObject,
   SessionMetadata,
@@ -6,14 +6,14 @@ import type {
 import type { EntityID } from '@app/shared/types';
 import type { SQL } from 'drizzle-orm';
 
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
-import { roles, users } from '@/db/schema';
+import { withTransaction } from '@/db';
+import { roles, sessions, users } from '@/db/schema';
 
 import { sanitizePermissions } from '@app/shared/permissions/matrix';
 
-import { liveUser } from '@/lib/users/filters';
+import { activeUser, liveUser } from '@/lib/users/filters';
 
 /**
  * Merges `patch` into the permission cache of every unexpired session whose
@@ -24,12 +24,8 @@ import { liveUser } from '@/lib/users/filters';
  * scalar, on which `||` concatenates into an array instead of merging — see
  * `jsonb` in `db/schema.ts`.
  */
-function patchSessionMetadata(
-  executor: Executor,
-  patch: SessionMetadata,
-  owners: SQL
-) {
-  return executor.execute(sql`
+function patchSessionMetadata(tx: Tx, patch: SessionMetadata, owners: SQL) {
+  return tx.execute(sql`
     UPDATE sessions
     SET metadata = COALESCE(metadata, '{}'::jsonb) || ${patch}::jsonb,
         updated_at = NOW()
@@ -80,19 +76,21 @@ export async function refreshRoleSessions(
   await patchSessionMetadata(
     tx,
     { roleName, roleScope, permissions, roleId },
-    sql`user_id IN (
-      SELECT id FROM users WHERE role_id = ${roleId} AND deleted_at IS NULL AND is_active = true
-    )`
+    inArray(
+      sessions.userId,
+      tx
+        .select({ id: users.id })
+        .from(users)
+        .where(activeUser(eq(users.roleId, roleId)))
+    )
   );
 }
 
 export async function refreshUserSessions(
   userId: EntityID,
-  tx?: Tx
+  tx: Tx
 ): Promise<void> {
-  const executor: Executor = tx ?? db;
-
-  const userData = await executor.query.users.findFirst({
+  const userData = await tx.query.users.findFirst({
     where: liveUser(eq(users.id, userId)),
     columns: { roleId: true },
     with: {
@@ -112,14 +110,14 @@ export async function refreshUserSessions(
   const permissions = sanitizePermissions(userData.role.rolePermissions);
 
   await patchSessionMetadata(
-    executor,
+    tx,
     {
       roleId: userData.roleId,
       roleName: userData.role.roleName,
       roleScope: userData.role.scope,
       permissions,
     },
-    sql`user_id = ${userId}`
+    eq(sessions.userId, userId)
   );
 }
 

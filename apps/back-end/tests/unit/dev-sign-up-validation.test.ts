@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { selfUpdateUserBodySchema } from '@app/shared/validation/auth';
 import { devSignUpSchema } from '@app/shared/validation/dev';
+import { selfUpdateUserBodySchema } from '@app/shared/validation/users';
 
 const BODY = { email: 'dev@gmail.com', password: 'Aa1!aaaaaaaaaaaa' };
 

@@ -25,7 +25,6 @@ jobs:
       NODE_ENV: development
       PUBLIC_URL: http://localhost:3000
       NEXT_PUBLIC_ENABLED_OTP_CHANNELS: email
-      NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
       DATABASE_URL: postgres://ci:ci@db.example.com/ci?sslmode=require
       SQLITE_DIR: /tmp/ci-sqlite
@@ -128,11 +127,14 @@ jobs:
         # refuses a drop, rename or long lock in any migration newer than the
         # grandfathered set in the script.
         run: bun run lint:migrations
+      - name: Document and comment references
+        # The owner's documents and the comments cite paths by hand, and
+        # nothing else reads them: a moved file leaves its citations pointing
+        # nowhere. `TODO.md` is git-ignored, so only a local run reads it.
+        run: bun run check:doc-refs
       - name: Unreachable files, unused exports and types
-        # `scripts/find-unused-files.ts` finds unreachable files, then Knip
-        # covers files under `tests/`, which that scanner's import graph treats
-        # as entry points. Binding registration is checked at runtime by
-        # `tests/unit/bindings.test.ts`.
+        # Knip, from the entries in `knip.jsonc`. A binding that is reachable
+        # but never registered is `tests/unit/bindings.test.ts`'s to catch.
         run: bun run find:unused-files
       - name: Collapsible duplicate dependencies
         # What Bun checks, and not more: duplicates whose ranges OVERLAP, so
@@ -202,7 +204,10 @@ jobs:
 
   # The deployable artefact itself. Every other job runs from a full checkout,
   # so none of them notices a file the Dockerfile forgets to copy or a
-  # `.dockerignore` entry that removes one a stage needs.
+  # `.dockerignore` entry that removes one the `verify` stage's typecheck
+  # needs. The runtime image is never booted: a devDependency import is
+  # ESLint's to refuse (`import-x/no-extraneous-dependencies`), and a file read
+  # only at run time is checked by neither.
   image:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -217,6 +222,129 @@ jobs:
       - name: Runtime user is not root
         # The UID `reports/coolify-deployment.md` §4 has the volume owned by.
         run: test "$(docker run --rm --entrypoint id back-end:ci -u)" = 1000
+
+  # The single-executable evaluation, on the OS production runs: nothing
+  # deploys `scripts/build-binary.ts`'s output, and this is the only place it
+  # boots on Linux. The production-posture values are `verify`'s, with the same
+  # throwaway secrets.
+  binary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/back-end
+    env:
+      NODE_ENV: production
+      PUBLIC_URL: http://localhost:3000
+      NEXT_PUBLIC_ENABLED_OTP_CHANNELS: email
+      TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
+      DATABASE_URL: postgres://ci:ci@db.example.com/ci?sslmode=require
+      SQLITE_DIR: /tmp/ci-sqlite-binary
+      PASSWORD_PEPPER_ACTIVE_ID: ci
+      OTP_HMAC_ACTIVE_ID: ci
+      SMTP_USER: ci@example.invalid
+      SMTP_PASS: ci-placeholder
+      R2_ACCOUNT_ID: ci-placeholder
+      R2_ACCESS_KEY_ID: ci-placeholder
+      R2_SECRET_ACCESS_KEY: ci-placeholder
+      R2_PUBLIC_BUCKET: ci-placeholder-public
+      R2_PRIVATE_BUCKET: ci-placeholder-private
+      R2_PUBLIC_URL: https://ci-placeholder.example.invalid
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate throwaway secrets
+        run: |
+          key() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '='; }
+          {
+            echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)"
+            echo "SQLITE_MAINTENANCE_TOKEN=$(openssl rand -base64 32)"
+            echo "PASSWORD_PEPPER_KEYRING={\"ci\":{\"generation\":1,\"secret\":\"$(key)\"}}"
+            echo "OTP_HMAC_KEYRING={\"ci\":{\"generation\":1,\"secret\":\"$(key)\"}}"
+          } >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - working-directory: ${{ github.workspace }}
+        run: bun install --frozen-lockfile
+      - name: Build the executable
+        # Built as `development` and run as `production` below, so a build
+        # that froze its own `NODE_ENV` in fails the posture checks.
+        env:
+          NODE_ENV: development
+        run: bun scripts/build-binary.ts --target=bun-linux-x64 --outfile="$RUNNER_TEMP/server"
+      - name: Boot smoke test (executable, production posture)
+        env:
+          SMOKE_SERVER_BINARY: ${{ runner.temp }}/server
+        run: bun run smoke
+      - name: The executable refuses an invalid NODE_ENV
+        run: |
+          code=0
+          NODE_ENV=staging timeout --kill-after=5s 30s "$RUNNER_TEMP/server" > "$RUNNER_TEMP/staging.log" 2>&1 || code=$?
+          cat "$RUNNER_TEMP/staging.log"
+          [ "$code" -eq 1 ] && grep -q '"msg":"startup rejected"' "$RUNNER_TEMP/staging.log"
+      - name: Boot time, memory and SIGTERM, executable against source
+        # The executable runs from an empty directory with `node_modules`
+        # moved away, so nothing it needs can come from the checkout. Ready
+        # means the first answer from a route that touches no database, since
+        # `DATABASE_URL` is unreachable here. The transpiler cache is off as in
+        # the `oven/bun` image. Spot figures from a shared runner, alternating
+        # order; the SVG worker never starts here.
+        run: |
+          export PORT=3997 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+          checkout=$PWD
+          mkdir -p "$RUNNER_TEMP/empty" "$RUNNER_TEMP/hidden"
+          trap 'kill -KILL "${pid:-}" 2> /dev/null || true' EXIT
+          measure() {
+            label=$1
+            shift
+            log="$RUNNER_TEMP/$label.log"
+            start=$(date +%s%N)
+            "$@" > "$log" 2>&1 &
+            pid=$!
+            deadline=$((SECONDS + 60))
+            until [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/health/storage")" != 000 ]; do
+              if ! kill -0 "$pid" 2> /dev/null || [ "$SECONDS" -ge "$deadline" ]; then
+                cat "$log"
+                return 1
+              fi
+              sleep 0.05
+            done
+            ready=$((($(date +%s%N) - start) / 1000000))
+            sleep 3
+            rss=$(awk '/^VmRSS/ { print int($2 / 1024) }' "/proc/$pid/status")
+            kill -TERM "$pid"
+            (sleep 60 && kill -KILL "$pid" 2> /dev/null) &
+            watchdog=$!
+            code=0
+            wait "$pid" || code=$?
+            kill "$watchdog" 2> /dev/null || true
+            echo "$label: answered after $ready ms, VmRSS $rss MiB 3 s later, SIGTERM exit $code" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$code" -ne 0 ] || ! grep -q '"msg":"server stopped"' "$log"; then
+              cat "$log"
+              return 1
+            fi
+          }
+          executable() {
+            mv "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/hidden/root"
+            if [ -d "$checkout/node_modules" ]; then mv "$checkout/node_modules" "$RUNNER_TEMP/hidden/back-end"; fi
+            cd "$RUNNER_TEMP/empty"
+            measure "executable-$1" "$RUNNER_TEMP/server"
+            cd "$checkout"
+            mv "$RUNNER_TEMP/hidden/root" "$GITHUB_WORKSPACE/node_modules"
+            if [ -d "$RUNNER_TEMP/hidden/back-end" ]; then mv "$RUNNER_TEMP/hidden/back-end" "$checkout/node_modules"; fi
+          }
+          from_source() {
+            measure "source-$1" bun --bun server.ts
+          }
+          for trial in 1 2 3 4; do
+            if [ $((trial % 2)) -eq 1 ]; then
+              executable "$trial"
+              from_source "$trial"
+            else
+              from_source "$trial"
+              executable "$trial"
+            fi
+          done
 
   # `verify` typechecks the front-end only as a consumer of `@app/shared`. Its
   # own lint (with the CSS browserslist audit) and format ran nowhere but a
@@ -263,7 +391,7 @@ jobs:
       postgres:
         # Pinned to the VPS's major. A different major trades one fidelity gap
         # for a smaller one rather than closing it.
-        image: postgres:18-alpine
+        image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -291,7 +419,6 @@ jobs:
       # (tests/integration/self-service-credentials.test.ts) asserts phone OTP
       # channels are disabled to test rejection and refusal boundaries.
       NEXT_PUBLIC_ENABLED_OTP_CHANNELS: email
-      NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
       SQLITE_DIR: /tmp/ci-sqlite
       PASSWORD_PEPPER_ACTIVE_ID: ci

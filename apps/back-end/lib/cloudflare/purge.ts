@@ -1,6 +1,7 @@
+import { CLOUDFLARE_PURGE_BATCH_SIZE } from '@/lib/env.server';
 import { rateLimit } from '@/lib/rate-limit/fixed-window';
 
-import { errorTypeOf, logLine, logSanitized } from '@/utils/log';
+import { errorClassOf, logLine, logSanitized } from '@/utils/log';
 
 const ZONE_ID = process.env.CLOUDFLARE_ZONE_ID;
 const TOKEN = process.env.CLOUDFLARE_CACHE_PURGE_TOKEN;
@@ -8,8 +9,7 @@ const TOKEN = process.env.CLOUDFLARE_CACHE_PURGE_TOKEN;
 /** Both variables, or neither — `lib/env.server.ts` refuses the half-set state. */
 export const CACHE_PURGE_CONFIGURED = Boolean(ZONE_ID && TOKEN);
 
-/** The API's per-call ceiling for purge-by-URL. */
-export const PURGE_BATCH_SIZE = 30;
+export const PURGE_BATCH_SIZE = CLOUDFLARE_PURGE_BATCH_SIZE;
 const DEADLINE_MS = 10_000;
 const ATTEMPTS = 2;
 
@@ -108,7 +108,7 @@ async function purgeBatch(
         // the zone id.
         logSanitized('error', {
           msg: 'media.cache-purge failed',
-          errorClass: errorTypeOf(error),
+          errorClass: errorClassOf(error),
           count: urls.length,
         });
         return 'failed';

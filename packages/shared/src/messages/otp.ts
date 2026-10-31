@@ -27,6 +27,9 @@ export const otpMsg = {
   // Promises that a new code lifts the block: `VERIFY_BLOCK_CLEARED_BY_RESEND`.
   verifyBlocked:
     'تم حظر التحقق مؤقتاً بعد تجاوز عدد المحاولات. يرجى طلب رمز جديد',
+  // Must not promise a new code: none lifts the daily cap.
+  dailyVerifyCapReached:
+    'تجاوزت الحد اليومي لمحاولات التحقق. يرجى المحاولة مرة أخرى لاحقاً',
   captchaFailed:
     'تعذر التحقق من أنك لست روبوتاً. أعد تحميل الصفحة وحاول مرة أخرى',
   invalidInput: 'صيغة المدخلات غير صحيحة',
@@ -42,7 +45,7 @@ export const otpMsg = {
     'لا يمكن إعادة تعيين كلمة المرور عبر هذه الوسيلة لأنها نفس وسيلة التحقق بخطوتين. استخدم طريقة تحقق أخرى أو تواصل مع الدعم',
 } as const;
 
-/** The contact a code went to, as `processOtpSend`'s `entityName` names it. */
+/** The contact a code went to, as `processOtpSend`'s send-cap refusal names it. */
 export const CONTACT_LABEL: Readonly<Record<ContactKind, string>> = {
   email: 'البريد الإلكتروني',
   phone: 'رقم الهاتف',
@@ -59,7 +62,7 @@ const OTP_PURPOSE_LABEL: Readonly<Record<OtpPurpose, string>> = {
   two_factor: 'التحقق بخطوتين',
 };
 
-/** The plain-text body on every channel. One line, because SMS is billed per segment. */
+/** The plain-text body on every channel. Kept short, because SMS is billed per segment. */
 export function otpTextFor(purpose: OtpPurpose, code: string): string {
   return `رمز ${OTP_PURPOSE_LABEL[purpose]}: ${code}\nلا تشارك هذا الرمز مع أي شخص`;
 }

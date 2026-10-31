@@ -1,11 +1,11 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 
 # Built from the REPOSITORY ROOT, not from this directory: the workspace
 # lockfile and `packages/shared` live there. Coolify: Build Pack `Dockerfile`,
 # Base Directory `/`, Dockerfile Location `/apps/front-end/Dockerfile`.
 #
 # The Bun tag moves with `packageManager` and with `apps/back-end/Dockerfile`.
-FROM oven/bun:1.4.4 AS build
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS build
 WORKDIR /app
 # The install guard would otherwise try to repair the toolchain over the
 # network; inside a build the image IS the toolchain.
@@ -36,7 +36,7 @@ ENV NEXT_STANDALONE=true \
 WORKDIR /app/apps/front-end
 RUN bun run build
 
-FROM oven/bun:1.4.4 AS runtime
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS runtime
 # Coolify's HTTP health check runs `curl -f` INSIDE the container.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends curl \

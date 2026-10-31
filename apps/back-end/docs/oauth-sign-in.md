@@ -2,7 +2,7 @@
 
 This repository provides the backend API. It contains no client application or
 sign-in page. A consuming client uses the capabilities and flows below. Deployment
-configuration is in [the Coolify runbook](../reports/coolify-deployment.md#14-google-oauth-sign-in).
+configuration is in [the Coolify runbook](../reports/coolify-deployment.md#12-google-oauth-sign-in).
 
 ## Account policy
 

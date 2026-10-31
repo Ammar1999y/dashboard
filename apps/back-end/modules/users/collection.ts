@@ -27,7 +27,6 @@ import { auditLog, getAuditMeta } from '@/lib/audit';
 import { insertCredentialAccount } from '@/lib/auth/credential-account';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword } from '@/lib/auth/password/hash';
-import { lockActor } from '@/lib/auth/user-eligibility';
 import { parseDataTableParams } from '@/lib/data-table/params';
 import { dataTableParameters } from '@/lib/data-table/query-parameters';
 import { bind } from '@/lib/http/binding';
@@ -35,12 +34,13 @@ import { handleUserConstraintViolation } from '@/lib/http/constraint-errors';
 import { auditCustomRolePermissions } from '@/lib/permissions/audit';
 import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
-  createCustomRole,
+  mintCustomRole,
   nonSystemRoleFilter,
   publicRoleFields,
   validateAssignableRole,
 } from '@/lib/permissions/roles';
 import { validateRolePermissionScope } from '@/lib/permissions/scope';
+import { lockActor } from '@/lib/users/lock-order';
 
 export const listUsersBinding = bind(listUsers, {
   permission: { resource: 'users', action: 'view' },
@@ -55,12 +55,12 @@ export const listUsersBinding = bind(listUsers, {
     tags: ['Users'],
     parameters: dataTableParameters(USERS_FILTER_COLUMNS),
   },
-  handler: async ({ actor, meta }) => {
+  handler: async ({ query, actor }) => {
     const { userId, scope } = actor;
 
     const { where, orderBy, limit, offset, paginationMeta } =
       parseDataTableParams(users, {
-        url: meta.url,
+        query,
         filterableColumns: USERS_FILTER_COLUMNS,
         searchableColumns: ['name', 'email'],
         defaultSort: { id: 'createdAt', desc: true },
@@ -181,7 +181,7 @@ export const createUserBinding = bind(createUser, {
         isCustomRole && input.permissions?.length ? input.permissions : null;
 
       const assignedRoleId = customPermissions
-        ? await createCustomRole(tx, customPermissions, null, actorUserId)
+        ? await mintCustomRole(tx, customPermissions, actorUserId)
         : input.roleId;
 
       const [newUser] = await tx

@@ -6,10 +6,12 @@
  * within the contract at least once in the integration tier — or be named
  * below with the reason they cannot.
  */
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import {
   describeResponseCoverage,
   expectedResponseCoverage,
-  readResponseCoverage,
 } from '@/lib/http/response-coverage';
 
 const AUTO_VERIFY_DORMANT =
@@ -23,6 +25,21 @@ const UNREACHED: Readonly<Record<string, string>> = {
   'POST /api/dash/users/me/change-email #0': AUTO_VERIFY_DORMANT,
   'POST /api/dash/users/me/change-phone #0': AUTO_VERIFY_DORMANT,
 };
+
+/**
+ * Every id the processes of one run recorded under `dir`, in the format
+ * `recordResponseCoverage` writes: a file per process, a JSON string per line.
+ */
+function readResponseCoverage(dir: string): Set<string> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- the directory the runner created for this run
+  const files = readdirSync(dir).map((name) => path.join(dir, name));
+  const ids = files
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a file a process of this run wrote there
+    .flatMap((file) => readFileSync(file, 'utf8').split('\n'))
+    .filter((line) => line !== '')
+    .map((line): unknown => JSON.parse(line));
+  return new Set(ids.filter((id) => typeof id === 'string'));
+}
 
 /** What the run saw against what it had to; `failed` when a gap is unexplained or an entry above is stale. */
 export function responseCoverageReport(dir: string): {

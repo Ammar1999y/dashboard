@@ -10,7 +10,7 @@ import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
 
 import {
   BETTER_AUTH_ALLOWED_PATH_SET,
-  BETTER_AUTH_KNOWN_PATHS,
+  BETTER_AUTH_KNOWN_ENDPOINTS,
   BETTER_AUTH_ROUTE_PREFIX,
 } from '@/lib/auth/allowed-paths';
 import { PUBLIC_ORIGIN } from '@/lib/env';
@@ -127,7 +127,9 @@ export function expectServed(
 export function otpAuthPathState(): Record<string, boolean> {
   return {
     allowed: BETTER_AUTH_ALLOWED_PATH_SET.has(OTP_AUTH_PATH),
-    known: BETTER_AUTH_KNOWN_PATHS.has(OTP_AUTH_PATH),
+    known: BETTER_AUTH_KNOWN_ENDPOINTS.some(
+      (entry) => entry.path === OTP_AUTH_PATH
+    ),
     routed: BETTER_AUTH_ROUTE_PREFIX.paths.some(
       (entry) => entry.path === OTP_AUTH_PATH
     ),

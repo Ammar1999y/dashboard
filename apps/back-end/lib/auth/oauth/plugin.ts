@@ -16,33 +16,24 @@ import * as z from 'zod';
 import * as contract from '@app/shared/api/better-auth';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import {
-  MSG_INTERNAL_ERROR,
-  MSG_INVALID_INPUT,
-} from '@app/shared/messages/common';
+import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
 import { oauthOutcomeSchema } from '@app/shared/responses/better-auth';
-import {
-  googleCallbackQuerySchema,
-  googleStartSchema,
-  OAUTH_STATE_LOST_PAGE,
-} from '@app/shared/validation/oauth';
+import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
 import { TWO_FACTOR_ENABLED } from '@app/shared/validation/two-factor';
 
 import { auditLog } from '@/lib/audit';
-import { verifyTurnstileRequest } from '@/lib/captcha';
+import { BASE64URL_32_BYTES_PATTERN } from '@/lib/crypto/keyring';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { customErrorFields, errorClassOf, logSanitized } from '@/utils/log';
 
-import { authAuditMeta, requestHeaders } from '../context';
+import { authAuditMeta } from '../context';
 import {
   authenticationDenied,
   authError,
-  authErrorCodeFirst,
   databaseUnavailable,
   toAuthApiError,
 } from '../errors';
-import { BASE64URL_32_BYTES_PATTERN } from '../keyring';
 import { pluginEndpoint } from '../plugin-endpoint';
 import { recordAbandonedSession } from '../session/audit';
 import { authenticationStartedAt } from '../session/authentication-time';
@@ -94,7 +85,6 @@ const googleProvider = GOOGLE_CREDENTIALS
       scope: ['openid', 'email'],
       accessType: 'online',
       includeGrantedScopes: false,
-      disableSignUp: true,
     })
   : null;
 
@@ -154,12 +144,10 @@ function serverFailure(
   if (error instanceof GoogleIdentityDenied) return undefined;
   if (isDatabaseContention(error)) return databaseUnavailable();
   if (error instanceof CustomError) {
-    const status = error.status ?? HTTP_STATUS.INTERNAL_ERROR;
-    return status === HTTP_STATUS.SERVICE_UNAVAILABLE
-      ? toAuthApiError(error, MSG_INTERNAL_ERROR)
-      : status >= HTTP_STATUS.INTERNAL_ERROR
-        ? authError(HTTP_STATUS.INTERNAL_ERROR, MSG_INTERNAL_ERROR)
-        : undefined;
+    const failure = toAuthApiError(error, MSG_INTERNAL_ERROR);
+    return failure.statusCode >= HTTP_STATUS.INTERNAL_ERROR
+      ? failure
+      : undefined;
   }
   if (isAPIError(error)) {
     if (error.statusCode >= HTTP_STATUS.INTERNAL_ERROR) return error;
@@ -311,57 +299,46 @@ export const oauth = () =>
         })
       ),
       ...(GOOGLE_ENABLED && {
-        googleStart: pluginEndpoint(
-          contract.googleStart,
-          { body: googleStartSchema },
-          async (ctx) => {
-            if (!googleProvider) throw authenticationDenied();
-            if (!(await verifyTurnstileRequest(requestHeaders(ctx))))
-              throw authErrorCodeFirst(
-                HTTP_STATUS.FORBIDDEN,
-                MSG_INVALID_INPUT
-              );
-            const destination = returnURL(ctx.body.callbackURL);
-            const nonce = randomToken(32);
-            const { state, codeVerifier } = await generateState(ctx, {
-              idTokenNonce: nonce,
-              additionalData: {
-                flow: {
-                  startedAt: await authenticationStartedAt(),
-                  rememberMe: submittedRememberMe(ctx.body),
-                  returnURL: destination,
+        googleStart: pluginEndpoint(contract.googleStart, {}, async (ctx) => {
+          if (!googleProvider) throw authenticationDenied();
+          const destination = returnURL(ctx.body.callbackURL);
+          const nonce = randomToken(32);
+          const { state, codeVerifier } = await generateState(ctx, {
+            idTokenNonce: nonce,
+            additionalData: {
+              flow: {
+                startedAt: await authenticationStartedAt(),
+                rememberMe: submittedRememberMe(ctx.body),
+                returnURL: destination,
+              },
+            },
+          });
+          // Better Auth consumes redirect state by read/delete; this marker makes concurrent callbacks single-use.
+          await ctx.context.internalAdapter.createVerificationValue({
+            identifier: oauthOnceKey(state),
+            value: '-',
+            expiresAt: expiresIn(OAUTH_STATE_MAX_AGE_S),
+          });
+          const url = await googleProvider.createAuthorizationURL({
+            state,
+            codeVerifier,
+            redirectURI: GOOGLE_REDIRECT_URI,
+            additionalParams: {
+              claims: JSON.stringify({
+                id_token: {
+                  amr: { essential: true },
                 },
-              },
-            });
-            // Better Auth consumes redirect state by read/delete; this marker makes concurrent callbacks single-use.
-            await ctx.context.internalAdapter.createVerificationValue({
-              identifier: oauthOnceKey(state),
-              value: '-',
-              expiresAt: expiresIn(OAUTH_STATE_MAX_AGE_S),
-            });
-            const url = await googleProvider.createAuthorizationURL({
-              state,
-              codeVerifier,
-              redirectURI: GOOGLE_REDIRECT_URI,
-              additionalParams: {
-                claims: JSON.stringify({
-                  id_token: {
-                    amr: { essential: true },
-                  },
-                }),
-              },
-            });
-            url.searchParams.set('nonce', nonce);
-            return ctx.json({
-              data: { url: url.href },
-            });
-          }
-        ),
+              }),
+            },
+          });
+          url.searchParams.set('nonce', nonce);
+          return ctx.json({
+            data: { url: url.href },
+          });
+        }),
         googleCallback: pluginEndpoint(
           contract.googleCallback,
-          {
-            query: googleCallbackQuerySchema,
-          },
+          {},
           async (ctx) => {
             let destination: string | null = null;
             let stage = 'state';

@@ -65,6 +65,11 @@ export function scheduleWhenOwner(
   }
 
   return {
+    // A claim retried during shutdown would start a fresh schedule.
+    halt: () => {
+      stopRetrying();
+      state.schedule?.halt();
+    },
     stopAndDrain: (timeoutMs) => {
       stopRetrying();
       return state.schedule

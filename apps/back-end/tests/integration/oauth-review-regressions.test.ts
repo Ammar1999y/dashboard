@@ -23,6 +23,8 @@ import {
   MSG_REAUTH_REQUIRED,
 } from '@app/shared/messages/auth';
 import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
+import { otpMsg } from '@app/shared/messages/otp';
+import { CAPTCHA_HEADER } from '@app/shared/validation/auth';
 import { OAUTH_STATE_LOST_PAGE } from '@app/shared/validation/oauth';
 
 import { auth } from '@/lib/auth';
@@ -419,7 +421,7 @@ async function expectTokenAnswerIsServerFailure(
             provider: 'google',
             stage: 'token_exchange',
             reason: 'unexpected_failure',
-            errorClass: 'Unknown',
+            errorClass: 'object',
             providerError,
           },
         ],
@@ -605,6 +607,48 @@ test('a token without exp is refused, by the verifier and through the callback',
     })
   ).rejects.toMatchObject({ reason: 'id_token_invalid' });
   await expect(flow.callback()).resolves.toHaveProperty('status', 401);
+});
+
+test.each([
+  ['issued 5 s ahead of this server’s clock is accepted', 5, true],
+  ['issued 60 s ahead of this server’s clock is refused', 60, false],
+] as const)('a token %s', async (_label, aheadSeconds, accepted) => {
+  const owner = await seedUser();
+  const now = Math.floor(Date.now() / 1000);
+  const flow = await startGoogle({
+    sub: `clock-skew-${aheadSeconds}`,
+    email: owner.email,
+    iat: now + aheadSeconds,
+  });
+  const verified = verifyGoogleIdToken({
+    token: flow.token,
+    audience: 'harness.apps.googleusercontent.com',
+    nonce: flow.url.searchParams.get('nonce') ?? '',
+  });
+  await (accepted
+    ? expect(verified).resolves.toMatchObject({
+        sub: `clock-skew-${aheadSeconds}`,
+      })
+    : expect(verified).rejects.toMatchObject({ reason: 'id_token_invalid' }));
+});
+
+test('Google start without a captcha token is refused as a failed captcha and starts nothing', async () => {
+  const headers = baseHeaders({
+    'content-type': 'application/json',
+    origin: PUBLIC_ORIGIN,
+  });
+  delete headers[CAPTCHA_HEADER];
+  const response = await app.handle(
+    new Request(`${PUBLIC_ORIGIN}/api/auth/oauth/google/start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ mode: 'sign_in', rememberMe: true }),
+    })
+  );
+
+  await expectAuthError(response, 403, otpMsg.captchaFailed);
+  expect(response.headers.getSetCookie()).toEqual([]);
+  expect(await db.select().from(verifications)).toEqual([]);
 });
 
 test.each([
@@ -1238,7 +1282,8 @@ test.each([
   ['the wrong nonce', { claims: { nonce: 'not-this-flows-nonce' } }],
   [
     'an expired token',
-    { claims: { iat: nowSeconds() - 100, exp: nowSeconds() - 10 } },
+    // Past the clock tolerance.
+    { claims: { iat: nowSeconds() - 100, exp: nowSeconds() - 60 } },
   ],
   [
     'a token older than an hour',

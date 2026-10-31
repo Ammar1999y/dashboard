@@ -141,7 +141,7 @@ check(
 // Error: the constructor is typed, so this fixture cannot drift from the shape
 // the driver really throws, and it needs no database to run in CI. What it does
 // NOT prove is that Bun populates `errno` from the wire — that needs a live
-// server and lives in scripts/probe/dev-live/.
+// server and lives in `tests/integration/driver-contract.test.ts`.
 const driverPgError = new SQL.PostgresError(
   'duplicate key value violates unique constraint "ux_users_email"',
   {

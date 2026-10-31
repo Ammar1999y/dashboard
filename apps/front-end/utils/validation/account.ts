@@ -1,13 +1,13 @@
 import * as z from 'zod';
 import { MSG_NAME_TOO_LONG } from '@app/shared/messages/validation';
+import { NAME_MAX } from '@app/shared/validation/constants';
+import { reauthPasswordSchema } from '@app/shared/validation/rules';
 import {
   changeEmailSchema,
   changePasswordSchema,
   changePhoneSchema,
   selfUpdateUserBodySchema,
-} from '@app/shared/validation/auth';
-import { NAME_MAX } from '@app/shared/validation/constants';
-import { reauthPasswordSchema } from '@app/shared/validation/rules';
+} from '@app/shared/validation/users';
 
 import { captchaField } from './auth';
 

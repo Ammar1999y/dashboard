@@ -1,0 +1,4 @@
+-- Every statement drizzle-kit generated for this snapshot is in
+-- db/migrations/ (012 to 029): the index changes run concurrently, which this
+-- file's transaction refuses, and the folded columns call search_fold(),
+-- which db/migrations/ creates after this directory is applied.

@@ -4,19 +4,14 @@ import type {
   PermissionAction,
 } from '@app/shared/permissions/constants';
 
-import { CustomError } from '@app/shared/error-class';
-import { REAUTH_REQUIRED_CODE } from '@app/shared/error-codes';
-import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_REAUTH_REQUIRED } from '@app/shared/messages/auth';
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 
-import { hasAdminReauth } from '@/lib/auth/reauth/window';
+import { requireReauthWindow } from '@/lib/auth/reauth/window';
+import { authenticatedSession, readLiveSession } from '@/lib/auth/session/read';
 import {
-  authenticatedSession,
   checkMultiplePermissions,
   checkUserPermission,
   insufficientPermissions,
-  readLiveSession,
 } from '@/lib/permissions/checker';
 
 export async function requirePermission(
@@ -48,15 +43,8 @@ export async function requirePermission(
   // whether a proof would have helped. `throwError: false` lets a refused
   // caller reach this line, so a route that branches on `scope` asks for the
   // window itself once it knows the branch needs one.
-  if (opts.reauth && result.allowed) {
-    const proven = await hasAdminReauth(result.sessionId, result.userId);
-    if (!proven)
-      throw new CustomError(
-        MSG_REAUTH_REQUIRED,
-        HTTP_STATUS.UNAUTHORIZED,
-        REAUTH_REQUIRED_CODE
-      );
-  }
+  if (opts.reauth && result.allowed)
+    await requireReauthWindow(result.userId, result.sessionId);
 
   return result;
 }

@@ -10,7 +10,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { CUSTOM_ROLE_VALUE } from '@app/shared/permissions/constants';
-import { createUserSchema } from '@app/shared/validation/auth';
+import { createUserSchema } from '@app/shared/validation/users';
 import { markDetailStale } from '@/lib/api/query-cache';
 
 import { DEFAULT_USER } from '@/utils/validation/auth';

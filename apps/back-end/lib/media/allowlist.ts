@@ -35,8 +35,8 @@ function signatureDetect(check: (bytes: Uint8Array) => boolean) {
 }
 
 /**
- * Image entries check the signature only; animation and decode caps are
- * enforced in `lib/media/image/process.ts`.
+ * Image entries check the signature only; `admitUpload` refuses animation, and
+ * the decode caps are enforced in `lib/media/image/optimize.ts`.
  */
 const DETECTORS: Readonly<Record<KnownMimeType, FileTypeSpec['detect']>> = {
   'image/png': signatureDetect((bytes) =>

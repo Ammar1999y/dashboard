@@ -1,12 +1,13 @@
 import path from 'node:path';
 
+import { validatePasswordPepperConfiguration } from '@/lib/auth/password/pepper';
 import {
   isPlaceholderSecret,
   MIN_DISTINCT_SECRET_SYMBOLS,
-} from '@/lib/auth/keyring';
-import { validatePasswordPepperConfiguration } from '@/lib/auth/password/pepper';
+} from '@/lib/crypto/keyring';
 import { validateOtpKeyConfiguration } from '@/lib/otp/key';
 import { R2_PRIVATE_BUCKET, R2_PUBLIC_BUCKET } from '@/lib/r2/buckets';
+import { R2_PUBLIC_URL } from '@/lib/r2/public-url';
 
 import { logLine } from '@/utils/log';
 import { missingServerEnvMessage } from '@/utils/missing-env';
@@ -60,11 +61,8 @@ const R2_CREDENTIALS = [
  * - no bucket at all in production, where every upload path would 422;
  * - one half of the cache-purge pair, which would look configured and do nothing;
  * - one bucket under both names, where a publish would copy an object onto
- *   itself and then delete the only copy.
- *
- * `R2_PUBLIC_URL` is parsed because it is concatenated with object keys into
- * URLs that are stored nowhere and rebuilt on every read: a trailing slash or a
- * query string here would corrupt every one of them the same way.
+ *   itself and then delete the only copy;
+ * - an `R2_PUBLIC_URL` that is not an https origin (`lib/r2/public-url.ts`).
  *
  * Only the presence rules are production-gated. The shape rules run in every
  * environment, because a malformed value is wrong everywhere.
@@ -73,37 +71,25 @@ function r2ConfigurationErrors(production: boolean): string[] {
   const errors: string[] = [];
   const publicBucket = R2_PUBLIC_BUCKET;
   const privateBucket = R2_PRIVATE_BUCKET;
-  const publicUrl = process.env.R2_PUBLIC_URL?.trim();
+  const publicUrl = R2_PUBLIC_URL.state !== 'unset';
 
-  if (publicUrl) {
-    let parsed: URL | null = null;
-    try {
-      parsed = new URL(publicUrl);
-    } catch {
-      parsed = null;
-    }
-    if (
-      !parsed ||
-      parsed.protocol !== 'https:' ||
-      parsed.search ||
-      parsed.hash ||
-      parsed.username ||
-      parsed.password ||
-      (parsed.pathname !== '/' && parsed.pathname !== '')
-    )
-      errors.push(
-        'R2_PUBLIC_URL must be an https origin with no path, query, fragment or credentials, e.g. "https://media.example.com"'
-      );
-    else if (production && parsed.hostname.endsWith('.r2.dev'))
-      // A warning, not a refusal: the URL works, Cloudflare only documents it as
-      // rate-limited and for development. Refusing would block a deploy over a
-      // capacity concern; saying nothing would hide it.
-      logLine('warn', {
-        msg: 'r2.public-url is an r2.dev development URL',
-        detail:
-          'Cloudflare rate-limits r2.dev and documents it as non-production. Attach a custom domain to the public bucket.',
-      });
-  }
+  if (R2_PUBLIC_URL.state === 'invalid')
+    errors.push(
+      'R2_PUBLIC_URL must be an https origin with no path, query, fragment or credentials, e.g. "https://media.example.com"'
+    );
+  else if (
+    production &&
+    R2_PUBLIC_URL.state === 'valid' &&
+    R2_PUBLIC_URL.hostname.endsWith('.r2.dev')
+  )
+    // A warning, not a refusal: the URL works, Cloudflare only documents it as
+    // rate-limited and for development. Refusing would block a deploy over a
+    // capacity concern; saying nothing would hide it.
+    logLine('warn', {
+      msg: 'r2.public-url is an r2.dev development URL',
+      detail:
+        'Cloudflare rate-limits r2.dev and documents it as non-production. Attach a custom domain to the public bucket.',
+    });
 
   const zoneId = process.env.CLOUDFLARE_ZONE_ID;
   const purgeToken = process.env.CLOUDFLARE_CACHE_PURGE_TOKEN;
@@ -285,7 +271,7 @@ export const SQLITE_DIR = resolveSqliteDir();
 /** Rate-limit state: process-crash-safe, must survive deploys (the OTP cap). */
 export const RATE_LIMIT_DB_PATH = path.join(SQLITE_DIR, 'rate-limit.db');
 
-/** Response cache: disposable. Safe to delete, and safe to place on tmpfs. */
+/** Response cache: disposable, so safe to delete. */
 export const CACHE_DB_PATH = path.join(SQLITE_DIR, 'cache.db');
 
 /**
@@ -330,3 +316,32 @@ function resolveMaintenanceToken(): string {
  * `REQUIRED_IN_PRODUCTION`), because there the route IS the readiness surface.
  */
 export const SQLITE_MAINTENANCE_TOKEN = resolveMaintenanceToken();
+
+/**
+ * Cloudflare's per-call ceiling for purge-by-URL, by plan
+ * (developers.cloudflare.com/cache/how-to/purge-cache/, "Availability and
+ * limits"): the default is Free's, Pro's and Business's, the maximum
+ * Enterprise's. Nothing here can see the zone's plan, so a value above it
+ * passes this check and fails every purge as a 4xx (`media.cache-purge failed`).
+ */
+const PURGE_BATCH_SIZE_DEFAULT = 100;
+const PURGE_BATCH_SIZE_MAX = 500;
+
+function resolvePurgeBatchSize(): number {
+  const configured = process.env.CLOUDFLARE_PURGE_BATCH_SIZE?.trim();
+  if (!configured) return PURGE_BATCH_SIZE_DEFAULT;
+  if (!/^\d+$/.test(configured))
+    throw new Error(
+      `CLOUDFLARE_PURGE_BATCH_SIZE must be a decimal integer. Received: "${configured}".`
+    );
+  const size = Number(configured);
+  if (size < 1 || size > PURGE_BATCH_SIZE_MAX)
+    throw new Error(
+      `CLOUDFLARE_PURGE_BATCH_SIZE must be between 1 and ${PURGE_BATCH_SIZE_MAX} ` +
+        `(${PURGE_BATCH_SIZE_DEFAULT} on Free, Pro and Business; ${PURGE_BATCH_SIZE_MAX} on Enterprise). Received: ${size}.`
+    );
+  return size;
+}
+
+/** URLs per Cloudflare purge call (`lib/cloudflare/purge.ts`). */
+export const CLOUDFLARE_PURGE_BATCH_SIZE = resolvePurgeBatchSize();

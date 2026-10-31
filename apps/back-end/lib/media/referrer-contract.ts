@@ -8,8 +8,9 @@
  * A plain `file_id → files(id)` key is invisible to `unreferenced()` and is
  * refused only at the final row delete, after the object is already gone.
  *
- * ⚠️ No runtime `@/` import: `scripts/migrate.ts` imports this by relative path
- * and runs it over its own `bun:sql` client.
+ * ⚠️ `scripts/migrate.ts` imports this and runs it over its own `bun:sql`
+ * client, without the server's secrets: nothing here may reach `@/db` or
+ * `@/lib/env.server`.
  */
 
 /** Runs one parameterless catalog statement and returns its rows. */

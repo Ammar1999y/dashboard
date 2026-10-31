@@ -24,6 +24,7 @@ import {
   users,
   verifications,
 } from '@/db/schema';
+import { createOTP } from '@better-auth/utils/otp';
 import { symmetricEncrypt } from 'better-auth/crypto';
 import * as z from 'zod';
 
@@ -32,6 +33,7 @@ import { MSG_LOGIN_REQUIRED, twoFactorMsg } from '@app/shared/messages/auth';
 import { auth } from '@/lib/auth';
 import { hasAdminReauth } from '@/lib/auth/reauth/window';
 import { issueRecoveryGrant } from '@/lib/auth/recovery/grant';
+import { authenticationStartedAt } from '@/lib/auth/session/authentication-time';
 import * as live from '@/lib/auth/session/live';
 import { TWO_FACTOR_ALLOWED_ATTEMPTS } from '@/lib/auth/two-factor/challenge';
 import {
@@ -360,6 +362,7 @@ describe('best-effort cleanup', () => {
       userId: user.userId,
       excludeContactKind: 'email',
       options: recoveryOptions(await readEnrolmentState(user.userId), 'email'),
+      startedAt: await authenticationStartedAt(),
     });
     await db
       .update(verifications)
@@ -428,10 +431,10 @@ describe('the plugin’s delegated verifiers', () => {
     '/two-factor/%s answers a fault consuming the counter (%s) with %d',
     async (endpoint, sqlstate, status) => {
       const { cookie } = await delegatedChallenge();
-      const { code } =
+      const code =
         endpoint === 'verify-totp'
-          ? await auth.api.generateTOTP({ body: { secret: TOTP_SECRET } })
-          : { code: BACKUP_CODES[0] };
+          ? await createOTP(TOTP_SECRET).totp()
+          : BACKUP_CODES[0];
       const lines = errorLines();
       await armWriteFault('delete', '2fa-attempts-%', sqlstate);
 
@@ -709,6 +712,7 @@ describe('account recovery', () => {
       userId: user.userId,
       excludeContactKind: 'email',
       options: recoveryOptions(await readEnrolmentState(user.userId), 'email'),
+      startedAt: await authenticationStartedAt(),
     });
     const lines = errorLines();
     await armWriteFault('delete', 'recovery-attempts-%', '40P01');
@@ -743,6 +747,7 @@ describe('account recovery', () => {
       userId: user.userId,
       excludeContactKind: 'email',
       options: recoveryOptions(await readEnrolmentState(user.userId), 'email'),
+      startedAt: await authenticationStartedAt(),
     });
     await seedOtpProof({
       userId: user.userId,

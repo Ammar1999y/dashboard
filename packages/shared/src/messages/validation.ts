@@ -1,3 +1,5 @@
+import type { DashboardPage, PermissionAction } from '../permissions/constants';
+
 import {
   EMAIL_MAX,
   FOLDER_NAME_MAX,
@@ -23,9 +25,10 @@ import {
   PERMISSIONS,
   SESSIONS_NOMINATIVE,
 } from './count';
+import { DASHBOARD_PAGE_LABELS, PERMISSION_ACTION_LABELS } from './permissions';
 
-// What a request schema answers a malformed body with. Imports constants only:
-// the schemas import this file, so it must never import one back.
+// What a request schema answers a malformed body with. Imports constants and
+// labels only: the schemas import this file, so it must never import one back.
 
 /** `zodIssueMessage` replaces any message without Arabic script, so every one stays Arabic. */
 export const idRequired =
@@ -65,7 +68,7 @@ export const MSG_UNRECOGNIZED_KEYS = (
 export const MSG_EMAIL_INVALID = 'يرجى إدخال بريد إلكتروني صحيح';
 export const MSG_EMAIL_TOO_LONG = `يجب أن لا يتجاوز البريد الإلكتروني ${countOf(EMAIL_MAX, CHARACTERS)}`;
 export const MSG_EMAIL_PROVIDER_NOT_ACCEPTED =
-  'نعتذر، حالياً نقبل التسجيل فقط عبر بريد Gmail أو Outlook أو Hotmail أو Yahoo. يرجى استخدام أحد هذه العناوين.';
+  'نعتذر، حالياً نقبل التسجيل فقط عبر بريد Gmail أو Outlook أو Hotmail أو Live أو Yahoo. يرجى استخدام أحد هذه العناوين.';
 
 export const MSG_PASSWORD_REQUIRED = 'كلمة المرور مطلوبة';
 export const MSG_PASSWORD_TOO_SHORT = `كلمة المرور يجب أن تكون ${countOf(PASSWORD_MIN, CHARACTERS)} على الأقل`;
@@ -75,12 +78,6 @@ export const MSG_PASSWORD_INVALID = 'تحقق من صحة كلمة المرور'
 export const MSG_PHONE_REQUIRED = 'رقم الهاتف مطلوب';
 export const MSG_PHONE_INVALID = 'يرجى إدخال رقم هاتف سعودي صحيح';
 export const MSG_PHONE_DISABLED = 'رقم الهاتف غير مُفعّل في النظام';
-
-export const MSG_COLOR_INVALID = 'قم بإدخال لون صحيح';
-
-export const MSG_SLUG_TOO_LONG = 'الـ slug طويل جداً';
-export const MSG_SLUG_INVALID_CHARACTERS = 'الـ slug يحتوي على أحرف غير مسموحة';
-export const MSG_SLUG_DIGITS_ONLY = 'الـ slug لا يمكن أن يكون أرقاماً فقط';
 
 export const MSG_CAPTCHA_REQUIRED = 'الرجاء التحقق من أنك لست روبوتاً';
 
@@ -135,6 +132,6 @@ export const permissionValidationMsg = {
   duplicatePageNames: 'أسماء الصفحات يجب أن لا تتكرر',
   viewRequiredForWrite:
     'يجب تفعيل صلاحية العرض عند تفعيل أي صلاحية كتابة (إنشاء، تعديل، حذف)',
-  actionUnavailableForPage: (action: string, page: string) =>
-    `الصلاحية "${action}" غير متاحة لصفحة "${page}"`,
+  actionUnavailableForPage: (action: PermissionAction, page: DashboardPage) =>
+    `الصلاحية "${PERMISSION_ACTION_LABELS[action]}" غير متاحة لصفحة "${DASHBOARD_PAGE_LABELS[page]}"`,
 };

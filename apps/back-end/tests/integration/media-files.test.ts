@@ -45,6 +45,7 @@ import {
 
 import {
   FILE_BUSY_CODE,
+  FILE_CONTENT_REFUSED_CODE,
   FILE_IN_USE_CODE,
   FILE_KIND_NOT_ALLOWED_CODE,
   FILE_NOT_FOUND_CODE,
@@ -57,10 +58,14 @@ import {
   UNPUBLISH_IN_USE_CODE,
   VISIBILITY_DISABLED_CODE,
 } from '@app/shared/error-codes';
+import { sanitizeFilename } from '@app/shared/filename';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { mediaMsg } from '@app/shared/messages/media';
 import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
-import { DOC_MIME_TYPE } from '@app/shared/validation/media-types';
+import {
+  DOC_MIME_TYPE,
+  DOCX_MIME_TYPE,
+} from '@app/shared/validation/media-types';
 
 import * as purge from '@/lib/cloudflare/purge';
 import { generateUuidV7 } from '@/lib/id';
@@ -71,6 +76,7 @@ import { downloadFilename, downloadUrl } from '@/lib/media/files';
 import * as foldersModule from '@/lib/media/folders';
 import { claimFiles, sweepFiles } from '@/lib/media/lifecycle';
 import { attachFiles, linkFiles, promoteForLink } from '@/lib/media/link';
+import { WORD_MAIN_CONTENT_TYPE } from '@/lib/media/office/ooxml';
 import {
   ORPHAN_DRAIN_BATCH,
   sweepOrphanedObjects,
@@ -107,6 +113,7 @@ import {
   withSource,
   withUploadPurpose,
 } from '../helpers/usage-registry';
+import { buildZip } from '../helpers/zip';
 
 const PUBLIC_BUCKET = process.env.R2_PUBLIC_BUCKET ?? '';
 const PRIVATE_BUCKET = process.env.R2_PRIVATE_BUCKET ?? '';
@@ -371,6 +378,63 @@ describe('upload into a folder', () => {
     expect(
       storedObject(PRIVATE_BUCKET, row?.r2Key ?? '')?.contentDisposition
     ).toContain('attachment');
+  });
+
+  test('a document whose relationships pass the scan budget is refused as too complex, and nothing is written', async () => {
+    const folderId = await createFolder(admin(), 'Link-heavy');
+    const docxForm = (links: number) => {
+      const relationships = Array.from(
+        { length: links },
+        (_, index) =>
+          // eslint-disable-next-line unicorn/prefer-https -- a relationship type is an identifier, not a fetched URL
+          `<Relationship Id="rId${index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.test/item/${index}" TargetMode="External"/>`
+      ).join('');
+      const zip = buildZip([
+        {
+          name: '[Content_Types].xml',
+          data: `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="${WORD_MAIN_CONTENT_TYPE}"/></Types>`,
+        },
+        { name: 'word/document.xml', data: '<w:document/>' },
+        {
+          name: 'word/_rels/document.xml.rels',
+          data: `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`,
+        },
+      ]);
+      const form = new FormData();
+      form.append(
+        'file',
+        new File([new Uint8Array(zip)], 'links.docx', {
+          type: DOCX_MIME_TYPE,
+        })
+      );
+      return form;
+    };
+    const rowCount = async () => {
+      const [row] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(files);
+      return row?.count;
+    };
+    const before = await rowCount();
+    resetObjectStoreOps();
+
+    const answer = await call(
+      admin(),
+      'POST',
+      `/api/dash/media/files?folder=${folderId}`,
+      docxForm(40_000)
+    );
+
+    expect([answer.status, answer.body.code, answer.body.detail]).toEqual([
+      HTTP_STATUS.BAD_REQUEST,
+      FILE_CONTENT_REFUSED_CODE,
+      mediaMsg.refused(sanitizeFilename('links.docx'), 'complex'),
+    ]);
+    expect(await rowCount()).toBe(before);
+    expect(storeOps()).toEqual([]);
+
+    const file = await upload(admin(), folderId, docxForm(20));
+    expect(file).toMatchObject({ kind: 'document', mimeType: DOCX_MIME_TYPE });
   });
 
   test('a failed object write keeps the pending row, and the sweep later removes the row with whatever the store holds', async () => {
@@ -2122,6 +2186,62 @@ describe('publish and unpublish', () => {
     expect(await rowOf(file.id)).toMatchObject({ transition: null });
     expect(storeHas(PUBLIC_BUCKET, key)).toBe(false);
     expect(storeHas(PRIVATE_BUCKET, key)).toBe(true);
+  });
+
+  test('repeating a change whose cleanup failed answers done until the sweep; the opposite change stays busy', async () => {
+    const folderId = await createFolder(admin(), 'Cleanup pending');
+    const file = await upload(admin(), folderId, svgForm('pending.svg'));
+    failObjectStore('DeleteObject');
+    const published = await call(
+      admin(),
+      'POST',
+      `/api/dash/media/files/${file.id}/publish`
+    );
+    expect(published.body.data).toMatchObject({
+      bucketType: 'public',
+      transition: 'cleanup',
+    });
+    clearObjectStoreFailures();
+    const [before] = await db
+      .select({ updatedAt: files.updatedAt })
+      .from(files)
+      .where(eq(files.id, file.id));
+    const audited = await auditActions(file.id);
+    resetObjectStoreOps();
+
+    const again = await call(
+      admin(),
+      'POST',
+      `/api/dash/media/files/${file.id}/publish`
+    );
+    expect(again.status, JSON.stringify(again.body)).toBe(HTTP_STATUS.OK);
+    expect(again.body.data).toMatchObject({
+      bucketType: 'public',
+      transition: 'cleanup',
+    });
+    expect(storeOps()).toEqual([]);
+    expect(await auditActions(file.id)).toEqual(audited);
+    const [after] = await db
+      .select({ updatedAt: files.updatedAt })
+      .from(files)
+      .where(eq(files.id, file.id));
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+
+    // Copying back while the private copy is being deleted would race it.
+    const reversed = await call(
+      admin(),
+      'POST',
+      `/api/dash/media/files/${file.id}/unpublish`
+    );
+    expect([reversed.status, reversed.body.code]).toEqual([
+      HTTP_STATUS.CONFLICT,
+      FILE_BUSY_CODE,
+    ]);
+    expect(await rowOf(file.id)).toMatchObject({
+      bucketType: 'public',
+      transition: 'cleanup',
+    });
+    expect(storeOps()).toEqual([]);
   });
 
   test('publish needs the publish grant; a view-only session is refused', async () => {

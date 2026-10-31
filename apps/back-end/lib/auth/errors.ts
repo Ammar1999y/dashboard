@@ -41,7 +41,7 @@ export function authError(
   return new APIError(status, { message, code: CUSTOM_AUTH_CODE }, headers);
 }
 
-export function authErrorCodeFirst(
+function authErrorCodeFirst(
   status: AuthErrorStatus,
   message: string
 ): APIError {
@@ -79,9 +79,17 @@ export function reauthenticationRequired(): APIError {
   });
 }
 
+/** A status-less `CustomError` too: no raiser chose a client error for it. */
+function isServerFailure(error: CustomError): boolean {
+  return (
+    (error.status ?? HTTP_STATUS.INTERNAL_ERROR) >= HTTP_STATUS.INTERNAL_ERROR
+  );
+}
+
 /**
  * Any non-`APIError` throw escapes `auth.handler` to `app.ts`. 429 and 503 keep
- * their headers; `genericMessage` answers every other status, collapsing
+ * their headers, and a server failure stays a 500, as `handleApiError` answers
+ * them; `genericMessage` answers every other status, collapsing
  * account-revealing failures.
  */
 export function toAuthApiError(
@@ -115,7 +123,9 @@ export function toAuthApiError(
       return authError(HTTP_STATUS.UNPROCESSABLE, error.message);
     }
     default: {
-      return authError(HTTP_STATUS.BAD_REQUEST, genericMessage);
+      return isServerFailure(error)
+        ? authError(HTTP_STATUS.INTERNAL_ERROR, error.message)
+        : authError(HTTP_STATUS.BAD_REQUEST, genericMessage);
     }
   }
 }
@@ -124,13 +134,8 @@ export function toAuthApiError(
 export function asAuthError(caught: unknown, genericMessage: string): unknown {
   if (caught instanceof APIError) return caught;
   if (caught instanceof CustomError) {
-    // Here, as `handleApiError` does: the `APIError` it becomes is not logged
-    // downstream, and a 500 becomes a 4xx.
-    if (
-      caught.status !== undefined &&
-      caught.status >= HTTP_STATUS.INTERNAL_ERROR
-    )
-      logServerErrorResponse(caught);
+    // Here, as `handleApiError` does: a 5xx `APIError` is not logged downstream.
+    if (isServerFailure(caught)) logServerErrorResponse(caught);
     return toAuthApiError(caught, genericMessage);
   }
   if (isDatabaseContention(caught)) return databaseContended(caught);
@@ -149,7 +154,7 @@ function localisedAuthMessage(code: unknown): string | undefined {
  * `CUSTOM_AUTH_CODE`: Better Auth declares `EMAIL_NOT_VERIFIED` too, so the
  * two raisers share one code and one message.
  */
-export function localisedAuthBody(
+function localisedAuthBody(
   code: unknown
 ): { message: string; code: string } | undefined {
   const message = localisedAuthMessage(code);

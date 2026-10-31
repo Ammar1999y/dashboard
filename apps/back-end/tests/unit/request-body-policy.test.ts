@@ -1,7 +1,7 @@
 /**
- * `withBodyPolicy` — the seam that decides which parser a route may use, and the
- * only place the media-type matcher is exercised end to end against the runtime
- * parser it hands the body to.
+ * The two body readers — `lazyFormData` for a multipart route and
+ * `readJsonObject` for the gate's JSON parse — and the only place their
+ * media-type matching is exercised end to end against the runtime parser.
  *
  * The mixed-case multipart case is version-gated and that is why it is pinned
  * here rather than reasoned about: up to Bun 1.3.14 `Request.formData()` matched
@@ -16,10 +16,11 @@ import { describe, expect, test } from 'bun:test';
 import { HTTP_STATUS } from '@app/shared/http-status';
 
 import {
-  buildRequestMeta,
+  lazyFormData,
   MAX_JSON_BODY_BYTES,
   MAX_REQUEST_BODY_BYTES,
-  withBodyPolicy,
+  readJsonObject,
+  SERVER_BODY_LIMIT_BYTES,
 } from '@/lib/http/request';
 
 const BOUNDARY = 'X';
@@ -35,15 +36,23 @@ const multipartRequest = (contentType: string) =>
     body: MULTIPART_BODY,
   });
 
-const jsonRequest = (contentType: string) =>
+const jsonRequest = (contentType: string, body = JSON.stringify({ a: 1 })) =>
   new Request('http://localhost/api/dash/users', {
     method: 'POST',
     headers: { 'content-type': contentType },
-    body: JSON.stringify({ a: 1 }),
+    body,
   });
 
-const input = (request: Request, policy: 'json' | 'multipart' | 'none') =>
-  withBodyPolicy(buildRequestMeta(request), policy);
+const readJson = (request: Request, maxBytes = MAX_JSON_BODY_BYTES) =>
+  readJsonObject(request, maxBytes);
+
+/** `readJsonObject`'s refusal, which wraps the problem it answers with. */
+const expectRefused = async (promise: Promise<unknown>, status: number) => {
+  await expect(promise).rejects.toMatchObject({
+    name: 'UnreadableBody',
+    refusal: { status },
+  });
+};
 
 describe('a multipart route accepts every spelling of its media type', () => {
   test.each([
@@ -52,98 +61,79 @@ describe('a multipart route accepts every spelling of its media type', () => {
     ['MULTIPART/FORM-DATA'],
     ['multipart/form-data '],
   ])('%p parses', async (contentType) => {
-    const form = await input(
-      multipartRequest(contentType),
-      'multipart'
-    ).readFormData();
+    const form = await lazyFormData(multipartRequest(contentType))();
 
     expect(form).not.toBeNull();
     expect(form?.get('files')).toBe('hello');
   });
 
-  test('a non-multipart type is not readable as a form', async () => {
-    expect(
-      await input(jsonRequest('application/json'), 'multipart').readFormData()
-    ).toBeNull();
+  test('another type is not readable as a form, and its body stays unread', async () => {
+    const request = jsonRequest('application/json');
+    expect(await lazyFormData(request)()).toBeNull();
+    expect(request.bodyUsed).toBe(false);
+  });
+
+  test('a GET reads nothing', async () => {
+    const request = new Request('http://localhost/api/upload/file', {
+      headers: { 'content-type': `multipart/form-data; boundary=${BOUNDARY}` },
+    });
+    expect(await lazyFormData(request)()).toBeNull();
   });
 });
 
-describe('a json route accepts every spelling of its media type', () => {
+describe('the JSON reader accepts every spelling of its media type', () => {
   test.each([
     ['application/json'],
     ['Application/JSON'],
     ['application/json; charset=utf-8'],
   ])('%p parses', async (contentType) => {
-    expect(await input(jsonRequest(contentType), 'json').readJson()).toEqual({
-      a: 1,
-    });
+    expect(await readJson(jsonRequest(contentType))).toEqual({ a: 1 });
   });
 
-  test('a near-miss subtype is refused rather than matched by substring', async () => {
-    expect(
-      await input(jsonRequest('application/jsonx'), 'json').readJson()
-    ).toBeNull();
-  });
+  test.each([['application/jsonx'], ['text/plain'], ['multipart/form-data']])(
+    '%p is refused 400, unread',
+    async (contentType) => {
+      const request = jsonRequest(contentType);
+      await expectRefused(readJson(request), HTTP_STATUS.BAD_REQUEST);
+      expect(request.bodyUsed).toBe(false);
+    }
+  );
+
+  test.each([['{ not json'], [''], ['[1]'], ['null']])(
+    '%p is refused 400, not a 500',
+    async (body) => {
+      await expectRefused(
+        readJson(jsonRequest('application/json', body)),
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+  );
 });
 
-describe('the policy, not the client, chooses the parser', () => {
-  test('a json route cannot be made to parse multipart', async () => {
-    const ctx = input(multipartRequest('multipart/form-data'), 'json');
-
-    expect(await ctx.readFormData()).toBeNull();
-    expect(await ctx.readJson()).toBeNull();
-  });
-
-  test('a multipart route cannot be made to parse json', async () => {
-    const ctx = input(jsonRequest('application/json'), 'multipart');
-
-    expect(await ctx.readJson()).toBeNull();
-    expect(await ctx.readFormData()).toBeNull();
-  });
-
-  test("policy 'none' reads nothing at all", async () => {
-    const ctx = input(jsonRequest('application/json'), 'none');
-
-    expect(await ctx.readJson()).toBeNull();
-    expect(await ctx.readFormData()).toBeNull();
-  });
-
-  test('a GET carrying a body still reads nothing', async () => {
-    const ctx = withBodyPolicy(
-      buildRequestMeta(
-        new Request('http://localhost/api/dash/users', {
-          headers: { 'content-type': 'application/json' },
-        })
-      ),
-      'json'
-    );
-
-    expect(await ctx.readJson()).toBeNull();
-  });
-});
-
-describe('a body reads once', () => {
+describe('a form reads once', () => {
   test('a second read returns the first result rather than throwing', async () => {
-    const ctx = input(jsonRequest('application/json'), 'json');
+    const read = lazyFormData(multipartRequest('multipart/form-data'));
 
-    expect(await ctx.readJson()).toEqual({ a: 1 });
+    const first = await read();
+    expect(first?.get('files')).toBe('hello');
     // A web `Request` body reads exactly once; without the memoisation this
     // rejects with `Body has already been used`.
-    expect(await ctx.readJson()).toEqual({ a: 1 });
+    expect(await read()).toBe(first);
   });
 
-  test('a malformed body is null both times, not a throw', async () => {
-    const ctx = input(
-      new Request('http://localhost/api/dash/users', {
+  test('a malformed form is null both times, not a throw', async () => {
+    const read = lazyFormData(
+      new Request('http://localhost/api/upload/file', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: '{ not json',
-      }),
-      'json'
+        headers: {
+          'content-type': `multipart/form-data; boundary=${BOUNDARY}`,
+        },
+        body: 'not a multipart body at all',
+      })
     );
 
-    expect(await ctx.readJson()).toBeNull();
-    expect(await ctx.readJson()).toBeNull();
+    expect(await read()).toBeNull();
+    expect(await read()).toBeNull();
   });
 });
 
@@ -167,31 +157,25 @@ describe('a JSON route is bounded independently of the server-wide ceiling', () 
       body,
     });
 
-  const readWith = (request: Request, maxBytes?: number) =>
-    withBodyPolicy(buildRequestMeta(request), 'json', maxBytes).readJson();
-
-  const expectTooLarge = async (promise: Promise<unknown>) => {
-    // 413, not the `null` a malformed body produces: a correct document that is
-    // merely too big must not be reported as unparseable.
-    expect(promise).rejects.toMatchObject({
-      status: HTTP_STATUS.CONTENT_TOO_LARGE,
-    });
-  };
+  // 413, not the 400 a malformed body produces: a correct document that is
+  // merely too big must not be reported as unparseable.
+  const expectTooLarge = (promise: Promise<unknown>) =>
+    expectRefused(promise, HTTP_STATUS.CONTENT_TOO_LARGE);
 
   test('a body at the ceiling is still read', async () => {
     const body = jsonBody(MAX_JSON_BODY_BYTES);
     expect(body.length).toBeLessThanOrEqual(MAX_JSON_BODY_BYTES);
-    expect(await readWith(post(body))).toBeObject();
+    expect(await readJson(post(body))).toBeObject();
   });
 
   test('a body over the ceiling is 413', async () => {
-    await expectTooLarge(readWith(post(jsonBody(MAX_JSON_BODY_BYTES + 4096))));
+    await expectTooLarge(readJson(post(jsonBody(MAX_JSON_BODY_BYTES + 4096))));
   });
 
   test('a route may raise its own ceiling and is still bounded by it', async () => {
     const raised = MAX_JSON_BODY_BYTES * 4;
-    expect(await readWith(post(jsonBody(raised - 4096)), raised)).toBeObject();
-    await expectTooLarge(readWith(post(jsonBody(raised + 4096)), raised));
+    expect(await readJson(post(jsonBody(raised - 4096)), raised)).toBeObject();
+    await expectTooLarge(readJson(post(jsonBody(raised + 4096)), raised));
   });
 
   /**
@@ -216,11 +200,57 @@ describe('a JSON route is bounded independently of the server-wide ceiling', () 
     } as RequestInit);
 
     expect(request.headers.get('content-length')).toBeNull();
-    await expectTooLarge(readWith(request));
+    await expectTooLarge(readJson(request));
   });
 
   test('multipart keeps the 12 MiB budget the JSON cap does not touch', () => {
     expect(MAX_REQUEST_BODY_BYTES).toBe(12 * 1024 * 1024);
     expect(MAX_JSON_BODY_BYTES).toBeLessThan(MAX_REQUEST_BODY_BYTES);
+  });
+});
+
+describe('a multipart route is bounded by its own count, not by the server limit', () => {
+  /** A chunked multipart body of about `bytes`, declaring no length. */
+  const chunkedUpload = (bytes: number) => {
+    const head =
+      `--${BOUNDARY}\r\n` +
+      'Content-Disposition: form-data; name="files"; filename="big.bin"\r\n' +
+      'Content-Type: application/octet-stream\r\n\r\n';
+    const encoded = new TextEncoder().encode(
+      `${head}${'y'.repeat(bytes)}\r\n--${BOUNDARY}--\r\n`
+    );
+    return new Request('http://localhost/api/upload/file?resource=users', {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${BOUNDARY}` },
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (let at = 0; at < encoded.length; at += 1024 * 1024)
+            controller.enqueue(encoded.slice(at, at + 1024 * 1024));
+          controller.close();
+        },
+      }),
+      duplex: 'half',
+    } as RequestInit);
+  };
+
+  test('a chunked form past the ceiling is 413, not buffered up to the server limit', async () => {
+    // Bun's limit now sits above the ceiling so the app can answer a declared
+    // over-size body itself; the form reader used to buffer whatever Bun let
+    // through.
+    const request = chunkedUpload(MAX_REQUEST_BODY_BYTES + 1024 * 1024);
+    expect(request.headers.get('content-length')).toBeNull();
+
+    await expect(lazyFormData(request)()).rejects.toMatchObject({
+      status: HTTP_STATUS.CONTENT_TOO_LARGE,
+    });
+  });
+
+  test('a chunked form under the ceiling still parses', async () => {
+    const form = await lazyFormData(chunkedUpload(1024))();
+    expect(form?.get('files')).toBeInstanceOf(File);
+  });
+
+  test('the server limit stays above every ceiling the app answers itself', () => {
+    expect(SERVER_BODY_LIMIT_BYTES).toBeGreaterThan(MAX_REQUEST_BODY_BYTES);
   });
 });

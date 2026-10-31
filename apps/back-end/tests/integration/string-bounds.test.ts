@@ -30,13 +30,13 @@ import { db } from '@/db';
 import { roles } from '@/db/schema';
 import * as z from 'zod';
 
-import { createUserSchema } from '@app/shared/validation/auth';
 import {
   EMAIL_MAX,
   NAME_MAX,
   ROLE_DESCRIPTION_MAX,
   ROLE_NAME_MAX,
 } from '@app/shared/validation/constants';
+import { createUserSchema } from '@app/shared/validation/users';
 
 import { generateUuidV7 } from '@/lib/id';
 

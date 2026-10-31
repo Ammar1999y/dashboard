@@ -48,7 +48,7 @@ const LOAD_TIME_NOTICES: ReadonlySet<string> = new Set([
 ]);
 
 function runChild(
-  mode: 'drain' | 'timeout' | 'elected' | 'throws'
+  mode: 'drain' | 'timeout' | 'elected' | 'throws' | 'halted'
 ): Promise<Outcome> {
   const child = Bun.spawn(['bun', '--no-env-file', CHILD, mode], {
     cwd: path.join(import.meta.dir, '..', '..'),
@@ -100,6 +100,7 @@ describe('shutdown while a scheduled sweep is running', () => {
     timeout: runChild('timeout'),
     elected: runChild('elected'),
     throws: runChild('throws'),
+    halted: runChild('halted'),
   };
 
   test('a sweep inside the deadline finishes before the stores close', async () => {
@@ -155,6 +156,20 @@ describe('shutdown while a scheduled sweep is running', () => {
     expect(count('scheduled sweep skipped')).toBe(1);
     expect(outcome.messages).not.toContain('scheduled sweep failed');
     expect(outcome.messages.at(-1)).toBe('stores closed');
+  }, 120_000);
+
+  test('a halted schedule starts nothing at the next boundary', async () => {
+    // Shutdown halts the schedule before it drains requests, which can take
+    // minutes; a firing inside that drain used to start a whole sweep the
+    // remaining budget could not wait for.
+    const outcome = await runs.halted;
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.messages).toEqual([
+      'maintenance schedule started',
+      'drain returned',
+      'stores closed',
+    ]);
   }, 120_000);
 
   test('a sweep that throws is logged by class, and the next firing still runs', async () => {

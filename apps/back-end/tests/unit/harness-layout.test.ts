@@ -41,10 +41,7 @@ function readFile(rel: string): string {
  * Source with comments removed, which is what the detectors below must match
  * against.
  *
- * `stripComments` is reused from `scripts/strip-comments.ts` — `find-unused-files.ts`
- * already imports it for exactly this reason, and writing a second stripper here
- * would be the duplicate that module's own header warns about. Its scanner
- * handles the cases a regex gets wrong: `//` inside a string literal is not a
+ * `stripComments` handles the cases a regex gets wrong: `//` inside a string literal is not a
  * comment, a quote inside a comment does not open a string, and a quote inside a
  * REGEX literal does not either — which this file used to break on, at its own
  * `IMPORTS_DB` line.
@@ -309,9 +306,6 @@ describe('the stripper both detectors depend on', () => {
   });
 
   test('a comment naming a module produces no import edge', () => {
-    // The live instance: `packages/shared/src/images/svg-optimizer.ts` said "use
-    // sanitizeSvgServer from './server'" in a doc comment, and
-    // `find-unused-files.ts` extracted `./server` from it as a real specifier.
     const stripped = stripComments(
       [
         '/**',

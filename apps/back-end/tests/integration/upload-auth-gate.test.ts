@@ -1,26 +1,24 @@
 /**
  * The authorization gate on `POST /api/upload/file`.
  *
- * Ported from `scripts/probe/dev-live/database/upload-auth-gate.dev-probe.ts`.
- * Three things the port changes, all of them because the harness can reach what
- * the probe could not:
+ * Three choices it rests on:
  *
  * 1. **No spawned server.** `app.handle(new Request(...))` runs the real route
  *    table in process, so the adapter's body policy, the pre-auth limiter, the
  *    session layer and the handler are all the production ones.
- * 2. **No hand-signed cookie.** The probe reimplemented `better-call`'s
- *    `signCookieValue` and inserted session rows directly, which meant its
- *    "cookie works" case proved its own HMAC rather than Better Auth's. Every
- *    cookie here comes from the real sign-in endpoint, and the two rejection
- *    cases are built by MUTATING it — a deleted session row under a still-valid
- *    signature, and a stripped or corrupted signature over a still-live row.
+ * 2. **No hand-signed cookie.** A cookie signed by a reimplementation of
+ *    `better-call`'s `signCookieValue` would prove that HMAC rather than Better
+ *    Auth's. Every cookie here comes from the real sign-in endpoint, and the two
+ *    rejection cases are built by MUTATING it — a deleted session row under a
+ *    still-valid signature, and a stripped or corrupted signature over a
+ *    still-live row.
  * 3. **The ordering claim is observed, not inferred.** `modules/media/upload.ts` says the
  *    permission check on `resource` must run before the multipart body is
  *    parsed. A status code cannot show that: every rejection is a 400 or a 401
  *    whether the body was buffered first or not. So each request instance gets
  *    its body accessors wrapped (`watchBody`), and the assertion is that a
  *    refused caller's body was never touched — `[]` — while an admitted one
- *    reads exactly `formData`.
+ *    takes its stream exactly once — `['body']`.
  *
  * The last one is also what makes the positive case honest: a gate that rejects
  * everything passes every negative test in this file.
@@ -44,7 +42,7 @@ import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
 import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
 import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 
-import { buildRequestMeta, withBodyPolicy } from '@/lib/http/request';
+import { buildRequestMeta, lazyFormData } from '@/lib/http/request';
 import { acceptUpload } from '@/lib/media/upload';
 
 import { resetTables } from '../helpers/database';
@@ -99,10 +97,11 @@ beforeAll(async () => {
  * process-wide is mutated — which matters because the integration tier runs
  * `--no-isolate`, and a prototype patch would outlive the test that installed it.
  *
- * `request.body` (the raw stream) is deliberately not covered: nothing in the
- * request path reads it directly, and a `ReadableStream` body is not a usable
- * probe here anyway — Bun drains a streamed request body on its own, one tick
- * after construction, whether a handler ever reads it or not (measured).
+ * `body` is the one an admitted upload touches: `lazyFormData` takes the
+ * stream to count it against the ceiling and parses a counted copy, so
+ * `formData` is never called on the request itself. The bodies here are a
+ * `FormData` or a string: Bun drains a `ReadableStream` body on its own, one
+ * tick after construction (measured), so a stream would be no probe.
  */
 const BODY_ACCESSORS = [
   'formData',
@@ -114,6 +113,16 @@ const BODY_ACCESSORS = [
 
 function watchBody(request: Request): readonly string[] {
   const reads: string[] = [];
+  const stream = Object.getOwnPropertyDescriptor(Request.prototype, 'body');
+  if (!stream?.get) throw new Error('Request.prototype.body has no getter');
+  const getStream = stream.get;
+  Object.defineProperty(request, 'body', {
+    configurable: true,
+    get(this: Request): unknown {
+      reads.push('body');
+      return getStream.call(this);
+    },
+  });
   for (const name of BODY_ACCESSORS) {
     // Captured EAGERLY and bound. `() => request[name]()` looks the property up
     // at CALL time, by which point it is the wrapper installed below — so the
@@ -200,12 +209,13 @@ function failure(status: number, message: string, code?: string) {
  * A real, decodable image the handler will accept — the file the refused cases
  * carry, so that a rejection is about the caller and not about the payload.
  *
- * SVG rather than PNG, and derived rather than pasted: `validateMagicBytes`
- * exempts SVG (it is XML, and `sanitizeSvgServer` validates it in full), and
- * `processImage` routes it away from `Bun.Image`, so the fixture needs neither a
- * hand-assembled zlib stream nor a copy of the magic-byte table to stay correct.
- * The image pipeline's own assertions — magic bytes, animated WebP, blurhash —
- * belong to the shard that owns `lib/media/image/process.ts`, not to the gate.
+ * SVG rather than PNG, and derived rather than pasted: the file table exempts
+ * SVG from the signature check (it is XML, and `sanitizeSvgServer` validates it
+ * in full), and `processImage` routes it away from `Bun.Image`, so the fixture
+ * needs neither a hand-assembled zlib stream nor a copy of the magic-byte table
+ * to stay correct. The image pipeline's own assertions — magic bytes, animated
+ * WebP, blurhash — belong to `tests/unit/upload-validation.test.ts`, not to the
+ * gate.
  */
 function imageForm(): FormData {
   const svg =
@@ -283,7 +293,7 @@ describe('the gate admits the callers it should', () => {
     expect(result.body).toEqual(
       failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
     );
-    expect(result.reads).toEqual(['formData']);
+    expect(result.reads).toEqual(['body']);
     expect(storeOps()).toEqual([]);
   });
 
@@ -299,7 +309,7 @@ describe('the gate admits the callers it should', () => {
     expect(result.body).toEqual(
       failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
     );
-    expect(result.reads).toEqual(['formData']);
+    expect(result.reads).toEqual(['body']);
   });
 
   test('an editOwn grant alone is admitted as well — current behaviour', async () => {
@@ -325,7 +335,7 @@ describe('the gate admits the callers it should', () => {
     const result = await attempt({ session, body: imageForm() });
 
     expect(result.status).toBe(HTTP_STATUS.CREATED);
-    expect(result.reads).toEqual(['formData']);
+    expect(result.reads).toEqual(['body']);
 
     // The object store is the far end of the pipeline; a gate failure never gets
     // here, so this is the assertion that the caller was admitted all the way
@@ -641,7 +651,7 @@ describe('the resource parameter is checked before the body is parsed', () => {
   // The ordering is the security property `modules/media/upload.ts` documents: `resource` is
   // read from the query rather than from a form field precisely so the
   // permission check on it can run before `readFormData()`. `reads` toEqual([])
-  // is that claim; the granted case above, whose `reads` is `['formData']`, is
+  // is that claim; the granted case above, whose `reads` is `['body']`, is
   // what stops it from being vacuous.
   const INVALID = [
     ['missing', ''],
@@ -720,11 +730,10 @@ describe('the resource parameter is checked before the body is parsed', () => {
 
 describe('the body policy on the way past the gate', () => {
   test('a JSON content-type is never parsed as a form', async () => {
-    // `withBodyPolicy` gates the readers by the route's declared policy, so a
-    // client cannot pick the parser by choosing a Content-Type. The route is
-    // `multipart`, so `readFormData()` is a constant null here and no accessor
-    // is invoked at all — the handler answers "no files" without touching the
-    // JSON the caller sent.
+    // `lazyFormData` reads only `multipart/form-data`, so a client cannot
+    // pick the parser by choosing a Content-Type: `readFormData()` is a
+    // constant null here and no accessor is invoked at all — the handler
+    // answers "no files" without touching the JSON the caller sent.
     const result = await attempt({
       session: actor('create'),
       contentType: 'application/json',
@@ -753,7 +762,7 @@ describe('the body policy on the way past the gate', () => {
       failure(HTTP_STATUS.BAD_REQUEST, uploadMsg.noFiles)
     );
     // It tried, and `safeReadFormData` turned the throw into "no form".
-    expect(result.reads).toEqual(['formData']);
+    expect(result.reads).toEqual(['body']);
     expect(result.text).not.toContain('boundary');
     expect(storeOps()).toEqual([]);
   });
@@ -770,7 +779,10 @@ describe('a public upload target', () => {
       method: 'POST',
       body: new FormData(),
     });
-    const input = withBodyPolicy(buildRequestMeta(request), 'multipart');
+    const input = {
+      ...buildRequestMeta(request),
+      readFormData: lazyFormData(request),
+    };
 
     await expect(
       acceptUpload(

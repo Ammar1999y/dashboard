@@ -18,10 +18,9 @@ import {
 import { TransactionDeadlineError } from '@/db/transaction';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
+import { otpMsg } from '@app/shared/messages/otp';
 
 import { credentialAccountOf } from '@/lib/auth/credential-account';
-import { lockUser } from '@/lib/auth/user-eligibility';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { RATE_LIMIT_DB_PATH } from '@/lib/env.server';
 import { MINIMUM_RESPONSE_MS } from '@/lib/http/timing-floor';
@@ -31,6 +30,7 @@ import * as rateLimit from '@/lib/rate-limit';
 import { getRateLimitStore } from '@/lib/rate-limit/store';
 import { BUSY_TIMEOUT_MS } from '@/lib/sqlite/database';
 import * as contact from '@/lib/users/contact';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { holdUntilReleased, resetTables } from '../helpers/database';
 import {
@@ -1384,8 +1384,6 @@ describe('a refund of a failed delivery', () => {
       identifier: user.email,
       channel: 'email',
       purpose: 'verify_contact',
-      sendTo: user.email,
-      entityName: CONTACT_LABEL.email,
       deferDelivery: (task) => {
         captured.task = task;
       },
@@ -1466,8 +1464,6 @@ describe('a send held in its global budget charge', () => {
         identifier: user.email,
         channel: 'email',
         purpose: 'verify_contact',
-        sendTo: user.email,
-        entityName: CONTACT_LABEL.email,
         deferDelivery: () => {},
       });
       await charging.promise;

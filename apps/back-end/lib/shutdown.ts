@@ -133,6 +133,11 @@ interface ShutdownDeps {
    * the shutdown budget still unspent when it is called.
    */
   stopServer: (budgetMs: number) => Promise<void>;
+  /**
+   * Synchronously prevents further sweep firings and asks a running one to
+   * stop. Called before `stopServer`, whose drain can outlast a cron boundary.
+   */
+  haltSweeps: () => void;
   /** Prevents further sweep firings and waits for a running one; true when idle. */
   stopSweeps: (timeoutMs: number) => Promise<boolean>;
   /** Waits for queued post-response work; true when the queue is observably empty. */
@@ -204,6 +209,13 @@ export function createShutdown(
     const overdue = () => now() >= deadline;
 
     const quiesced = { sweeps: false, afterResponse: false };
+
+    try {
+      deps.haltSweeps();
+    } catch (error) {
+      state.exitCode = Math.max(state.exitCode, 1);
+      deps.error({ msg: 'sweep halt failed', errorClass: errorClassOf(error) });
+    }
 
     // Its own boundary: a faulted stop must not skip the drains, or the guard
     // below holds the stores open with nothing in flight until the forced exit.

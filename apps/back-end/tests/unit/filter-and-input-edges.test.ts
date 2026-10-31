@@ -22,13 +22,9 @@ import {
   OUT_OF_RANGE,
   positiveInt,
 } from '@app/shared/utils';
-import { adminUpdateUserBodySchema } from '@app/shared/validation/auth';
 import { createPermissionSchema } from '@app/shared/validation/permissions';
-import {
-  idSchema,
-  slugSchema,
-  zodIssueMessage,
-} from '@app/shared/validation/rules';
+import { idSchema, zodIssueMessage } from '@app/shared/validation/rules';
+import { adminUpdateUserBodySchema } from '@app/shared/validation/users';
 
 import { filterColumns } from '@/lib/data-table/filter-columns';
 import { parseDataTableParams } from '@/lib/data-table/params';
@@ -137,29 +133,37 @@ describe('L1/L4 - a SUPPLIED but unreadable parameter is not an absent one', () 
   });
 });
 
-describe('L4 - unknown and repeated query keys are refused, not ignored', () => {
-  const parse = (query: string) =>
+describe('the validated query, as bind() hands it over', () => {
+  const parse = (query: Record<string, string>) =>
     parseDataTableParams(users, {
-      url: `https://example.test/api/dash/users?${query}`,
-      filterableColumns: { name: { type: 'text' } },
+      query,
+      filterableColumns: USERS_FILTER_COLUMNS,
       searchableColumns: ['name'],
     });
 
-  test.each([['serach=bob'], ['filtres=x'], ['extra=1'], ['page=1&page=2']])(
-    '%s is a 422',
-    (query) => {
-      expect(() => parse(query)).toThrow(
-        expect.objectContaining({ status: HTTP_STATUS.UNPROCESSABLE })
-      );
-    }
-  );
+  test('no keys is the first default page', () => {
+    const parsed = parse({});
+    expect(parsed).toMatchObject({ limit: 10, offset: 0, search: '' });
+    expect(parsed.where).toBeUndefined();
+    expect(parsed.paginationMeta(25)).toEqual({
+      page: 1,
+      perPage: 10,
+      total: 25,
+      pageCount: 3,
+    });
+  });
 
-  test('every key the parser actually reads is accepted', () => {
-    expect(() =>
-      parse(
-        'page=1&perPage=10&maxPerPage=50&sort=&filters=&joinOperator=and&search='
-      )
-    ).not.toThrow();
+  test('some keys keep the defaults for the rest', () => {
+    const parsed = parse({ page: '3', search: 'bob' });
+    expect(parsed).toMatchObject({ limit: 10, offset: 20, search: 'bob' });
+    expect(parsed.where).toBeDefined();
+  });
+
+  test('a route key beside them is not read', () => {
+    expect(parse({ folder: 'x', perPage: '5' })).toMatchObject({
+      limit: 5,
+      offset: 0,
+    });
   });
 });
 
@@ -509,11 +513,6 @@ describe('M11 - a wrong TYPE stays a type error', () => {
       ).toBe(true);
     }
   );
-
-  test('slugSchema, unreferenced today, is swept with the class', () => {
-    expect(slugSchema.safeParse(123).success).toBe(false);
-    expect(slugSchema.safeParse('My Slug').success).toBe(true);
-  });
 });
 
 describe('the search floor admits only terms pg_trgm can index', () => {
@@ -581,7 +580,7 @@ describe('the search floor admits only terms pg_trgm can index', () => {
   test('quick search drops a term with no trigram instead of scanning', () => {
     const search = (term: string) =>
       parseDataTableParams(users, {
-        url: `https://example.test/api/dash/users?search=${encodeURIComponent(term)}`,
+        query: { search: term },
         filterableColumns: { name: { type: 'text' } },
         searchableColumns: ['name'],
       }).search;

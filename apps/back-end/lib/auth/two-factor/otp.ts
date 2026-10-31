@@ -21,11 +21,10 @@ import * as z from 'zod';
 import * as contract from '@app/shared/api/better-auth';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
-import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
+import { otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf, optionId } from '@app/shared/validation/enums';
 import {
   isTwoFactorOtpChannelEnabled,
-  TWO_FACTOR_OTP_AVAILABLE,
   twoFactorOtpEnrollSchema,
   twoFactorOtpVerifySchema,
 } from '@app/shared/validation/two-factor';
@@ -39,7 +38,7 @@ import {
 import { contactOf } from '@/lib/users/contact';
 
 import { authAuditMeta, bodyRecord, parseAuthBody } from '../context';
-import { asAuthError, authError } from '../errors';
+import { asAuthError, authError, sessionRequired } from '../errors';
 import { pluginEndpoint } from '../plugin-endpoint';
 import { requireReauthPassword } from '../reauth/grant';
 import { resolveRequestSession } from '../session/request';
@@ -53,6 +52,7 @@ import {
 } from './challenge';
 import { auditLifecycle } from './lifecycle';
 import { recordEnabledMethod } from './methods';
+import { markTwoFactorProven } from './trusted-device';
 
 interface OtpTarget {
   userId: EntityID;
@@ -85,7 +85,7 @@ async function enrolmentTarget(
       )
     )
     .limit(1);
-  if (!user) throw challengeMissingError();
+  if (!user) throw sessionRequired();
 
   const kind = contactKindOf(channel);
   const destination = contactOf(user, kind);
@@ -116,15 +116,7 @@ export async function sendTwoFactorCode(params: {
     identifier: params.destination,
     channel: params.channel,
     purpose: 'two_factor',
-    sendTo: params.destination,
-    entityName: CONTACT_LABEL[contactKindOf(params.channel)],
   });
-}
-
-/** 404, not 400: an unserved path answers like every other unserved path. */
-function assertOtpAvailable(): void {
-  if (!TWO_FACTOR_OTP_AVAILABLE)
-    throw authError(HTTP_STATUS.NOT_FOUND, otpMsg.invalidInput);
 }
 
 export const twoFactorOtp = () =>
@@ -141,7 +133,6 @@ export const twoFactorOtp = () =>
           body: z.record(z.string(), z.unknown()).optional(),
         },
         async (ctx) => {
-          assertOtpAvailable();
           try {
             const requestSession = await resolveRequestSession(ctx);
             if (requestSession)
@@ -185,8 +176,6 @@ export const twoFactorOtp = () =>
         contract.twoFactorOtpVerify,
         { body: z.record(z.string(), z.unknown()) },
         async (ctx) => {
-          assertOtpAvailable();
-
           const { code } = parseAuthBody(
             ctx,
             twoFactorOtpVerifySchema,
@@ -330,6 +319,8 @@ async function verifyForEnrolment(
           twoFactorEnabled: true,
         });
         await revokeOtherSessions(tx, target.userId, requestSession.sessionId);
+        // As TOTP enrolment does: a code was just proven on this session.
+        await markTwoFactorProven(tx, requestSession.sessionId);
       },
     });
   } catch (caught) {

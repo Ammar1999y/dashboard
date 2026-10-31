@@ -19,7 +19,6 @@ import { FOLDER_RECURSIVE_DELETE_MAX } from '@app/shared/validation/constants';
 import { parseDataTableParams } from '@/lib/data-table/params';
 import { dataTableParameters } from '@/lib/data-table/query-parameters';
 import { bind } from '@/lib/http/binding';
-import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
 import { grantedActor } from '@/lib/media/actor';
 import {
   ABANDONED_UPLOAD_MINUTES,
@@ -46,15 +45,6 @@ import { ENABLED_VISIBILITIES } from '@/lib/r2/client';
 
 import { MEDIA_ROUTE_TIMEOUT_SECONDS } from './limits';
 
-/** Read by this route, not by the data-table parser, which refuses unknown keys. */
-const OWN_PARAMS = ['folder', 'scope'] as const;
-
-function dataTableUrl(url: string): string {
-  const parsed = new URL(url);
-  for (const key of OWN_PARAMS) parsed.searchParams.delete(key);
-  return parsed.href;
-}
-
 export const listMediaBinding = bind(listMedia, {
   permission: { resource: 'media', action: 'view' },
   rateLimit: { scope: 'media.get', limit: 120, by: 'user' },
@@ -72,13 +62,13 @@ export const listMediaBinding = bind(listMedia, {
     tags: ['Media'],
     parameters: dataTableParameters(MEDIA_FILTER_COLUMNS),
   },
-  handler: async ({ query, actor, meta }) => {
+  handler: async ({ query, actor }) => {
     const scope = query.scope ?? 'folder';
     const folderId = query.folder ?? null;
 
     const { where, orderBy, limit, offset, search, paginationMeta } =
       parseDataTableParams(files, {
-        url: dataTableUrl(meta.url),
+        query,
         filterableColumns: MEDIA_FILTER_COLUMNS,
         searchableColumns: ['displayName'],
         defaultSort: { id: 'createdAt', desc: true },
@@ -176,7 +166,6 @@ export const moveMediaBinding = bind(moveMedia, {
   permission: { resource: 'media', action: 'edit' },
   rateLimit: { ...MOVE_LIMIT, failClosed: true, by: 'user' },
   failure: mediaMsg.updateError,
-  mapError: handleFolderForeignKeyViolation,
   detail: {
     summary: 'Move files and folders',
     description:

@@ -93,7 +93,7 @@ try {
   }
 
   // ---- a cost above 1 spends that many units, and cannot overshoot ---------
-  // `app/api/upload/image/handler.ts` charges megapixels rather than requests,
+  // `lib/media/upload.ts` charges megapixels rather than requests,
   // so the statement has to be exact for cost > 1 in both directions: the stored
   // count is the SUM of the costs, and an admission that would cross `max` is
   // refused without a write rather than clamped.
@@ -335,57 +335,18 @@ try {
     );
   }
 
-  // ---- R-2 regression: the sweep statement is bounded ----------------------
-  {
-    const db = open('sweep.db');
-    db.exec(sql.rateLimitDdl);
-    const insert = db.prepare(
-      'INSERT INTO rate_limit (key, window_start, count, expires_at) VALUES (?,?,?,?)'
-    );
-    db.transaction(() => {
-      for (let i = 0; i < 1200; i++) insert.run(`s${i}`, 0, 1, 1);
-    })();
-    const first = db.prepare(sql.sweepRateLimit).run(1000, 500).changes;
-    check(
-      'sweep deletes at most one batch per statement',
-      first === 500,
-      `first batch removed ${first} (expected the 500 ceiling, not all 1200)`
-    );
-    db.close(false);
-  }
-
-  // ---- backlog probe -------------------------------------------------------
-  // The sweep's `hasMore` is the only signal that expired rows are piling up,
-  // so the probe must report FALSE once every row's expiry is in the future, or
-  // the signal is permanently true and therefore worthless.
-  //
-  // One table, not two: `auth_rate_limit` was dropped when Better Auth's own
-  // limiter was switched off (`lib/rate-limit/store.ts` migration 2). The DDL
-  // extracted above still creates it and then drops it, which is why nothing
-  // here may reference it.
+  // ---- the limiter table carries no secondary index -------------------------
+  // `auth_rate_limit` was dropped when Better Auth's own limiter was switched
+  // off (`lib/rate-limit/store.ts` migration 2). The DDL extracted above still
+  // creates it and then drops it, which is why nothing here may reference it.
+  // The sweep's statements are covered against the real store in
+  // `sqlite-expiry-sweep.test.ts`.
   {
     const db = open('backlog.db');
     db.exec(sql.rateLimitDdl);
-    const probe = db.prepare(sql.anyExpired);
-    const rlInsert = db.prepare(
-      'INSERT INTO rate_limit (key, window_start, count, expires_at) VALUES (?,?,?,?)'
-    );
-    const present = () => Number(probe.get(1000).present);
-
-    const empty = present();
-    rlInsert.run('b', 0, 1, 500);
-    const expired = present();
-    db.prepare('UPDATE rate_limit SET expires_at = 5000').run();
-    const future = present();
-
-    check(
-      'backlog probe reports expired rows and only expired rows',
-      empty === 0 && expired === 1 && future === 0,
-      `empty=${empty} expired=${expired} future=${future}`
-    );
 
     // Every index on `rate_limit` is rewritten by every admission, because
-    // `SQL_CONSUME` sets every non-key column; the sweep and this probe scan.
+    // `SQL_CONSUME` sets every non-key column; the sweep walks the key instead.
     const indexes = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'rate_limit' AND sql IS NOT NULL"

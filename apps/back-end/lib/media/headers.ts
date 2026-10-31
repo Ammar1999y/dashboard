@@ -1,31 +1,11 @@
 import type { BucketType, FileKind } from '@app/shared/validation/enums';
 
-function getCacheControlHeader(params: {
-  mimeType: string;
-  isPublic: boolean;
-}): string {
-  const { mimeType, isPublic } = params;
+const PUBLIC_CACHE_CONTROL: Readonly<Record<FileKind, string>> = {
+  image: 'public, max-age=31536000, immutable',
+  document: 'public, max-age=3600',
+};
 
-  if (!isPublic) {
-    return 'private, no-cache, no-store, must-revalidate';
-  }
-
-  if (mimeType.startsWith('image/')) {
-    return 'public, max-age=31536000, immutable';
-  }
-
-  if (
-    mimeType === 'application/pdf' ||
-    mimeType.includes('document') ||
-    mimeType.includes('word') ||
-    mimeType.includes('excel') ||
-    mimeType.includes('spreadsheet')
-  ) {
-    return 'public, max-age=3600';
-  }
-
-  return 'public, max-age=86400';
-}
+const PRIVATE_CACHE_CONTROL = 'private, no-cache, no-store, must-revalidate';
 
 /** RFC 5987 encoding; `encodeURIComponent` leaves `'*()` unescaped. */
 const ATTR_CHARS = new Set(
@@ -78,10 +58,10 @@ export function objectHeaders(
 ) {
   return {
     contentType: object.mimeType,
-    cacheControl: getCacheControlHeader({
-      mimeType: object.mimeType,
-      isPublic: bucketType === 'public',
-    }),
+    cacheControl:
+      bucketType === 'public'
+        ? PUBLIC_CACHE_CONTROL[object.kind]
+        : PRIVATE_CACHE_CONTROL,
     // Documents are never rendered inline: a PDF on the public origin would
     // otherwise run its scripting on that origin. The one inline rendering is
     // `previewUrl` in `./files.ts`, overridden per link on the store's own

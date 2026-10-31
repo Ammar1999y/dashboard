@@ -98,7 +98,8 @@ the application by dynamic import, then listens and owns shutdown
    only, 413 / 400). Every other binding declares `parse: 'none'` and is gated
    in `transform`; a multipart handler reads its form lazily through
    `meta.readFormData`. `admit()` runs once per request: same-origin write →
-   pre-auth IP limit → the route's own credential (`credential`, answered as
+   pre-auth IP limit (a signed-in route charges it only when a session token
+   is sent) → the route's own credential (`credential`, answered as
    its handler would) → session, permission and re-authentication window →
    the own-id 403 (`notSelf`) → rate limit → the other-target 403 (`orSelf`) →
    captcha.

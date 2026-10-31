@@ -15,7 +15,8 @@ export async function recordAbandonedSession(params: {
   reason?:
     | 'cookie_delivery_failed'
     | 'post_commit_admission_failed'
-    | 'result_delivery_failed';
+    | 'result_delivery_failed'
+    | 'two_factor_check_failed';
 }): Promise<void> {
   try {
     await auditLog(db, {

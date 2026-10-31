@@ -30,6 +30,7 @@ import {
   spendRecoveryAttempt,
 } from '@/lib/auth/recovery/grant';
 import { verifyRecoveryFactor } from '@/lib/auth/recovery/second-factor';
+import { authenticationStartedAt } from '@/lib/auth/session/authentication-time';
 import {
   revokeOtherSessions,
   revokePendingProofs,
@@ -41,7 +42,6 @@ import {
   recoveryOptions,
 } from '@/lib/auth/two-factor/methods';
 import { sendTwoFactorCode } from '@/lib/auth/two-factor/otp';
-import { lockUser } from '@/lib/auth/user-eligibility';
 import { bind } from '@/lib/http/binding';
 import { handleApiError } from '@/lib/http/response';
 import {
@@ -64,6 +64,7 @@ import {
   contactIdentifier,
   contactOf,
 } from '@/lib/users/contact';
+import { lockUser } from '@/lib/users/lock-order';
 
 import {
   COLLAPSED_BODY_REFUSALS,
@@ -185,9 +186,9 @@ export const resetPasswordBinding = bind(resetPassword, {
     const auditMeta = getAuditMeta(meta);
     const contactKind = contactKindOf(channel);
     // Acted on after commit: a failed grant mint must not un-consume the code.
-    const pending: { secondFactor: OfferedOption[] | null } = {
-      secondFactor: null,
-    };
+    const pending: {
+      secondFactor: { options: OfferedOption[]; startedAt: number } | null;
+    } = { secondFactor: null };
 
     await verifyRequesterOtp({
       userId: userData.id,
@@ -210,7 +211,12 @@ export const resetPasswordBinding = bind(resetPassword, {
         if (state.enabled) {
           const options = recoveryOptions(state, contactKind);
           if (options.length > 0) {
-            pending.secondFactor = options;
+            pending.secondFactor = {
+              options,
+              // Under the verify's user lock: a rotation that commits after
+              // this transaction stamps a later time.
+              startedAt: await authenticationStartedAt(tx),
+            };
             await auditLog(tx, {
               userId: userData.id,
               userEmail: userData.email,
@@ -265,12 +271,15 @@ export const resetPasswordBinding = bind(resetPassword, {
     });
 
     if (pending.secondFactor) {
-      const options = pending.secondFactor;
+      const { options, startedAt } = pending.secondFactor;
       const grant = await issueRecoveryGrant({
         userId: userData.id,
         excludeContactKind: contactKind,
         options,
+        startedAt,
       });
+      // As if the rotation had landed first and taken the code with it.
+      if (!grant) throw invalidOrExpiredCode();
       return {
         message: otpMsg.recoverySecondFactorRequired,
         data: {

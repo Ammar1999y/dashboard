@@ -8,16 +8,18 @@
 import { beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
 import {
+  auditLogs,
   sessions,
   trustedDevices,
   twoFactorCredentials,
   twoFactorMethods,
 } from '@/db/schema';
+import { createOTP } from '@better-auth/utils/otp';
 import { symmetricDecrypt } from 'better-auth/crypto';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -107,8 +109,7 @@ function request(
 }
 
 async function totpCode(secret = fixture.secret): Promise<string> {
-  const { code } = await auth.api.generateTOTP({ body: { secret } });
-  return code;
+  return createOTP(secret).totp();
 }
 
 interface SignInResult {
@@ -459,6 +460,51 @@ describe('the skip, and taking it away', () => {
       .from(trustedDevices)
       .where(eq(trustedDevices.userId, other.userId));
     expect(rows).toHaveLength(0);
+  });
+
+  test('enrolling OTP proves a factor, so the browser that enrolled can be trusted', async () => {
+    // As TOTP enrolment does. The opposite of the case above: the same
+    // request, on a session that has just proven a code.
+    const owner = await seedUser();
+    const ip = nextTestIp();
+    const first = await signIn('', owner, ip);
+    const sent = await request(
+      'POST',
+      '/api/auth/two-factor/otp/send',
+      { channel: 'email', password: owner.password },
+      first.cookie,
+      ip
+    );
+    expect(sent.status).toBe(HTTP_STATUS.OK);
+    await replaceOtpCode({
+      userId: owner.userId,
+      purpose: 'two_factor',
+      contactKind: 'email',
+      code: RIGHT_CODE,
+    });
+    const enrolled = await request(
+      'POST',
+      '/api/auth/two-factor/otp/verify',
+      { code: RIGHT_CODE, channel: 'email' },
+      first.cookie,
+      ip
+    );
+    expect(enrolled.status).toBe(HTTP_STATUS.OK);
+
+    const trusted = await request(
+      'POST',
+      '/api/auth/two-factor/trust-device',
+      {},
+      mergeCookies(first.cookie, enrolled.headers.getSetCookie()),
+      ip
+    );
+    expect(trusted.status).toBe(HTTP_STATUS.OK);
+    expect(
+      await db
+        .select({ id: trustedDevices.id })
+        .from(trustedDevices)
+        .where(eq(trustedDevices.userId, owner.userId))
+    ).toHaveLength(1);
   });
 
   test('the proof is single-use', async () => {
@@ -861,5 +907,138 @@ describe('bulk session revocation and the second-factor skip', () => {
         .from(trustedDevices)
         .where(eq(trustedDevices.userId, owner.userId))
     ).toHaveLength(1);
+  });
+});
+
+/**
+ * The one setting that skips the second factor for 30 days: who granted it,
+ * which device used it and who revoked it must each leave a row. A browser
+ * that trusts again holds only the new cookie, so the row its old cookie named
+ * goes with it rather than lingering, unusable, in the list.
+ */
+describe('the trusted-device record', () => {
+  function devicesOf(user: SeededUser) {
+    return db
+      .select({ id: trustedDevices.id })
+      .from(trustedDevices)
+      .where(eq(trustedDevices.userId, user.userId));
+  }
+
+  function deviceEvents(user: SeededUser) {
+    return db
+      .select({
+        action: auditLogs.action,
+        recordId: auditLogs.recordId,
+        newData: auditLogs.newData,
+      })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.userId, user.userId),
+          eq(auditLogs.tableName, 'trusted_devices')
+        )
+      );
+  }
+
+  test('a re-trust replaces the row the browser held, and grant, use and revocation are audited', async () => {
+    const owner = await seedUser();
+    const enrolled = await enrolTotp(owner, true);
+    const first = await request(
+      'POST',
+      '/api/auth/two-factor/trust-device',
+      {},
+      enrolled.jar
+    );
+    expect(first.status).toBe(HTTP_STATUS.OK);
+    const trustPair = mergeCookies(enrolled.jar, first.headers.getSetCookie())
+      .split('; ')
+      .find((pair) => pair.includes('trust_device='));
+    expect(trustPair).toBeDefined();
+    const [original] = await devicesOf(owner);
+    expect(original).toBeDefined();
+
+    // A fresh proof in the same browser, still presenting its trust cookie.
+    const challenged = await signIn('', owner, nextTestIp());
+    expect(challenged.body).toMatchObject({ twoFactorRedirect: true });
+    const verified = await request(
+      'POST',
+      '/api/auth/two-factor/verify-backup-code',
+      { code: enrolled.backupCodes[0] },
+      challenged.cookie
+    );
+    expect(verified.status).toBe(HTTP_STATUS.OK);
+    const again = await request(
+      'POST',
+      '/api/auth/two-factor/trust-device',
+      {},
+      `${mergeCookies(challenged.cookie, verified.headers.getSetCookie())}; ${trustPair}`
+    );
+    expect(again.status).toBe(HTTP_STATUS.OK);
+
+    const devices = await devicesOf(owner);
+    expect(devices).toHaveLength(1);
+    const [replacement] = devices;
+    expect(replacement?.id).not.toBe(original?.id);
+    const granted = await deviceEvents(owner);
+    expect(granted).toHaveLength(2);
+    expect(granted).toContainEqual({
+      action: 'INSERT',
+      recordId: original?.id ?? '',
+      newData: { deviceTrusted: true },
+    });
+    expect(granted).toContainEqual({
+      action: 'INSERT',
+      recordId: replacement?.id ?? '',
+      newData: { deviceTrusted: true, replacedDeviceId: original?.id },
+    });
+
+    const trustedJar = mergeCookies(
+      mergeCookies(challenged.cookie, verified.headers.getSetCookie()),
+      again.headers.getSetCookie()
+    );
+    const skipped = await signIn(trustedJar, owner);
+    expect(skipped.body.twoFactorRedirect).toBeUndefined();
+    const skips = await db
+      .select({ newData: auditLogs.newData })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.userId, owner.userId),
+          eq(auditLogs.tableName, 'sessions')
+        )
+      );
+    expect(skips.map((row) => row.newData)).toContainEqual(
+      expect.objectContaining({
+        reason: 'two_factor_skipped_trusted_device',
+        trustedDeviceId: replacement?.id,
+      })
+    );
+
+    const revoked = await request(
+      'POST',
+      '/api/auth/two-factor/trusted-devices/revoke',
+      { id: replacement?.id },
+      trustedJar
+    );
+    expect(revoked.status).toBe(HTTP_STATUS.OK);
+    expect(await devicesOf(owner)).toHaveLength(0);
+    expect(await deviceEvents(owner)).toContainEqual({
+      action: 'DELETE',
+      recordId: replacement?.id ?? '',
+      newData: { deviceTrusted: false },
+    });
+  });
+
+  test('a malformed device id is refused before anything is read', async () => {
+    const owner = await seedUser();
+    const enrolled = await enrolTotp(owner);
+    const refused = await request(
+      'POST',
+      '/api/auth/two-factor/trusted-devices/revoke',
+      { id: 'not-an-id' },
+      enrolled.jar
+    );
+    expect(refused.status).toBe(HTTP_STATUS.UNPROCESSABLE);
+    expect(await deviceEvents(owner)).toHaveLength(0);
   });
 });

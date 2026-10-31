@@ -217,8 +217,8 @@ export function assertFilterAllowed(
     if (typeof filter.value !== 'string') invalidFilter();
     // Measured on the fold, as quick search is: it is the text the index holds.
     const term = searchFold(filter.value);
-    const min = spec.minSearchLength ?? MIN_SEARCH_LENGTH;
-    if (searchTermLength(term) < min) invalidFilter(MSG_SHORT_SEARCH(min));
+    if (searchTermLength(term) < MIN_SEARCH_LENGTH)
+      invalidFilter(MSG_SHORT_SEARCH(MIN_SEARCH_LENGTH));
     // The floor is a proxy; this is the property. Not applied to the scan-only
     // operator, whose predicate can never use the index however the term is
     // spelled — requiring trigrams there would refuse a filter for no gain.
@@ -226,7 +226,7 @@ export function assertFilterAllowed(
       !isScanOnlyOperator(filter.operator) &&
       !isTrigramIndexable(term, searchAnchorOf(filter.operator))
     )
-      invalidFilter(MSG_SHORT_SEARCH(min));
+      invalidFilter(MSG_SHORT_SEARCH(MIN_SEARCH_LENGTH));
   }
 
   return 'apply';

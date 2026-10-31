@@ -77,6 +77,26 @@ test.each([
   }
 );
 
+// SQLite runs the hook only when the upsert finishes (`SqliteStatement.get`).
+// Stopped at its row, the WAL grows by every admission until a refused one
+// checkpoints the whole backlog inside its own request.
+test('admissions run the auto-checkpoint, so the WAL stays within one interval', () => {
+  const store = getRateLimitStore();
+  const interval = Number(store.db.pragmaValue('wal_autocheckpoint'));
+  expect(interval).toBeGreaterThan(0);
+
+  for (let index = 0; index < 3 * interval; index++)
+    admit('preauth.dash.users:ip:10.9.9.9');
+
+  const row = store.db
+    .prepare('PRAGMA wal_checkpoint(PASSIVE)')
+    .get<{ log: number }>();
+  if (!row) throw new Error('wal_checkpoint returned no row');
+  // -1 means the file is not in WAL mode, and would pass the bound below.
+  expect(row.log).toBeGreaterThanOrEqual(0);
+  expect(row.log).toBeLessThanOrEqual(interval + 1);
+});
+
 test('a file from before the drop loses the index when it is opened', () => {
   const previous = getRateLimitStore();
   previous.db.exec(

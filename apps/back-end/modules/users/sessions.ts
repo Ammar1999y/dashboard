@@ -20,10 +20,10 @@ import {
   revokeSessionsWhere,
   revokeTrustedDevices,
 } from '@/lib/auth/session/rotation';
-import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
 import { bind } from '@/lib/http/binding';
 import { notFoundError } from '@/lib/http/response';
 import { liveUser } from '@/lib/users/filters';
+import { lockTargetAndActor } from '@/lib/users/lock-order';
 import {
   parseCursor,
   parseLimit,
@@ -67,7 +67,6 @@ async function assertTargetReachable(
       id: users.id,
       roleId: users.roleId,
       createdBy: users.createdBy,
-      roleName: roles.roleName,
       roleScope: roles.scope,
     })
     .from(users)
@@ -84,7 +83,7 @@ async function assertTargetReachable(
     isSelf: false,
     roleId: targetUser.roleId,
     createdBy: targetUser.createdBy,
-    role: { roleName: targetUser.roleName, scope: targetUser.roleScope },
+    role: { scope: targetUser.roleScope },
     actorUserId: opts.currentUserId,
     scope: opts.editScope,
     actorPermissions: opts.actorPermissions,

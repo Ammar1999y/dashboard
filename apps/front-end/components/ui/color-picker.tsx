@@ -4,7 +4,6 @@ import type { ChangeEvent, CSSProperties } from 'react';
 import { memo, useCallback, useId, useMemo, useState } from 'react';
 
 import { HexAlphaColorPicker, HexColorPicker } from 'react-colorful';
-import { getColorSchema } from '@app/shared/validation/rules';
 import { cn } from '@/lib/utils';
 
 import {
@@ -17,6 +16,7 @@ import {
   rgbToHex,
   rgbToHsl,
 } from '@/utils/color-converter';
+import { getColorSchema } from '@/utils/validation/rules';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

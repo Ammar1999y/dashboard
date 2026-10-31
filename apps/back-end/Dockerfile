@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 
 # Built from the REPOSITORY ROOT, not from this directory: the workspace
 # lockfile and `packages/shared` live there. Coolify: Build Pack `Dockerfile`,
@@ -8,7 +8,7 @@
 # refuses an image whose Bun is older than `packageManager`, and `server.ts`
 # logs when it is newer, so a forgotten bump here fails the build or shows in
 # the boot log rather than passing silently.
-FROM oven/bun:1.4.4 AS manifests
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS manifests
 WORKDIR /app
 # The install guard would otherwise try to repair the toolchain over the
 # network; inside a build the image IS the toolchain.

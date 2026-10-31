@@ -7,7 +7,6 @@ import {
   resetDoneSchema,
   verifiedSchema,
 } from '../responses/auth';
-import { adminReauthSchema } from '../validation/auth';
 import {
   recoveryCompleteSchema,
   recoverySecondFactorSendSchema,
@@ -15,6 +14,7 @@ import {
   sendOtpSchema,
   verifyOtpSchema,
 } from '../validation/otp';
+import { adminReauthSchema } from '../validation/reauth';
 import { endpoint } from './endpoint';
 
 /**

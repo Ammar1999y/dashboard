@@ -48,7 +48,10 @@ function sampled(keys: readonly string[]) {
   return { count: keys.length, sample: keys.slice(0, SAMPLE_SIZE) };
 }
 
-async function listBucket(bucket: BucketType): Promise<{
+async function listBucket(
+  bucket: BucketType,
+  stopping: AbortSignal | undefined
+): Promise<{
   listed: Set<string>;
   orphans: string[];
   stale: string[];
@@ -65,8 +68,9 @@ async function listBucket(bucket: BucketType): Promise<{
       bucketType: bucket,
       prefix: OBJECT_KEY_PREFIX,
       continuationToken: token,
+      signal: stopping,
     });
-    const keys = page.objects.map((object) => object.key);
+    const { keys } = page;
     for (const key of keys) listed.add(key);
 
     if (keys.length > 0) {
@@ -87,6 +91,7 @@ async function listBucket(bucket: BucketType): Promise<{
       }
     }
 
+    stopping?.throwIfAborted();
     token = page.nextContinuationToken ?? undefined;
     if (token && listed.size >= MAX_LISTED_KEYS) {
       truncated = true;
@@ -105,7 +110,8 @@ async function listBucket(bucket: BucketType): Promise<{
 async function suspectKeys(
   bucket: BucketType,
   listed: ReadonlySet<string>,
-  truncated: boolean
+  truncated: boolean,
+  stopping: AbortSignal | undefined
 ): Promise<{ suspects: string[]; unchecked: number }> {
   const suspects: string[] = [];
   let unchecked = 0;
@@ -137,6 +143,7 @@ async function suspectKeys(
     }
 
     if (settled.length < ROW_PAGE_SIZE) break;
+    stopping?.throwIfAborted();
     after = settled.at(-1)?.id ?? null;
     if (after === null) break;
   }
@@ -147,25 +154,41 @@ async function suspectKeys(
  * Read-only: an orphan object may be a request one second from committing its
  * row, and a human acts on the report. Only `active` rows with no transition
  * must have an object; `pending` is the sweep's, `deleting` is on its way out.
+ *
+ * `stopping` abandons the run at its next page or HEAD: a partial report is
+ * not one a human should act on, and the next weekly run starts over.
  */
 export async function reconcileObjectStore(
-  startedAt = Date.now()
+  startedAt = Date.now(),
+  stopping?: AbortSignal
 ): Promise<ReconcileReport> {
   const reports: BucketReport[] = [];
 
   for (const bucket of ENABLED_VISIBILITIES) {
-    const { listed, orphans, stale, truncated } = await listBucket(bucket);
+    const { listed, orphans, stale, truncated } = await listBucket(
+      bucket,
+      stopping
+    );
 
     const { suspects, unchecked } = await suspectKeys(
       bucket,
       listed,
-      truncated
+      truncated,
+      stopping
     );
 
     const dangling: string[] = [];
-    for (const key of suspects)
-      if ((await headObjectInR2({ key, bucketType: bucket })) === null)
+    for (const key of suspects) {
+      stopping?.throwIfAborted();
+      if (
+        (await headObjectInR2({
+          key,
+          bucketType: bucket,
+          signal: stopping,
+        })) === null
+      )
         dangling.push(key);
+    }
 
     reports.push({
       bucket,

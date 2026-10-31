@@ -26,8 +26,10 @@ import * as authSchemas from '@app/shared/validation/auth';
 import * as mediaSchemas from '@app/shared/validation/media';
 import * as otpSchemas from '@app/shared/validation/otp';
 import * as permissionSchemas from '@app/shared/validation/permissions';
+import * as reauthSchemas from '@app/shared/validation/reauth';
 import * as ruleSchemas from '@app/shared/validation/rules';
 import * as twoFactorSchemas from '@app/shared/validation/two-factor';
+import * as userSchemas from '@app/shared/validation/users';
 
 import { loadFieldDocs } from '@/lib/http/openapi/docs';
 
@@ -39,8 +41,10 @@ const MODULES = {
   media: mediaSchemas,
   otp: otpSchemas,
   permissions: permissionSchemas,
+  reauth: reauthSchemas,
   rules: ruleSchemas,
   'two-factor': twoFactorSchemas,
+  users: userSchemas,
 };
 
 /**
@@ -56,6 +60,12 @@ const PROBES: readonly unknown[] = [
   'Aa\tBb',
   'User@Gmail.COM',
   ' User@Gmail.com ',
+  // The Kelvin sign lowercases to `k`, the one non-ASCII character that does.
+  'Use\u{212A}@gmail.com',
+  'user@outloo\u{212A}.com',
+  // One raw character, two after NFC (a composition exclusion), so a floor of
+  // two measured on the raw value refuses a name the server accepts.
+  '\u{0958}',
   ' 123456 ',
   '123456\n',
   // A zero-width space is a FORMAT character, not whitespace: `\\s` does not
@@ -171,7 +181,7 @@ describe('a preprocess that rewrites accepted input publishes what it does', () 
     // would be a silent pass. The count is a floor, not an inventory.
     expect(leaves.length).toBeGreaterThanOrEqual(10);
     expect(leaves.map((leaf) => leaf.path)).toContain(
-      'auth.adminUpdateUserBodySchema.email'
+      'users.adminUpdateUserBodySchema.name'
     );
   });
 

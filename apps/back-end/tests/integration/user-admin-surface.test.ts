@@ -13,7 +13,7 @@ import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 
 import { auditLog } from '@/lib/audit';
 import { generateUuidV7 } from '@/lib/id';
-import { createCustomRole } from '@/lib/permissions/roles';
+import { rewriteCustomRoleMatrix } from '@/lib/permissions/roles';
 
 import { resetTables } from '../helpers/database';
 import {
@@ -189,11 +189,11 @@ describe('the administrative 2FA reset with a malformed id', () => {
     expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
   });
 
-  test('answers an authorised caller 404', async () => {
+  test('answers an authorised caller 422, like every sibling', async () => {
     const response = await app.handle(
       authedRequest(fx().admin, path, { method: 'POST' })
     );
-    expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
+    expect(response.status).toBe(HTTP_STATUS.UNPROCESSABLE);
   });
 });
 
@@ -275,14 +275,10 @@ describe('rewriting a custom role with its unchanged matrix', () => {
     expect(before).toHaveLength(2);
 
     await withTransaction((tx) =>
-      createCustomRole(
-        tx,
-        [
-          { name: 'media', permissions: { view: true } },
-          { name: 'users', permissions: { view: true } },
-        ],
-        owner.roleId
-      )
+      rewriteCustomRoleMatrix(tx, owner.roleId, [
+        { name: 'media', permissions: { view: true } },
+        { name: 'users', permissions: { view: true } },
+      ])
     );
 
     expect(await readRows()).toEqual(before);
@@ -364,6 +360,50 @@ describe('GET /api/dash/permissions', () => {
       data.find(({ id }) => id === roleId)?.usersCount;
     expect(countOf(holder.roleId)).toBe(3);
     expect(countOf(departed.roleId)).toBe(0);
+  });
+});
+
+describe('GET /api/dash/roles', () => {
+  test('lists only the roles a user create or edit by the caller accepts', async () => {
+    const lister = await signedInUser({
+      permissions: {
+        permissions: { view: true },
+        users: { view: true, edit: true },
+      },
+    });
+    const within = await seedUser({ permissions: { users: { view: true } } });
+    // `users.delete` is a grant the lister lacks, so assigning it is a 403.
+    const above = await seedUser({
+      permissions: { users: { view: true, delete: true } },
+    });
+
+    const response = await app.handle(authedRequest(lister, '/api/dash/roles'));
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    const { data } = (await response.json()) as { data: { id: string }[] };
+    const listed = data.map(({ id }) => id);
+    expect(listed).toContain(lister.user.roleId);
+    expect(listed).toContain(within.roleId);
+    expect(listed).not.toContain(above.roleId);
+
+    // What the list leaves out is what the write refuses.
+    const assigned = await app.handle(
+      authedRequest(lister, `/api/dash/users/${within.userId}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Harness User',
+          email: within.email,
+          isActive: true,
+          roleId: above.roleId,
+        }),
+      })
+    );
+    expect(assigned.status).toBe(HTTP_STATUS.FORBIDDEN);
+    const [stored] = await db
+      .select({ roleId: users.roleId })
+      .from(users)
+      .where(eq(users.id, within.userId));
+    expect(stored?.roleId).toBe(within.roleId);
   });
 });
 

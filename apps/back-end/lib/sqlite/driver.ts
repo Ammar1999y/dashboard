@@ -16,12 +16,10 @@
  * 6. Integers past 2^53 lose precision. Do not enable `safeIntegers`: it
  *    returns EVERY integer as a bigint, which breaks `JSON.stringify`, and the
  *    largest stored value is a millisecond timestamp.
- * 7. The bounded sweeps use `DELETE ... LIMIT`, which needs
- *    `SQLITE_ENABLE_UPDATE_DELETE_LIMIT`. Without it, rewrite as
- *    `DELETE FROM t WHERE key IN (SELECT key FROM t WHERE ... LIMIT ?)`.
- * 8. `close(true)` finalizes outstanding statements; see `close` below.
- * 9. A lock conflict throws an error whose `code` starts `SQLITE_BUSY`
+ * 7. `close(true)` finalizes outstanding statements; see `close` below.
+ * 8. A lock conflict throws an error whose `code` starts `SQLITE_BUSY`
  *    (`isSqliteBusy`).
+ * 9. `get` steps the statement to its end; see `SqliteStatement.get`.
  *
  * Callers use anonymous `?` placeholders, never `?1`: `better-sqlite3` rejects
  * numbered placeholders bound positionally, so they would pin this driver.
@@ -30,6 +28,12 @@ import { Database } from 'bun:sqlite';
 import type { SQLQueryBindings } from 'bun:sqlite';
 
 export interface SqliteStatement {
+  /**
+   * The first row of a statement that returns at most one, stepped to its end:
+   * SQLite runs the auto-checkpoint only when a statement finishes, so a write
+   * read back after its first row would leave the WAL growing until some
+   * unrelated statement checkpoints the whole backlog on the event loop.
+   */
   get<Row>(...params: readonly SqliteBindValue[]): Row | null;
   all<Row>(...params: readonly SqliteBindValue[]): Row[];
   /** `changes` is how the bounded sweep knows a batch came up short. */
@@ -82,7 +86,7 @@ export function openConnection(path: string): SqliteConnection {
     prepare(sql) {
       const statement = db.prepare<unknown, SQLQueryBindings[]>(sql);
       return {
-        get: (...params) => statement.get(...params) as never,
+        get: (...params) => (statement.all(...params)[0] ?? null) as never,
         all: (...params) => statement.all(...params) as never,
         run: (...params) => ({ changes: statement.run(...params).changes }),
         finalize: () => statement.finalize(),

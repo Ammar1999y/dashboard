@@ -12,7 +12,10 @@ import { app } from '@/app';
 import { db } from '@/db';
 import { twoFactorMethods, users } from '@/db/schema';
 
+import { otpMsg } from '@app/shared/messages/otp';
+
 import { issueRecoveryGrant } from '@/lib/auth/recovery/grant';
+import { authenticationStartedAt } from '@/lib/auth/session/authentication-time';
 import {
   readEnrolmentState,
   recoveryOptions,
@@ -113,7 +116,9 @@ test('the two-factor send, answered by asAuthError', async () => {
   const lines = errorLines();
 
   const answered = await post('/api/auth/two-factor/otp/send', {}, cookie);
-  expect(answered.status).toBeGreaterThanOrEqual(400);
+  // A provider outage, as its recovery twin below answers it: not bad input.
+  expect(answered.status).toBe(500);
+  expect(await answered.json()).toMatchObject({ detail: otpMsg.smsSendError });
   expect(texts).toHaveLength(1);
   expectOneDiagnosis(
     lines(),
@@ -128,6 +133,7 @@ test('the recovery second-factor send, answered by handleApiError', async () => 
     userId: user.userId,
     excludeContactKind: 'email',
     options: recoveryOptions(await readEnrolmentState(user.userId), 'email'),
+    startedAt: await authenticationStartedAt(),
   });
   const texts = failingSms();
   const lines = errorLines();
@@ -137,6 +143,7 @@ test('the recovery second-factor send, answered by handleApiError', async () => 
     option: 'otp:phone',
   });
   expect(answered.status).toBe(500);
+  expect(await answered.json()).toMatchObject({ detail: otpMsg.smsSendError });
   expect(texts).toHaveLength(1);
   expectOneDiagnosis(
     lines(),

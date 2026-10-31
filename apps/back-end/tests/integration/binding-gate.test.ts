@@ -31,12 +31,15 @@ import { PHONE_OTP_CHANNELS } from '@app/shared/validation/enums';
 import { isChannelEnabled } from '@app/shared/validation/otp';
 import { issueCodeMessage } from '@app/shared/validation/rules';
 
+import { auth } from '@/lib/auth';
 import { captchaRefused } from '@/lib/captcha';
 import { gateAsksReauth } from '@/lib/http/admit';
+import { PRE_AUTH_LIMIT, preAuthScope } from '@/lib/http/pre-auth';
 import { MAX_JSON_BODY_BYTES } from '@/lib/http/request';
 import { notFoundError } from '@/lib/http/response';
 import { SECURITY_HEADERS } from '@/lib/http/security-headers';
 import { generateUuidV7 } from '@/lib/id';
+import { getRateLimitStore } from '@/lib/rate-limit/store';
 
 import { resetTables } from '../helpers/database';
 import { expectData, expectError } from '../helpers/expect-body';
@@ -49,6 +52,7 @@ import {
   uniqueEmail,
   uniquePhone,
 } from '../helpers/session';
+import { recordStatements } from '../helpers/statements';
 
 const fx: {
   admin: SignedInSession | null;
@@ -462,5 +466,139 @@ describe('HEAD on a binding GET', () => {
     );
     for (const name of Object.keys(SECURITY_HEADERS))
       expect(head.headers.get(name)).toBe(get.headers.get(name));
+  });
+});
+
+describe('the per-IP admission limit', () => {
+  let lastIp = 0;
+  /** A caller no other case has charged. */
+  const freshIp = () => `198.51.100.${++lastIp}`;
+
+  /** What the gate charged this caller on this path. */
+  function charged(path: string, ip: string): number {
+    const row = getRateLimitStore()
+      .db.prepare('select count from rate_limit where key = ?')
+      .get(`${preAuthScope(path)}:ip:${ip}`) as { count: number } | null;
+    return row?.count ?? 0;
+  }
+
+  function send(
+    { entry }: AnyBinding,
+    ip: string,
+    cookie?: string
+  ): Promise<Response> {
+    return app.handle(
+      new Request(`http://localhost${concrete(entry.path)}`, {
+        method: entry.method,
+        headers: baseHeaders({
+          'cf-connecting-ip': ip,
+          ...(entry.bodyKind === 'json' && JSON_HEADERS),
+          ...(cookie && { cookie }),
+        }),
+        body: entry.bodyKind === 'json' ? '{}' : undefined,
+      })
+    );
+  }
+
+  /** Well formed, so only its signature fails. */
+  async function forgedToken(): Promise<string> {
+    const context = await auth.$context;
+    const { name } = context.authCookies.sessionToken;
+    return `${name}=forged.${'A'.repeat(43)}=`;
+  }
+
+  const LIMITED = BINDINGS.filter(
+    ({ options }) => options.preAuthIpLimit !== false
+  );
+  const SIGNED_IN = LIMITED.filter(
+    ({ entry }) => entry.policy.auth !== 'public'
+  );
+  const PUBLIC = LIMITED.filter(({ entry }) => entry.policy.auth === 'public');
+  const permissions = BINDINGS.find(({ entry }) => entry === listPermissions);
+
+  test('the walks below are not empty', () => {
+    expect(SIGNED_IN.length).toBeGreaterThan(20);
+    expect(PUBLIC.length).toBeGreaterThan(0);
+    expect(permissions).toBeDefined();
+  });
+
+  // Uncharged only because such a request reaches no database: the
+  // statement count is the premise, the limiter row the consequence.
+  test.each(keyed(SIGNED_IN))(
+    '%s without a session token answers 401 from memory and charges nothing',
+    async (_key, binding) => {
+      const ip = freshIp();
+      const recorder = recordStatements();
+      const response = await send(binding, ip).finally(recorder.stop);
+      expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+      expect(recorder.statements).toEqual([]);
+      expect(charged(binding.entry.path, ip)).toBe(0);
+    }
+  );
+
+  test('a valid cookie cache without its token is treated as no token', async () => {
+    const binding = seeded(permissions ?? null);
+    const context = await auth.$context;
+    const { name } = context.authCookies.sessionData;
+    // A signed-in caller's own cache, chunks included, minus the token.
+    const cache = admin()
+      .cookie.split('; ')
+      .filter(
+        (pair) => pair.startsWith(`${name}=`) || pair.startsWith(`${name}.`)
+      )
+      .join('; ');
+    expect(cache).not.toBe('');
+    const ip = freshIp();
+    const recorder = recordStatements();
+    const response = await send(binding, ip, cache).finally(recorder.stop);
+    expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+    expect(recorder.statements).toEqual([]);
+    expect(charged(binding.entry.path, ip)).toBe(0);
+  });
+
+  test.each(keyed(SIGNED_IN))(
+    '%s with a forged session token is charged',
+    async (_key, binding) => {
+      const ip = freshIp();
+      const response = await send(binding, ip, await forgedToken());
+      expect(response.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+      expect(charged(binding.entry.path, ip)).toBe(1);
+    }
+  );
+
+  test.each(keyed(PUBLIC))(
+    '%s charges a caller with no cookie',
+    async (_key, binding) => {
+      const ip = freshIp();
+      await send(binding, ip);
+      expect(charged(binding.entry.path, ip)).toBe(1);
+    }
+  );
+
+  test('a signed-in caller is charged', async () => {
+    const binding = seeded(permissions ?? null);
+    const ip = freshIp();
+    const response = await send(binding, ip, admin().cookie);
+    expect(response.status).toBe(HTTP_STATUS.OK);
+    expect(charged(binding.entry.path, ip)).toBe(1);
+  });
+
+  test('a token-bearing caller past the budget is refused 429; a cookie-less one stays 401', async () => {
+    const binding = seeded(permissions ?? null);
+    const ip = freshIp();
+    const token = await forgedToken();
+    const statuses: number[] = [];
+    for (let sent = 0; sent <= PRE_AUTH_LIMIT; sent += 1) {
+      const response = await send(binding, ip, token);
+      statuses.push(response.status);
+    }
+    const cookieless = await send(binding, ip);
+
+    expect(statuses.slice(0, PRE_AUTH_LIMIT)).toEqual(
+      Array.from({ length: PRE_AUTH_LIMIT }, () => HTTP_STATUS.UNAUTHORIZED)
+    );
+    expect(statuses.at(-1)).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+    expect(cookieless.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+    expect(charged(binding.entry.path, ip)).toBe(PRE_AUTH_LIMIT);
   });
 });

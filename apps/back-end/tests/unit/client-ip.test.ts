@@ -114,9 +114,8 @@ describe('only the edge header is trusted', () => {
   test('every header the trusted list names is actually read', () => {
     // `getClientIp` reads `TRUSTED_IP_HEADERS[0]` and nothing else, while
     // `lib/auth/index.ts` hands Better Auth the WHOLE array as `ipAddressHeaders`. A
-    // second entry would be honoured there and ignored here, so one request
-    // would carry two different client IPs — this limiter's and the session
-    // row's. One entry today; this fails the moment that stops being true.
+    // second entry would be honoured there and ignored here. One entry today;
+    // this fails the moment that stops being true.
     for (const name of TRUSTED_IP_HEADERS)
       expect(getClientIp(header('203.0.113.7', name))).toBe('203.0.113.7');
   });

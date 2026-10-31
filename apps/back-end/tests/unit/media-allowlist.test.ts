@@ -21,8 +21,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { deflateRawSync } from 'node:zlib';
+import type { ZipEntryFixture } from '../helpers/zip';
 
+import { MIB } from '@app/shared/validation/constants';
 import {
   ALLOWED_MIME_TYPES,
   DISABLED_FILE_TYPES,
@@ -43,106 +44,14 @@ import {
   detectOoxml,
   EXCEL_MAIN_CONTENT_TYPE,
   OOXML_MAX_ENTRIES,
+  OOXML_RELATIONSHIPS_MAX_BYTES,
+  OOXML_RELATIONSHIPS_MAX_TOKENS,
   WORD_MAIN_CONTENT_TYPE,
 } from '@/lib/media/office/ooxml';
 
+import { buildZip, u16, u32 } from '../helpers/zip';
+
 const OFFICE_FIXTURES = path.join(import.meta.dir, '..', 'fixtures', 'office');
-
-interface ZipEntryFixture {
-  name: string;
-  data: string | Uint8Array;
-  /** 8 = deflate (what Office writes), 0 = stored. */
-  method?: 0 | 8;
-  /** Written into the LOCAL header instead of `name`; the central directory keeps `name`. */
-  localName?: string;
-}
-
-function u16(value: number): Buffer {
-  const out = Buffer.alloc(2);
-  out.writeUInt16LE(value);
-  return out;
-}
-
-function u32(value: number): Buffer {
-  const out = Buffer.alloc(4);
-  out.writeUInt32LE(value >>> 0);
-  return out;
-}
-
-/**
- * A minimal, valid ZIP: local headers, then the central directory, then the
- * end record. CRCs are zero — nothing under test verifies them, and a reader
- * that started to would fail this fixture loudly rather than pass it quietly.
- */
-function buildZip(
-  entries: readonly ZipEntryFixture[],
-  options: { zip64Marker?: boolean } = {}
-): Buffer {
-  const locals: Buffer[] = [];
-  const centrals: Buffer[] = [];
-  let offset = 0;
-
-  for (const entry of entries) {
-    const name = Buffer.from(entry.name, 'utf8');
-    const localName = Buffer.from(entry.localName ?? entry.name, 'utf8');
-    const raw = Buffer.from(entry.data);
-    const method = entry.method ?? 8;
-    const stored = method === 8 ? deflateRawSync(raw) : raw;
-
-    const local = Buffer.concat([
-      u32(0x04_03_4b_50),
-      u16(20),
-      u16(0),
-      u16(method),
-      u16(0),
-      u16(0),
-      u32(0),
-      u32(stored.length),
-      u32(raw.length),
-      u16(localName.length),
-      u16(0),
-      localName,
-      stored,
-    ]);
-    const central = Buffer.concat([
-      u32(0x02_01_4b_50),
-      u16(20),
-      u16(20),
-      u16(0),
-      u16(method),
-      u16(0),
-      u16(0),
-      u32(0),
-      u32(stored.length),
-      u32(raw.length),
-      u16(name.length),
-      u16(0),
-      u16(0),
-      u16(0),
-      u16(0),
-      u32(0),
-      u32(offset),
-      name,
-    ]);
-    locals.push(local);
-    centrals.push(central);
-    offset += local.length;
-  }
-
-  const directory = Buffer.concat(centrals);
-  const total = options.zip64Marker ? 0xff_ff : entries.length;
-  const eocd = Buffer.concat([
-    u32(0x06_05_4b_50),
-    u16(0),
-    u16(0),
-    u16(total),
-    u16(total),
-    u32(directory.length),
-    u32(offset),
-    u16(0),
-  ]);
-  return Buffer.concat([...locals, directory, eocd]);
-}
 
 function contentTypes(
   parts: ReadonlyArray<readonly [partName: string, contentType: string]>,
@@ -195,6 +104,44 @@ const xlsx = (
 const TYPES_OPEN =
   '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">';
 const MAIN_OVERRIDE = `<Override PartName="/word/document.xml" ContentType="${WORD_MAIN_CONTENT_TYPE}"/>`;
+
+// Relationship types are identifiers, not fetched URLs.
+/* eslint-disable unicorn/prefer-https */
+const OFFICE_REL =
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
+const STRICT_REL = 'http://purl.oclc.org/ooxml/officeDocument/relationships/';
+const MSO_REL = 'http://schemas.microsoft.com/office/2006/relationships/';
+const PACKAGE_REL =
+  'http://schemas.openxmlformats.org/package/2006/relationships';
+/* eslint-enable unicorn/prefer-https */
+
+interface RelationshipFixture {
+  type: string;
+  target: string;
+  external?: boolean;
+}
+
+function relationships(...items: readonly RelationshipFixture[]): string {
+  const body = items
+    .map(
+      ({ type, target, external }, index) =>
+        `<Relationship Id="rId${index + 1}" Type="${type}" Target="${target}"${
+          external ? ' TargetMode="External"' : ''
+        }/>`
+    )
+    .join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${PACKAGE_REL}">${body}</Relationships>`;
+}
+
+const DOCUMENT_RELS = 'word/_rels/document.xml.rels';
+
+/** A `.docx` whose main part relates to `items`, with each target part present. */
+const docxRelating = (
+  items: readonly RelationshipFixture[],
+  parts: ZipEntryFixture[] = [],
+  xml?: string
+) =>
+  docx([{ name: DOCUMENT_RELS, data: relationships(...items) }, ...parts], xml);
 
 const SECTOR = 512;
 const MINI_SECTOR = 64;
@@ -400,6 +347,26 @@ describe('the allowlist table', () => {
     const keys: string[] = [];
     for (const key of FILE_TYPES.keys()) keys.push(key);
     expect(ALLOWED_MIME_TYPES).toEqual(keys);
+  });
+
+  test('every check but SVG’s refuses bytes that are not its format', () => {
+    // The real table, not a copy: an entry added with a check that admits
+    // anything would pass unchecked, silently. SVG is exempt only because the
+    // sanitiser parses it in full.
+    for (const [mime, spec] of FILE_TYPE_TABLE) {
+      const verdict = spec.detect(Buffer.alloc(64, 0x41));
+      if (mime === 'image/svg+xml') expect(verdict, mime).toEqual({ ok: true });
+      else expect(verdict.ok, mime).toBe(false);
+    }
+    for (const type of [
+      'image/jpeg',
+      'image/gif',
+      'image/avif',
+      'text/html',
+      'application/octet-stream',
+      '',
+    ])
+      expect(fileTypeFor(type), type).toBeUndefined();
   });
 
   test('legacy Office is known, inspected, and held back from the allowlist', () => {
@@ -686,7 +653,13 @@ describe('Office Open XML', () => {
 
     // A `vbaProject.bin` part is refused even when the content types lie about it.
     expect(
-      detectOoxml(docx([{ name: 'word/vbaProject.bin', data: 'vba' }]), 'word')
+      detectOoxml(
+        docxRelating(
+          [{ type: `${MSO_REL}vbaProject`, target: 'vbaProject.bin' }],
+          [{ name: 'word/vbaProject.bin', data: 'vba' }]
+        ),
+        'word'
+      )
     ).toEqual({ ok: false, reason: 'macros' });
 
     const xlsm = contentTypes([
@@ -704,16 +677,38 @@ describe('Office Open XML', () => {
   test('embedded objects and ActiveX controls are refused', () => {
     expect(
       detectOoxml(
-        docx([{ name: 'word/embeddings/oleObject1.bin', data: 'ole' }]),
+        docxRelating(
+          [
+            {
+              type: `${OFFICE_REL}oleObject`,
+              target: 'embeddings/oleObject1.bin',
+            },
+          ],
+          [{ name: 'word/embeddings/oleObject1.bin', data: 'ole' }]
+        ),
         'word'
       )
     ).toEqual({ ok: false, reason: 'embedded' });
     expect(
       detectOoxml(
-        docx([{ name: 'word/activeX/activeX1.xml', data: '<ax/>' }]),
+        docxRelating(
+          [{ type: `${OFFICE_REL}control`, target: 'activeX/activeX1.xml' }],
+          [{ name: 'word/activeX/activeX1.xml', data: '<ax/>' }]
+        ),
         'word'
       )
     ).toEqual({ ok: false, reason: 'embedded' });
+    // The folder is the writer's choice and activates nothing: a part no
+    // relationship reaches is inert wherever it lives.
+    expect(
+      detectOoxml(
+        docx([
+          { name: 'word/embeddings/oleObject1.bin', data: 'ole' },
+          { name: 'word/vbaProject.bin', data: 'vba' },
+        ]),
+        'word'
+      )
+    ).toEqual({ ok: true });
     const withOle = contentTypes([
       ['/word/document.xml', WORD_MAIN_CONTENT_TYPE],
       [
@@ -787,6 +782,657 @@ describe('Office Open XML', () => {
       ok: false,
       reason: 'signature',
     });
+  });
+});
+
+describe('Office Open XML relationships', () => {
+  // A part becomes an embedded object, a control or code because a
+  // relationship of that type points at it; its folder and declared content
+  // type are the writer's choice. Every target below sits outside the folders
+  // Office uses and is declared as something inert.
+  const inertDefaults = [
+    ['xml', 'application/xml'],
+    ['rels', 'application/vnd.openxmlformats-package.relationships+xml'],
+    ['bin', 'application/octet-stream'],
+    ['dat', 'application/octet-stream'],
+    ['rtf', 'application/rtf'],
+    ['mht', 'message/rfc822'],
+  ] as const;
+  const inertTypes = (
+    main = WORD_MAIN_CONTENT_TYPE,
+    part = '/word/document.xml'
+  ) => contentTypes([[part, main]], { defaults: inertDefaults });
+
+  test('an embedded object is refused by the relationship that activates it, wherever the part lives', () => {
+    const cases: Array<[string, RelationshipFixture, ZipEntryFixture]> = [
+      [
+        'an embedded package outside embeddings/',
+        { type: `${OFFICE_REL}package`, target: 'objects/report.docx' },
+        { name: 'word/objects/report.docx', data: 'PK inert' },
+      ],
+      [
+        'an OLE object declared as octet-stream',
+        { type: `${OFFICE_REL}oleObject`, target: 'objects/oleObject1.bin' },
+        { name: 'word/objects/oleObject1.bin', data: 'ole' },
+      ],
+      [
+        'an altChunk RTF carrying \\objdata',
+        { type: `${OFFICE_REL}aFChunk`, target: 'chunk.rtf' },
+        {
+          name: 'word/chunk.rtf',
+          data: String.raw`{\rtf1{\object\objemb{\*\objdata 0105000002000000}}}`,
+        },
+      ],
+      [
+        'an altChunk MHT',
+        { type: `${OFFICE_REL}aFChunk`, target: 'chunk.mht' },
+        {
+          name: 'word/chunk.mht',
+          data: 'MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary="b"\r\n\r\n--b\r\nContent-Type: text/html\r\n\r\n<html><body>x</body></html>\r\n--b--\r\n',
+        },
+      ],
+      [
+        'an ActiveX control outside activeX/',
+        { type: `${OFFICE_REL}control`, target: 'ctl/control1.xml' },
+        { name: 'word/ctl/control1.xml', data: '<ax:ocx/>' },
+      ],
+      [
+        // The shape of CVE-2017-0199 and Follina (CVE-2022-30190): nothing
+        // is embedded, the object is fetched.
+        'a linked OLE object with an external target',
+        {
+          type: `${OFFICE_REL}oleObject`,
+          target: 'http://example.test/payload.hta',
+          external: true,
+        },
+        { name: 'word/media/unused.xml', data: '<x/>' },
+      ],
+    ];
+    for (const [label, relationship, part] of cases)
+      expect(
+        detectOoxml(docxRelating([relationship], [part], inertTypes()), 'word'),
+        label
+      ).toEqual({ ok: false, reason: 'embedded' });
+
+    // An ActiveX binary is related from the control's own part, not the
+    // document, so every relationships part is read, not only the main one's.
+    expect(
+      detectOoxml(
+        docx(
+          [
+            {
+              name: 'word/ctl/_rels/control1.xml.rels',
+              data: relationships({
+                type: `${MSO_REL}activeXControlBinary`,
+                target: 'control1.dat',
+              }),
+            },
+            { name: 'word/ctl/control1.dat', data: 'ocx' },
+          ],
+          inertTypes()
+        ),
+        'word'
+      )
+    ).toEqual({ ok: false, reason: 'embedded' });
+
+    // A chart's data workbook is an embedded package too.
+    expect(
+      detectOoxml(
+        docx(
+          [
+            {
+              name: 'word/charts/_rels/chart1.xml.rels',
+              data: relationships({
+                type: `${OFFICE_REL}package`,
+                target: '../embeddings/Microsoft_Excel_Worksheet.xlsx',
+              }),
+            },
+            { name: 'word/charts/chart1.xml', data: '<c:chartSpace/>' },
+            {
+              name: 'word/embeddings/Microsoft_Excel_Worksheet.xlsx',
+              data: 'PK inert',
+            },
+          ],
+          inertTypes()
+        ),
+        'word'
+      )
+    ).toEqual({ ok: false, reason: 'embedded' });
+
+    const sheetWithObject = buildZip([
+      {
+        name: '[Content_Types].xml',
+        data: inertTypes(EXCEL_MAIN_CONTENT_TYPE, '/xl/workbook.xml'),
+      },
+      { name: 'xl/workbook.xml', data: '<workbook/>' },
+      { name: 'xl/worksheets/sheet1.xml', data: '<worksheet/>' },
+      {
+        name: 'xl/worksheets/_rels/sheet1.xml.rels',
+        data: relationships({
+          type: `${OFFICE_REL}oleObject`,
+          target: '../stuff/object1.bin',
+        }),
+      },
+      { name: 'xl/stuff/object1.bin', data: 'ole' },
+    ]);
+    expect(detectOoxml(sheetWithObject, 'excel')).toEqual({
+      ok: false,
+      reason: 'embedded',
+    });
+  });
+
+  test('code reached through a relationship is refused as macros, whatever the part is declared as', () => {
+    for (const [label, relationship] of [
+      ['vbaProject', { type: `${MSO_REL}vbaProject`, target: 'code.dat' }],
+      ['wordVbaData', { type: `${MSO_REL}wordVbaData`, target: 'code.xml' }],
+    ] as const)
+      expect(
+        detectOoxml(
+          docxRelating(
+            [relationship],
+            [{ name: `word/${relationship.target}`, data: 'vba' }],
+            inertTypes()
+          ),
+          'word'
+        ),
+        label
+      ).toEqual({ ok: false, reason: 'macros' });
+
+    // An Excel 4.0 macro sheet, as the compound-file check already refuses.
+    for (const type of ['xlMacrosheet', 'xlIntlMacrosheet']) {
+      const workbook = buildZip([
+        {
+          name: '[Content_Types].xml',
+          data: inertTypes(EXCEL_MAIN_CONTENT_TYPE, '/xl/workbook.xml'),
+        },
+        { name: 'xl/workbook.xml', data: '<workbook/>' },
+        {
+          name: 'xl/_rels/workbook.xml.rels',
+          data: relationships({
+            type: `${MSO_REL}${type}`,
+            target: 'worksheets/sheet2.xml',
+          }),
+        },
+        { name: 'xl/worksheets/sheet2.xml', data: '<xm:macrosheet/>' },
+      ]);
+      expect(detectOoxml(workbook, 'excel'), type).toEqual({
+        ok: false,
+        reason: 'macros',
+      });
+    }
+  });
+
+  test('every namespace and spelling Office resolves to a refused type is refused', () => {
+    const variants = [
+      `${STRICT_REL}oleObject`,
+      `${STRICT_REL}package`,
+      `${STRICT_REL}control`,
+      `${STRICT_REL}aFChunk`,
+      `${OFFICE_REL}OLEOBJECT`,
+      `${OFFICE_REL}afchunk`,
+      `  ${OFFICE_REL}oleObject\t`,
+      `${OFFICE_REL}oleObj&#101;ct`,
+      `${OFFICE_REL}&#x6F;leObject`,
+      `${OFFICE_REL.replace('relationships', 'relat&#105;onships')}package`,
+    ];
+    for (const type of variants)
+      expect(
+        detectOoxml(
+          docxRelating(
+            [{ type, target: 'objects/o.bin' }],
+            [{ name: 'word/objects/o.bin', data: 'ole' }],
+            inertTypes()
+          ),
+          'word'
+        ),
+        type
+      ).toEqual({ ok: false, reason: 'embedded' });
+
+    const ole = `<Relationship Id="rId1" Type="${OFFICE_REL}oleObject" Target="o.bin"/>`;
+    const spelt = (body: string, name = DOCUMENT_RELS) =>
+      docx(
+        [
+          { name, data: body },
+          { name: 'word/o.bin', data: 'ole' },
+        ],
+        inertTypes()
+      );
+    const shapes: Array<[string, Buffer]> = [
+      [
+        'a prefixed element',
+        spelt(
+          `<r:Relationships xmlns:r="${PACKAGE_REL}"><r:Relationship Id="rId1" Type="${OFFICE_REL}oleObject" Target="o.bin"/></r:Relationships>`
+        ),
+      ],
+      [
+        'single quotes and a ">" in an earlier attribute',
+        spelt(
+          `<Relationships xmlns='${PACKAGE_REL}'><Relationship Id='a>b' Type='${OFFICE_REL}oleObject' Target='o.bin'/></Relationships>`
+        ),
+      ],
+      [
+        'an upper-case part name',
+        spelt(
+          `<Relationships xmlns="${PACKAGE_REL}">${ole}</Relationships>`,
+          'WORD/_RELS/DOCUMENT.XML.RELS'
+        ),
+      ],
+      [
+        'a percent-encoded part name',
+        spelt(
+          `<Relationships xmlns="${PACKAGE_REL}">${ole}</Relationships>`,
+          'word/_rels/document.xml.rel%73'
+        ),
+      ],
+      // Escapes decode to upper case, so the name is folded after them.
+      [
+        'an escape decoding to an upper-case letter',
+        spelt(
+          `<Relationships xmlns="${PACKAGE_REL}">${ole}</Relationships>`,
+          'word/_rels/document.xml.re%4Cs'
+        ),
+      ],
+      [
+        'an extension written wholly in upper-case escapes',
+        spelt(
+          `<Relationships xmlns="${PACKAGE_REL}">${ole}</Relationships>`,
+          'word/_rels/document.xml.%52%45%4C%53'
+        ),
+      ],
+      [
+        'the relationship after a comment and a processing instruction',
+        spelt(
+          `<?xml version="1.0"?><!-- <Relationship Type="x"/> --><Relationships xmlns="${PACKAGE_REL}"><?pi ?>${ole}</Relationships>`
+        ),
+      ],
+    ];
+    for (const [label, zip] of shapes)
+      expect(detectOoxml(zip, 'word'), label).toEqual({
+        ok: false,
+        reason: 'embedded',
+      });
+
+    const stored = buildZip([
+      { name: '[Content_Types].xml', data: inertTypes(), method: 0 },
+      { name: 'word/document.xml', data: '<w:document/>', method: 0 },
+      {
+        name: DOCUMENT_RELS,
+        data: relationships({
+          type: `${OFFICE_REL}oleObject`,
+          target: 'o.bin',
+        }),
+        method: 0,
+      },
+    ]);
+    expect(detectOoxml(stored, 'word')).toEqual({
+      ok: false,
+      reason: 'embedded',
+    });
+  });
+
+  test('a relationships part this reader cannot resolve refuses the package', () => {
+    const bodies = [
+      `<!DOCTYPE r [<!ENTITY ole "oleObject">]><Relationships xmlns="${PACKAGE_REL}"><Relationship Id="rId1" Type="${OFFICE_REL}&ole;" Target="o.bin"/></Relationships>`,
+      `<Relationships xmlns="${PACKAGE_REL}"><Relationship Id="rId1" Type="${OFFICE_REL}&bogus;" Target="o.bin"/></Relationships>`,
+      // Prototype names are not entities either.
+      `<Relationships xmlns="${PACKAGE_REL}"><Relationship Id="rId1" Type="${OFFICE_REL}oleObject&constructor;" Target="o.bin"/></Relationships>`,
+      `<Relationships xmlns="${PACKAGE_REL}"><Relationship Id="rId1" Type="${OFFICE_REL}styles&toString;" Target="o.bin"/></Relationships>`,
+      `<Relationships xmlns="${PACKAGE_REL}" xmlns:x="urn:x"><Relationship Id="rId1" x:Type="${OFFICE_REL}styles" Type="${OFFICE_REL}oleObject" Target="o.bin"/></Relationships>`,
+      `<Relationships xmlns="${PACKAGE_REL}"><Relationship Id="rId1" Type="${OFFICE_REL}oleObject" Type="${OFFICE_REL}styles" Target="o.bin"/></Relationships>`,
+      `<Relationships xmlns="${PACKAGE_REL}"><Relationship Id="rId1" Type=${OFFICE_REL}oleObject Target="o.bin"/></Relationships>`,
+      `<Relationships xmlns="${PACKAGE_REL}"><![CDATA[<Relationship Type="x"/>]]></Relationships>`,
+      // Only XML's four whitespace characters separate attributes.
+      `<Relationships xmlns="${PACKAGE_REL}"><Relationship\u{A0}Id="rId1"\u{A0}Type="${OFFICE_REL}styles" Target="s.xml"/></Relationships>`,
+      `<Relationships xmlns="${PACKAGE_REL}"><Relationship Id="rId1" Type="${OFFICE_REL}oleObject`,
+    ];
+    for (const body of bodies)
+      expect(
+        detectOoxml(
+          docx([{ name: DOCUMENT_RELS, data: body }], inertTypes()),
+          'word'
+        ),
+        body
+      ).toEqual({ ok: false, reason: 'container' });
+
+    // UTF-16 is legal OPC but Office writes UTF-8; read as UTF-8 it is not
+    // XML, so it is refused rather than skipped.
+    const utf16 = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from(
+        relationships({ type: `${OFFICE_REL}oleObject`, target: 'o.bin' }),
+        'utf16le'
+      ),
+    ]);
+    expect(
+      detectOoxml(
+        docx([{ name: DOCUMENT_RELS, data: utf16 }], inertTypes()),
+        'word'
+      )
+    ).toEqual({ ok: false, reason: 'container' });
+  });
+
+  test('relationships parts past the budget are refused as too complex, whatever their headers claim', () => {
+    const hyperlink = (index: number) =>
+      `<Relationship Id="rId${index}" Type="${OFFICE_REL}hyperlink" Target="https://example.test/item/${index}" TargetMode="External"/>`;
+    /** Benign relationships, at least `size` bytes long. */
+    const benignRels = (size: number) => {
+      const items: string[] = [];
+      let length = 0;
+      for (let index = 1; length < size; index++) {
+        const item = hyperlink(index);
+        items.push(item);
+        length += item.length;
+      }
+      return `<Relationships xmlns="${PACKAGE_REL}">${items.join('')}</Relationships>`;
+    };
+    const sheet = (...parts: ZipEntryFixture[]) =>
+      buildZip([
+        {
+          name: '[Content_Types].xml',
+          data: contentTypes([['/xl/workbook.xml', EXCEL_MAIN_CONTENT_TYPE]]),
+        },
+        { name: 'xl/workbook.xml', data: '<workbook/>' },
+        ...parts,
+      ]);
+
+    // A sheet with 20 000 hyperlinks: several MiB of relationships, legitimate.
+    const linked = benignRels(20_000 * hyperlink(20_000).length);
+    expect(linked.length).toBeGreaterThan(3 * MIB);
+    expect(
+      detectOoxml(
+        sheet({ name: 'xl/worksheets/_rels/sheet1.xml.rels', data: linked }),
+        'excel'
+      )
+    ).toEqual({ ok: true });
+
+    const over = benignRels(OOXML_RELATIONSHIPS_MAX_BYTES + 1);
+    // Each under the byte budget, but far more tokens than relationships that
+    // size: the walk's cost is per element, attribute and reference.
+    const wrapped = (body: string) =>
+      `<Relationships xmlns="${PACKAGE_REL}">${body}</Relationships>`;
+    const elements = (count: number) => wrapped('<a/>'.repeat(count));
+    const flood = elements((OOXML_RELATIONSHIPS_MAX_BYTES - 200) / 4);
+    const oneTag = wrapped(
+      `<a${Array.from(
+        { length: OOXML_RELATIONSHIPS_MAX_TOKENS },
+        (_, index) => ` a${index}=""`
+      ).join('')}/>`
+    );
+    const escaped = wrapped(
+      `<Relationship Id="rId1" Type="${OFFICE_REL}hyperlink" Target="${'&#65;'.repeat(
+        OOXML_RELATIONSHIPS_MAX_TOKENS
+      )}" TargetMode="External"/>`
+    );
+    const half = elements(Math.ceil(OOXML_RELATIONSHIPS_MAX_TOKENS * 0.6));
+    for (const body of [flood, oneTag, escaped, half])
+      expect(body.length).toBeLessThan(OOXML_RELATIONSHIPS_MAX_BYTES);
+    const cases: Array<[string, ZipEntryFixture[]]> = [
+      [
+        'elements packed under the byte budget',
+        [{ name: 'xl/_rels/workbook.xml.rels', data: flood }],
+      ],
+      [
+        'attributes packed into one start tag',
+        [{ name: 'xl/_rels/workbook.xml.rels', data: oneTag }],
+      ],
+      [
+        'character references packed into one value',
+        [{ name: 'xl/_rels/workbook.xml.rels', data: escaped }],
+      ],
+      [
+        'two parts, each under the token budget, together over it',
+        [
+          { name: 'xl/_rels/workbook.xml.rels', data: half },
+          { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: half },
+        ],
+      ],
+      ['one part over', [{ name: 'xl/_rels/workbook.xml.rels', data: over }]],
+      [
+        'one part over, its header claiming a few bytes',
+        [{ name: 'xl/_rels/workbook.xml.rels', data: over, declaredSize: 64 }],
+      ],
+      [
+        'one stored part over, its header claiming a few bytes',
+        [
+          {
+            name: 'xl/_rels/workbook.xml.rels',
+            data: over,
+            method: 0,
+            declaredSize: 64,
+          },
+        ],
+      ],
+      [
+        'many parts, each under, together over',
+        Array.from(
+          { length: OOXML_RELATIONSHIPS_MAX_BYTES / MIB + 1 },
+          (_, index) => ({
+            name: `xl/worksheets/_rels/sheet${index}.xml.rels`,
+            data: benignRels(MIB),
+          })
+        ),
+      ],
+    ];
+    for (const [label, parts] of cases)
+      expect(detectOoxml(sheet(...parts), 'excel'), label).toEqual({
+        ok: false,
+        reason: 'complex',
+      });
+
+    // Malformed XML inside the budget stays a broken file, not a busy one.
+    expect(
+      detectOoxml(
+        sheet({
+          name: 'xl/_rels/workbook.xml.rels',
+          data: `${benignRels(MIB)}<!DOCTYPE x>`,
+        }),
+        'excel'
+      )
+    ).toEqual({ ok: false, reason: 'container' });
+  });
+
+  test('a benign document and workbook with images, links, charts and styles pass', () => {
+    const wordTypes = contentTypes(
+      [
+        ['/word/document.xml', WORD_MAIN_CONTENT_TYPE],
+        [
+          '/word/styles.xml',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml',
+        ],
+        [
+          '/word/settings.xml',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml',
+        ],
+        [
+          '/word/header1.xml',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml',
+        ],
+        [
+          '/word/theme/theme1.xml',
+          'application/vnd.openxmlformats-officedocument.theme+xml',
+        ],
+        [
+          '/docProps/core.xml',
+          'application/vnd.openxmlformats-package.core-properties+xml',
+        ],
+      ],
+      {
+        defaults: [
+          ['xml', 'application/xml'],
+          ['rels', 'application/vnd.openxmlformats-package.relationships+xml'],
+          ['png', 'image/png'],
+          [
+            'odttf',
+            'application/vnd.openxmlformats-officedocument.obfuscatedFont',
+          ],
+        ],
+      }
+    );
+    const document = buildZip([
+      { name: '[Content_Types].xml', data: wordTypes },
+      {
+        name: '_rels/.rels',
+        data: relationships(
+          { type: `${OFFICE_REL}officeDocument`, target: 'word/document.xml' },
+          {
+            type: `${PACKAGE_REL}/metadata/core-properties`,
+            target: 'docProps/core.xml',
+          },
+          {
+            type: `${OFFICE_REL}extended-properties`,
+            target: 'docProps/app.xml',
+          }
+        ),
+      },
+      { name: 'word/document.xml', data: '<w:document/>' },
+      {
+        name: DOCUMENT_RELS,
+        data: relationships(
+          { type: `${OFFICE_REL}styles`, target: 'styles.xml' },
+          { type: `${OFFICE_REL}settings`, target: 'settings.xml' },
+          { type: `${OFFICE_REL}theme`, target: 'theme/theme1.xml' },
+          { type: `${OFFICE_REL}header`, target: 'header1.xml' },
+          { type: `${OFFICE_REL}fontTable`, target: 'fontTable.xml' },
+          { type: `${OFFICE_REL}numbering`, target: 'numbering.xml' },
+          { type: `${OFFICE_REL}footnotes`, target: 'footnotes.xml' },
+          { type: `${OFFICE_REL}comments`, target: 'comments.xml' },
+          { type: `${OFFICE_REL}image`, target: 'media/image1.png' },
+          { type: `${OFFICE_REL}chart`, target: 'charts/chart1.xml' },
+          { type: `${OFFICE_REL}customXml`, target: '../customXml/item1.xml' },
+          {
+            type: `${OFFICE_REL}hyperlink`,
+            target: 'https://example.test/a?b=1&amp;c=2',
+            external: true,
+          },
+          // A corporate template on a share: an external link the contract
+          // leaves uninspected.
+          {
+            type: `${OFFICE_REL}attachedTemplate`,
+            target: 'file:///\\\\server\\templates\\Corporate.dotx',
+            external: true,
+          }
+        ),
+      },
+      {
+        name: 'word/_rels/header1.xml.rels',
+        data: relationships({
+          type: `${OFFICE_REL}image`,
+          target: 'media/image1.png',
+        }),
+      },
+      {
+        name: 'word/_rels/fontTable.xml.rels',
+        data: relationships({
+          type: `${OFFICE_REL}font`,
+          target: 'fonts/font1.odttf',
+        }),
+      },
+      {
+        name: 'word/charts/_rels/chart1.xml.rels',
+        data: relationships(
+          {
+            type: `${MSO_REL.replace('2006', '2011')}chartStyle`,
+            target: 'style1.xml',
+          },
+          {
+            type: `${MSO_REL.replace('2006', '2011')}chartColorStyle`,
+            target: 'colors1.xml',
+          }
+        ),
+      },
+      {
+        name: 'word/media/image1.png',
+        data: Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
+      },
+      { name: 'word/styles.xml', data: '<w:styles/>' },
+      { name: 'docProps/core.xml', data: '<cp:coreProperties/>' },
+    ]);
+    expect(detectOoxml(document, 'word')).toEqual({ ok: true });
+
+    const workbook = buildZip([
+      {
+        name: '[Content_Types].xml',
+        data: contentTypes(
+          [
+            ['/xl/workbook.xml', EXCEL_MAIN_CONTENT_TYPE],
+            [
+              '/xl/worksheets/sheet1.xml',
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
+            ],
+          ],
+          {
+            defaults: [
+              ['xml', 'application/xml'],
+              [
+                'rels',
+                'application/vnd.openxmlformats-package.relationships+xml',
+              ],
+              [
+                'bin',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.printerSettings',
+              ],
+            ],
+          }
+        ),
+      },
+      { name: 'xl/workbook.xml', data: '<workbook/>' },
+      {
+        name: 'xl/_rels/workbook.xml.rels',
+        data: relationships(
+          { type: `${OFFICE_REL}worksheet`, target: 'worksheets/sheet1.xml' },
+          { type: `${OFFICE_REL}sharedStrings`, target: 'sharedStrings.xml' },
+          { type: `${OFFICE_REL}styles`, target: 'styles.xml' },
+          { type: `${OFFICE_REL}theme`, target: 'theme/theme1.xml' },
+          { type: `${OFFICE_REL}calcChain`, target: 'calcChain.xml' },
+          {
+            type: `${OFFICE_REL}externalLink`,
+            target: 'externalLinks/externalLink1.xml',
+          }
+        ),
+      },
+      { name: 'xl/worksheets/sheet1.xml', data: '<worksheet/>' },
+      {
+        name: 'xl/worksheets/_rels/sheet1.xml.rels',
+        data: relationships(
+          { type: `${OFFICE_REL}drawing`, target: '../drawings/drawing1.xml' },
+          { type: `${OFFICE_REL}table`, target: '../tables/table1.xml' },
+          {
+            type: `${OFFICE_REL}printerSettings`,
+            target: '../printerSettings/printerSettings1.bin',
+          },
+          {
+            type: `${OFFICE_REL}ctrlProp`,
+            target: '../ctrlProps/ctrlProp1.xml',
+          },
+          {
+            type: `${OFFICE_REL}vmlDrawing`,
+            target: '../drawings/vmlDrawing1.vml',
+          },
+          {
+            type: `${OFFICE_REL}hyperlink`,
+            target: 'https://example.test/',
+            external: true,
+          }
+        ),
+      },
+      {
+        name: 'xl/drawings/_rels/drawing1.xml.rels',
+        data: relationships(
+          { type: `${OFFICE_REL}image`, target: '../media/image1.png' },
+          { type: `${OFFICE_REL}chart`, target: '../charts/chart1.xml' }
+        ),
+      },
+      {
+        name: 'xl/externalLinks/_rels/externalLink1.xml.rels',
+        data: relationships({
+          type: `${OFFICE_REL}externalLinkPath`,
+          target: 'other.xlsx',
+          external: true,
+        }),
+      },
+      { name: 'xl/printerSettings/printerSettings1.bin', data: 'DEVMODE' },
+    ]);
+    expect(detectOoxml(workbook, 'excel')).toEqual({ ok: true });
   });
 });
 

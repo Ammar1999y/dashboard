@@ -21,20 +21,18 @@ const SITEVERIFY_URL =
 
 const SITEVERIFY_TIMEOUT_MS = 3000;
 
-/** The one Turnstile secret choice, shared with Better Auth's captcha plugin. */
-export function turnstileSecretKey(): string | undefined {
+function turnstileSecretKey(): string | undefined {
   return process.env.NODE_ENV === 'development'
     ? TEST_SECRET_KEY
     : process.env.TURNSTILE_SECRET_KEY;
 }
 
 /**
- * The hostnames a token must have been issued on, shared with Better Auth's
- * captcha plugin. Without it, a token solved on any site using the same sitekey
- * passes. `undefined` under the test secret, whose tokens carry Cloudflare's
- * placeholder hostname.
+ * The hostnames a token must have been issued on. Without it, a token solved on
+ * any site using the same sitekey passes. `undefined` under the test secret,
+ * whose tokens carry Cloudflare's placeholder hostname.
  */
-export function turnstileHostnames(): string[] | undefined {
+function turnstileHostnames(): string[] | undefined {
   return process.env.NODE_ENV === 'development'
     ? undefined
     : [new URL(PUBLIC_ORIGIN).hostname];
@@ -107,10 +105,11 @@ export async function verifyTurnstileRequest(
 }
 
 /**
- * A failed `verifyTurnstileRequest`. It reveals nothing about an account, so
- * the anonymous OTP handlers RETURN it through `handleApiError` rather than
- * throw it: their status collapse never applies to it. It precedes the lookup,
- * so it answers without the timing floor.
+ * A failed `verifyTurnstileRequest`, thrown by the binding gate
+ * (`lib/http/admit.ts`) and the Better Auth mount
+ * (`server/elysia/auth-mount.ts`) before any handler runs, so no handler's
+ * status collapse or timing floor applies to it. It reveals nothing about an
+ * account.
  */
 export function captchaRefused(): CustomError {
   return new CustomError(otpMsg.captchaFailed, HTTP_STATUS.FORBIDDEN);

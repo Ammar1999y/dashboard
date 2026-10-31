@@ -17,6 +17,7 @@ import { contactKindOf } from '@app/shared/validation/enums';
 import { invalidOrExpiredCode } from '@/lib/otp/throttle';
 import { processOtpVerify } from '@/lib/otp/verify';
 import { contactOf } from '@/lib/users/contact';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { auth } from '..';
 import { accountTemporarilyLocked } from '../login-guard';
@@ -28,7 +29,6 @@ import {
   consumeTotpCode,
   readVerifiedTotpSecret,
 } from '../two-factor/totp-replay';
-import { lockUser } from '../user-eligibility';
 import { expiresIn } from '../verifications';
 
 export type RecoveryVerdict = 'matched' | 'rejected' | 'unavailable';

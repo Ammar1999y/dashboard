@@ -20,9 +20,9 @@ import * as passwords from '@/lib/auth/password/hash';
 import * as reauthWindow from '@/lib/auth/reauth/window';
 import { hasAdminReauth } from '@/lib/auth/reauth/window';
 import * as rotation from '@/lib/auth/session/rotation';
-import * as eligibility from '@/lib/auth/user-eligibility';
 import { reauthPasskeyKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
+import * as lockOrder from '@/lib/users/lock-order';
 
 import { resetTables, waitForUserLock } from '../helpers/database';
 import { startGoogle } from '../helpers/google';
@@ -247,8 +247,8 @@ test('a ceremony that expires while the verify waits for the user lock opens no 
   // the clock after `lockUser` returns. Not a real holder: in full parallel
   // runs a request waiting on one stalled after its lock wait ended, never sent
   // its next statement, and kept the lock from every later test in the worker.
-  const lockUser = eligibility.lockUser;
-  const waited = spyOn(eligibility, 'lockUser').mockImplementation(
+  const lockUser = lockOrder.lockUser;
+  const waited = spyOn(lockOrder, 'lockUser').mockImplementation(
     async (...args) => {
       await Bun.sleep(Math.max(0, expiresAt.getTime() - Date.now()) + 200);
       return lockUser(...args);

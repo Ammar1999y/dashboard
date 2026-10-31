@@ -16,6 +16,7 @@ import {
   accounts,
   twoFactorMethods,
   users,
+  verificationCodes,
   verificationSessions,
 } from '@/db/schema';
 
@@ -34,6 +35,7 @@ import {
 } from '@app/shared/validation/otp';
 
 import { generateUuidV7 } from '@/lib/id';
+import { OTP_MAX_DAILY_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
 
 import { resetTables } from '../helpers/database';
 import { scriptEgress } from '../helpers/egress';
@@ -275,6 +277,41 @@ describe('a contact change whose send slot is spent is the proof throttle', () =
     30_000
   );
 });
+
+// A send the daily verify cap would make useless is refused, not delivered.
+test.if(!OTP_AUTO_VERIFY && EMAIL_OTP_AVAILABLE)(
+  'a contact change whose daily verify budget is spent is the proof throttle',
+  async () => {
+    const session = await signedInUser();
+    const newEmail = uniqueEmail();
+    const [proof] = await db
+      .insert(verificationSessions)
+      .values({
+        userId: session.user.userId,
+        channel: 'email',
+        identifier: newEmail,
+        targetIdentifier: newEmail,
+        purpose: 'change_email',
+        verifyAttemptDaily: OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+      })
+      .returning({ id: verificationSessions.id });
+    if (!proof) throw new Error('daily-capped fixture was not inserted');
+
+    await expectProofThrottle(
+      await send(session, 'POST', '/api/dash/users/me/change-email', {
+        currentPassword: session.user.password,
+        newEmail,
+      })
+    );
+    expect(
+      await db
+        .select({ id: verificationCodes.id })
+        .from(verificationCodes)
+        .where(eq(verificationCodes.sessionId, proof.id))
+    ).toEqual([]);
+  },
+  30_000
+);
 
 describe('POST /api/dash/users', () => {
   const create = (body: Record<string, unknown>) =>

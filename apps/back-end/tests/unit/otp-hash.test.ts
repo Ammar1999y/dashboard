@@ -1,6 +1,6 @@
 /**
  * The OTP MAC primitive (`lib/otp/hash.ts`) and the keyring it reads
- * (`lib/auth/keyring.ts`).
+ * (`lib/crypto/keyring.ts`).
  *
  * Covers the three things that would fail silently: a malformed stored value
  * must be REJECTED rather than throw (a throw is a 500, and an error-shaped
@@ -179,7 +179,7 @@ test('an active id absent from the keyring fails at load', async () => {
 
 test('two keys sharing one generation fail at load', async () => {
   // Generation is what answers "is this hash stale", so a shared one makes that
-  // unanswerable. Shared with the password pepper via lib/auth/keyring.ts.
+  // unanswerable. Shared with the password pepper via lib/crypto/keyring.ts.
   const { code, err } = await run(
     {
       OTP_HMAC_ACTIVE_ID: 'a',

@@ -6,16 +6,15 @@
  */
 import crypto from 'node:crypto';
 import type { AuthContext } from '../context';
-import type { Tx } from '@/db';
+import type { Executor, Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { BetterAuthPlugin } from 'better-auth';
 
 import { and, desc, eq, gt } from 'drizzle-orm';
 
-import { db } from '@/db';
+import { db, withTransaction } from '@/db';
 import { trustedDevices } from '@/db/schema';
 import { createHMAC } from '@better-auth/utils/hmac';
-import { sessionMiddleware } from 'better-auth/api';
 import { expireCookie } from 'better-auth/cookies';
 
 import * as contract from '@app/shared/api/better-auth';
@@ -23,8 +22,11 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { MSG_INVALID_INPUT, MSG_NOT_FOUND } from '@app/shared/messages/common';
 import { validID } from '@app/shared/utils';
+import { ownedRowSchema } from '@app/shared/validation/two-factor';
 
-import { authAuditMeta, bodyRecord } from '../context';
+import { auditLog } from '@/lib/audit';
+
+import { authAuditMeta, parseAuthBody } from '../context';
 import { authError, sessionRequired } from '../errors';
 import { pluginEndpoint } from '../plugin-endpoint';
 import { lockSessionOwner } from '../session/live';
@@ -91,35 +93,63 @@ function signTrust(
   );
 }
 
-// The identifier is deliberately not rotated on use: the row is bounded by
-// `expiresAt`, user-revocable and dropped by credential rotation.
-export async function consumeDeviceTrust(
-  ctx: AuthContext,
-  userId: EntityID
-): Promise<boolean> {
-  const cookie = ctx.context.createAuthCookie(TRUST_COOKIE_NAME, {
+function trustCookie(ctx: AuthContext) {
+  return ctx.context.createAuthCookie(TRUST_COOKIE_NAME, {
     maxAge: TRUST_DEVICE_MAX_AGE_S,
   });
+}
+
+/** The identifier a cookie signed for `userId` names. Any other cookie is expired. */
+async function presentedTrustIdentifier(
+  ctx: AuthContext,
+  userId: EntityID
+): Promise<string | null> {
+  const cookie = trustCookie(ctx);
   const raw = await ctx.getSignedCookie(cookie.name, ctx.context.secret);
-  if (typeof raw !== 'string' || !raw) return false;
+  if (typeof raw !== 'string' || !raw) return null;
 
   const [token, identifier] = raw.split('!', 2);
-  if (!token || !identifier) {
-    expireCookie(ctx, cookie);
-    return false;
+  if (token && identifier) {
+    const expected = await signTrust(ctx.context.secret, userId, identifier);
+    // Length-checked first: `timingSafeEqual` throws on differing lengths.
+    if (
+      token.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected))
+    )
+      return identifier;
   }
+  expireCookie(ctx, cookie);
+  return null;
+}
 
-  const expected = await signTrust(ctx.context.secret, userId, identifier);
-  // Length-checked first: `timingSafeEqual` throws on differing lengths.
-  const matches =
-    token.length === expected.length &&
-    crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected));
-  if (!matches) {
-    expireCookie(ctx, cookie);
-    return false;
-  }
+async function setTrustCookie(
+  ctx: AuthContext,
+  userId: EntityID,
+  identifier: string
+): Promise<void> {
+  const cookie = trustCookie(ctx);
+  await ctx.setSignedCookie(
+    cookie.name,
+    `${await signTrust(ctx.context.secret, userId, identifier)}!${identifier}`,
+    ctx.context.secret,
+    cookie.attributes
+  );
+}
 
-  const [row] = await db
+/**
+ * The id of the row the request's trust cookie names, or `null`. The
+ * identifier is deliberately not rotated on use: the row is bounded by
+ * `expiresAt`, user-revocable and dropped by credential rotation.
+ */
+export async function consumeDeviceTrust(
+  ctx: AuthContext,
+  userId: EntityID,
+  executor: Executor = db
+): Promise<EntityID | null> {
+  const identifier = await presentedTrustIdentifier(ctx, userId);
+  if (!identifier) return null;
+
+  const [row] = await executor
     .update(trustedDevices)
     .set({
       lastUsedAt: new Date(),
@@ -135,18 +165,13 @@ export async function consumeDeviceTrust(
     .returning({ id: trustedDevices.id });
 
   if (!row) {
-    expireCookie(ctx, cookie);
-    return false;
+    expireCookie(ctx, trustCookie(ctx));
+    return null;
   }
 
   // Refreshed in the response too, so the cookie does not lapse before its row.
-  await ctx.setSignedCookie(
-    cookie.name,
-    raw,
-    ctx.context.secret,
-    cookie.attributes
-  );
-  return true;
+  await setTrustCookie(ctx, userId, identifier);
+  return row.id;
 }
 
 /**
@@ -161,30 +186,52 @@ async function grantDeviceTrust(
 ): Promise<void> {
   const identifier = trustDeviceKey(randomToken(IDENTIFIER_BYTES));
   const meta = authAuditMeta(ctx);
+  // The cookie set below replaces it, so its row could never be used again.
+  const replacing = await presentedTrustIdentifier(ctx, userId);
 
   await withAuthTransaction(ctx, async (tx) => {
-    if (!(await lockSessionOwner(tx, userId, sessionId)))
-      throw sessionRequired();
+    const user = await lockSessionOwner(tx, userId, sessionId);
+    if (!user) throw sessionRequired();
     if (!(await consumeTwoFactorProof(ctx, sessionId)))
       throw authError(HTTP_STATUS.FORBIDDEN, twoFactorMsg.trustRequiresProof);
-    await tx.insert(trustedDevices).values({
+    const [replaced] = replacing
+      ? await tx
+          .delete(trustedDevices)
+          .where(
+            and(
+              eq(trustedDevices.trustIdentifier, replacing),
+              eq(trustedDevices.userId, userId)
+            )
+          )
+          .returning({ id: trustedDevices.id })
+      : [];
+    const [device] = await tx
+      .insert(trustedDevices)
+      .values({
+        userId,
+        trustIdentifier: identifier,
+        userAgent: meta.userAgent,
+        ipAddress: meta.ip,
+        expiresAt: expiresIn(TRUST_DEVICE_MAX_AGE_S),
+      })
+      .returning({ id: trustedDevices.id });
+    if (!device) throw new Error('The trusted-device insert returned no row');
+    await auditLog(tx, {
       userId,
-      trustIdentifier: identifier,
-      userAgent: meta.userAgent,
-      ipAddress: meta.ip,
-      expiresAt: expiresIn(TRUST_DEVICE_MAX_AGE_S),
+      userEmail: user.email,
+      action: 'INSERT',
+      tableName: 'trusted_devices',
+      recordId: device.id,
+      oldData: null,
+      newData: {
+        deviceTrusted: true,
+        ...(replaced && { replacedDeviceId: replaced.id }),
+      },
+      meta,
     });
   });
 
-  const cookie = ctx.context.createAuthCookie(TRUST_COOKIE_NAME, {
-    maxAge: TRUST_DEVICE_MAX_AGE_S,
-  });
-  await ctx.setSignedCookie(
-    cookie.name,
-    `${await signTrust(ctx.context.secret, userId, identifier)}!${identifier}`,
-    ctx.context.secret,
-    cookie.attributes
-  );
+  await setTrustCookie(ctx, userId, identifier);
 }
 
 async function listTrustedDevices(userId: EntityID) {
@@ -208,16 +255,35 @@ async function listTrustedDevices(userId: EntityID) {
 }
 
 async function revokeTrustedDevice(
+  ctx: AuthContext,
   userId: EntityID,
-  deviceId: string
+  sessionId: string,
+  deviceId: EntityID
 ): Promise<boolean> {
-  const [removed] = await db
-    .delete(trustedDevices)
-    .where(
-      and(eq(trustedDevices.id, deviceId), eq(trustedDevices.userId, userId))
-    )
-    .returning({ id: trustedDevices.id });
-  return Boolean(removed);
+  return withTransaction(async (tx) => {
+    // Before the row: rotation deletes these rows holding the user lock that
+    // the audit row's foreign key waits for.
+    const user = await lockSessionOwner(tx, userId, sessionId);
+    if (!user) throw sessionRequired();
+    const [removed] = await tx
+      .delete(trustedDevices)
+      .where(
+        and(eq(trustedDevices.id, deviceId), eq(trustedDevices.userId, userId))
+      )
+      .returning({ id: trustedDevices.id });
+    if (!removed) return false;
+    await auditLog(tx, {
+      userId,
+      userEmail: user.email,
+      action: 'DELETE',
+      tableName: 'trusted_devices',
+      recordId: removed.id,
+      oldData: { deviceTrusted: true },
+      newData: { deviceTrusted: false },
+      meta: authAuditMeta(ctx),
+    });
+    return true;
+  });
 }
 
 function requireSessionUserId(ctx: {
@@ -226,6 +292,14 @@ function requireSessionUserId(ctx: {
   const userId = validID(ctx.context.session?.user.id);
   if (!userId) throw sessionRequired();
   return userId;
+}
+
+function requireSessionId(ctx: {
+  context: { session?: { session: { id: string } } | null };
+}): string {
+  const sessionId = validID(ctx.context.session?.session.id);
+  if (!sessionId) throw sessionRequired();
+  return sessionId;
 }
 
 /**
@@ -241,11 +315,10 @@ export const trustedDevice = () =>
     endpoints: {
       trustCurrentDevice: pluginEndpoint(
         contract.trustCurrentDevice,
-        { use: [sessionMiddleware] },
+        sessionOptions(),
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
-          const sessionId = validID(ctx.context.session?.session.id);
-          if (!sessionId) throw sessionRequired();
+          const sessionId = requireSessionId(ctx);
 
           await grantDeviceTrust(ctx, userId, sessionId);
           return ctx.json({ data: { trusted: true } });
@@ -268,12 +341,19 @@ export const trustedDevice = () =>
         sessionBodyOptions(),
         async (ctx) => {
           const userId = requireSessionUserId(ctx);
+          const sessionId = requireSessionId(ctx);
+          const { id: deviceId } = parseAuthBody(
+            ctx,
+            ownedRowSchema,
+            MSG_INVALID_INPUT
+          );
 
-          const deviceId = validID(bodyRecord(ctx).id);
-          if (!deviceId)
-            throw authError(HTTP_STATUS.UNPROCESSABLE, MSG_INVALID_INPUT);
-
-          const removed = await revokeTrustedDevice(userId, deviceId);
+          const removed = await revokeTrustedDevice(
+            ctx,
+            userId,
+            sessionId,
+            deviceId
+          );
           // Another user's device and a missing one answer identically.
           if (!removed) throw authError(HTTP_STATUS.NOT_FOUND, MSG_NOT_FOUND);
 

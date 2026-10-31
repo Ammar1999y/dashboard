@@ -1,20 +1,19 @@
 /**
- * The `bun:sql` driver contract — the properties the Neon → `bun:sql` swap rests
- * on, and that only a live PostgreSQL can witness.
+ * The `bun:sql` driver contract — the properties the database layer rests on,
+ * and that only a live PostgreSQL can witness.
  *
- * Ported from `scripts/probe/dev-live/database/driver-contract.dev-probe.ts`,
- * which proved these against a developer's own database and could not run in a
- * tier. `tests/unit/log-serializer.test.ts` already pins the serializer against
- * a `PostgresError` built from Bun's own constructor — that runs without a
+ * `tests/unit/log-serializer.test.ts` pins the serializer against a
+ * `PostgresError` built from Bun's own constructor — that runs without a
  * server, but it cannot prove the one thing underneath it: that Bun POPULATES
  * those fields from the wire the way the constructor suggests. Everything here
  * is asserted against an error the real driver threw, or against SQL the real
  * server executed.
  *
  * What it pins down:
- *  - the SQLSTATE arrives in `errno`, not `code` — the relocation that silently
- *    disabled `isUniqueViolation` and `isForeignKeyViolation` — at BOTH the
- *    `DrizzleQueryError` level and the driver-error level underneath it
+ *  - the SQLSTATE arrives in `errno`, not `code` — read from `code`,
+ *    `isUniqueViolation` and `isForeignKeyViolation` would silently never match
+ *    — at BOTH the `DrizzleQueryError` level and the driver-error level
+ *    underneath it
  *  - a real constraint name reaches `getConstraintName`, and a real `users`
  *    violation maps to 409 rather than a generic 500
  *  - both predicates are FALSE for an unrelated failure, so nothing here passes
@@ -87,7 +86,7 @@ import {
   twoFactorProofKey,
 } from '@/lib/auth/verifications';
 import {
-  handleUserForeignKeyViolation,
+  handleUserConstraintViolation,
   handleUserUniqueViolation,
 } from '@/lib/http/constraint-errors';
 import { generateUuidV7 } from '@/lib/id';
@@ -376,10 +375,7 @@ describe('a real foreign-key violation', () => {
     // `USER_FK_CONSTRAINTS` matches EXACTLY, so the real name reaching it is the
     // whole reason this becomes a 400 the client can act on.
     expect(getConstraintName(thrown)).toBe('users_role_id_roles_id_fk');
-    expect(
-      handleUserForeignKeyViolation(thrown, { roleNotFound: 'role not found' })
-        ?.status
-    ).toBe(400);
+    expect(handleUserConstraintViolation(thrown)?.status).toBe(400);
   });
 
   test('and neither predicate matches an unrelated failure', async () => {
@@ -560,7 +556,7 @@ describe('the permission-refresh merge', () => {
     const sessionId = await insertSession(userId, stale());
     expect(await jsonbTypeof('sessions', 'metadata', sessionId)).toBe('object');
 
-    await refreshUserSessions(userId);
+    await withTransaction((tx) => refreshUserSessions(userId, tx));
 
     const merged = await mergedMetadata(sessionId);
     // `||` on two jsonb STRINGS concatenates into an array, so this is the

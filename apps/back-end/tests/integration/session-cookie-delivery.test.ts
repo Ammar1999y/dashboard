@@ -23,15 +23,20 @@ import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import { sessions, users } from '@/db/schema';
+import { passkeys, sessions, twoFactorCredentials, users } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
+import {
+  MSG_INVALID_CREDENTIALS,
+  MSG_REAUTH_REQUIRED,
+} from '@app/shared/messages/auth';
 
 import { auth } from '@/lib/auth';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { parseSetCookieHeaders } from '@/lib/http/cookies';
 
 import { resetTables } from '../helpers/database';
+import { expectAuthError } from '../helpers/expect-body';
 import { resetRateLimits } from '../helpers/rate-limit';
 import {
   authedRequest,
@@ -301,6 +306,90 @@ describe('a Better Auth route whose hook reads the session delivers its cookies'
     expect(named(response, CACHE)).toHaveLength(1);
     const names = cookiesOf(response).map((cookie) => cookie.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+/**
+ * Better Auth answers a before hook's throw with the error's own headers, so
+ * the slide the hook's read wrote to the row must still reach the browser.
+ */
+describe('a Better Auth hook that refuses after its session read delivers its cookies', () => {
+  test.each([
+    [
+      'a wrong password',
+      '/api/auth/two-factor/get-totp-uri',
+      { password: 'Not-The-Password!1' },
+      MSG_INVALID_CREDENTIALS,
+      1,
+    ],
+    [
+      'no password',
+      '/api/auth/two-factor/get-totp-uri',
+      {},
+      MSG_REAUTH_REQUIRED,
+      0,
+    ],
+    [
+      'an unknown grant',
+      '/api/auth/passkey/verify-registration',
+      { response: {}, grant: 'not-a-grant' },
+      MSG_INVALID_CREDENTIALS,
+      0,
+    ],
+  ] as const)('%s', async (_label, path, body, message, failedAttempts) => {
+    const session = withoutCookie(await remembered(), CACHE);
+    await ageSessionPastUpdateAge(session);
+    const before = await sessionExpiry(session);
+    const { userId } = session.user;
+    const sessionIds = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.userId, userId));
+
+    const response = await app.handle(
+      authedRequest(session, path, {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: {
+          'content-type': 'application/json',
+          origin: PUBLIC_ORIGIN,
+        },
+      })
+    );
+
+    await expectAuthError(response, HTTP_STATUS.UNAUTHORIZED, message);
+    expect(await sessionExpiry(session)).toBeGreaterThan(before + DAY_MS / 2);
+    const [token] = named(response, TOKEN);
+    expect(token?.value).toBeTruthy();
+    expect(token?.options?.maxAge).toBe(EXPIRES_IN_S);
+    expect(named(response, CACHE)).toHaveLength(1);
+    const names = cookiesOf(response).map((cookie) => cookie.name);
+    expect(new Set(names).size).toBe(names.length);
+
+    // The refusal's own failed attempt, and nothing else.
+    expect(
+      await db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.userId, userId))
+    ).toEqual(sessionIds);
+    const [user] = await db
+      .select({ failedLoginAttempts: users.failedLoginAttempts })
+      .from(users)
+      .where(eq(users.id, userId));
+    expect(user?.failedLoginAttempts).toBe(failedAttempts);
+    expect(
+      await db
+        .select({ id: twoFactorCredentials.id })
+        .from(twoFactorCredentials)
+        .where(eq(twoFactorCredentials.userId, userId))
+    ).toEqual([]);
+    expect(
+      await db
+        .select({ id: passkeys.id })
+        .from(passkeys)
+        .where(eq(passkeys.userId, userId))
+    ).toEqual([]);
   });
 });
 

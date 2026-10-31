@@ -11,12 +11,16 @@ import { logLine } from '@/utils/log';
  */
 export function maintenanceTokenMatches(provided: string | null): boolean {
   const matched = compare(provided);
+  const configured = SQLITE_MAINTENANCE_TOKEN.length > 0;
 
+  // A wrong or missing token is anyone's to send, so it must not page anyone;
+  // the failing health check is the operator's signal. An unset token is a
+  // misconfiguration.
   if (!matched)
-    logLine('error', {
+    logLine(configured ? 'warn' : 'error', {
       msg: 'maintenance token rejected',
       reason: provided ? 'mismatch' : 'absent',
-      configured: SQLITE_MAINTENANCE_TOKEN.length > 0,
+      configured,
     });
   return matched;
 }

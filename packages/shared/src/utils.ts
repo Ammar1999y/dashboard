@@ -1,5 +1,3 @@
-import { MAX_ID } from './constants';
-
 /** UUID v7, shared by runtime validation and the generated OpenAPI contract. */
 export const UUID_V7_FRAGMENT =
   '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}';
@@ -32,7 +30,7 @@ const CANONICAL_INTEGER = /^(?:0|[1-9]\d*)$/;
 /** Distinguishes "over the cap" from "not a number at all", which is `0`. */
 export const OUT_OF_RANGE = -1;
 
-export const positiveInt = (val: unknown, maxValue = MAX_ID) => {
+export const positiveInt = (val: unknown, maxValue: number) => {
   const raw =
     typeof val === 'number' ? String(val) : typeof val === 'string' ? val : '';
   if (!CANONICAL_INTEGER.test(raw)) return 0;

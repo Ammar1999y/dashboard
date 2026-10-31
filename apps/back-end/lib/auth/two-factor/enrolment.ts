@@ -43,21 +43,20 @@ import {
 } from '@app/shared/validation/two-factor';
 
 import { generateUuidV7 } from '@/lib/id';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { parseAuthBody } from '../context';
-import { authError } from '../errors';
+import { authError, sessionRequired } from '../errors';
 import { pluginEndpoint } from '../plugin-endpoint';
 import { mintReauthGrant, requireReauthPassword } from '../reauth/grant';
 import { resolveRequestSession } from '../session/request';
 import { revokeTwoFactorState } from '../session/rotation';
-import { lockUser } from '../user-eligibility';
 import {
   expiresIn,
   replaceVerification,
   totpEnrolmentKey,
 } from '../verifications';
 import { encodeBackupCodes, generateBackupCodes } from './backup-codes';
-import { challengeMissingError } from './challenge';
 import { auditLifecycle, enableMethod } from './lifecycle';
 import {
   clearTwoFactorEnrolment,
@@ -99,7 +98,7 @@ function methodNotFound() {
 async function requireSession(ctx: AuthContext, method?: TwoFactorMethod) {
   if (method && !isTwoFactorMethodEnabled(method)) throw methodNotFound();
   const session = await resolveRequestSession(ctx);
-  if (!session) throw challengeMissingError();
+  if (!session) throw sessionRequired();
   return session;
 }
 
@@ -122,7 +121,7 @@ export const twoFactorEnrolment = () =>
             .from(users)
             .where(eq(users.id, userId))
             .limit(1);
-          if (!user) throw challengeMissingError();
+          if (!user) throw sessionRequired();
 
           const secret = generateRandomString(TOTP_SECRET_LENGTH);
           const encrypted = await symmetricEncrypt({
@@ -284,8 +283,10 @@ export const twoFactorEnrolment = () =>
         }
       ),
 
-      // The new set id unbinds the old acknowledgement, so `backup_code` is not
-      // offered until the new set is acknowledged.
+      // A first set is offered only once acknowledged. A set replacing one
+      // already offered is offered at once, since the old codes stop working
+      // here: held back for an acknowledgement that may never land, it would
+      // leave a user whose only factor it is with nothing to sign in with.
       generateBackupCodes: pluginEndpoint(
         contract.generateBackupCodes,
         sessionBodyOptions(),
@@ -312,6 +313,7 @@ export const twoFactorEnrolment = () =>
               .from(twoFactorCredentials)
               .where(eq(twoFactorCredentials.userId, userId))
               .limit(1);
+            const replacesOffered = existing?.acknowledgedSetId != null;
 
             if (existing)
               await tx
@@ -319,7 +321,9 @@ export const twoFactorEnrolment = () =>
                 .set({
                   backupCodes: encoded,
                   backupCodesSetId: setId,
-                  backupCodesAcknowledgedSetId: null,
+                  // The set offered at sign-in; `acknowledgedAt` stays null
+                  // until the user confirms this one.
+                  backupCodesAcknowledgedSetId: replacesOffered ? setId : null,
                   backupCodesAcknowledgedAt: null,
                   backupCodesRemaining: codes.length,
                 })
@@ -342,13 +346,9 @@ export const twoFactorEnrolment = () =>
               backupCodesSetId: setId,
             });
             // Regenerating is what a user does when the sheet leaked, and trust
-            // a leaked code earned would outlive it. Only an acknowledged set
-            // was ever offered at sign-in, so only one could have earned trust.
-            if (existing?.acknowledgedSetId != null)
-              await revokeTwoFactorState(tx, userId);
-
-            // The intent row is deliberately kept; `backupCodesReady` answers
-            // false until the new set is acknowledged.
+            // a leaked code earned would outlive it. Only an offered set could
+            // have earned trust.
+            if (replacesOffered) await revokeTwoFactorState(tx, userId);
           });
 
           return ctx.json({
@@ -414,7 +414,7 @@ export const twoFactorEnrolment = () =>
         sessionOptions(),
         async (ctx) => {
           const userId = validID(ctx.context.session?.user.id);
-          if (!userId) throw challengeMissingError();
+          if (!userId) throw sessionRequired();
           return ctx.json({
             data: { methods: await listEnrolledMethods(userId) },
           });
@@ -443,17 +443,18 @@ export const twoFactorEnrolment = () =>
 
           const removed = await withTransaction(async (tx) => {
             await lockUser(tx, userId);
-            const enrolled = await listEnrolledMethods(userId, tx);
+            const state = await readEnrolmentState(userId, tx);
+            const enrolled = state.intent;
             // `contactKind` is required for `otp` by the schema, so this names
             // exactly one row rather than whichever sorted first.
             const target = enrolled.find((entry) =>
               matchesEnrolment(entry, method, contactKind)
             );
             if (!target) throw methodNotFound();
-            if (enrolled.length === 1)
-              throw authError(HTTP_STATUS.CONFLICT, twoFactorMsg.lastMethod);
-            const state = await readEnrolmentState(userId, tx);
-            if (removalStrandsTwoFactor(state, method, target.contactKind))
+            if (
+              enrolled.length === 1 ||
+              removalStrandsTwoFactor(state, method, target.contactKind)
+            )
               throw authError(HTTP_STATUS.CONFLICT, twoFactorMsg.lastMethod);
 
             const removedOption = optionId(method, target.contactKind);
@@ -549,7 +550,8 @@ export const twoFactorEnrolment = () =>
             if (!owned.some((row) => row.id === passkeyId))
               throw methodNotFound();
 
-            const enrolled = await listEnrolledMethods(userId, tx);
+            const state = await readEnrolmentState(userId, tx);
+            const enrolled = state.intent;
             const isFactor = enrolled.some(
               (entry) => entry.method === 'passkey'
             );
@@ -557,11 +559,7 @@ export const twoFactorEnrolment = () =>
             if (
               removesMethod &&
               (enrolled.length === 1 ||
-                removalStrandsTwoFactor(
-                  await readEnrolmentState(userId, tx),
-                  'passkey',
-                  null
-                ))
+                removalStrandsTwoFactor(state, 'passkey', null))
             )
               throw authError(HTTP_STATUS.CONFLICT, twoFactorMsg.lastMethod);
 

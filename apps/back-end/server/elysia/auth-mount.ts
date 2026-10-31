@@ -10,21 +10,25 @@
  * **The allowlist is enforced HERE, before `auth.handler` is called.** The
  * `before` hook in `lib/auth/path-policy.ts` enforces it too, but Better Auth
  * runs every plugin's `onRequest` ahead of its hooks, so only this check is
- * upstream of a plugin that matches its endpoints loosely (the captcha plugin
- * would spend an outbound siteverify on an unrouted path). Both stay.
+ * upstream of them all. Both stay.
+ *
+ * Turnstile is enforced here too, from the row's `captcha` flag, the one that
+ * publishes the header, with the bindings' verifier and refusal. A plugin or a
+ * handler that checks its own token would drift from both.
  */
 import type { GatedApp } from '@/app';
 import type { RoutePrefix, Routing } from '@/lib/http/routing';
 
 import { auth } from '@/lib/auth';
 import { betterAuthServes } from '@/lib/auth/allowed-paths';
+import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import { drainQueuedCookies, queueResponseCookies } from '@/lib/http/cookies';
 import {
   allowlistedPathScope,
   enforcePreAuthIpLimit,
   UNKNOWN_PREFIX_SCOPE,
 } from '@/lib/http/pre-auth';
-import { boundedBodyRequest, buildRequestMeta } from '@/lib/http/request';
+import { boundedBodyRequest } from '@/lib/http/request';
 import { handleApiError, toWebResponse } from '@/lib/http/response';
 import {
   checkBetterAuthResponse,
@@ -67,12 +71,15 @@ export function mountAuthPrefix(
       // counted per path; everything else shares ONE fixed key, so rotating
       // `/api/auth/<random>` multiplies neither the budget nor the
       // `rate_limit` keyspace.
-      await enforcePreAuthIpLimit(buildRequestMeta(request), {
-        limit: known?.preAuthLimit,
-        scope: known
-          ? allowlistedPathScope(`${prefix.prefix}${known.path}`)
-          : UNKNOWN_PREFIX_SCOPE,
-      });
+      await enforcePreAuthIpLimit(
+        { apiPath: url.pathname, headers: request.headers },
+        {
+          limit: known?.preAuthLimit,
+          scope: known
+            ? allowlistedPathScope(`${prefix.prefix}${known.path}`)
+            : UNKNOWN_PREFIX_SCOPE,
+        }
+      );
       // `routeMiss`, not a plain 404: bindings live under this prefix too
       // (`/api/auth/otp/*`, `/api/auth/forgot-password/*`, ...), and a wrong
       // method on one falls through this wildcard. `routeMiss` still answers
@@ -96,6 +103,10 @@ export function mountAuthPrefix(
               request,
               routing.lookupBodyCeiling(url.pathname)
             );
+      // After the per-path limit, which bounds siteverify calls, and after the
+      // body count, so an over-size chunked body buys none.
+      if (known.captcha && !(await verifyTurnstileRequest(request.headers)))
+        throw captchaRefused();
       return await checkBetterAuthResponse(
         responseCheck,
         subPath,

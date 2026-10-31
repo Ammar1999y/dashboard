@@ -12,7 +12,7 @@ async function until(predicate: () => boolean): Promise<void> {
 }
 
 function fakes(outcomes: (boolean | Error)[]) {
-  const calls = { claims: 0, starts: 0, releases: 0, drains: 0 };
+  const calls = { claims: 0, starts: 0, releases: 0, drains: 0, halts: 0 };
   const lock: WriterLock = {
     release: () => {
       calls.releases += 1;
@@ -27,6 +27,9 @@ function fakes(outcomes: (boolean | Error)[]) {
   const start = (): ScheduleHandle => {
     calls.starts += 1;
     return {
+      halt: () => {
+        calls.halts += 1;
+      },
       stopAndDrain: () => {
         calls.drains += 1;
         return Promise.resolve(true);
@@ -47,7 +50,13 @@ describe('scheduleWhenOwner', () => {
     expect(calls.starts).toBe(1);
     expect(await ownership.stopAndDrain(100)).toBe(true);
     ownership.release();
-    expect(calls).toEqual({ claims: 1, starts: 1, releases: 1, drains: 1 });
+    expect(calls).toEqual({
+      claims: 1,
+      starts: 1,
+      releases: 1,
+      drains: 1,
+      halts: 0,
+    });
   });
 
   test('a loser starts nothing until the directory frees up, then takes over', async () => {
@@ -81,6 +90,37 @@ describe('scheduleWhenOwner', () => {
 
     expect(calls.claims).toBe(claimsAtStop);
     expect(calls).toMatchObject({ starts: 0, releases: 0, drains: 0 });
+  });
+
+  test('halt reaches a running schedule at once', () => {
+    const { calls, claim, start } = fakes([true]);
+    const ownership = scheduleWhenOwner(claim(), claim, {
+      start,
+      retryMs: RETRY_MS,
+    });
+
+    ownership.halt();
+    expect(calls.halts).toBe(1);
+    ownership.release();
+  });
+
+  test('halt ends the retries of a loser, so a takeover cannot start a schedule during shutdown', async () => {
+    // The directory frees up while the server is still draining: before halt
+    // existed the retry kept running until `stopAndDrain`, and could start a
+    // fresh schedule in that window.
+    const { calls, claim, start } = fakes([false, true]);
+    const ownership = scheduleWhenOwner(claim(), claim, {
+      start,
+      retryMs: RETRY_MS,
+    });
+
+    ownership.halt();
+    await Bun.sleep(RETRY_MS * 4);
+
+    expect(calls).toMatchObject({ claims: 1, starts: 0 });
+    expect(await ownership.stopAndDrain(100)).toBe(true);
+    ownership.release();
+    expect(calls.releases).toBe(0);
   });
 
   test('a claim that throws on a retry is logged with its reason and retried, not escaped', async () => {

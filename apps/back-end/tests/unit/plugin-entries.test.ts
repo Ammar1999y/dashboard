@@ -1,10 +1,12 @@
 /**
  * Each plugin endpoint's shared entry against what the server serves: its
  * allowlist row and the endpoint Better Auth mounted. `pluginEndpoint` takes
- * the path and method from the entry, so a mismatch here is the allowlist or
+ * the path, method, query and body from the entry, so a mismatch here is the allowlist or
  * the policy drifting from the handler.
  */
 import { describe, expect, test } from 'bun:test';
+
+import * as z from 'zod';
 
 import { PLUGIN_ENDPOINTS } from '@app/shared/api/all';
 
@@ -48,6 +50,26 @@ describe('plugin endpoint entries', () => {
       expect(row?.session === 'session').toBe(entry.policy.auth === 'session');
     }
   );
+
+  test('a mounted endpoint validates its entry’s query, and its entry’s body unless its handler parses its own', () => {
+    const enabled = BETTER_AUTH_ENDPOINTS.filter(({ path }) =>
+      PLUGIN_ENDPOINTS.has(path)
+    );
+    for (const { path } of enabled) {
+      const options = MOUNTED.get(path)?.options ?? {};
+      const option = (key: 'query' | 'body'): unknown =>
+        Reflect.get(options, key);
+      const entry = PLUGIN_ENDPOINTS.get(path);
+      expect([path, option('query') === entry?.query]).toEqual([path, true]);
+      // An override takes any object, which the handler then parses.
+      const body = option('body');
+      if (entry?.body && body !== entry.body)
+        expect([
+          path,
+          body instanceof z.ZodType && body.safeParse({ any: 1 }).success,
+        ]).toEqual([path, true]);
+    }
+  });
 
   test('every enabled one is mounted at its path with its method', () => {
     const enabled = BETTER_AUTH_ENDPOINTS.filter(({ path }) =>

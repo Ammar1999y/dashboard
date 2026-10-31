@@ -15,11 +15,11 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logLine } from '@/utils/log';
 
 import { R2_PRIVATE_BUCKET, R2_PUBLIC_BUCKET } from './buckets';
+import { R2_PUBLIC_URL } from './public-url';
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
-const R2_PUBLIC_URL = process.env.R2_PUBLIC_URL?.trim().replace(/\/+$/, '');
 
 const MAX_PRESIGNED_URL_EXPIRY = 604_800;
 const MIN_PRESIGNED_URL_EXPIRY = 1;
@@ -39,15 +39,23 @@ const validateR2Config = !!(
 
 /**
  * The deadlines the SDK does not have: its HTTP handler sets neither by
- * default, so a hung R2 socket outlives the route, and `requestTimeout` only
- * warns unless `throwOnRequestTimeout` is set.
+ * default, and `requestTimeout` only warns unless `throwOnRequestTimeout` is
+ * set.
  *
  * `requestTimeout` covers the body upload too, so it must fit the largest object
  * written (`MAX_DOCUMENT_SIZE_MB`), and `maxAttempts` times it must stay under
  * the destructive media routes' declared `timeoutSeconds`.
+ *
+ * ⚠️ Neither bounds a response BODY: the handler clears its request timer when
+ * the headers arrive, so R2 stalling mid-body would hang the call forever. Every
+ * call therefore runs under `R2_CALL_DEADLINE_MS` (`bounded`), which also
+ * covers the retries.
  */
 const R2_CONNECTION_TIMEOUT_MS = 3000;
 const R2_REQUEST_TIMEOUT_MS = 15_000;
+const R2_MAX_ATTEMPTS = 3;
+const R2_CALL_DEADLINE_MS =
+  R2_MAX_ATTEMPTS * (R2_CONNECTION_TIMEOUT_MS + R2_REQUEST_TIMEOUT_MS);
 
 const r2Client = new S3Client({
   endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -65,7 +73,7 @@ const r2Client = new S3Client({
   },
   // Stated although they are the SDK defaults: every route timeout that reaches
   // R2 is sized on `maxAttempts`, and `uploadToR2` relies on the checksums.
-  maxAttempts: 3,
+  maxAttempts: R2_MAX_ATTEMPTS,
   requestChecksumCalculation: 'WHEN_SUPPORTED',
   responseChecksumValidation: 'WHEN_SUPPORTED',
 });
@@ -107,6 +115,32 @@ function assertR2Configured(): void {
 function configuredBucket(bucketType: BucketType): string {
   assertR2Configured();
   return getBucketName(bucketType);
+}
+
+class R2DeadlineError extends Error {
+  constructor(cause: unknown) {
+    super(`R2 call exceeded ${R2_CALL_DEADLINE_MS} ms`, { cause });
+    this.name = 'TimeoutError';
+  }
+}
+
+/**
+ * Runs one SDK call under `R2_CALL_DEADLINE_MS` and the caller's `signal`.
+ * The deadline surfaces as a `TimeoutError`, like the SDK's own timeouts, so a
+ * pass counting timeouts sees a stalled store; the caller's abort stays an
+ * `AbortError`.
+ */
+async function bounded<T>(
+  call: (abortSignal: AbortSignal) => Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
+  const deadline = AbortSignal.timeout(R2_CALL_DEADLINE_MS);
+  try {
+    return await call(signal ? AbortSignal.any([signal, deadline]) : deadline);
+  } catch (error) {
+    if (!deadline.aborted || signal?.aborted) throw error;
+    throw new R2DeadlineError(error);
+  }
 }
 
 /** A hex SHA-256 in the base64 form R2 takes and returns as `ChecksumSHA256`. */
@@ -172,7 +206,7 @@ export async function uploadToR2(params: {
    * which.
    */
   ifNoneMatch?: boolean;
-}): Promise<{ success: boolean; key: string }> {
+}): Promise<void> {
   const {
     file,
     key,
@@ -187,21 +221,22 @@ export async function uploadToR2(params: {
 
   const bucket = configuredBucket(bucketType);
 
-  await r2Client.send(
-    new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: file,
-      ContentType: contentType,
-      CacheControl: cacheControl,
-      ContentDisposition: contentDisposition,
-      Metadata: metadata,
-      ChecksumSHA256: checksumSha256Of(sha256),
-      ...(ifNoneMatch && { IfNoneMatch: '*' }),
-    })
+  await bounded((abortSignal) =>
+    r2Client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: file,
+        ContentType: contentType,
+        CacheControl: cacheControl,
+        ContentDisposition: contentDisposition,
+        Metadata: metadata,
+        ChecksumSHA256: checksumSha256Of(sha256),
+        ...(ifNoneMatch && { IfNoneMatch: '*' }),
+      }),
+      { abortSignal }
+    )
   );
-
-  return { success: true, key };
 }
 
 export async function deleteFromR2(params: {
@@ -209,20 +244,18 @@ export async function deleteFromR2(params: {
   bucketType: BucketType;
   /** Ends the call, retries included, when it fires. */
   signal?: AbortSignal;
-}): Promise<{ success: boolean }> {
+}): Promise<void> {
   const { key, bucketType, signal } = params;
 
   const bucket = configuredBucket(bucketType);
 
-  await r2Client.send(
-    new DeleteObjectCommand({
-      Bucket: bucket,
-      Key: key,
-    }),
-    { abortSignal: signal }
+  await bounded(
+    (abortSignal) =>
+      r2Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }), {
+        abortSignal,
+      }),
+    signal
   );
-
-  return { success: true };
 }
 
 /**
@@ -236,19 +269,26 @@ export async function deleteFromR2(params: {
 export async function deleteObjectsFromR2(params: {
   keys: readonly string[];
   bucketType: BucketType;
+  /** Ends the chunk in flight, retries included, when it fires. */
+  signal?: AbortSignal;
 }): Promise<{ deleted: string[]; failed: string[] }> {
-  const { keys, bucketType } = params;
+  const { keys, bucketType, signal } = params;
   const bucket = configuredBucket(bucketType);
 
   const deleted: string[] = [];
   const failed: string[] = [];
   for (let start = 0; start < keys.length; start += DELETE_OBJECTS_MAX_KEYS) {
     const chunk = keys.slice(start, start + DELETE_OBJECTS_MAX_KEYS);
-    const result = await r2Client.send(
-      new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: { Objects: chunk.map((Key) => ({ Key })), Quiet: true },
-      })
+    const result = await bounded(
+      (abortSignal) =>
+        r2Client.send(
+          new DeleteObjectsCommand({
+            Bucket: bucket,
+            Delete: { Objects: chunk.map((Key) => ({ Key })), Quiet: true },
+          }),
+          { abortSignal }
+        ),
+      signal
     );
     const errors = result.Errors ?? [];
     // An error entry without a `Key`, which the SDK's type permits, names no
@@ -283,32 +323,31 @@ export async function copyFileInR2(params: {
     contentDisposition?: string;
     metadata?: Record<string, string>;
   };
-}): Promise<{ success: boolean; newKey: string; etag: string | null }> {
+}): Promise<{ etag: string | null }> {
   const { sourceKey, destinationKey, bucketType, replace } = params;
 
   const bucket = configuredBucket(bucketType);
   const sourceBucket = getBucketName(params.sourceBucketType ?? bucketType);
 
-  const copied = await r2Client.send(
-    new CopyObjectCommand({
-      Bucket: bucket,
-      CopySource: `${sourceBucket}/${encodeObjectKey(sourceKey)}`,
-      Key: destinationKey,
-      ...(replace && {
-        MetadataDirective: 'REPLACE',
-        ContentType: replace.contentType,
-        CacheControl: replace.cacheControl,
-        ContentDisposition: replace.contentDisposition,
-        Metadata: replace.metadata,
+  const copied = await bounded((abortSignal) =>
+    r2Client.send(
+      new CopyObjectCommand({
+        Bucket: bucket,
+        CopySource: `${sourceBucket}/${encodeObjectKey(sourceKey)}`,
+        Key: destinationKey,
+        ...(replace && {
+          MetadataDirective: 'REPLACE',
+          ContentType: replace.contentType,
+          CacheControl: replace.cacheControl,
+          ContentDisposition: replace.contentDisposition,
+          Metadata: replace.metadata,
+        }),
       }),
-    })
+      { abortSignal }
+    )
   );
 
-  return {
-    success: true,
-    newKey: destinationKey,
-    etag: copied.CopyObjectResult?.ETag ?? null,
-  };
+  return { etag: copied.CopyObjectResult?.ETag ?? null };
 }
 
 export interface ObjectHead {
@@ -324,15 +363,21 @@ export interface ObjectHead {
 export async function headObjectInR2(params: {
   key: string;
   bucketType: BucketType;
+  signal?: AbortSignal;
 }): Promise<ObjectHead | null> {
   const bucket = configuredBucket(params.bucketType);
   try {
-    const head = await r2Client.send(
-      new HeadObjectCommand({
-        Bucket: bucket,
-        Key: params.key,
-        ChecksumMode: 'ENABLED',
-      })
+    const head = await bounded(
+      (abortSignal) =>
+        r2Client.send(
+          new HeadObjectCommand({
+            Bucket: bucket,
+            Key: params.key,
+            ChecksumMode: 'ENABLED',
+          }),
+          { abortSignal }
+        ),
+      params.signal
     );
     return {
       contentLength:
@@ -347,11 +392,6 @@ export async function headObjectInR2(params: {
   }
 }
 
-interface ListedObject {
-  key: string;
-  size: number;
-}
-
 /**
  * One page of keys under a prefix. R2 caps a page whatever `MaxKeys` asks for,
  * so callers loop on `nextContinuationToken`.
@@ -360,21 +400,25 @@ export async function listObjectsInR2(params: {
   bucketType: BucketType;
   prefix: string;
   continuationToken?: string;
-}): Promise<{ objects: ListedObject[]; nextContinuationToken: string | null }> {
+  signal?: AbortSignal;
+}): Promise<{ keys: string[]; nextContinuationToken: string | null }> {
   const bucket = configuredBucket(params.bucketType);
-  const page = await r2Client.send(
-    new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: params.prefix,
-      MaxKeys: 1000,
-      ContinuationToken: params.continuationToken,
-    })
+  const page = await bounded(
+    (abortSignal) =>
+      r2Client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: params.prefix,
+          MaxKeys: 1000,
+          ContinuationToken: params.continuationToken,
+        }),
+        { abortSignal }
+      ),
+    params.signal
   );
   return {
-    objects: (page.Contents ?? []).flatMap((entry) =>
-      typeof entry.Key === 'string'
-        ? { key: entry.Key, size: entry.Size ?? 0 }
-        : []
+    keys: (page.Contents ?? []).flatMap((entry) =>
+      typeof entry.Key === 'string' ? entry.Key : []
     ),
     nextContinuationToken: page.IsTruncated
       ? (page.NextContinuationToken ?? null)
@@ -444,18 +488,18 @@ export async function getPresignedUrl(params: {
  * back to a presigned GET on the public bucket, which works but expires.
  */
 export function hasPublicUrl(): boolean {
-  return Boolean(R2_PUBLIC_URL);
+  return R2_PUBLIC_URL.state === 'valid';
 }
 
 export function getPublicUrl(key: string): string {
-  if (!R2_PUBLIC_URL) {
+  if (R2_PUBLIC_URL.state !== 'valid') {
     throw new Error(
       'R2_PUBLIC_URL not configured. ' +
         'Attach a custom domain to the public bucket and add R2_PUBLIC_URL to .env'
     );
   }
 
-  return `${R2_PUBLIC_URL}/${encodeObjectKey(key)}`;
+  return `${R2_PUBLIC_URL.origin}/${encodeObjectKey(key)}`;
 }
 
 /**
@@ -472,6 +516,6 @@ export function getR2ConfigStatus() {
     secretAccessKey: !!R2_SECRET_ACCESS_KEY,
     publicBucket: !!R2_PUBLIC_BUCKET,
     privateBucket: !!R2_PRIVATE_BUCKET,
-    publicUrl: !!R2_PUBLIC_URL,
+    publicUrl: R2_PUBLIC_URL.state !== 'unset',
   };
 }

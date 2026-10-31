@@ -160,6 +160,10 @@ export const MSG_LINK_REQUIRED = 'الرابط مطلوب';
 export const MSG_LINK_TOO_LONG = (max: number) =>
   `الرابط يجب أن لا يتجاوز ${countOf(max, CHARACTERS)}`;
 export const MSG_KEY_REQUIRED = 'المفتاح مطلوب';
+export const MSG_COLOR_INVALID = 'قم بإدخال لون صحيح';
+export const MSG_SLUG_TOO_LONG = 'الـ slug طويل جداً';
+export const MSG_SLUG_INVALID_CHARACTERS = 'الـ slug يحتوي على أحرف غير مسموحة';
+export const MSG_SLUG_DIGITS_ONLY = 'الـ slug لا يمكن أن يكون أرقاماً فقط';
 
 export const MSG_ROWS_DUPLICATE_ID = 'العناصر يجب أن لا تتكرر';
 export const MSG_ROWS_DUPLICATE_KEY = 'المفتاح يجب أن لا يتكرر';
@@ -479,12 +483,12 @@ export const MSG_TOTP_SCAN =
 export const MSG_TOTP_SECRET = 'المفتاح';
 export const MSG_TOTP_ENTER_CODE = 'الرمز الظاهر في التطبيق';
 export const MSG_BACKUP_CODES_UNACKNOWLEDGED =
-  'لا تعمل هذه الرموز قبل أن تؤكّد حفظها، وتبطل الرموز السابقة فور إنشاء مجموعة جديدة.';
+  'احفظ هذه الرموز ثم أكّد حفظها. تبطل الرموز السابقة فور إنشاء مجموعة جديدة.';
 export const MSG_BACKUP_CODES_ONCE =
   'تُعرض الرموز مرة واحدة فقط ولا يمكن عرضها مرة أخرى. احفظها في مكان آمن.';
 export const MSG_BACKUP_CODES_ACKNOWLEDGE = 'حفظتُ هذه الرموز في مكان آمن';
 export const MSG_BACKUP_CODES_RENEW_EFFECT =
-  'تبطل رموزك الاحتياطية الحالية فور إنشاء المجموعة الجديدة، ولا تعمل الجديدة قبل أن تؤكّد حفظها.';
+  'تبطل رموزك الاحتياطية الحالية فور إنشاء المجموعة الجديدة، فاحفظ الجديدة في مكان آمن.';
 export const MSG_BACKUP_CODES_LEAVE =
   'الرموز الاحتياطية الجديدة لم تُحفظ بعد ولا يمكن عرضها مرة أخرى، وقد أُبطلت الرموز السابقة. هل تغادر الصفحة؟';
 export const MSG_PASSKEYS_INTRO =

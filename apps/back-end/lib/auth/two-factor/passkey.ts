@@ -9,7 +9,6 @@
 import type { BetterAuthPlugin } from 'better-auth';
 
 import { withTransaction } from '@/db';
-import { VERIFICATION_IDENTIFIER_MAX } from '@/db/limits';
 import { isAPIError } from 'better-auth/api';
 import * as z from 'zod';
 
@@ -42,14 +41,6 @@ import {
 
 const CHALLENGE_MAX_AGE_S = 300;
 
-// Keyed by the challenge id, so a ceremony cannot complete under another challenge.
-function ceremonyIdentifier(challengeId: string): string {
-  return twoFactorWebauthnKey(challengeId).slice(
-    0,
-    VERIFICATION_IDENTIFIER_MAX
-  );
-}
-
 export const twoFactorPasskey = () =>
   ({
     id: 'two-factor-passkey',
@@ -68,12 +59,13 @@ export const twoFactorPasskey = () =>
             );
           });
 
-          // Replacing any previous ceremony for this challenge is deliberate:
-          // only the newest options stay live.
+          // Keyed by the challenge id, so a ceremony cannot complete under
+          // another challenge. Replacing any previous ceremony for this
+          // challenge is deliberate: only the newest options stay live.
           await withTransaction((tx) =>
             replaceVerification(
               tx,
-              ceremonyIdentifier(challenge.challengeId),
+              twoFactorWebauthnKey(challenge.challengeId),
               options.challenge,
               expiresIn(CHALLENGE_MAX_AGE_S)
             )
@@ -117,10 +109,9 @@ export const twoFactorPasskey = () =>
           };
 
           try {
-            const identifier = ceremonyIdentifier(challenge.challengeId);
             const stored =
               await ctx.context.internalAdapter.consumeVerificationValue(
-                identifier
+                twoFactorWebauthnKey(challenge.challengeId)
               );
             if (!stored || stored.expiresAt <= new Date())
               throw authError(

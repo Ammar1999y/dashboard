@@ -345,15 +345,13 @@ export const BETTER_AUTH_ENDPOINTS: readonly RoutePrefixPath[] =
   );
 
 /**
- * Every row under SOME configuration, so the contract builder can tell a
- * switched-off path from a typo. ⚠️ Never for enforcement.
+ * Every row under SOME configuration, so the tests can tell a switched-off
+ * path from a typo. ⚠️ Never for enforcement.
+ *
+ * @internal
  */
 export const BETTER_AUTH_KNOWN_ENDPOINTS: readonly RoutePrefixPath[] =
   ENDPOINT_GROUPS.flatMap((group) => group.endpoints);
-
-export const BETTER_AUTH_KNOWN_PATHS: ReadonlySet<string> = new Set(
-  BETTER_AUTH_KNOWN_ENDPOINTS.map((endpoint) => endpoint.path)
-);
 
 export const BETTER_AUTH_ROUTE_PREFIX: RoutePrefix = {
   prefix: BETTER_AUTH_PREFIX,

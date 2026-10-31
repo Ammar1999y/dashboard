@@ -8,11 +8,11 @@
  * absolute-`SQLITE_DIR` rule and HSTS at once while the server still booted and
  * served traffic. Weakening any of them — deleting `VALID_NODE_ENV`, turning
  * `requireNodeEnv` from `fail` into a warning — left every other gate green:
- * lint, `format:check`, `build`, all three test tiers, `find-unused-files`,
- * knip, `dedupe`, and `smoke`, which always passes a valid `NODE_ENV`. A
+ * lint, `format:check`, `build`, all three test tiers, knip, `dedupe`, and
+ * `smoke`, which always passes a valid `NODE_ENV`. A
  * fail-closed guard that is never exercised regresses to fail-open silently.
  *
- * Spawned, not imported: the checks run at module scope before `./app` is
+ * Spawned, not imported: the checks run at module scope before `@/app` is
  * dynamically imported, so the only way to observe them is a real process and a
  * real exit code.
  *
@@ -310,6 +310,67 @@ describe('the production environment gate refuses a missing variable', () => {
 
     expect(outcome.exitCode).not.toBe(0);
     expect(outcome.output).toInclude('R2_PUBLIC_URL');
+  }, 60_000);
+
+  test.each([
+    'https://media.example.invalid/?',
+    'https://media.example.invalid#',
+  ])(
+    'a public URL ending in a bare query or fragment mark (%s) fails the boot',
+    async (publicUrl) => {
+      // `URL` reports both as an empty query and fragment, so the gate used to
+      // pass them and every public file URL came out as `…/?/media/key`.
+      const outcome = await bootWith({
+        ...baseEnv(tempSqliteDir()),
+        R2_ACCOUNT_ID: 'throwaway',
+        R2_ACCESS_KEY_ID: 'throwaway',
+        R2_SECRET_ACCESS_KEY: 'throwaway',
+        R2_PUBLIC_BUCKET: 'throwaway-public',
+        R2_PUBLIC_URL: publicUrl,
+      });
+
+      expect(outcome.exitCode).not.toBe(0);
+      expect(outcome.output).toInclude('R2_PUBLIC_URL must be an https origin');
+    },
+    60_000
+  );
+
+  test.each([
+    ['501', 'must be between 1 and 500'],
+    ['0', 'must be between 1 and 500'],
+    ['100urls', 'must be a decimal integer'],
+  ])(
+    'a purge batch size of %s fails the boot',
+    async (size, reason) => {
+      // Cloudflare refuses a batch over the zone's ceiling, so every purge
+      // would fail while unpublished files stayed cached at the edge.
+      const outcome = await bootWith({
+        ...baseEnv(tempSqliteDir()),
+        CLOUDFLARE_PURGE_BATCH_SIZE: size,
+      });
+
+      expect(outcome.exitCode).not.toBe(0);
+      expect(outcome.output).toInclude(`CLOUDFLARE_PURGE_BATCH_SIZE ${reason}`);
+      expect(outcome.output).not.toInclude('server started');
+    },
+    60_000
+  );
+
+  test('the public origin is read from PUBLIC_URL only', async () => {
+    // `NEXT_PUBLIC_URL` was a second accepted name; a deployment still using
+    // it fails here, by name, rather than resolving some other origin.
+    const env: Record<string, string> = {
+      ...baseEnv(tempSqliteDir()),
+      NEXT_PUBLIC_URL: `http://localhost:${BOOT_PORT}`,
+    };
+    delete env.PUBLIC_URL;
+
+    const outcome = await bootWith(env);
+
+    expect(outcome.exitCode).not.toBe(0);
+    expect(outcome.output).toInclude(
+      'Missing required environment variable: PUBLIC_URL'
+    );
   }, 60_000);
 
   test('a public origin without the purge pair boots, but says so', async () => {

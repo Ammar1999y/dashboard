@@ -110,23 +110,29 @@ describe('the statuses it publishes are the ones the routes answer', () => {
   }
 
   test('a route that answers a malformed id with 404 publishes no 422', async () => {
-    for (const [method, url, path] of [
-      ['GET', '/api/dash/media/files/nope', '/api/dash/media/files/{id}'],
-      [
-        'POST',
-        '/api/dash/users/nope/two-factor/reset',
-        '/api/dash/users/{id}/two-factor/reset',
-      ],
-    ] as const) {
-      const response = await app.handle(
-        authedRequest(admin(), url, { method })
-      );
+    const response = await app.handle(
+      authedRequest(admin(), '/api/dash/media/files/nope')
+    );
 
-      expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
-      const published = await operation(path, method.toLowerCase());
-      expect(Object.keys(published.responses)).toContain('404');
-      expect(Object.keys(published.responses)).not.toContain('422');
-    }
+    expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
+    const published = await operation('/api/dash/media/files/{id}', 'get');
+    expect(Object.keys(published.responses)).toContain('404');
+    expect(Object.keys(published.responses)).not.toContain('422');
+  });
+
+  test('the administrative 2FA reset publishes the 422 it answers a malformed id', async () => {
+    const response = await app.handle(
+      authedRequest(admin(), '/api/dash/users/nope/two-factor/reset', {
+        method: 'POST',
+      })
+    );
+
+    expect(response.status).toBe(HTTP_STATUS.UNPROCESSABLE);
+    const published = await operation(
+      '/api/dash/users/{id}/two-factor/reset',
+      'post'
+    );
+    expect(Object.keys(published.responses)).toContain('422');
   });
 
   test('re-auth answers a failed body schema with the 401 it publishes for a wrong password', async () => {

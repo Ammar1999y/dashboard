@@ -9,6 +9,7 @@ import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 
 import { asAuthError } from '../errors';
 import { LoginRejected, verifyLoginAttempt } from '../login-guard';
+import { enforceReauthAttemptLimit } from './session';
 
 /** `null` for a rejected password; a lockout or a fault still throws. */
 export async function verifySessionPassword(
@@ -32,14 +33,17 @@ export async function verifySessionPassword(
   }
 }
 
-// A lock throws as an `APIError`: any other throw escapes Better Auth's response.
+// Charged before the type check, as the binding charges a malformed body. A
+// lock or the budget throws as an `APIError`: any other throw escapes Better
+// Auth's response.
 export async function verifyReauthPassword(
   userId: EntityID,
   supplied: unknown,
   auditMeta: AuditMeta
 ): Promise<AcceptedPasswordHashes | null> {
-  if (typeof supplied !== 'string') return null;
   try {
+    await enforceReauthAttemptLimit(userId);
+    if (typeof supplied !== 'string') return null;
     return await verifySessionPassword(
       userId,
       supplied,

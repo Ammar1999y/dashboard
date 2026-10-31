@@ -1,7 +1,7 @@
 import type { ReservedSQL } from 'bun';
 
 import { db } from '@/db';
-import { POOL_ACQUIRE_TIMEOUT_MS } from '@/db/limits';
+import { reserveConnection } from '@/db/transaction';
 
 import { logLine } from '@/utils/log';
 
@@ -15,18 +15,15 @@ type Election<T> = { elected: true; result: T } | { elected: false };
  * A session-level advisory lock on one reserved connection, held for the whole
  * run: the transaction-scoped form would keep a transaction idle across the
  * job's own queries, which run on other pool connections. The wait for that
- * connection is bounded, because `reserve()` alone waits forever on a full
- * pool; `signal` abandons the wait too, never a run in progress.
+ * connection ends in `ConnectionTimeoutError` like every other pool wait;
+ * `signal` abandons it too, never a run in progress.
  */
 export async function runElected<T>(
   name: string,
   run: () => Promise<T>,
   signal?: AbortSignal
 ): Promise<Election<T>> {
-  const wait = AbortSignal.timeout(POOL_ACQUIRE_TIMEOUT_MS);
-  const connection = await db.$client.reserve({
-    signal: signal ? AbortSignal.any([signal, wait]) : wait,
-  });
+  const connection = await reserveConnection(db.$client, signal);
   const key = `maintenance.${name}`;
   let held = false;
 

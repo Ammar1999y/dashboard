@@ -1,6 +1,15 @@
 {
   "$schema": "https://unpkg.com/knip@latest/schema.json",
   "tags": ["-knipignore"],
+  // A use inside the export's own file counts, so an export production stops
+  // using is reported by `--production` even while tests still import it; a tag
+  // on it would hide that. The cost, in both runs: an export only its own file
+  // uses passes, even when that use is itself (recursion, a recursive type, a
+  // cycle within the file).
+  "ignoreExportsUsedInFile": true,
+  // A tag on an export production imports fails the run: a stale `@internal`
+  // would hide the export from `--production` once that import goes.
+  "treatTagHintsAsErrors": true,
   "workspaces": {
     ".": {
       // Declaring `entry` REPLACES knip's defaults, including its built-in
@@ -8,8 +17,11 @@
       // one: `server.ts`, which dynamically imports `app.ts` -> `modules/index.ts`
       // -> every binding.
       "entry": [
-        "server.ts",
-        "scripts/**/*.ts",
+        "server.ts!",
+        "scripts/**/*.ts!",
+        // Scaffolds no route uses yet; drop each entry once one does.
+        "lib/cache/index.ts!",
+        "lib/media/link.ts!",
 
         // One pattern per tier rather than `tests/**`, so a file outside a tier
         // is still reported; `tests/unit/harness-layout.test.ts` asserts the
@@ -28,12 +40,21 @@
         "tests/helpers/preload-document-check.ts",
         "tests/helpers/preload-base.ts",
       ],
+      // `--production` (the second half of `find:unused-files`) starts from the
+      // `!` entries only, so it reports code that nothing but tests reaches. A
+      // test seam production never uses says so with `@internal`; the `!...!`
+      // negation applies in production mode only, so default runs still check
+      // `tests/`.
+      "project": ["**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}!", "!tests/**!"],
+      // Session worktrees are full checkouts of this repository.
+      "ignore": [".claude/**"],
     },
   },
   // Tool configs are absent on purpose: knip recognises them and would report a
   // redundant entry for each.
   "ignoreDependencies": [
     // Loaded by name through `FlatCompat.extends()`, which knip cannot see.
+    "eslint-config-prettier",
     "eslint-plugin-no-unsanitized",
     "eslint-plugin-security",
     // Imported directly but installed through `@better-auth/passkey`; the
@@ -42,7 +63,6 @@
     "@peculiar/x509",
   ],
   // `mise` is installed by `mise.toml`, not `bun install`; the `scan:*` scripts
-  // run it. `check` and `fmt` are Bun's own subcommands (`bun check`,
-  // `bun fmt`), which knip reads as binaries.
-  "ignoreBinaries": ["mise", "check", "fmt"],
+  // run it.
+  "ignoreBinaries": ["mise"],
 }

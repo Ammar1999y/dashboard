@@ -14,9 +14,9 @@ import {
 } from '@app/shared/validation/otp';
 import {
   ENABLED_TWO_FACTOR_METHODS,
+  ENABLED_TWO_FACTOR_OTP_CHANNELS,
   isTwoFactorMethodEnabled,
   TWO_FACTOR_ENABLED,
-  TWO_FACTOR_OTP_CHANNELS,
 } from '@app/shared/validation/two-factor';
 import {
   TWO_FACTOR_METHODS_VAR,
@@ -51,19 +51,19 @@ if (!TWO_FACTOR_ENABLED)
 
 // A warning, not a refusal: the reset enforces disjointness per user, and the
 // configuration cannot decide it exactly.
-const overlappingKinds = TWO_FACTOR_OTP_CHANNELS.filter((channel) =>
+const overlappingKinds = ENABLED_TWO_FACTOR_OTP_CHANNELS.filter((channel) =>
   contactKindOf(channel) === 'email' ? EMAIL_OTP_AVAILABLE : PHONE_OTP_AVAILABLE
 );
 if (
   ENABLED_TWO_FACTOR_METHODS.length === 1 &&
   isTwoFactorMethodEnabled('otp') &&
-  TWO_FACTOR_OTP_CHANNELS.length > 0 &&
-  overlappingKinds.length === TWO_FACTOR_OTP_CHANNELS.length
+  ENABLED_TWO_FACTOR_OTP_CHANNELS.length > 0 &&
+  overlappingKinds.length === ENABLED_TWO_FACTOR_OTP_CHANNELS.length
 )
   logLine('error', {
     msg: 'twoFactor.otpOverlapsRecovery',
     methods: [...ENABLED_TWO_FACTOR_METHODS],
-    otpChannels: [...TWO_FACTOR_OTP_CHANNELS],
+    otpChannels: [...ENABLED_TWO_FACTOR_OTP_CHANNELS],
     effect:
       'every second factor reaches a contact account recovery also reaches, ' +
       'so password recovery will refuse for these users and the administrative ' +
@@ -90,7 +90,7 @@ function missingCredentials(
 if (process.env.NODE_ENV === 'production') {
   const missing = [
     ...missingCredentials(ENABLED_OTP_CHANNELS, 'OTP channel'),
-    ...missingCredentials(TWO_FACTOR_OTP_CHANNELS, '2FA OTP channel'),
+    ...missingCredentials(ENABLED_TWO_FACTOR_OTP_CHANNELS, '2FA OTP channel'),
   ];
   if (missing.length > 0) throw new Error(missingServerEnvMessage(missing));
 }

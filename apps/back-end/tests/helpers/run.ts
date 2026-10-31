@@ -34,7 +34,8 @@ import path from 'node:path';
 import {
   configurationCoverageFlags,
   stampCoverageProvenance,
-} from './coverage';
+} from '@/scripts/coverage-provenance';
+
 import { loadTestEnv } from './env-file';
 import { newRunToken } from './names';
 import {
@@ -228,7 +229,6 @@ const TIERS: Record<string, Tier> = {
         env: {
           NEXT_PUBLIC_ENABLED_OTP_CHANNELS: 'email',
           PUBLIC_URL: 'https://localhost',
-          NEXT_PUBLIC_URL: 'https://localhost',
         },
         files: ['secure-cookie-cache.test.ts'],
         exclusive: true,

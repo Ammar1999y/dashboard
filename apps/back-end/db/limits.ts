@@ -23,6 +23,9 @@ export const MAX_POOL_CONNECTIONS = 10;
  */
 export const DATA_TABLE_POOL_CONNECTIONS = 4;
 
+/** `pingDatabase`'s pool, on top of the two above. */
+export const PROBE_POOL_CONNECTIONS = 1;
+
 /**
  * How long `withTransaction` waits for a free connection before answering 503.
  * Bun's `connectionTimeout` bounds only opening a connection; without this a

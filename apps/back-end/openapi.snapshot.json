@@ -325,6 +325,7 @@
     },
     "securitySchemes": {
       "sessionCookie": {
+        "description": "Any operation that reads the session can answer `Set-Cookie` without publishing it: the read extends a session near its expiry and re-signs the cookie cache, and the cookies of a session that no longer holds are expired. An operation publishes `Set-Cookie` where it sets a cookie of its own.",
         "in": "cookie",
         "name": "__Secure-better-auth.session_token",
         "type": "apiKey"
@@ -456,7 +457,7 @@
                   "code": {
                     "anyOf": [
                       {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
@@ -627,7 +628,7 @@
                     "properties": {
                       "channel": { "const": "whatsapp", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
@@ -655,13 +656,13 @@
                     "properties": {
                       "channel": { "const": "email", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
                       "email": {
                         "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                        "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                        "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                         "type": "string"
                       },
                       "newPassword": {
@@ -676,7 +677,7 @@
                     "properties": {
                       "channel": { "const": "sms", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
@@ -1047,7 +1048,7 @@
                       "channel": { "const": "email", "type": "string" },
                       "email": {
                         "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                        "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                        "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                         "type": "string"
                       }
                     },
@@ -1301,17 +1302,25 @@
           {
             "in": "query",
             "name": "code",
+            "required": false,
             "schema": { "maxLength": 4096, "minLength": 1, "type": "string" }
           },
-          { "in": "query", "name": "state", "schema": { "type": "string" } },
+          {
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": { "pattern": "^[\\w-]{32}$", "type": "string" }
+          },
           {
             "in": "query",
             "name": "error",
+            "required": false,
             "schema": { "maxLength": 256, "type": "string" }
           },
           {
             "in": "query",
             "name": "iss",
+            "required": false,
             "schema": { "maxLength": 255, "type": "string" }
           }
         ],
@@ -1440,12 +1449,22 @@
                 }
               }
             },
-            "description": "Google sign-in result or local two-factor challenge. A supplied callbackURL receives a redirect; retrieve the result once at /oauth/result. A two-factor account is answered with the challenge branch instead, and no session cookie."
+            "description": "Google sign-in result or local two-factor challenge. A supplied callbackURL receives a redirect; retrieve the result once at /oauth/result. A two-factor account is answered with the challenge branch instead, and no session cookie.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The session cookies, or the two-factor challenge cookie in their place when a second factor is needed. A device trust cookie the request carries is refreshed, or expired once it no longer holds. The sign-in state cookie is expired.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "302": {
             "description": "Return to the validated same-origin callbackURL, without codes or tokens. Fetch /api/auth/oauth/result with cookies to consume the result. A callback whose sign-in state is gone (expired, already used, started in another browser, or never issued here) cannot know that callbackURL and goes to /dash/sign-in?oauth=expired instead, whatever mode the flow started in; start a new sign-in from there. A database or server fault answers 500 or 503 instead, with or without a callbackURL.",
             "headers": {
-              "Location": { "schema": { "format": "uri", "type": "string" } }
+              "Location": { "schema": { "format": "uri", "type": "string" } },
+              "Set-Cookie": {
+                "description": "The single-use cookie /oauth/result redeems, and the sign-in state cookie is expired. A completed sign-in also sets the session cookies, or the two-factor challenge cookie in their place, and refreshes or expires a device trust cookie the request carries; a refused one sets neither. A callback whose sign-in state is gone sets no session, challenge or result cookie.",
+                "schema": { "type": "string" }
+              }
             }
           },
           "400": {
@@ -1592,7 +1611,13 @@
                 }
               }
             },
-            "description": "Navigate to the returned Google authorization URL."
+            "description": "Navigate to the returned Google authorization URL.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The signed sign-in state cookie the callback checks.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1616,7 +1641,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -1813,7 +1838,13 @@
                 }
               }
             },
-            "description": "Consume the Google redirect result once. A two-factor account is answered with the challenge branch instead, and no session cookie."
+            "description": "Consume the Google redirect result once. A two-factor account is answered with the challenge branch instead, and no session cookie.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "Expires the cookie the callback set.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1925,7 +1956,7 @@
                       "channel": { "const": "email", "type": "string" },
                       "email": {
                         "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                        "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                        "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                         "type": "string"
                       }
                     },
@@ -2091,7 +2122,7 @@
                     "properties": {
                       "channel": { "const": "whatsapp", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
@@ -2110,13 +2141,13 @@
                     "properties": {
                       "channel": { "const": "email", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
                       "email": {
                         "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                        "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                        "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                         "type": "string"
                       }
                     },
@@ -2127,7 +2158,7 @@
                     "properties": {
                       "channel": { "const": "sms", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
@@ -2328,7 +2359,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -2478,7 +2509,13 @@
                 }
               }
             },
-            "description": "Success"
+            "description": "Success",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The signed WebAuthn challenge cookie /passkey/verify-registration reads.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "401": {
             "content": {
@@ -2711,7 +2748,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -2810,10 +2847,6 @@
             "application/json": {
               "schema": {
                 "properties": {
-                  "createSession": {
-                    "description": "Create a session after registering the passkey",
-                    "type": "boolean"
-                  },
                   "grant": {
                     "description": "The token POST /two-factor/passkey/grant answered with. Required here or as the `grant` query parameter.",
                     "maxLength": 32,
@@ -2877,7 +2910,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -2997,7 +3030,7 @@
                       "channel": { "const": "email", "type": "string" },
                       "email": {
                         "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                        "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                        "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                         "type": "string"
                       }
                     },
@@ -3163,7 +3196,7 @@
                     "properties": {
                       "channel": { "const": "whatsapp", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
@@ -3183,13 +3216,13 @@
                     "properties": {
                       "channel": { "const": "email", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
                       "email": {
                         "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                        "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                        "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                         "type": "string"
                       },
                       "rememberMe": { "type": "boolean" }
@@ -3201,7 +3234,7 @@
                     "properties": {
                       "channel": { "const": "sms", "type": "string" },
                       "code": {
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                         "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                         "type": "string"
                       },
@@ -3349,7 +3382,13 @@
                 }
               }
             },
-            "description": "Passwordless sign-in succeeded. A two-factor account is answered with the challenge branch instead, and no session cookie. Redeems the code sent to the browser whose cookie this request carries; without that cookie the answer is the wrong-code one. Each code allows 3 guesses, after which a new one must be requested."
+            "description": "Passwordless sign-in succeeded. A two-factor account is answered with the challenge branch instead, and no session cookie. Redeems the code sent to the browser whose cookie this request carries; without that cookie the answer is the wrong-code one. Each code allows 3 guesses, after which a new one must be requested.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The session cookies, or the two-factor challenge cookie in their place when a second factor is needed. A device trust cookie the request carries is refreshed, or expired once it no longer holds.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -3373,7 +3412,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -3667,7 +3706,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -3806,7 +3845,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -3894,7 +3933,7 @@
                 "properties": {
                   "email": {
                     "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                    "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                    "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                     "type": "string"
                   },
                   "password": {
@@ -3917,18 +3956,10 @@
                 "schema": {
                   "anyOf": [
                     {
-                      "description": "Session response when idToken is provided",
                       "properties": {
-                        "redirect": {
-                          "description": "`true` exactly when the request named a `callbackURL`, which `url` then repeats and `Location` carries.",
-                          "type": "boolean"
-                        },
+                        "redirect": { "enum": [false], "type": "boolean" },
                         "token": {
                           "description": "Session token",
-                          "type": "string"
-                        },
-                        "url": {
-                          "description": "The request’s `callbackURL`; absent when it named none.",
                           "type": "string"
                         },
                         "user": {
@@ -4043,7 +4074,13 @@
                 }
               }
             },
-            "description": "Success - Returns either session details or redirect URL A two-factor account is answered with the challenge branch instead, and no session cookie."
+            "description": "The password was accepted and a session cookie is set. `token` is that session’s token; the cookie is what subsequent requests use. A two-factor account is answered with the challenge branch instead, and no session cookie.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The session cookies, or the two-factor challenge cookie in their place when a second factor is needed. A device trust cookie the request carries is refreshed, or expired once it no longer holds.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -4067,7 +4104,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -4147,51 +4184,23 @@
       "post": {
         "description": "Served by the authentication library, which owns its own routing, validation and response shapes under this prefix. Every path under it that is not documented here is answered 404.",
         "operationId": "betterAuth_post_sign_out",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "callbackURL": {
-                    "description": "The URL to redirect to after provider logout",
-                    "type": "string"
-                  },
-                  "disableRedirect": {
-                    "description": "Return the provider logout URL without redirecting",
-                    "type": "boolean"
-                  },
-                  "state": {
-                    "description": "State to pass to the provider logout endpoint",
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              }
-            }
-          },
-          "required": false
-        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "redirect": {
-                      "description": "Whether the client should redirect to the provider logout URL",
-                      "type": "boolean"
-                    },
-                    "success": { "type": "boolean" },
-                    "url": {
-                      "description": "Provider logout URL when RP-initiated logout is available",
-                      "type": "string"
-                    }
-                  },
+                  "properties": { "success": { "type": "boolean" } },
                   "type": "object"
                 }
               }
             },
-            "description": "Success"
+            "description": "Success",
+            "headers": {
+              "Set-Cookie": {
+                "description": "Expires the session cookies.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -4207,7 +4216,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -4337,7 +4346,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -4477,7 +4486,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -4626,7 +4635,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -4756,7 +4765,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -5066,7 +5075,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -5239,7 +5248,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -5400,7 +5409,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -5490,7 +5499,7 @@
                 "properties": {
                   "channel": { "type": "string" },
                   "code": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                     "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                     "type": "string"
                   },
@@ -5545,7 +5554,13 @@
                 }
               }
             },
-            "description": "The second factor was verified: a sign-in completed, or the OTP method was enrolled."
+            "description": "The second factor was verified: a sign-in completed, or the OTP method was enrolled.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "A completed sign-in sets the session cookies and expires the two-factor challenge cookie; an enrolment sets none.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -5569,7 +5584,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -5719,7 +5734,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -5905,7 +5920,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -6025,7 +6040,13 @@
                 }
               }
             },
-            "description": "The passkey assertion was verified and the sign-in completed."
+            "description": "The passkey assertion was verified and the sign-in completed.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The session cookies; the two-factor challenge cookie is expired.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -6049,7 +6070,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -6135,7 +6156,7 @@
               "schema": {
                 "properties": {
                   "code": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                     "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                     "type": "string"
                   }
@@ -6193,7 +6214,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -6347,7 +6368,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -6456,7 +6477,13 @@
                 }
               }
             },
-            "description": "This device is now trusted."
+            "description": "This device is now trusted.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The cookie that marks this device as trusted.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -6480,7 +6507,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -6759,7 +6786,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -6847,14 +6874,6 @@
                   "code": {
                     "description": "A backup code to verify. Eg: \"123456\"",
                     "type": "string"
-                  },
-                  "disableSession": {
-                    "description": "If true, the session cookie will not be set.",
-                    "type": "boolean"
-                  },
-                  "trustDevice": {
-                    "description": "If true, the device will be trusted for 30 days. It'll be refreshed on every sign in request within this time. Eg: true",
-                    "type": "boolean"
                   }
                 },
                 "required": ["code"],
@@ -6879,7 +6898,13 @@
                 }
               }
             },
-            "description": "The backup code was accepted, consumed, and the sign-in is complete."
+            "description": "The backup code was accepted, consumed, and the sign-in is complete.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The session cookies; the two-factor challenge cookie is expired.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -6903,7 +6928,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -6991,10 +7016,6 @@
                   "code": {
                     "description": "The otp code to verify. Eg: \"012345\"",
                     "type": "string"
-                  },
-                  "trustDevice": {
-                    "description": "If true, the device will be trusted for 30 days. It'll be refreshed on every sign in request within this time. Eg: true",
-                    "type": "boolean"
                   }
                 },
                 "required": ["code"],
@@ -7019,7 +7040,13 @@
                 }
               }
             },
-            "description": "The authenticator code was accepted and the sign-in is complete."
+            "description": "The authenticator code was accepted and the sign-in is complete.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The session cookies; the two-factor challenge cookie is expired.",
+                "schema": { "type": "string" }
+              }
+            }
           },
           "400": {
             "content": {
@@ -7043,7 +7070,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel."
+            "description": "The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel."
           },
           "404": {
             "content": {
@@ -7512,7 +7539,7 @@
             }
           },
           {
-            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does; a value whose fold in the database keys nothing matches no rows. Columns: `displayName` (text; substring searches need 3+ characters once folded, including letters or digits the trigram index can key on; operators: iLike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `sizeBytes` (number; operators: eq, ne, lt, lte, gt, gte, isBetween, isEmpty, isNotEmpty). `mimeType` (select; one of image/png|image/webp|image/svg+xml|application/pdf|application/vnd.openxmlformats-officedocument.wordprocessingml.document|application/vnd.openxmlformats-officedocument.spreadsheetml.sheet|application/msword|application/vnd.ms-excel; operators: eq, ne, isEmpty, isNotEmpty). `kind` (select; one of image|document; operators: eq, ne, isEmpty, isNotEmpty). `bucketType` (select; one of public|private; operators: eq, ne, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
+            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `displayName` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; operators: iLike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `sizeBytes` (number; operators: eq, ne, lt, lte, gt, gte, isBetween, isEmpty, isNotEmpty). `mimeType` (select; one of image/png|image/webp|image/svg+xml|application/pdf|application/vnd.openxmlformats-officedocument.wordprocessingml.document|application/vnd.openxmlformats-officedocument.spreadsheetml.sheet|application/msword|application/vnd.ms-excel; operators: eq, ne, isEmpty, isNotEmpty). `kind` (select; one of image|document; operators: eq, ne, isEmpty, isNotEmpty). `bucketType` (select; one of public|private; operators: eq, ne, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
             "in": "query",
             "name": "filters",
             "required": false,
@@ -8909,7 +8936,7 @@
                 "properties": {
                   "file": {
                     "contentEncoding": "binary",
-                    "description": "The file, stored privately in the folder named by `folder`. A deployment with no private bucket answers 422. Exactly one file. Images (image/png, image/webp, image/svg+xml): at most 1 MiB, 25,000,000 decoded pixels and 16,383 pixels on either edge; PNG is re-encoded to WebP, SVG is sanitised. Documents (application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet): at most 10 MiB, byte-inspected: macro-enabled, template, encrypted and object-embedding variants are refused; field codes, external links and DDE are not inspected, and documents are always served as attachments, never rendered. Upload several files as sequential single-file requests with bounded concurrency and honour `Retry-After` on 429.",
+                    "description": "The file, stored privately in the folder named by `folder`. A deployment with no private bucket answers 422. Exactly one file. Images (image/png, image/webp, image/svg+xml): at most 1 MiB, 25,000,000 decoded pixels and 16,383 pixels on either edge; PNG is re-encoded to WebP, SVG is sanitised. Documents (application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet): at most 10 MiB, byte-inspected: macro-enabled, template, encrypted and object-embedding variants are refused. Embedding is judged by the package relationships, so a linked OLE object (a chart linked to an outside workbook included), an ActiveX control and any imported alternative-format chunk (altChunk) are refused too, as is a package whose relationship parts are unusually large. Field codes, hyperlinks, external templates and DDE are not inspected, and documents are always served as attachments, never rendered. Upload several files as sequential single-file requests with bounded concurrency and honour `Retry-After` on 429.",
                     "format": "binary",
                     "maxLength": 10485760,
                     "type": "string",
@@ -9604,7 +9631,7 @@
                 "description": "At least one property must be present; an empty object is rejected.",
                 "properties": {
                   "displayName": {
-                    "description": "Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected. After that it must be at most 150 characters.",
+                    "description": "Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected, and so is a name made only of invisible characters (default-ignorable code points, whitespace and U+2800 BRAILLE PATTERN BLANK). After that it must be at most 150 characters.",
                     "pattern": "^\\s*[^\\s\\u0000-\\u001F\\u007F/\\\\](?:[^\\s\\u0000-\\u001F\\u007F/\\\\]|\\s)*$",
                     "type": "string"
                   },
@@ -10227,7 +10254,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "name": {
-                    "description": "Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected, as are the names `.` and `..`. After that it must be at most 100 characters.",
+                    "description": "Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected, and so is a name made only of invisible characters (default-ignorable code points, whitespace and U+2800 BRAILLE PATTERN BLANK), as are the names `.` and `..`. After that it must be at most 100 characters.",
                     "pattern": "^(?!\\s*\\.{1,2}\\s*$)\\s*[^\\s\\u0000-\\u001F\\u007F/\\\\](?:[^\\s\\u0000-\\u001F\\u007F/\\\\]|\\s)*$",
                     "type": "string"
                   },
@@ -10796,7 +10823,7 @@
                 "description": "At least one property must be present; an empty object is rejected.",
                 "properties": {
                   "name": {
-                    "description": "Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected, as are the names `.` and `..`. After that it must be at most 100 characters.",
+                    "description": "Unicode-normalised (NFC), inner whitespace collapsed to single spaces and trimmed before validation, so it may be sent as typed, and the length rule measures what is left. Control and format characters, unpaired surrogates, `/` and `\\` are rejected, and so is a name made only of invisible characters (default-ignorable code points, whitespace and U+2800 BRAILLE PATTERN BLANK), as are the names `.` and `..`. After that it must be at most 100 characters.",
                     "pattern": "^(?!\\s*\\.{1,2}\\s*$)\\s*[^\\s\\u0000-\\u001F\\u007F/\\\\](?:[^\\s\\u0000-\\u001F\\u007F/\\\\]|\\s)*$",
                     "type": "string"
                   },
@@ -11094,7 +11121,7 @@
             }
           },
           {
-            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does; a value whose fold in the database keys nothing matches no rows. Columns: `roleName` (text; substring searches need 3+ characters once folded, including letters or digits the trigram index can key on; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `description` (text; substring searches need 3+ characters once folded, including letters or digits the trigram index can key on; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `isActive` (boolean; operators: eq, ne, inArray, notInArray, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
+            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `roleName` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `description` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `isActive` (boolean; operators: eq, ne, inArray, notInArray, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
             "in": "query",
             "name": "filters",
             "required": false,
@@ -11300,11 +11327,11 @@
                     "anyOf": [
                       {
                         "anyOf": [{ "type": "string" }, { "type": "null" }],
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. After that it must be at most 150 characters."
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. After that it must be at most 150 characters."
                       },
                       { "type": "null" }
                     ],
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. After that it must be at most 150 characters."
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. After that it must be at most 150 characters."
                   },
                   "isActive": {
                     "description": "Users holding an inactive role cannot sign in.",
@@ -11444,7 +11471,7 @@
                     "x-unique-by": "name"
                   },
                   "roleName": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space. After that it must be at most 100 characters.",
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every whitespace run, line breaks included, is then collapsed to a single space. After that it must be at most 100 characters.",
                     "minLength": 1,
                     "type": "string"
                   }
@@ -11744,7 +11771,7 @@
                         },
                         "isActive": { "type": "boolean" },
                         "permissions": {
-                          "description": "One entry per dashboard page the role has a grant on, holding the actions stored for it: an absent action is not granted, and an action the page does not offer is never stored.",
+                          "description": "One entry per dashboard page the role’s matrix lists, a page granting nothing included, holding the actions stored for it: an absent or false action is not granted, and an action the page does not offer is never stored.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -11888,7 +11915,7 @@
         "tags": ["Permissions"]
       },
       "put": {
-        "description": "`permissions`, when present, is the COMPLETE matrix and replaces the stored one: a page absent from the array has its grants REVOKED, and the answer is still 200. Send the whole matrix, not a diff. Omitting the key entirely is the only way to leave the current matrix untouched while changing `roleName`, `description` or `isActive`; an empty array is rejected. A role cannot edit its own matrix (403), and this operation requires re-authentication.",
+        "description": "`permissions`, when present, is the COMPLETE matrix and replaces the stored one: a page absent from the array has its grants REVOKED, and the answer is still 200. Send the whole matrix, not a diff. Omitting the key entirely is the only way to leave the current matrix untouched while changing `roleName`, `description` or `isActive`; an empty array is rejected. The role the caller holds is refused 403 whatever the body changes, a rename or deactivation included, and this operation requires re-authentication.",
         "operationId": "put_api_dash_permissions__id",
         "parameters": [
           {
@@ -11912,11 +11939,11 @@
                     "anyOf": [
                       {
                         "anyOf": [{ "type": "string" }, { "type": "null" }],
-                        "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. After that it must be at most 150 characters."
+                        "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. After that it must be at most 150 characters."
                       },
                       { "type": "null" }
                     ],
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. After that it must be at most 150 characters."
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. After that it must be at most 150 characters."
                   },
                   "isActive": {
                     "description": "Users holding an inactive role cannot sign in.",
@@ -12056,7 +12083,7 @@
                     "x-unique-by": "name"
                   },
                   "roleName": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space. After that it must be at most 100 characters.",
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every whitespace run, line breaks included, is then collapsed to a single space. After that it must be at most 100 characters.",
                     "minLength": 1,
                     "type": "string"
                   }
@@ -12200,6 +12227,7 @@
     },
     "/api/dash/roles": {
       "get": {
+        "description": "The active standard roles a user create or edit by the caller accepts: those whose every grant the caller also holds. Under `permissions.viewOwn`, only the roles the caller created.",
         "operationId": "get_api_dash_roles",
         "responses": {
           "200": {
@@ -12344,7 +12372,7 @@
             }
           },
           {
-            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does; a value whose fold in the database keys nothing matches no rows. Columns: `name` (text; substring searches need 3+ characters once folded, including letters or digits the trigram index can key on; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `email` (text; substring searches need 3+ characters once folded, including letters or digits the trigram index can key on; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `isActive` (boolean; operators: eq, ne, inArray, notInArray, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
+            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `name` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `email` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `isActive` (boolean; operators: eq, ne, inArray, notInArray, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
             "in": "query",
             "name": "filters",
             "required": false,
@@ -12572,13 +12600,12 @@
                 "properties": {
                   "email": {
                     "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                    "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                    "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                     "type": "string"
                   },
                   "isActive": { "default": true, "type": "boolean" },
                   "name": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space. After that it must be at most 150 characters.",
-                    "minLength": 2,
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every whitespace run, line breaks included, is then collapsed to a single space. After that it must be 2 to 150 characters.",
                     "type": "string"
                   },
                   "password": {
@@ -12884,8 +12911,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "name": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space. After that it must be at most 150 characters.",
-                    "minLength": 2,
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every whitespace run, line breaks included, is then collapsed to a single space. After that it must be 2 to 150 characters.",
                     "type": "string"
                   }
                 },
@@ -13048,7 +13074,7 @@
                   },
                   "newEmail": {
                     "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                    "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                    "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                     "type": "string"
                   }
                 },
@@ -13226,13 +13252,13 @@
               "schema": {
                 "properties": {
                   "code": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                     "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                     "type": "string"
                   },
                   "newEmail": {
                     "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                    "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                    "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                     "type": "string"
                   }
                 },
@@ -13718,7 +13744,7 @@
                 "properties": {
                   "channel": { "enum": ["sms", "whatsapp"], "type": "string" },
                   "code": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space.",
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every remaining whitespace character is then removed, so a grouped code such as `123 456` is accepted. After that it must be exactly 6 ASCII digits.",
                     "pattern": "^[^0-9]*(?:[0-9][^0-9]*){6}$",
                     "type": "string"
                   },
@@ -14327,7 +14353,7 @@
                         "isActive": { "type": "boolean" },
                         "name": { "type": "string" },
                         "permissions": {
-                          "description": "One entry per dashboard page the role has a grant on, holding the actions stored for it: an absent action is not granted, and an action the page does not offer is never stored.",
+                          "description": "One entry per dashboard page the role’s matrix lists, a page granting nothing included, holding the actions stored for it: an absent or false action is not granted, and an action the page does not offer is never stored.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -14573,13 +14599,12 @@
                 "properties": {
                   "email": {
                     "description": "Email address. Whitespace is collapsed and trimmed and the address is lowercased before validation, so it may be sent as typed; after that it must be at most 150 characters. Only these providers are accepted: gmail.com, outlook.com, hotmail.com, live.com, yahoo.com.",
-                    "pattern": "^\\s*[A-Za-z0-9._%+-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
+                    "pattern": "^\\s*[A-Za-z0-9._+K-]{1,141}@(?:[gG][mM][aA][iI][lL]\\.[cC][oO][mM]|[oO][uU][tT][lL][oO][oO][kKK]\\.[cC][oO][mM]|[hH][oO][tT][mM][aA][iI][lL]\\.[cC][oO][mM]|[lL][iI][vV][eE]\\.[cC][oO][mM]|[yY][aA][hH][oO][oO]\\.[cC][oO][mM])\\s*$",
                     "type": "string"
                   },
                   "isActive": { "type": "boolean" },
                   "name": {
-                    "description": "Characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed and the value is trimmed before the length rules apply, so it may be sent as typed. Line breaks and repeated spaces are collapsed to a single space. After that it must be at most 150 characters.",
-                    "minLength": 2,
+                    "description": "Line breaks (CR, CRLF, U+0085, U+2028, U+2029) become a line feed and tabs, vertical tabs and form feeds become spaces; then characters outside letters, marks, digits, spaces and `. , ! ? : / \\ ; - + = ( ) [ ] ' \" ؟ ، ؛ @ # _ & %` are removed, as are default-ignorable (invisible) code points such as U+3164 and U+034F; the result is NFC-normalised and trimmed before the length rules apply, so it may be sent as typed. Every whitespace run, line breaks included, is then collapsed to a single space. After that it must be 2 to 150 characters.",
                     "type": "string"
                   },
                   "password": {
@@ -15292,7 +15317,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The target does not exist, or is outside the caller’s visible scope. The params failed validation; answered with a fixed message."
+            "description": "The target does not exist, or is outside the caller’s visible scope."
           },
           "413": {
             "content": {
@@ -15301,6 +15326,14 @@
               }
             },
             "description": "The request declares a body larger than any method on this path admits, refused before it is read."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/Problem" }
+              }
+            },
+            "description": "Validation failed: the params was rejected."
           },
           "429": {
             "content": {
@@ -15533,7 +15566,7 @@
                 "properties": {
                   "files": {
                     "contentEncoding": "binary",
-                    "description": "The file, for the record named by `resource` and `purpose`. Exactly one file. Images (image/png, image/webp, image/svg+xml): at most 1 MiB, 25,000,000 decoded pixels and 16,383 pixels on either edge; PNG is re-encoded to WebP, SVG is sanitised. Documents (application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet): at most 10 MiB, byte-inspected: macro-enabled, template, encrypted and object-embedding variants are refused; field codes, external links and DDE are not inspected, and documents are always served as attachments, never rendered. Upload several files as sequential single-file requests with bounded concurrency and honour `Retry-After` on 429.",
+                    "description": "The file, for the record named by `resource` and `purpose`. Exactly one file. Images (image/png, image/webp, image/svg+xml): at most 1 MiB, 25,000,000 decoded pixels and 16,383 pixels on either edge; PNG is re-encoded to WebP, SVG is sanitised. Documents (application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet): at most 10 MiB, byte-inspected: macro-enabled, template, encrypted and object-embedding variants are refused. Embedding is judged by the package relationships, so a linked OLE object (a chart linked to an outside workbook included), an ActiveX control and any imported alternative-format chunk (altChunk) are refused too, as is a package whose relationship parts are unusually large. Field codes, hyperlinks, external templates and DDE are not inspected, and documents are always served as attachments, never rendered. Upload several files as sequential single-file requests with bounded concurrency and honour `Retry-After` on 429.",
                     "format": "binary",
                     "maxLength": 10485760,
                     "type": "string",

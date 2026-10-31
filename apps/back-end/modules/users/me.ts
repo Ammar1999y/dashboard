@@ -29,15 +29,13 @@ import { verifyLoginAttempt } from '@/lib/auth/login-guard';
 import { checkPasswordCompromise } from '@/lib/auth/password/compromise';
 import { hashPassword, verifyPassword } from '@/lib/auth/password/hash';
 import { requireReauthWindow } from '@/lib/auth/reauth/window';
+import { refreshSessionCookies } from '@/lib/auth/session/read';
 import {
   revokeOtherSessions,
   revokePendingProofs,
 } from '@/lib/auth/session/rotation';
 import { bind } from '@/lib/http/binding';
-import {
-  insufficientPermissions,
-  refreshSessionCookies,
-} from '@/lib/permissions/checker';
+import { insufficientPermissions } from '@/lib/permissions/checker';
 import { asCurrentPasswordIncorrect } from '@/lib/users/current-password';
 import { renameSelf } from '@/lib/users/edit';
 import { liveUser } from '@/lib/users/filters';

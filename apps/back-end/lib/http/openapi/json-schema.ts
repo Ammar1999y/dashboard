@@ -6,6 +6,72 @@ export function isJsonSchema(value: unknown): value is JsonSchema {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const COMPONENT_REF = /^#\/components\/schemas\/(.+)$/;
+
+/** The component a `$ref` value names, if it names one. */
+export function refName(ref: unknown): string | undefined {
+  return typeof ref === 'string' ? COMPONENT_REF.exec(ref)?.[1] : undefined;
+}
+
+/**
+ * The entries of `schemas` that `root` references, directly or through each
+ * other, in the order a breadth-first walk finds them.
+ */
+export function referencedComponents(
+  root: unknown,
+  schemas: JsonSchema
+): JsonSchema {
+  const refsIn = (node: unknown, found: string[]): void => {
+    if (Array.isArray(node)) for (const item of node) refsIn(item, found);
+    if (!isJsonSchema(node)) return;
+    for (const [key, child] of Object.entries(node)) {
+      const name = key === '$ref' ? refName(child) : undefined;
+      if (name === undefined) refsIn(child, found);
+      else found.push(name);
+    }
+  };
+  const kept = new Map<string, unknown>();
+  let frontier: unknown[] = [root];
+  while (frontier.length > 0) {
+    const names: string[] = [];
+    for (const node of frontier) refsIn(node, names);
+    frontier = [];
+    for (const name of names)
+      if (!kept.has(name) && Object.hasOwn(schemas, name)) {
+        kept.set(name, schemas[name]);
+        frontier.push(schemas[name]);
+      }
+  }
+  return Object.fromEntries(kept);
+}
+
+/** A response's or request body's `application/json` schema, or `{}`. */
+export function jsonBodySchema(owner: JsonSchema): JsonSchema {
+  const content = isJsonSchema(owner.content) ? owner.content : {};
+  const json = isJsonSchema(content['application/json'])
+    ? content['application/json']
+    : {};
+  return isJsonSchema(json.schema) ? json.schema : {};
+}
+
+/** `owner` with its `application/json` schema replaced by `edit`'s. */
+export function withJsonBodySchema(
+  owner: JsonSchema,
+  edit: (schema: JsonSchema) => JsonSchema
+): JsonSchema {
+  const content = isJsonSchema(owner.content) ? owner.content : {};
+  const json = isJsonSchema(content['application/json'])
+    ? content['application/json']
+    : {};
+  return {
+    ...owner,
+    content: {
+      ...content,
+      'application/json': { ...json, schema: edit(jsonBodySchema(owner)) },
+    },
+  };
+}
+
 /** Repair Better Auth's OpenAPI-3.0-era schema fragments for a 3.1 document. */
 export function normalizeOpenApi31(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizeOpenApi31);

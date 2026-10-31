@@ -1,6 +1,7 @@
 /**
  * Generic admission for a binding, before any body byte is read: origin, the
- * coarse per-IP limit, the route's own credential, session, ONE static
+ * coarse per-IP limit (for a signed-in route, only when a session token is
+ * sent), the route's own credential, session, ONE static
  * permission (the caller exempted or refused as its own target), the
  * re-authentication window, the route's own limiter (unless its handler
  * charges it after a contextual check), then captcha. Other contextual
@@ -14,6 +15,7 @@ import type { Actor, AnyBinding, AnyBindingResult } from './binding';
 
 import { validID } from '@app/shared/utils';
 
+import { presentsSessionToken } from '@/lib/auth/session/read';
 import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
@@ -93,7 +95,7 @@ async function runGate(
   const { headers, method } = request;
 
   assertSameOriginWrite({ headers, method });
-  if (options.preAuthIpLimit !== false)
+  if (await chargesPreAuthLimit(binding, headers))
     await enforcePreAuthIpLimit({
       apiPath: new URL(request.url).pathname,
       headers,
@@ -134,6 +136,19 @@ async function runGate(
     throw captchaRefused();
 
   admitted.set(request, { actor });
+}
+
+/**
+ * A signed-in route without a session token answers 401 before any read, so
+ * the limiter would cost more than the lookup it bounds. Every request that
+ * can reach the session store, a forged token included, is still charged.
+ */
+async function chargesPreAuthLimit(
+  { entry, options }: AnyBinding,
+  headers: Headers
+): Promise<boolean> {
+  if (options.preAuthIpLimit === false) return false;
+  return entry.policy.auth === 'public' || presentsSessionToken(headers);
 }
 
 /** The binding's own limiter, from the gate or, when deferred, from its handler. */

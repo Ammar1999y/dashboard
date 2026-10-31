@@ -21,12 +21,17 @@ import type { OtpChannel, TwoFactorMethod } from '@app/shared/validation/enums';
 
 import { ENABLED_TWO_FACTOR_METHODS } from '@app/shared/validation/two-factor';
 
-import { defaultOption, offeredMethods } from '@/lib/auth/two-factor/methods';
+import {
+  defaultOption,
+  offeredMethods,
+  removalStrandsTwoFactor,
+} from '@/lib/auth/two-factor/methods';
 
 /** Everything capable, so a case only has to say what it takes away. */
 const CAPABLE: EnrollmentState['capability'] = {
   totpVerified: true,
   backupCodesReady: true,
+  backupCodesConfirmed: true,
   hasPasskey: true,
   emailVerified: true,
   phoneVerified: true,
@@ -216,5 +221,33 @@ describe('order and the default', () => {
     );
     expect(ids(chosen)).toEqual(['backup_code', 'totp']);
     expect(defaultOption(chosen)).toBe('totp');
+  });
+});
+
+describe('what a removal may leave', () => {
+  // A regenerated set is offered before the user confirms saving it, but a
+  // removal must not leave them relying on codes they may have discarded.
+  test('unconfirmed backup codes are offered, yet never the surviving factor', () => {
+    const unconfirmed = state([enrol('backup_code'), enrol('totp')], {
+      backupCodesConfirmed: false,
+    });
+    expect(ids(offeredMethods(unconfirmed))).toEqual(['totp', 'backup_code']);
+    expect(removalStrandsTwoFactor(unconfirmed, 'totp', null)).toBe(true);
+  });
+
+  test('a removal that takes nothing relied on is not refused', () => {
+    // Only unconfirmed codes, and a row no challenge would offer.
+    const nothingConfirmed = state(
+      [enrol('backup_code'), enrol('otp', 'sms')],
+      { backupCodesConfirmed: false, phoneVerified: false }
+    );
+    expect(removalStrandsTwoFactor(nothingConfirmed, 'otp', 'phone')).toBe(
+      false
+    );
+  });
+
+  test('confirmed backup codes may be what is left', () => {
+    const confirmed = state([enrol('backup_code'), enrol('totp')]);
+    expect(removalStrandsTwoFactor(confirmed, 'totp', null)).toBe(false);
   });
 });

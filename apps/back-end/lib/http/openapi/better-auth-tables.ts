@@ -62,7 +62,7 @@ export const BETTER_AUTH_STATUS_DESCRIPTIONS = {
   '401':
     'Credentials refused — a password, a second-factor code, or the session or two-factor challenge the endpoint needs — or the session this request would create is not allowed to exist (inactive user, inactive role).',
   '403':
-    'Captcha verification failed, the request origin is not trusted, or the account has an unverified contact channel.',
+    'The captcha this route requires was absent or rejected, the request origin or a callback URL the request names (such as `callbackURL`) is not trusted, or the account has an unverified contact channel.',
   '422':
     'The submitted fields failed this project’s own schema for the endpoint.',
   '409':
@@ -252,30 +252,80 @@ export const LIBRARY_VERIFIER_DESCRIPTIONS: Readonly<Record<string, string>> = {
     'The backup code was accepted, consumed, and the sign-in is complete.',
 };
 
-export const LIBRARY_VERIFIER_PATHS: ReadonlySet<string> = new Set(
-  Object.keys(LIBRARY_VERIFIER_DESCRIPTIONS)
-);
+/**
+ * A library 200 whose generated description promises what this deployment
+ * strips; replaces the answer's description and drops its schema's.
+ */
+export const LIBRARY_SUCCESS_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  '/sign-in/email':
+    'The password was accepted and a session cookie is set. `token` is that session’s token; the cookie is what subsequent requests use.',
+};
 
 /**
  * Properties of a library 200 that its generator declares wrongly, replaced by
- * what the handler sends.
+ * what the handler sends; `null` for one it never sends.
  */
 export const LIBRARY_SUCCESS_PROPERTIES: Readonly<
-  Record<string, Readonly<Record<string, Record<string, unknown>>>>
+  Record<string, Readonly<Record<string, Record<string, unknown> | null>>>
 > = {
-  // `redirect: !!callbackURL` and `url: callbackURL` (`sign-in.mjs`), where the
-  // generator declares `redirect` always `false` and `url` nullable.
-  '/sign-in/email': {
-    redirect: {
-      type: 'boolean',
-      description:
-        '`true` exactly when the request named a `callbackURL`, which `url` then repeats and `Location` carries.',
-    },
-    url: {
-      type: 'string',
-      description: 'The request’s `callbackURL`; absent when it named none.',
-    },
+  // `url: callbackURL` (`sign-in.mjs`), which `path-policy.ts` strips.
+  '/sign-in/email': { url: null },
+  // A social provider's logout URL; none is configured.
+  '/sign-out': { url: null, redirect: null },
+};
+
+/**
+ * Request fields the library reads only for a feature this deployment leaves
+ * off, so the document leaves them out; a body left with no field is not
+ * published.
+ */
+export const LIBRARY_UNUSED_BODY_FIELDS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  // A social provider's logout; none is configured.
+  '/sign-out': ['callbackURL', 'disableRedirect', 'state'],
+};
+
+const SESSION_OR_CHALLENGE_COOKIES =
+  'The session cookies, or the two-factor challenge cookie in their place when a second factor is needed. A device trust cookie the request carries is refreshed, or expired once it no longer holds.';
+
+const CHALLENGE_COMPLETED_COOKIES =
+  'The session cookies; the two-factor challenge cookie is expired.';
+
+/**
+ * What the `Set-Cookie` of each Better Auth answer that sets a cookie of its
+ * own does, by path and status. A session read's refresh is not one: the
+ * `sessionCookie` scheme describes it once.
+ */
+export const BETTER_AUTH_SET_COOKIE: Readonly<
+  Record<string, Readonly<Partial<Record<'200' | '302', string>>>>
+> = {
+  '/sign-in/email': { '200': SESSION_OR_CHALLENGE_COOKIES },
+  '/passwordless/verify': { '200': SESSION_OR_CHALLENGE_COOKIES },
+  '/oauth/google/start': {
+    '200': 'The signed sign-in state cookie the callback checks.',
   },
+  '/oauth/google/callback': {
+    '200': `${SESSION_OR_CHALLENGE_COOKIES} The sign-in state cookie is expired.`,
+    '302':
+      'The single-use cookie /oauth/result redeems, and the sign-in state cookie is expired. A completed sign-in also sets the session cookies, or the two-factor challenge cookie in their place, and refreshes or expires a device trust cookie the request carries; a refused one sets neither. A callback whose sign-in state is gone sets no session, challenge or result cookie.',
+  },
+  '/oauth/result': { '200': 'Expires the cookie the callback set.' },
+  '/two-factor/verify-totp': { '200': CHALLENGE_COMPLETED_COOKIES },
+  '/two-factor/verify-backup-code': { '200': CHALLENGE_COMPLETED_COOKIES },
+  '/two-factor/otp/verify': {
+    '200':
+      'A completed sign-in sets the session cookies and expires the two-factor challenge cookie; an enrolment sets none.',
+  },
+  '/two-factor/passkey/verify': { '200': CHALLENGE_COMPLETED_COOKIES },
+  '/two-factor/trust-device': {
+    '200': 'The cookie that marks this device as trusted.',
+  },
+  '/passkey/generate-register-options': {
+    '200':
+      'The signed WebAuthn challenge cookie /passkey/verify-registration reads.',
+  },
+  '/sign-out': { '200': 'Expires the session cookies.' },
 };
 
 /**

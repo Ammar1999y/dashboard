@@ -3,7 +3,7 @@
  * that working password, logged only as `auth.password.hash unevaluatable`;
  * startup cannot see it. Keep a generation until every hash is rehashed.
  */
-import { defineKeyring } from '../keyring';
+import { defineKeyring } from '@/lib/crypto/keyring';
 
 const keyring = defineKeyring({
   activeIdEnv: 'PASSWORD_PEPPER_ACTIVE_ID',

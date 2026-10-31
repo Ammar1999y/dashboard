@@ -37,7 +37,6 @@ export const MSG_CUSTOM_ROLE_PREFIX_FORBIDDEN = (prefix: string) =>
 
 export const permissionMsg = {
   nameExists: MSG_ROLE_NAME_EXISTS,
-  duplicatePagePermission: 'صلاحية الصفحة مكررة',
   hasUsers: MSG_ROLE_HAS_USERS,
   cannotEditOwnRole: MSG_CANNOT_EDIT_OWN_ROLE,
 };

@@ -1051,6 +1051,55 @@ describe('the delete under real contention', () => {
       resume.open();
     }
   });
+
+  test('a single-file move racing the delete of its destination waits on the folder, then answers 404 and stays put', async () => {
+    const doomed = await seedFolder('Raced destination');
+    const home = await seedFolder('Raced home');
+    const file = await seedFile({ folderId: home });
+    const paused = gate();
+    const resume = gate();
+    const original = actorModule.auditManyAs;
+    const audit = spyOn(actorModule, 'auditManyAs').mockImplementation(
+      async (tx, actor, entries) => {
+        if (
+          entries.some(
+            (entry) =>
+              entry.tableName === 'folders' && entry.action === 'DELETE'
+          )
+        ) {
+          paused.open();
+          await resume.promise;
+        }
+        return original(tx, actor, entries);
+      }
+    );
+    try {
+      const deleting = call(
+        admin(),
+        'DELETE',
+        `/api/dash/media/folders/${doomed}`
+      );
+      await paused.promise;
+      const moving = call(admin(), 'PUT', `/api/dash/media/files/${file}`, {
+        folderId: doomed,
+      });
+      await waitForLockWait('for key share');
+      resume.open();
+      const deleted = await deleting;
+      expect(deleted.status).toBe(HTTP_STATUS.OK);
+
+      const moved = await moving;
+      expect([moved.status, moved.body.code]).toEqual([
+        HTTP_STATUS.NOT_FOUND,
+        FOLDER_NOT_FOUND_CODE,
+      ]);
+      expect(await fileRow(file)).toEqual({ status: 'active', folderId: home });
+      expect(await folderRow(doomed)).toBeNull();
+    } finally {
+      audit.mockRestore();
+      resume.open();
+    }
+  });
 });
 
 describe('the move', () => {

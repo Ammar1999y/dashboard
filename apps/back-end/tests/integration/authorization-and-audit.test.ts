@@ -46,6 +46,7 @@ import {
   MSG_INVALID_INPUT,
   MSG_NOT_FOUND,
 } from '@app/shared/messages/common';
+import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 
 import { SQLITE_MAINTENANCE_TOKEN } from '@/lib/env.server';
 import { generateUuidV7 } from '@/lib/id';
@@ -268,18 +269,22 @@ describe('`own` scope on GET /api/dash/users/:id', () => {
 
 describe('a target whose role outranks the caller', () => {
   /**
-   * The privilege-ranking oracle, from the caller who can actually mount it: an
-   * actor with `users.view` + `users.edit` and NO `permissions.view`.
-   *
-   * They can list users (which per `should-ignore.md` #39 shows every non-system
-   * user) and send a minimal valid `PUT` at each id. While
-   * `validateRolePermissionScope` answered 403 for a target whose role held a
-   * permission the actor did not, the two replies were distinguishable: 404
-   * meant nonexistent / system-role / not-mine, 403 meant "this account exists
-   * and outranks me". That reconstructs the relative privilege ranking of every
-   * account without ever granting `permissions.view` — the grant that is
-   * supposed to gate exactly that knowledge.
+   * The actor holds `users.view`, so `GET /users/:id` already shows it the
+   * target's whole matrix (`should-ignore.md` #9): a write is refused as the
+   * authority failure it is, 403, never disguised as a missing target.
    */
+  async function storedUser(userId: string) {
+    const rows = await db.execute<{
+      name: string;
+      email: string;
+      role_id: string;
+      deleted: boolean;
+    }>(
+      sql`select name, email, role_id::text as role_id, deleted_at is not null as deleted from users where id = ${userId}`
+    );
+    return rows[0];
+  }
+
   /**
    * A body that PASSES validation, so the reply comes from the authorization
    * gate rather than from the schema. Both arms send the identical body, and
@@ -305,9 +310,10 @@ describe('a target whose role outranks the caller', () => {
     );
   }
 
-  test('is refused identically to one that does not exist', async () => {
+  test('is refused 403, apart from one that does not exist, and changes nothing', async () => {
     // `admin` holds every action on every page, so its role outranks an actor
     // that holds only `users`.
+    const before = await storedUser(fx().admin.user.userId);
     const outranking = await editAttempt(
       fx().usersEditAll,
       fx().admin.user.userId,
@@ -319,9 +325,13 @@ describe('a target whose role outranks the caller', () => {
       'probe-nonexistent@gmail.com'
     );
 
-    expect(outranking.status).toBe(nonexistent.status);
-    expect(outranking.status).toBe(HTTP_STATUS.NOT_FOUND);
-    expect(await outranking.json()).toEqual(await nonexistent.json());
+    await expectError(
+      outranking,
+      HTTP_STATUS.FORBIDDEN,
+      MSG_INSUFFICIENT_PERMISSIONS
+    );
+    expect(await nonexistent.json()).toEqual(NOT_FOUND_BODY);
+    expect(await storedUser(fx().admin.user.userId)).toEqual(before);
   });
 
   test('DELETE answers the same way', async () => {
@@ -333,8 +343,13 @@ describe('a target whose role outranks the caller', () => {
       )
     );
 
-    expect(outranking.status).toBe(HTTP_STATUS.NOT_FOUND);
-    expect(await outranking.json()).toEqual(NOT_FOUND_BODY);
+    await expectError(
+      outranking,
+      HTTP_STATUS.FORBIDDEN,
+      MSG_INSUFFICIENT_PERMISSIONS
+    );
+    const after = await storedUser(fx().admin.user.userId);
+    expect(after?.deleted).toBe(false);
   });
 
   test('GET omits its sessions, on the one read of its role permissions', async () => {

@@ -60,7 +60,7 @@ Dockerfiles use this release; CI reads the root pin automatically.
 | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bun fmt`                                                      | Formatting scripts and Git hooks use the native formatter with the existing Prettier configs and ignore files; its output matched Prettier's on every tracked file. Both configs group Bun imports explicitly. Prettier and its plugins stay installed: back-end ESLint runs `prettier/prettier`, and the front-end scripts `build-icons`, `generate-manifest` and `sync-community-themes` call Prettier's API with the project config. `bun fmt --doctor`'s removal list does not see those uses. |
 | `bun check` improvements                                       | All workspaces already use the native checker, so the upgrade supplies the improvements without changing tsconfig boundaries or introducing project references.                                                                                                                                                                                                                                                                                                                                    |
-| SQL and SQLite fixes                                           | Supplied by the runtime upgrade. Keep transaction deadlines, the separate list/probe pools, pool watchdog and shutdown draining until re-measured; three fixes bear on recorded findings and are the ones to re-test: `idleTimeout`/`maxLifetime` no longer close a busy connection (the reason `reports/performance-fixes.md` set them aside), a pool that lost connections grows back, and TCP keepalive fails a query whose server vanished (`reports/review-findings.md` #1).                  |
+| SQL and SQLite fixes                                           | Supplied by the runtime upgrade. Keep transaction deadlines, the separate list/probe pools, pool watchdog and shutdown draining until re-measured; three fixes bear on earlier findings and are the ones to re-test: `idleTimeout`/`maxLifetime` no longer close a busy connection (the reason the pools in `apps/back-end/db/index.ts` set neither), a pool that lost connections grows back, and TCP keepalive fails a query whose server vanished.                                              |
 | Arrays in `Bun.SQL`                                            | A JavaScript array now binds as a PostgreSQL array, so the two-factor preflight and the media id lists pass arrays directly instead of building literals or one parameter per id.                                                                                                                                                                                                                                                                                                                  |
 | `minimumReleaseAge` units and per-version exclusions           | The policy stays in seconds: Bun before 1.4.4 refuses `"3d"` and would stop before the runtime guard explains why. An urgent release inside the window is exempted alone with `--minimum-release-age-excludes=…,<name>@<version>` (`bunfig.toml`).                                                                                                                                                                                                                                                 |
 | Coverage reporting                                             | A whole-tier run keeps its full report while focused configuration reruns still execute. Narrowed runs retain their own coverage. Coverage thresholds are unchanged. Each focused row writes its own JUnit file the same way.                                                                                                                                                                                                                                                                      |
@@ -94,7 +94,7 @@ current integrations and deployment:
 ## The shared package
 
 `packages/shared/src` is imported by package name — `@app/shared/validation/rules`,
-`@app/shared/contract`, `@app/shared/types` — never by a relative path across
+`@app/shared/api/users`, `@app/shared/types` — never by a relative path across
 workspaces. It ships TypeScript source: Bun runs it as is, and the front-end
 lists it in `transpilePackages`.
 
@@ -127,9 +127,11 @@ What lives there and why:
   `mock(entry, …)`, and the OpenAPI document is generated from it.
   `api/wire.ts` builds and parses every body: successes, and errors as RFC
   9457 problems (`application/problem+json`).
-- `contract.ts`, `response-contract.ts` — the Better Auth request and
-  response tables, keyed by the path under `/api/auth`, and the generic
-  field and contract checks.
+- `api/better-auth.ts` — the entries for this project's own Better Auth
+  plugin endpoints under `/api/auth`, which the server builds with
+  `pluginEndpoint()` rather than `bind()`. The corrections to Better Auth's own
+  generated paths live in the back-end
+  (`apps/back-end/lib/http/openapi/better-auth-tables.ts`).
 - `auth-fields.ts` — the Better Auth `additionalFields`, so the server's
   `betterAuth()` and the client's `inferAdditionalFields()` share one
   declaration.

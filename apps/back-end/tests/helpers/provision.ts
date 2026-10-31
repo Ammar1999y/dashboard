@@ -19,7 +19,11 @@ import { SQL } from 'bun';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { DATA_TABLE_POOL_CONNECTIONS, MAX_POOL_CONNECTIONS } from '@/db/limits';
+import {
+  DATA_TABLE_POOL_CONNECTIONS,
+  MAX_POOL_CONNECTIONS,
+  PROBE_POOL_CONNECTIONS,
+} from '@/db/limits';
 
 import { compareCodeUnits } from '@/utils/text';
 
@@ -134,7 +138,8 @@ async function schemaFingerprint(): Promise<string> {
   return hasher.digest('hex');
 }
 
-const WORKER_CONNECTIONS = MAX_POOL_CONNECTIONS + DATA_TABLE_POOL_CONNECTIONS;
+const WORKER_CONNECTIONS =
+  MAX_POOL_CONNECTIONS + DATA_TABLE_POOL_CONNECTIONS + PROBE_POOL_CONNECTIONS;
 
 /**
  * `--parallel` ceiling, computed from the server rather than from the CPU count.

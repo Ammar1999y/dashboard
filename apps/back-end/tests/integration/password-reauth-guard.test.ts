@@ -15,6 +15,7 @@ import { db } from '@/db';
 import {
   accounts,
   auditLogs,
+  twoFactorCredentials,
   twoFactorMethods,
   users,
   verificationSessions,
@@ -33,6 +34,7 @@ import {
   LOCK_DURATION_SECONDS,
   MAX_FAILED_ATTEMPTS,
 } from '@/lib/auth/login-guard';
+import { REAUTH_ATTEMPT_LIMIT } from '@/lib/auth/reauth/session';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { resetTables } from '../helpers/database';
@@ -211,6 +213,55 @@ describe('a locked account, re-authenticating with its correct password', () => 
     expect(lockedBody).toEqual(await unknown.json());
     expect(lockedBody).toMatchObject({ message: MSG_INVALID_CREDENTIALS });
     expect(locked.headers.get('retry-after')).toBeNull();
+  });
+});
+
+test('the binding and the 2FA paths spend one per-user re-authentication budget', async () => {
+  const user = await seedUser();
+  const session = await signIn(user);
+
+  // Malformed bodies: the gate charges each before the body is read, and none
+  // buys an Argon2 run or a failed attempt.
+  for (let spent = 1; spent < REAUTH_ATTEMPT_LIMIT.limit; spent++) {
+    const malformed = await post(session, '/api/dash/auth/reauth', {});
+    expect(malformed.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+  }
+
+  // The last unit, spent by a 2FA path.
+  const started = await post(session, '/api/auth/two-factor/totp/start', {
+    password: user.password,
+  });
+  expect(started.status).toBe(HTTP_STATUS.OK);
+  const proofs = await proofPurposes(user.userId);
+  expect(proofs).toEqual(['sign_in', 'reauth_two_factor']);
+  const secretOf = async () => {
+    const [credential] = await db
+      .select({ secret: twoFactorCredentials.secret })
+      .from(twoFactorCredentials)
+      .where(eq(twoFactorCredentials.userId, user.userId));
+    return credential?.secret;
+  };
+  const secret = await secretOf();
+  expect(secret).toBeString();
+
+  for (const path of [
+    '/api/auth/two-factor/totp/start',
+    '/api/auth/two-factor/get-totp-uri',
+    '/api/dash/auth/reauth',
+  ]) {
+    const refused = await post(session, path, { password: user.password });
+    expect([path, refused.status]).toEqual([
+      path,
+      HTTP_STATUS.TOO_MANY_REQUESTS,
+    ]);
+  }
+
+  // Refused before the password was checked, and nothing was rewritten.
+  expect(await proofPurposes(user.userId)).toEqual(proofs);
+  expect(await secretOf()).toBe(secret);
+  expect(await lockState(user.userId)).toEqual({
+    failedLoginAttempts: 0,
+    lockedUntil: null,
   });
 });
 

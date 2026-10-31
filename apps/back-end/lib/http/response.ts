@@ -94,24 +94,15 @@ export function apiError({
   };
 }
 
-/**
- * Maps a caught error to a problem. `extraHeaders` carries headers
- * (Retry-After, ...) from an original error that a catch block rewrote into a
- * new `CustomError`.
- */
+/** Maps a caught error to a problem. */
 export function handleApiError(
   error: unknown,
-  fallbackMessage?: string,
-  extraHeaders?: Record<string, string>
+  fallbackMessage?: string
 ): HandlerError {
   if (error instanceof CustomError) {
     if (error.status !== undefined && error.status >= 500)
       logServerErrorResponse(error);
-    const errorHeaders = error.responseHeaders;
-    const headers =
-      errorHeaders || extraHeaders
-        ? { ...extraHeaders, ...errorHeaders }
-        : undefined;
+    const headers = error.responseHeaders;
     return apiError({
       message: error.message,
       code: error.code,
@@ -125,7 +116,6 @@ export function handleApiError(
     return apiError({
       message: MSG_INVALID_INPUT,
       status: HTTP_STATUS.UNPROCESSABLE,
-      ...(extraHeaders && { headers: extraHeaders }),
     });
 
   // A deadlock is the backstop for a writer that misses the users → roles lock
@@ -135,10 +125,7 @@ export function handleApiError(
     return apiError({
       message: MSG_SERVICE_UNAVAILABLE,
       status: HTTP_STATUS.SERVICE_UNAVAILABLE,
-      headers: {
-        ...extraHeaders,
-        'Retry-After': String(DATABASE_RETRY_AFTER_S),
-      },
+      headers: { 'Retry-After': String(DATABASE_RETRY_AFTER_S) },
     });
   }
 
@@ -157,7 +144,6 @@ export function handleApiError(
   return apiError({
     message: fallbackMessage ?? MSG_INTERNAL_ERROR,
     status: HTTP_STATUS.INTERNAL_ERROR,
-    ...(extraHeaders && { headers: extraHeaders }),
   });
 }
 

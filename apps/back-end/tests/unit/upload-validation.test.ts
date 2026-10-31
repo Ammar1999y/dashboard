@@ -1,11 +1,12 @@
 /**
- * The two halves of the upload door: `validateMagicBytes` on the bytes, and
- * `sanitizeSvg` on the one type the byte check deliberately waves through.
+ * The two halves of the upload door: the byte checks `admitUpload` runs (the
+ * file table's signature, then animation), and `sanitizeSvg` on the one type
+ * the signature check deliberately waves through.
  *
  * Neither had an assertion before this file, and the gap is structural rather
  * than accidental: `tests/integration/upload-auth-gate.test.ts` uploads a benign
  * `<svg><rect/></svg>` precisely *because* SVG is exempt from the magic-byte
- * check (`lib/media/image/process.ts:99`), so the one fixture that reaches the
+ * check (`FILE_TYPE_TABLE`'s SVG entry), so the one fixture that reaches the
  * pipeline is the one fixture that exercises neither guard.
  *
  * Why the SVG half is a security test and not a formatting test: the sanitised
@@ -57,10 +58,13 @@ import {
 } from '@app/shared/images/config';
 import {
   iccProfileChunk,
+  isAnimatedRaster,
   rasterDimensions,
 } from '@app/shared/images/raster-bytes';
-import { sanitizeSvg } from '@app/shared/images/svg-optimizer';
+import { sanitizeSvg } from '@app/shared/images/svg-sanitizer';
 import {
+  mediaMsg,
+  MSG_INVALID_SVG,
   MSG_SVG_EXTERNAL_REFERENCE,
   MSG_SVG_INVALID_INLINE_RASTER,
   MSG_SVG_REQUIRES_CONVERSION,
@@ -75,15 +79,14 @@ import {
 } from '@app/shared/validation/constants';
 
 import {
-  MAX_ICC_PROFILE_BYTES,
-  measureEncodeCost,
-  optimizeImage,
-} from '@/lib/media/image/optimize';
+  FILE_TYPE_TABLE,
+  FILE_TYPES,
+  fileTypeFor,
+} from '@/lib/media/allowlist';
+import { MAX_ICC_PROFILE_BYTES } from '@/lib/media/image/icc';
+import { measureEncodeCost, optimizeImage } from '@/lib/media/image/optimize';
 import {
-  ALLOWED_IMAGE_TYPES,
-  isAllowedImageType,
   optimizeSvgUpload,
-  validateMagicBytes,
   validateSvgUpload,
 } from '@/lib/media/image/process';
 import { imageToRgba } from '@/lib/media/image/rgba';
@@ -131,6 +134,9 @@ function expectNeutralised(markup: string, forbidden: readonly string[]) {
     expect(stored).not.toInclude(token.toLowerCase());
   return result;
 }
+
+/** For a test whose job may be the first to start the SVG worker thread. */
+const WORKER_COLD_START_MS = 30_000;
 
 /** The refusal a direct upload of `markup` gets, through the upload entry point. */
 async function uploadRefusal(markup: string, name = 'a.svg'): Promise<unknown> {
@@ -287,21 +293,34 @@ describe('hostile SVG, neutralised', () => {
   });
 
   test.each([
-    ['a prefixed child', '<s:g><s:script>alert(1)</s:script></s:g>'],
+    ['a prefixed child', '<s:g><s:script>alert(1)</s:script></s:g>', true],
     [
       'a prefixed onload attribute',
       '<s:rect width="8" height="8" onload="alert(1)"/>',
+      true,
     ],
     [
       'a prefixed foreignObject',
       '<s:foreignObject><s:script>alert(1)</s:script></s:foreignObject>',
+      false,
     ],
-  ])('%s under a prefix-only SVG root is neutralised', (_name, inner) => {
-    expectNeutralised(
-      `<s:svg xmlns:s="${SVG_NS}" width="8" height="8">${inner}</s:svg>`,
-      ['script', 'alert', 'onload', 'foreignobject']
-    );
-  });
+  ])(
+    '%s under a prefix-only SVG root is neutralised',
+    (_name, inner, accepted) => {
+      const result = expectNeutralised(
+        `<s:svg xmlns:s="${SVG_NS}" width="8" height="8">${inner}</s:svg>`,
+        ['script', 'alert', 'onload', 'foreignobject']
+      );
+      // Judged as under an unprefixed root: the prefix alone refuses nothing,
+      // and an accepted row shows the payload gone from a stored document.
+      expect(result.isValid).toBe(accepted);
+      expect(result).toEqual(
+        clean(
+          `<svg xmlns="${SVG_NS}" xmlns:s="${SVG_NS}" width="8" height="8">${inner}</svg>`
+        )
+      );
+    }
+  );
 
   test.each([...DANGEROUS_ELEMENTS])(
     'a <%s> element never reaches the cleaned output',
@@ -1361,7 +1380,7 @@ describe('animation in an SVG', () => {
 
       expect(result.isValid).toBe(false);
       expect(result.cleanedSvg).toBe('');
-      // The reason is what `processImage` branches on to produce the same
+      // The reason is what `validateSvgUpload` branches on to produce the same
       // "animated uploads are not supported" message an animated WebP gets.
       expect(result.reason).toBe('animated');
     }
@@ -2055,15 +2074,48 @@ describe('the SVG content boundary', () => {
   // the server pipeline already refuses the same input by CONTENT — so the
   // weaker parallel boundary is gone rather than repaired, leaving one authority.
   test('a non-SVG carrying an .svg name is refused by content', () => {
-    // `processImage` decodes the buffer as UTF-8 and hands it to
-    // `sanitizeSvgServer`; no `<svg` substring means a 400, whatever the name
-    // said.
+    // `validateSvgUpload` decodes the buffer as UTF-8 and hands it to
+    // `sanitizeSvgServer`; no parsed `<svg>` root means a 400, whatever the
+    // name said.
     const asText = Buffer.from(PNG_SIGNATURE).toString('utf8');
 
     const result = clean(asText);
     expect(result.isValid).toBe(false);
     expect(result.cleanedSvg).toBe('');
   });
+
+  test('a root written with any prefix is an SVG', () => {
+    // The text has no `<svg` anywhere; only the parsed root says what it is.
+    const prefixed = `<s:svg xmlns:s="${SVG_NS}" width="8" height="8"><s:rect width="8" height="8"/></s:svg>`;
+    expect(prefixed).not.toInclude('<svg');
+
+    const result = clean(prefixed);
+    expect(result.isValid).toBe(true);
+    expect(result.cleanedSvg).toStartWith('<svg');
+    expect(result.cleanedSvg).toInclude('<rect');
+  });
+
+  test.each([
+    ['PNG bytes', Buffer.from(PNG_SIGNATURE).toString('utf8')],
+    ['plain text', 'not markup at all'],
+    ['an XHTML root', '<html xmlns="http://www.w3.org/1999/xhtml"/>'],
+    [
+      'a prefixed svg root in another namespace',
+      '<s:svg xmlns:s="urn:example:not-svg"><s:rect/></s:svg>',
+    ],
+  ])(
+    '%s is refused as an invalid SVG, the answer the front end shows',
+    async (_label, document) => {
+      expect(clean(document)).toMatchObject({ isValid: false, cleanedSvg: '' });
+      expect(clean(document)).not.toHaveProperty('reason');
+      expect(await uploadRefusal(document)).toMatchObject({
+        status: HTTP_STATUS.BAD_REQUEST,
+        message: MSG_INVALID_SVG,
+        code: FILE_CONTENT_REFUSED_CODE,
+      });
+    },
+    WORKER_COLD_START_MS
+  );
 
   test('the size ceiling belongs to the sanitiser, and applies to content', () => {
     const at = `<svg xmlns="${SVG_NS}"><desc>${'A'.repeat(SVG_SIZE_CAP - 200)}</desc><rect width="1" height="1"/></svg>`;
@@ -2426,10 +2478,10 @@ const gifPolyglot = Buffer.concat([
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GAP 5 — validateMagicBytes
+// GAP 5 — the image byte checks
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('validateMagicBytes fixtures are real images', () => {
+describe('the byte-check fixtures are real images', () => {
   test('the hand-built PNG and the derived WebPs decode', async () => {
     // Without this the rest of the section is circular: it would assert that
     // bytes built to satisfy the checker satisfy the checker.
@@ -2483,9 +2535,23 @@ describe('one side over what WebP can hold', () => {
     });
   });
 
+  test('the upload charge refuses it the same way, before the encoder queue', async () => {
+    // `measureEncodeCost` runs before the budget charge and the encoder slot,
+    // so a side check that lived only inside the slot let the file charge the
+    // budget and hold a queue place first.
+    await expect(measureEncodeCost(tall)).rejects.toMatchObject({
+      status: HTTP_STATUS.UNPROCESSABLE,
+      message: uploadMsg.edgeTooLong(MAX_IMAGE_EDGE),
+      code: IMAGE_TOO_LARGE_CODE,
+    });
+    expect(await measureEncodeCost(buildPng(MAX_IMAGE_EDGE, 1, true))).toBe(1);
+  });
+
   test('a square inside the edge limit still optimises', async () => {
     const out = await optimizeImage(buildPng(64));
-    expect(out.format).toBe('webp');
+    expect(await new Bun.Image(out.buffer).metadata()).toMatchObject({
+      format: 'webp',
+    });
     expect(out.width).toBe(64);
   });
 
@@ -2496,7 +2562,9 @@ describe('one side over what WebP can hold', () => {
     // not be exceeded is `MAX_STORED_IMAGE_BYTES`, asserted below.
     const out = await optimizeImage(buildPng(64), { targetSize: 1 });
 
-    expect(out.format).toBe('webp');
+    expect(await new Bun.Image(out.buffer).metadata()).toMatchObject({
+      format: 'webp',
+    });
     expect(out.size).toBeGreaterThan(1);
     expect(out.size).toBeLessThanOrEqual(800 * 1024);
     // Two encodes, not the whole ladder: a miss this wide at rung 0 aims the
@@ -2617,28 +2685,37 @@ describe('the encode search', () => {
   }, 30_000);
 });
 
-describe('validateMagicBytes', () => {
+/** The file table's verdict on `bytes` declared as `type`. */
+function detect(bytes: Uint8Array, type: string) {
+  const spec = FILE_TYPE_TABLE.get(type);
+  if (!spec) throw new Error(`${type} is not in the file table`);
+  return spec.detect(bytes);
+}
+
+const SIGNATURE_REFUSAL = { ok: false, reason: 'signature' } as const;
+
+/** Through the upload entry point, as the image routes call it. */
+const admitImage = (bytes: Uint8Array, type: string, name: string) =>
+  admitUpload(new File([Uint8Array.from(bytes)], name, { type }), {
+    kinds: ['image'],
+  });
+
+describe('the image signature checks', () => {
   test('a real PNG passes', () => {
-    expect(validateMagicBytes(realPng, 'image/png')).toEqual({ valid: true });
+    expect(detect(realPng, 'image/png')).toEqual({ ok: true });
   });
 
   test('a real still WebP passes', () => {
-    expect(validateMagicBytes(stillWebp, 'image/webp')).toEqual({
-      valid: true,
-    });
+    expect(detect(stillWebp, 'image/webp')).toEqual({ ok: true });
   });
 
   test('SVG is exempt by design, and the sanitiser is what closes the hole', () => {
-    // `validateMagicBytes` says yes to any bytes declared `image/svg+xml`,
-    // including the polyglot. That is not a defect on its own — the check that
-    // runs on this branch is `sanitizeSvgServer` — but the pair only holds if
-    // both halves do. Asserted together for that reason.
-    expect(validateMagicBytes(gifPolyglot, 'image/svg+xml')).toEqual({
-      valid: true,
-    });
-    expect(validateMagicBytes(Buffer.alloc(0), 'image/svg+xml')).toEqual({
-      valid: true,
-    });
+    // The SVG entry says yes to any bytes declared `image/svg+xml`, including
+    // the polyglot. That is not a defect on its own — the check that runs on
+    // this branch is `sanitizeSvgServer` — but the pair only holds if both
+    // halves do. Asserted together for that reason.
+    expect(detect(gifPolyglot, 'image/svg+xml')).toEqual({ ok: true });
+    expect(detect(Buffer.alloc(0), 'image/svg+xml')).toEqual({ ok: true });
 
     expect(clean(gifPolyglot.toString('utf8')).isValid).toBe(false);
     expect(
@@ -2653,32 +2730,22 @@ describe('validateMagicBytes', () => {
     ).toBe(false);
   });
 
-  test('the bytes decide, not the filename or the extension', () => {
-    // A PNG named `.jpg` never reaches this function under a jpeg type —
-    // `isAllowedImageType` refuses first — so the assertion that matters is that
-    // the verdict is a pure function of the buffer and the declared type. The
-    // name is not an argument at all, which is the property being pinned.
-    const pngNamedJpg = new File([Uint8Array.from(realPng)], 'photo.jpg', {
-      type: 'image/png',
-    });
-    expect(pngNamedJpg.name.endsWith('.jpg')).toBe(true);
-    expect(validateMagicBytes(realPng, pngNamedJpg.type)).toEqual({
-      valid: true,
-    });
+  test('the bytes decide, not the filename or the extension', async () => {
+    // The verdict is a function of the buffer and the declared type; the name
+    // is never consulted, which is the property being pinned.
+    const admitted = await admitImage(realPng, 'image/png', 'photo.jpg');
+    expect(admitted.mimeType).toBe('image/png');
+    expect(admitted.spec.extension).toBe('png');
 
     // The same bytes with a jpeg declaration are refused at the door instead.
-    expect(isAllowedImageType('image/jpeg')).toBe(false);
+    expect(fileTypeFor('image/jpeg')).toBeUndefined();
   });
 
   test('a GIF/<script> polyglot is refused under every raster declaration', () => {
-    expect(validateMagicBytes(gifPolyglot, 'image/png')).toEqual({
-      valid: false,
-    });
-    expect(validateMagicBytes(gifPolyglot, 'image/webp')).toEqual({
-      valid: false,
-    });
+    expect(detect(gifPolyglot, 'image/png')).toEqual(SIGNATURE_REFUSAL);
+    expect(detect(gifPolyglot, 'image/webp')).toEqual(SIGNATURE_REFUSAL);
     // And `image/gif` never gets that far.
-    expect(isAllowedImageType('image/gif')).toBe(false);
+    expect(fileTypeFor('image/gif')).toBeUndefined();
   });
 
   test.each([
@@ -2688,48 +2755,12 @@ describe('validateMagicBytes', () => {
     ['WebP truncated before the WEBP FourCC', 8, 'image/webp'],
   ] as const)('%s is refused rather than throwing', (_name, length, type) => {
     const source = type === 'image/png' ? realPng : stillWebp;
-    expect(validateMagicBytes(source.subarray(0, length), type)).toEqual({
-      valid: false,
-    });
+    expect(detect(source.subarray(0, length), type)).toEqual(SIGNATURE_REFUSAL);
   });
 
   test('an empty buffer is refused for every magic-checked type', () => {
-    expect(validateMagicBytes(Buffer.alloc(0), 'image/png')).toEqual({
-      valid: false,
-    });
-    expect(validateMagicBytes(Buffer.alloc(0), 'image/webp')).toEqual({
-      valid: false,
-    });
-  });
-
-  test('every type isAllowedImageType admits is magic-checked, or is SVG', () => {
-    // The real list, imported rather than restated — a copy here would keep
-    // passing for a type added to production and nowhere else, which is exactly
-    // the case this invariant exists to catch. The invariant keeps the fail-open
-    // default at `upload-helper.ts:102` safe: an allowed type with no signature
-    // entry would pass unchecked, silently.
-    const admitted = [...ALLOWED_IMAGE_TYPES];
-
-    // The predicate and the list must agree in both directions, or the walk
-    // below is over the wrong set.
-    for (const type of admitted) expect(isAllowedImageType(type)).toBe(true);
-    for (const type of [
-      'image/jpeg',
-      'image/gif',
-      'image/avif',
-      'text/html',
-      'application/octet-stream',
-      '',
-    ])
-      expect(isAllowedImageType(type)).toBe(false);
-
-    for (const type of admitted) {
-      if (type === 'image/svg+xml') continue;
-      // Junk bytes must be refused, which is only possible if a signature exists.
-      expect(validateMagicBytes(Buffer.alloc(64, 0x41), type)).toEqual({
-        valid: false,
-      });
-    }
+    expect(detect(Buffer.alloc(0), 'image/png')).toEqual(SIGNATURE_REFUSAL);
+    expect(detect(Buffer.alloc(0), 'image/webp')).toEqual(SIGNATURE_REFUSAL);
   });
 });
 
@@ -2754,11 +2785,9 @@ describe('a declared type carrying parameters', () => {
   });
 
   test('does NOT skip animation detection', async () => {
-    // The gap: the allowlist lookup normalized and the byte-level checks
-    // compared the raw string, so `hasRasterSignature` answered false for a
-    // parameterised type and `validateMagicBytes` returned `{ valid: true }`
-    // for an animated WebP. It survived only because `processImage` later
-    // refused the raw string — a check whose job is something else entirely.
+    // The gap: the allowlist lookup normalizes, so a byte-level check keyed on
+    // the raw string finds no animation check for a parameterised type and
+    // admits an animated WebP as a still.
     expect(
       admitUpload(
         part(animatedWebp, 'image/webp; charset=utf-8', 'anim.webp'),
@@ -2783,19 +2812,13 @@ describe('a declared type carrying parameters', () => {
   });
 });
 
-describe('validateMagicBytes — the animated-WebP branch', () => {
-  test('an animated WebP is refused with { valid: false, animated: true }', () => {
-    expect(validateMagicBytes(animatedWebp, 'image/webp')).toEqual({
-      valid: false,
-      animated: true,
-    });
+describe('the animation check — the WebP branch', () => {
+  test('an animated WebP is animated', () => {
+    expect(isAnimatedRaster(animatedWebp, 'image/webp')).toBe(true);
   });
 
   test('an ANIM chunk with no VP8X flag is treated as animated too', () => {
-    expect(validateMagicBytes(animatedWithoutVp8x, 'image/webp')).toEqual({
-      valid: false,
-      animated: true,
-    });
+    expect(isAnimatedRaster(animatedWithoutVp8x, 'image/webp')).toBe(true);
   });
 
   test('a still WebP is still accepted, simple and extended alike', () => {
@@ -2806,41 +2829,28 @@ describe('validateMagicBytes — the animated-WebP branch', () => {
     expect(findRiffChunk(stillWebp, 'VP8X')).toBeNull();
     expect(findRiffChunk(extendedStillWebp, 'VP8X')).not.toBeNull();
 
-    expect(validateMagicBytes(stillWebp, 'image/webp')).toEqual({
-      valid: true,
-    });
-    expect(validateMagicBytes(extendedStillWebp, 'image/webp')).toEqual({
-      valid: true,
-    });
+    expect(isAnimatedRaster(stillWebp, 'image/webp')).toBe(false);
+    expect(isAnimatedRaster(extendedStillWebp, 'image/webp')).toBe(false);
   });
 
-  test('a PNG declared image/webp is refused with `animated` ABSENT', () => {
-    const verdict = validateMagicBytes(realPng, 'image/webp');
-
-    expect(verdict).toEqual({ valid: false });
-    // `toEqual` treats `{ animated: undefined }` as equal to `{}`, and the
-    // handler branches on truthiness, so the key's absence is asserted directly.
-    expect('animated' in verdict).toBe(false);
-    expect(verdict.animated).toBeUndefined();
-  });
-
-  test('the two rejection reasons produce two different messages', () => {
-    // The consequence the branch exists for: `handler.ts:127-133` picks the
-    // message off `magicValidation.animated`. If a content mismatch carried
-    // `animated: true`, a user uploading a mislabelled PNG would be told their
-    // still image is an animation.
-    const messageFor = (buffer: Buffer) => {
-      const verdict = validateMagicBytes(buffer, 'image/webp');
-      return verdict.animated
-        ? uploadMsg.animatedNotAllowed('f.webp')
-        : uploadMsg.contentMismatch('f.webp');
-    };
-
-    expect(messageFor(animatedWebp)).toBe(
-      uploadMsg.animatedNotAllowed('f.webp')
+  test('a PNG declared image/webp is a signature refusal, not an animation', async () => {
+    // A still image is never reported as an animation: the signature check
+    // answers first, with its own message.
+    await expect(
+      admitImage(realPng, 'image/webp', 'f.webp')
+    ).rejects.toMatchObject({
+      message: mediaMsg.refused('f', 'signature'),
+      code: FILE_CONTENT_REFUSED_CODE,
+    });
+    await expect(
+      admitImage(animatedWebp, 'image/webp', 'f.webp')
+    ).rejects.toMatchObject({
+      message: uploadMsg.animatedNotAllowed('f'),
+      code: FILE_CONTENT_REFUSED_CODE,
+    });
+    expect(uploadMsg.animatedNotAllowed('f')).not.toBe(
+      mediaMsg.refused('f', 'signature')
     );
-    expect(messageFor(realPng)).toBe(uploadMsg.contentMismatch('f.webp'));
-    expect(messageFor(animatedWebp)).not.toBe(messageFor(realPng));
   });
 
   test('a truncated animated WebP does not throw', () => {
@@ -2849,7 +2859,7 @@ describe('validateMagicBytes — the animated-WebP branch', () => {
     // become a `RangeError` four layers below the route.
     for (let length = 12; length <= animatedWebp.length; length += 3)
       expect(() =>
-        validateMagicBytes(animatedWebp.subarray(0, length), 'image/webp')
+        isAnimatedRaster(animatedWebp.subarray(0, length), 'image/webp')
       ).not.toThrow();
   });
 
@@ -2861,52 +2871,43 @@ describe('validateMagicBytes — the animated-WebP branch', () => {
       Buffer.concat([Buffer.from('WEBP', 'ascii'), header, Buffer.alloc(8)])
     );
 
-    expect(() => validateMagicBytes(lying, 'image/webp')).not.toThrow();
+    expect(() => isAnimatedRaster(lying, 'image/webp')).not.toThrow();
   });
 
   test('a zero-length chunk before VP8X does not hide the animation flag', () => {
     // The walk used to bail on the first `size <= 0` chunk, so one empty (and
     // legal) `XMP ` ahead of VP8X made the animation flag unreachable: the file
     // was admitted as a still and then rejected by `optimizeImage` as corrupt,
-    // with a generic 422 instead of the animation-specific 400 this branch
-    // exists to provide.
-    expect(validateMagicBytes(animatedBehindEmptyChunk, 'image/webp')).toEqual({
-      valid: false,
-      animated: true,
-    });
+    // with a generic 422 instead of the animation-specific refusal.
+    expect(isAnimatedRaster(animatedBehindEmptyChunk, 'image/webp')).toBe(true);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// validateMagicBytes — the APNG branch. Same policy as WebP, and it has to be:
+// The animation check — the APNG branch. Same policy as WebP, and it has to be:
 // an APNG is conventionally named `.png` and declared `image/png`, so before
 // this it was admitted and silently flattened to its first frame with a 200.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('validateMagicBytes — the animated-PNG branch', () => {
-  test('an APNG is refused with { valid: false, animated: true }', () => {
-    expect(validateMagicBytes(apng, 'image/png')).toEqual({
-      valid: false,
-      animated: true,
-    });
+describe('the animation check — the PNG branch', () => {
+  test('an APNG is animated', () => {
+    expect(isAnimatedRaster(apng, 'image/png')).toBe(true);
   });
 
-  test('a still PNG is still accepted', () => {
-    expect(validateMagicBytes(realPng, 'image/png')).toEqual({ valid: true });
+  test('a still PNG is not', () => {
+    expect(isAnimatedRaster(realPng, 'image/png')).toBe(false);
   });
 
   test('an acTL AFTER the first IDAT is not animation', () => {
     // Position is the rule, not presence: a decoder ignores `acTL` there, so
     // treating it as animated would refuse a still PNG carrying a stray chunk.
-    expect(validateMagicBytes(apngWithLateAcTl, 'image/png')).toEqual({
-      valid: true,
-    });
+    expect(isAnimatedRaster(apngWithLateAcTl, 'image/png')).toBe(false);
   });
 
   test('a truncated APNG does not throw', () => {
     for (let length = 8; length <= apng.length; length += 3)
       expect(() =>
-        validateMagicBytes(apng.subarray(0, length), 'image/png')
+        isAnimatedRaster(apng.subarray(0, length), 'image/png')
       ).not.toThrow();
   });
 
@@ -2922,24 +2923,32 @@ describe('validateMagicBytes — the animated-PNG branch', () => {
       Buffer.alloc(8),
     ]);
 
-    expect(() => validateMagicBytes(lying, 'image/png')).not.toThrow();
+    expect(() => isAnimatedRaster(lying, 'image/png')).not.toThrow();
   });
 
-  test('every admitted raster format is covered by an animation check', () => {
+  test('every admitted raster format is refused animated at the upload door', async () => {
     // The class this finding was an instance of: three formats admitted, all
     // three with a standard animation form, and only one checked. SVG is the
     // exemption — it carries no magic bytes and `sanitizeSvg` refuses its
-    // animation elements instead.
-    const rasterTypes = ALLOWED_IMAGE_TYPES.filter(
-      (type) => type !== 'image/svg+xml'
-    );
+    // animation elements instead. A raster type added without a fixture here
+    // fails the lookup rather than passing unchecked.
+    const animatedFixtures = new Map([
+      ['image/png', apng],
+      ['image/webp', animatedWebp],
+    ]);
+    const rasterTypes = [...FILE_TYPES]
+      .filter(
+        ([type, spec]) => spec.kind === 'image' && type !== 'image/svg+xml'
+      )
+      .map(([type]) => type);
 
     expect(rasterTypes.length).toBeGreaterThan(0);
     for (const type of rasterTypes) {
-      const animatedFixture = type === 'image/png' ? apng : animatedWebp;
-      expect(validateMagicBytes(animatedFixture, type)).toEqual({
-        valid: false,
-        animated: true,
+      const fixture = animatedFixtures.get(type);
+      if (!fixture) throw new Error(`no animated fixture for ${type}`);
+      await expect(admitImage(fixture, type, 'anim')).rejects.toMatchObject({
+        message: uploadMsg.animatedNotAllowed('anim'),
+        code: FILE_CONTENT_REFUSED_CODE,
       });
     }
   });
@@ -3116,10 +3125,7 @@ describe('an inline data: raster is held to the upload policy', () => {
       // the modern spelling stored and served an animated raster from the public
       // bucket while the same bytes uploaded directly were refused by the byte
       // checks. Both boundaries read the same predicate now.
-      expect(validateMagicBytes(bytes(), mimeType)).toEqual({
-        valid: false,
-        animated: true,
-      });
+      expect(isAnimatedRaster(bytes(), mimeType)).toBe(true);
 
       // Refused, NOT stripped — and that is the half a security fix alone would
       // have missed. Stripping answers 200 with the picture silently gone, which
@@ -3135,12 +3141,9 @@ describe('an inline data: raster is held to the upload policy', () => {
 
   test('all three routes animation takes answer alike', () => {
     // Uploaded directly, declared with SMIL, or inlined on a reference — one
-    // policy, one disposition. `processImage` maps `reason: 'animated'` to the
-    // same `animatedNotAllowed` message the byte check produces.
-    expect(validateMagicBytes(apng, 'image/png')).toMatchObject({
-      valid: false,
-      animated: true,
-    });
+    // policy, one disposition. `validateSvgUpload` maps `reason: 'animated'`
+    // to the same `animatedNotAllowed` message the byte check produces.
+    expect(isAnimatedRaster(apng, 'image/png')).toBe(true);
     expect(
       clean(svg('<rect><animate attributeName="x"/></rect>'))
     ).toMatchObject({ isValid: false, reason: 'animated' });
@@ -3151,12 +3154,12 @@ describe('an inline data: raster is held to the upload policy', () => {
   });
 
   test('a type the upload route does not admit is REFUSED, not stripped', () => {
-    // The OTHER axis. GIF is not in `ALLOWED_IMAGE_TYPES`, and it used to keep
+    // The OTHER axis. GIF is not in the file table, and it used to keep
     // the external-reference answer — stripped, 200, picture silently gone. The
     // caller supplied a PICTURE here, not a pointer to one, so it now gets the
     // same disposition an unsupported direct upload gets.
     const gif = Buffer.from('R0lGODlhAQABAAAAACw=', 'base64');
-    expect(isAllowedImageType('image/gif')).toBe(false);
+    expect(fileTypeFor('image/gif')).toBeUndefined();
 
     const result = clean(inline('image/gif', gif));
     expect(result.isValid).toBe(false);
@@ -3589,6 +3592,286 @@ describe('an inline data: raster is held to the upload policy', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// An inline raster is stored without its metadata, as a direct upload is
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TIFF_SHORT = 3;
+const TIFF_LONG = 4;
+const ORIENTATION_TAG = 0x01_12;
+const GPS_IFD_TAG = 0x88_25;
+
+/** A big-endian TIFF: IFD0 of `[tag, type, value]` entries, then `tail`. */
+function tiffWith(
+  entries: ReadonlyArray<readonly [number, number, number]>,
+  tail = Buffer.alloc(0)
+): Buffer {
+  const ifd = Buffer.alloc(2 + entries.length * 12 + 4);
+  ifd.writeUInt16BE(entries.length, 0);
+  entries.forEach(([tag, type, value], index) => {
+    const at = 2 + index * 12;
+    ifd.writeUInt16BE(tag, at);
+    ifd.writeUInt16BE(type, at + 2);
+    ifd.writeUInt32BE(1, at + 4);
+    if (type === TIFF_SHORT) ifd.writeUInt16BE(value, at + 8);
+    else ifd.writeUInt32BE(value, at + 8);
+  });
+  return Buffer.concat([
+    Buffer.from([0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08]),
+    ifd,
+    tail,
+  ]);
+}
+
+const GPS_SENTINEL = 'GPS-SENTINEL 24.7136N 46.6753E';
+const AUTHOR_SENTINEL = 'AUTHOR-SENTINEL';
+const XMP_SENTINEL = 'XMP-SENTINEL';
+const SENTINELS = [GPS_SENTINEL, AUTHOR_SENTINEL, XMP_SENTINEL];
+
+/** EXIF a phone writes: a GPS block, which only the IFD0 pointer names. */
+function photoExif(orientation?: number): Buffer {
+  const entries: Array<readonly [number, number, number]> = [];
+  if (orientation !== undefined)
+    entries.push([ORIENTATION_TAG, TIFF_SHORT, orientation]);
+  const tailOffset = 8 + 2 + (entries.length + 1) * 12 + 4;
+  entries.push([GPS_IFD_TAG, TIFF_LONG, tailOffset]);
+  return tiffWith(entries, Buffer.from(GPS_SENTINEL, 'latin1'));
+}
+
+const xmpPacket = Buffer.from(
+  `<x:xmpmeta xmlns:x="adobe:ns:meta/"><dc:creator>${XMP_SENTINEL}</dc:creator></x:xmpmeta>`,
+  'latin1'
+);
+
+/** `realPng` as an editor saves it: what renders, and what only describes it. */
+function pngWithMetadata(exif: Buffer): Buffer {
+  const gama = Buffer.alloc(4);
+  gama.writeUInt32BE(45_455, 0);
+  return withPngChunks(
+    realPng,
+    pngChunk('gAMA', gama),
+    pngChunk('eXIf', exif),
+    pngChunk('tEXt', Buffer.from(`Author\0${AUTHOR_SENTINEL}`, 'latin1')),
+    pngChunk(
+      'iTXt',
+      Buffer.concat([
+        Buffer.from('XML:com.adobe.xmp\0\0\0\0\0', 'latin1'),
+        xmpPacket,
+      ])
+    ),
+    pngChunk('tIME', Buffer.from([0x07, 0xea, 10, 31, 12, 0, 0])),
+    pngChunk(
+      'zTXt',
+      Buffer.concat([
+        Buffer.from('Comment\0\0', 'latin1'),
+        zlib.deflateSync(Buffer.from(AUTHOR_SENTINEL)),
+      ])
+    ),
+    pngChunk('prVt', Buffer.from(AUTHOR_SENTINEL))
+  );
+}
+
+const WEBP_EXIF_FLAG = 0x08;
+const WEBP_XMP_FLAG = 0x04;
+
+/** The lossy still with VP8X announcing EXIF and XMP, both carried. */
+const webpWithMetadata = (exif: Buffer): Buffer =>
+  riffContainer(
+    Buffer.concat([
+      Buffer.from('WEBP', 'ascii'),
+      riffChunk('VP8X', vp8xChunk(WEBP_EXIF_FLAG | WEBP_XMP_FLAG)),
+      riffChunk('VP8 ', realFrame),
+      riffChunk('EXIF', exif),
+      // Odd length: the chunk after it starts past a pad byte.
+      riffChunk('XMP ', Buffer.concat([xmpPacket, Buffer.from('!')])),
+    ])
+  );
+
+/** Every PNG chunk type, walked independently of the production reader. */
+function pngChunkTypes(bytes: Buffer): string[] {
+  const types: string[] = [];
+  let offset = PNG_SIGNATURE.length;
+  while (offset + 8 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    types.push(bytes.toString('ascii', offset + 4, offset + 8));
+    offset += 12 + length;
+  }
+  return types;
+}
+
+function pngChunkData(bytes: Buffer, type: string): Buffer | null {
+  let offset = PNG_SIGNATURE.length;
+  while (offset + 8 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    if (bytes.toString('ascii', offset + 4, offset + 8) === type)
+      return bytes.subarray(offset + 8, offset + 8 + length);
+    offset += 12 + length;
+  }
+  return null;
+}
+
+/** The PNG CRC check a decoder runs, on every chunk. */
+function pngCrcsHold(bytes: Buffer): boolean {
+  let offset = PNG_SIGNATURE.length;
+  while (offset + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    const crc = bytes.readUInt32BE(offset + 8 + length);
+    if (
+      Bun.hash.crc32(bytes.subarray(offset + 4, offset + 8 + length)) >>> 0 !==
+      crc
+    )
+      return false;
+    offset += 12 + length;
+  }
+  return true;
+}
+
+const inlineImage = (mimeType: string, bytes: Buffer) =>
+  svg(
+    `<image width="8" height="8" href="data:${mimeType};base64,${bytes.toString('base64')}"/>`
+  );
+
+/** The raster an upload stores, through the sanitise and optimise workers. */
+async function storedRaster(mimeType: string, bytes: Buffer): Promise<Buffer> {
+  const { cleanedSvg } = await validateSvgUpload(
+    Buffer.from(inlineImage(mimeType, bytes)),
+    'photo.svg'
+  );
+  const stored = await optimizeSvgUpload(cleanedSvg);
+  for (const sentinel of SENTINELS) expect(stored).not.toInclude(sentinel);
+  const [, storedType, payload] =
+    /data:(image\/\w+);base64,([^"]+)"/.exec(stored) ?? [];
+  if (payload === undefined) throw new Error('no inline raster was stored');
+  expect(storedType).toBe(mimeType);
+  return Buffer.from(payload, 'base64');
+}
+
+async function pixelsOf(bytes: Buffer): Promise<Buffer> {
+  const { rgba } = await imageToRgba(bytes, IMAGE_SIZE);
+  return rgba;
+}
+
+const containsSentinel = (bytes: Buffer) =>
+  SENTINELS.some((sentinel) => bytes.includes(Buffer.from(sentinel)));
+
+describe('an inline raster is stored without its metadata', () => {
+  test(
+    'a PNG loses its location, author and text, and keeps its pixels',
+    async () => {
+      const uploaded = pngWithMetadata(photoExif());
+      expect(containsSentinel(uploaded)).toBe(true);
+
+      const stored = await storedRaster('image/png', uploaded);
+
+      expect(containsSentinel(stored)).toBe(false);
+      expect(pngChunkTypes(stored)).toEqual(['IHDR', 'gAMA', 'IDAT', 'IEND']);
+      expect(pngCrcsHold(stored)).toBe(true);
+      expect(await pixelsOf(stored)).toEqual(await pixelsOf(uploaded));
+    },
+    WORKER_COLD_START_MS
+  );
+
+  test(
+    'a WebP loses EXIF and XMP, and its header stops announcing them',
+    async () => {
+      const uploaded = webpWithMetadata(photoExif());
+      expect(containsSentinel(uploaded)).toBe(true);
+
+      const stored = await storedRaster('image/webp', uploaded);
+
+      expect(containsSentinel(stored)).toBe(false);
+      expect(webpChunkTypes(stored)).toEqual(['VP8X', 'VP8 ']);
+      expect(findRiffChunk(stored, 'VP8X')?.[0]).toBe(0);
+      expect(stored.readUInt32LE(4)).toBe(stored.length - 8);
+      expect(await pixelsOf(stored)).toEqual(await pixelsOf(stillWebp));
+    },
+    WORKER_COLD_START_MS
+  );
+
+  test(
+    'an EXIF orientation is kept alone: it changes how the photo is drawn',
+    async () => {
+      const orientationOnly = tiffWith([[ORIENTATION_TAG, TIFF_SHORT, 6]]);
+
+      const png = await storedRaster(
+        'image/png',
+        pngWithMetadata(photoExif(6))
+      );
+      expect(pngChunkData(png, 'eXIf')).toEqual(orientationOnly);
+      expect(pngCrcsHold(png)).toBe(true);
+
+      const webp = await storedRaster(
+        'image/webp',
+        webpWithMetadata(photoExif(6))
+      );
+      expect(findRiffChunk(webp, 'EXIF')).toEqual(orientationOnly);
+      expect(findRiffChunk(webp, 'VP8X')?.[0]).toBe(WEBP_EXIF_FLAG);
+      expect(webp.readUInt32LE(4)).toBe(webp.length - 8);
+    },
+    WORKER_COLD_START_MS
+  );
+
+  test.each([
+    ['a PNG', 'image/png', () => realPng],
+    ['a lossy WebP', 'image/webp', () => stillWebp],
+    ['a lossless WebP', 'image/webp', () => losslessWebp],
+    ['an extended WebP', 'image/webp', () => extendedStillWebp],
+  ])(
+    '%s without metadata is stored byte for byte',
+    async (_label, mimeType, bytes) => {
+      expect(await storedRaster(mimeType, bytes())).toEqual(bytes());
+    },
+    WORKER_COLD_START_MS
+  );
+
+  const truncatedPng = realPng.subarray(0, -20);
+  test.each([
+    ['a PNG chunk that runs past the end', 'image/png', () => truncatedPng],
+    ['a PNG with no IEND', 'image/png', () => realPng.subarray(0, -12)],
+    [
+      'a PNG with an unknown critical chunk',
+      'image/png',
+      () => withPngChunks(realPng, pngChunk('CRIT', Buffer.from('x'))),
+    ],
+    [
+      'a WebP whose RIFF size passes the end',
+      'image/webp',
+      () => stillWebp.subarray(0, -2),
+    ],
+    [
+      'a WebP with two images',
+      'image/webp',
+      () =>
+        riffContainer(
+          Buffer.concat([
+            Buffer.from('WEBP', 'ascii'),
+            riffChunk('VP8X', vp8xChunk(0)),
+            riffChunk('VP8 ', realFrame),
+            riffChunk('VP8 ', realFrame),
+          ])
+        ),
+    ],
+  ])(
+    '%s is refused rather than stored as it came',
+    async (_label, mimeType, bytes) => {
+      const result = clean(inlineImage(mimeType, bytes()));
+      expect(result).toMatchObject({
+        isValid: false,
+        cleanedSvg: '',
+        reason: 'invalid-inline-raster',
+      });
+      expect(await uploadRefusal(inlineImage(mimeType, bytes()))).toMatchObject(
+        {
+          status: HTTP_STATUS.BAD_REQUEST,
+          message: MSG_SVG_INVALID_INLINE_RASTER,
+          code: FILE_CONTENT_REFUSED_CODE,
+        }
+      );
+    },
+    WORKER_COLD_START_MS
+  );
+});
+
 describe('functions other than url() in an attribute', () => {
   // `image-set('…' 1x)` takes a bare string, so a check of `url()` targets
   // never saw it. The native form allows a short list of functions by name
@@ -3797,11 +4080,80 @@ describe('the ICC profile bound', () => {
     expect(output.includes(Buffer.from('xmp-sentinel'))).toBe(false);
   }, 30_000);
 
+  // An SVG keeps its inline raster's profile as uploaded, and a viewer's
+  // browser inflates it, so the worker applies the same bound.
+  const ICC_FLAG = 0x20;
+  const inlineCases: Array<[string, string, () => Buffer]> = [
+    [
+      'a PNG whose deflated profile inflates past the bound',
+      'image/png',
+      () => withPngChunks(realPng, iccpChunk(overBound)),
+    ],
+    [
+      'a WebP whose verbatim profile is over the bound',
+      'image/webp',
+      () =>
+        riffContainer(
+          Buffer.concat([
+            Buffer.from('WEBP', 'ascii'),
+            riffChunk('VP8X', vp8xChunk(ICC_FLAG)),
+            riffChunk('ICCP', overBound),
+            riffChunk('VP8 ', realFrame),
+          ])
+        ),
+    ],
+  ];
+  test.each(inlineCases)(
+    'an SVG carrying %s is refused as an invalid inline raster',
+    async (_label, mimeType, bytes) => {
+      expect(clean(inlineImage(mimeType, bytes()))).toMatchObject({
+        isValid: false,
+        cleanedSvg: '',
+        reason: 'invalid-inline-raster',
+      });
+      expect(await uploadRefusal(inlineImage(mimeType, bytes()))).toMatchObject(
+        {
+          status: HTTP_STATUS.BAD_REQUEST,
+          message: MSG_SVG_INVALID_INLINE_RASTER,
+          code: FILE_CONTENT_REFUSED_CODE,
+        }
+      );
+    },
+    WORKER_COLD_START_MS
+  );
+
+  test('the same data URI as text or a label is not an image, so it passes', () => {
+    const uri = `data:image/png;base64,${withPngChunks(realPng, iccpChunk(overBound)).toString('base64')}`;
+    for (const markup of [
+      svg(`<text x="0" y="8">${uri}</text>`),
+      svg(`<rect width="8" height="8" aria-label="${uri}"/>`),
+    ])
+      expect(clean(markup), markup.slice(0, 80)).toMatchObject({
+        isValid: true,
+      });
+  });
+
+  test(
+    'an SVG whose inline raster carries a profile under the bound stores it as uploaded',
+    async () => {
+      const profile = Buffer.alloc(2048, 0x5a);
+      const png = withPngChunks(realPng, iccpChunk(profile));
+
+      const stored = await storedRaster('image/png', png);
+
+      expect(stored).toEqual(png);
+      expect(iccProfileChunk(stored)).toMatchObject({ deflated: true });
+    },
+    WORKER_COLD_START_MS
+  );
+
   test('an image with no profile is untouched by the check', async () => {
     const png = buildPng(32, 32, true);
     expect(iccProfileChunk(png)).toBeNull();
-    await expect(optimizeImage(png)).resolves.toMatchObject({
+    const out = await optimizeImage(png);
+    expect(await new Bun.Image(out.buffer).metadata()).toMatchObject({
       format: 'webp',
+      width: 32,
     });
   }, 30_000);
 });

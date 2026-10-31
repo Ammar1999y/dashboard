@@ -65,18 +65,35 @@ export class TransactionDeadlineError extends Error {
 async function reserveWithin(
   pool: SQL,
   timeoutMs: number,
-  bounded: boolean
+  bounded: boolean,
+  cancel?: AbortSignal
 ): Promise<ReservedSQL> {
-  const signal = AbortSignal.timeout(timeoutMs);
+  const timeout = AbortSignal.timeout(timeoutMs);
   try {
-    return await pool.reserve({ signal });
+    return await pool.reserve({
+      signal: cancel ? AbortSignal.any([cancel, timeout]) : timeout,
+    });
   } catch (error) {
-    if (error !== signal.reason) throw error;
+    // A cancellation rejects with `cancel`'s own reason, so only the timer's
+    // becomes a timeout.
+    if (error !== timeout.reason) throw error;
     const timedOut = new ConnectionTimeoutError(timeoutMs);
     throw bounded
       ? new TransactionDeadlineError({ cause: timedOut })
       : timedOut;
   }
+}
+
+/**
+ * A pooled connection held outside a transaction, waiting no longer than
+ * `withTransaction` does: `reserve()` alone waits forever on a full pool. The
+ * caller releases it. `cancel` abandons the wait with its own reason.
+ */
+export function reserveConnection(
+  pool: SQL,
+  cancel?: AbortSignal
+): Promise<ReservedSQL> {
+  return reserveWithin(pool, POOL_ACQUIRE_TIMEOUT_MS, false, cancel);
 }
 
 /** The first cut a deadline made in one transaction, at any depth. */

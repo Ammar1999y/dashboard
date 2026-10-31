@@ -12,7 +12,7 @@ import type {
 import { and, eq } from 'drizzle-orm';
 
 import { db } from '@/db';
-import { users, verificationSessions } from '@/db/schema';
+import { sessions, users, verificationSessions } from '@/db/schema';
 import { APIError } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
 
@@ -28,7 +28,9 @@ import { auditLog, boundedAuditMeta } from '@/lib/audit';
 
 import { logSanitized } from '@/utils/log';
 
+import { recordAbandonedSession } from '../session/audit';
 import { expireDontRememberMarker } from '../session/cookie';
+import { revokeSessionsWhere } from '../session/rotation';
 import {
   expiresIn,
   randomToken,
@@ -102,7 +104,7 @@ interface IssueChallengeParams {
   userId: EntityID;
   userEmail: string;
   /** The session the first factor created, which must not survive this call. */
-  session: { id: string; token: string };
+  session: { id: string };
   firstFactor: FirstFactor;
   /** The Better Auth adapter must already be scoped to this same transaction. */
   transaction?: Tx;
@@ -184,7 +186,7 @@ export async function issueTwoFactorChallenge(
     const withoutExclusion = params.excludeContactKind
       ? offeredMethods(state)
       : options;
-    await withdrawFirstFactorSession(ctx, params.session.token);
+    await withdrawFirstFactorSession(ctx, params);
     // Deferred, it runs after the caller's transaction rolled the session back:
     // there was never a login to abandon.
     const deferred = params.transaction !== undefined;
@@ -212,10 +214,11 @@ export async function issueTwoFactorChallenge(
   }
 
   // After the offered set: a trust row outlives the factor it was granted for.
-  if (
-    params.firstFactor !== 'google' &&
-    (await consumeDeviceTrust(ctx, params.userId))
-  ) {
+  const trustedDeviceId =
+    params.firstFactor === 'google'
+      ? null
+      : await consumeDeviceTrust(ctx, params.userId, params.transaction ?? db);
+  if (trustedDeviceId) {
     // The only record of a login completed without a second factor.
     await recordChallengeEvent(
       params,
@@ -223,13 +226,14 @@ export async function issueTwoFactorChallenge(
       {
         reason: 'two_factor_skipped_trusted_device',
         twoFactorBypass: 'trusted_device',
+        trustedDeviceId,
         firstFactor: params.firstFactor,
       }
     );
     return { kind: 'proceed' };
   }
 
-  await withdrawFirstFactorSession(ctx, params.session.token);
+  await withdrawFirstFactorSession(ctx, params);
   await carryRememberChoice(ctx, params.rememberMe);
 
   await recordChallengeEvent(
@@ -256,7 +260,6 @@ export async function issueTwoFactorChallenge(
       options: options.map((option) => option.id),
       defaultMethod,
       firstFactor: params.firstFactor,
-      excludeContactKind: params.excludeContactKind ?? null,
       rememberMe: params.rememberMe,
     } satisfies ChallengeState),
     identifier: twoFactorStateKey(challengeId),
@@ -298,12 +301,59 @@ export async function issueTwoFactorChallenge(
   };
 }
 
+/**
+ * Not `internalAdapter.deleteSession`: its pre-read swallows a fault and then
+ * skips the DELETE, reporting success with the row still live.
+ */
+async function deleteFirstFactorSession(
+  sessionId: string,
+  transaction: Tx | undefined
+): Promise<void> {
+  await revokeSessionsWhere(transaction ?? db, eq(sessions.id, sessionId));
+}
+
 // First, so a later failure leaves the user signed out, never signed in without a second factor.
 async function withdrawFirstFactorSession(
   ctx: AuthContext,
-  token: string
+  params: Pick<IssueChallengeParams, 'session' | 'transaction'>
 ): Promise<void> {
-  await ctx.context.internalAdapter.deleteSession(token);
+  await deleteFirstFactorSession(params.session.id, params.transaction);
+  deleteSessionCookie(ctx, true);
+  ctx.context.setNewSession(null);
+}
+
+/**
+ * For a committed first-factor session the response will not deliver.
+ * `session.create.after` already logged `loginSuccess`, and the append-only
+ * log needs the compensating event. Never throws: the caller rethrows the
+ * failure that caused it.
+ */
+export async function abandonFirstFactorSession(
+  ctx: AuthContext,
+  params: Pick<
+    IssueChallengeParams,
+    'userId' | 'userEmail' | 'session' | 'auditMeta'
+  > & {
+    reason: NonNullable<Parameters<typeof recordAbandonedSession>[0]['reason']>;
+  }
+): Promise<void> {
+  await recordAbandonedSession({
+    userId: params.userId,
+    userEmail: params.userEmail,
+    sessionId: params.session.id,
+    auditMeta: params.auditMeta,
+    reason: params.reason,
+  });
+  try {
+    await deleteFirstFactorSession(params.session.id, undefined);
+  } catch (error) {
+    logSanitized('error', {
+      msg: 'auth.abandonedSession.cleanupFailed',
+      userId: params.userId,
+      sessionId: params.session.id,
+      error,
+    });
+  }
   deleteSessionCookie(ctx, true);
   ctx.context.setNewSession(null);
 }

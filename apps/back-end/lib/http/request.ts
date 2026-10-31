@@ -1,4 +1,4 @@
-import type { BodyPolicy, HandlerInput, HandlerRequestMeta } from './contract';
+import type { BodyPolicy, HandlerRequestMeta } from './contract';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -22,6 +22,19 @@ const MULTIPART_TYPE = 'multipart/form-data';
 export const MAX_REQUEST_BODY_BYTES = 12 * 1024 * 1024;
 
 /**
+ * Bun's own `maxRequestBodySize`, kept ABOVE every ceiling the app enforces.
+ * At or below one, Bun answers a declared over-size body itself, before any
+ * hook runs: a bare 413 with no CORS header, no problem body and no access
+ * line, which a cross-origin page sees as a network error. Between the two,
+ * the app's head check answers and Bun drains the unread body, which is what
+ * lets a browser still uploading read that answer.
+ *
+ * Every reader counts its own bytes against the route's ceiling
+ * (`boundRequestBody`), so this is never the bound on what is buffered.
+ */
+export const SERVER_BODY_LIMIT_BYTES = 2 * MAX_REQUEST_BODY_BYTES;
+
+/**
  * Default ceiling on a body parsed into memory, separate from
  * `MAX_REQUEST_BODY_BYTES` so no JSON route inherits the multipart allowance:
  * `JSON.parse` is synchronous and stalls every other in-flight request for as
@@ -31,15 +44,8 @@ export const MAX_REQUEST_BODY_BYTES = 12 * 1024 * 1024;
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 /** Builds the head-only part of the request context — no body byte is read. */
-export function buildRequestMeta(
-  request: Request,
-  params: Record<string, string> = {}
-): HandlerRequestMeta {
-  const url = new URL(request.url);
-
+export function buildRequestMeta(request: Request): HandlerRequestMeta {
   return {
-    query: url.searchParams,
-    params,
     headers: request.headers,
     url: request.url,
     method: request.method,
@@ -47,65 +53,32 @@ export function buildRequestMeta(
     // note on TRUSTED_IP_HEADERS in ./client-ip.ts.
     ip: getClientIp(request.headers) ?? '',
     userAgent: request.headers.get('user-agent'),
-    apiPath: url.pathname,
+    apiPath: new URL(request.url).pathname,
     rawRequest: request,
   };
 }
 
 /**
- * Completes a `HandlerRequestMeta` into a `HandlerInput` under the route's
- * declared body policy.
- *
- * Synchronous, and it reads nothing: both readers are lazy, so "check, then
- * read" holds even for routes whose limiter lives inside the handler. The
- * policy decides what is readable at all — a `json` route's `readFormData()`
- * returns null whatever the client sent, and vice versa.
+ * A multipart route's form, read when the handler asks, so "check, then read"
+ * holds even for routes whose limiter lives inside the handler. Null, with the
+ * stream untouched, for a method without a body or another media type, so a
+ * client cannot pick the parser. Memoised: a web `Request` body reads once,
+ * and the first result, the `null` of a malformed body included, is kept.
  *
  * The caller must hand over an unread body; on Elysia that means registering
  * the route with `parse: 'none'`.
  */
-export function withBodyPolicy(
-  meta: HandlerRequestMeta,
-  policy: BodyPolicy,
-  maxJsonBodyBytes: number = MAX_JSON_BODY_BYTES
-): HandlerInput {
-  const request = meta.rawRequest;
-  const canHaveBody = methodCanHaveBody(meta.method);
+export function lazyFormData(request: Request): () => Promise<FormData | null> {
   // ⚠️ Case-insensitive matching only agrees with `Request.formData()` at or
   // above the runtime floor `server.ts` asserts;
   // `tests/unit/request-body-policy.test.ts` holds the cases that fail if that
   // floor is lowered.
   const essence = normalizeMimeType(request.headers.get('content-type') ?? '');
+  if (essence !== MULTIPART_TYPE || !methodCanHaveBody(request.method))
+    return () => Promise.resolve(null);
 
-  const jsonAllowed = policy === 'json' && canHaveBody && essence === JSON_TYPE;
-  const multipartAllowed =
-    policy === 'multipart' && canHaveBody && essence === MULTIPART_TYPE;
-
-  return {
-    ...meta,
-    readJson: memoise(jsonAllowed, () =>
-      safeReadJson(request, maxJsonBodyBytes)
-    ),
-    readFormData: memoise(multipartAllowed, () => safeReadFormData(request)),
-  };
-}
-
-/**
- * A web `Request` body reads exactly once, so the first result is cached,
- * including the `null` a malformed body produces. A forbidden read is a
- * constant `null` that never touches the stream.
- */
-function memoise<T>(
-  allowed: boolean,
-  read: () => Promise<T | null>
-): () => Promise<T | null> {
-  if (!allowed) return () => Promise.resolve(null);
-
-  let pending: Promise<T | null> | null = null;
-  return () => {
-    pending ??= read();
-    return pending;
-  };
+  let pending: Promise<FormData | null> | null = null;
+  return () => (pending ??= safeReadFormData(request, MAX_REQUEST_BODY_BYTES));
 }
 
 function methodCanHaveBody(method: string): boolean {
@@ -210,18 +183,6 @@ export async function boundedBodyRequest(
   });
 }
 
-/**
- * Reads a JSON body; null on an empty or malformed body, which
- * `requireJsonBody` turns into a 400. An over-size body is the one case that
- * throws, because a 413 is not the same answer as "unparseable".
- */
-async function safeReadJson(
-  request: Request,
-  maxBytes: number
-): Promise<unknown> {
-  return parsedOrNull(await readBoundedText(request, maxBytes));
-}
-
 function parsedOrNull(text: string): unknown {
   try {
     if (!text) return null;
@@ -269,11 +230,19 @@ export class UnreadableBody extends Error {
   }
 }
 
-/** A malformed multipart body is "no form", not a 500; the handler decides. */
-async function safeReadFormData(request: Request): Promise<FormData | null> {
+/**
+ * A malformed multipart body is "no form", not a 500; the handler decides. An
+ * over-size one is the 413 the counter raised: `formData()` rejects with the
+ * stream's own error.
+ */
+async function safeReadFormData(
+  request: Request,
+  maxBytes: number
+): Promise<FormData | null> {
   try {
-    return await request.formData();
-  } catch {
+    return await boundRequestBody(request, maxBytes).formData();
+  } catch (error) {
+    if (error instanceof CustomError) throw error;
     return null;
   }
 }

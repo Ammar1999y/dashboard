@@ -6,7 +6,8 @@
     ":dependencyDashboard",
     "security:openssf-scorecard",
     "security:minimumReleaseAgeNpm",
-    "helpers:pinGitHubActionDigests"
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests"
   ],
   "timezone": "Asia/Riyadh",
   "prConcurrentLimit": 5,
@@ -61,9 +62,16 @@
       "groupName": "drizzle"
     },
     {
-      "description": "GitHub Actions pinned by major only.",
+      "description": "GitHub Actions move together; each is pinned to a commit with its version beside it.",
       "matchManagers": ["github-actions"],
       "groupName": "github actions"
+    },
+    {
+      "description": "Container images are pinned to a digest beside their tag; a digest refresh for the same tag waits for the weekly batch.",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest"],
+      "groupName": "container image digests",
+      "schedule": ["before 6am on monday"]
     },
     {
       "description": "Scanner binaries move together and are never grouped with app deps.",

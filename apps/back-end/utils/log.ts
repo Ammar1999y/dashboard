@@ -454,7 +454,7 @@ export function serializeForLog(input: unknown, maxLength = 1024): string {
 
 /** The class of a thrown value, for a log line. */
 export function errorClassOf(error: unknown): string {
-  return error instanceof Error ? error.name : 'Unknown';
+  return error instanceof Error ? error.name : typeof error;
 }
 
 /**
@@ -491,11 +491,6 @@ export async function bestEffort<T>(
     logSanitized('error', { msg, ...fields, error });
     return undefined;
   }
-}
-
-/** `errorClassOf`, but a non-`Error` throw is named by its `typeof`. */
-export function errorTypeOf(error: unknown): string {
-  return error instanceof Error ? error.name : typeof error;
 }
 
 type LogLevel = 'log' | 'warn' | 'error';

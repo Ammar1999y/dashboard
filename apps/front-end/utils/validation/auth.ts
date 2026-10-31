@@ -1,9 +1,9 @@
 import type { UserClient } from '@/types/user';
+import type { devSignUpSchema } from '@app/shared/validation/dev';
 import type {
   adminUpdateUserBodySchema,
   createUserSchema,
-} from '@app/shared/validation/auth';
-import type { devSignUpSchema } from '@app/shared/validation/dev';
+} from '@app/shared/validation/users';
 import type { DefaultValues } from 'react-hook-form';
 
 import * as z from 'zod';

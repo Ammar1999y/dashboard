@@ -38,6 +38,15 @@ export const PURPOSE_NAME_PATTERN = '^[a-z][a-zA-Z0-9_-]{0,49}$';
 const FORBIDDEN_NAME_CHARACTERS = /[\p{Cc}\p{Cf}\p{Cs}/\\]/u;
 
 /**
+ * Refused only when they are ALL a name holds: inside one they carry meaning,
+ * like the variation selector of an emoji, but alone (U+3164) they display a
+ * blank name. U+2800 is a symbol, not default-ignorable, yet renders empty.
+ */
+const INVISIBLE_CHARACTERS = /[\p{Default_Ignorable_Code_Point}\s\u{2800}]/gu;
+const isVisible = (name: string) =>
+  name.replaceAll(INVISIBLE_CHARACTERS, '') !== '';
+
+/**
  * NFC first, then whitespace collapse, then trim — in that order. Unicode
  * normalisation can change what counts as whitespace-adjacent, and the unique
  * index compares `lower(name)`, so two names that differ only in normalisation
@@ -95,6 +104,7 @@ export const folderNameSchema = z.preprocess(
         !FORBIDDEN_NAME_CHARACTERS.test(name) && name !== '.' && name !== '..',
       mediaValidationMsg.folderNameInvalid
     )
+    .refine(isVisible, mediaValidationMsg.folderNameRequired)
     .meta({
       minLength: undefined,
       maxLength: undefined,
@@ -112,6 +122,7 @@ export const displayNameSchema = z.preprocess(
       (name) => !FORBIDDEN_NAME_CHARACTERS.test(name),
       mediaValidationMsg.displayNameInvalid
     )
+    .refine(isVisible, mediaValidationMsg.displayNameRequired)
     .meta({
       minLength: undefined,
       maxLength: undefined,

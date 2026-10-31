@@ -38,7 +38,7 @@ export const FIELD_DOCS_MODULES: Readonly<
     import('@app/shared/responses/better-auth.docs'),
   'validation/health.docs': () => import('@app/shared/validation/health.docs'),
   'validation/rules.docs': () => import('@app/shared/validation/rules.docs'),
-  'validation/auth.docs': () => import('@app/shared/validation/auth.docs'),
+  'validation/users.docs': () => import('@app/shared/validation/users.docs'),
   'validation/two-factor.docs': () =>
     import('@app/shared/validation/two-factor.docs'),
 };

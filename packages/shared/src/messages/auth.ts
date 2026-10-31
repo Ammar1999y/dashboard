@@ -55,49 +55,25 @@ export const twoFactorMsg = {
     'الرموز الاحتياطية التي تؤكّد حفظها لم تعد هي الحالية. تم توليد مجموعة أحدث؛ اعرضها واحفظها ثم أكّد حفظها',
 } as const;
 
-const MSG_RETRY_OR_RELOAD = 'حاول مجدداً، أو أعد تحميل الصفحة';
-const MSG_USER_ALREADY_EXISTS =
-  'المستخدم موجود بالفعل، استخدم بريداً إلكترونياً آخر لإنشاء الحساب';
-
 /**
  * Better Auth's own error codes, localised by the `after` hook and by `app.ts`.
  * A key that is also one of this project's routing codes keeps that code on the
  * wire (`localisedAuthBody`), so its value must be the message the project
- * raises it with.
+ * raises it with. Only codes a served path can raise belong here: mounting a
+ * new Better Auth route means re-checking which of its codes need a message.
  */
 export const betterAuthMsg: Readonly<Record<string, string>> = {
   USER_NOT_FOUND: 'المستخدم غير موجود',
-  FAILED_TO_CREATE_USER:
-    'حدث خطأ ما في عملية إنشاء المستخدم، حاول مجدداً، أو أعد تحميل الصفحة',
   FAILED_TO_CREATE_SESSION:
     'حدث خطأ ما في عملية إنشاء الجلسة، حاول مجدداً، أو أعد تحميل الصفحة',
-  FAILED_TO_UPDATE_USER:
-    'حدث خطأ ما في عملية تحديث المستخدم، حاول مجدداً، أو أعد تحميل الصفحة',
   FAILED_TO_GET_SESSION:
     'حدث خطأ ما في عملية الحصول على بيانات الجلسة، حاول مجدداً، أو أعد تحميل الصفحة',
   INVALID_PASSWORD: 'كلمة المرور غير صحيحة',
   INVALID_EMAIL: 'البريد الإلكتروني غير صحيح',
   INVALID_EMAIL_OR_PASSWORD: MSG_INVALID_CREDENTIALS,
-  INVALID_TOKEN: MSG_RETRY_OR_RELOAD,
-  FAILED_TO_GET_USER_INFO:
-    'حدث خطأ ما في عملية الحصول على بيانات المستخدم، حاول مجدداً، أو أعد تحميل الصفحة',
-  USER_EMAIL_NOT_FOUND: 'البريد الإلكتروني غير موجود',
-
-  SOCIAL_ACCOUNT_ALREADY_LINKED: 'هذا الحساب الخارجي مرتبط بالفعل',
-  PROVIDER_NOT_FOUND: 'مزود تسجيل الدخول غير متاح',
-  ID_TOKEN_NOT_SUPPORTED: 'مزود تسجيل الدخول لا يدعم هذه الطريقة',
-  PASSWORD_TOO_SHORT: 'كلمة المرور قصيرة جداً',
   PASSWORD_TOO_LONG: 'كلمة المرور طويلة جداً',
-  CREDENTIAL_ACCOUNT_NOT_FOUND: 'لا يوجد حساب بكلمة مرور لهذا المستخدم',
-  USER_ALREADY_HAS_PASSWORD:
-    'هذا الحساب يملك كلمة مرور بالفعل، أدخلها لحذف الحساب',
-  FAILED_TO_UNLINK_LAST_ACCOUNT: 'لا يمكن إلغاء ربط آخر حساب مرتبط بك',
-
   EMAIL_NOT_VERIFIED: MSG_EMAIL_NOT_VERIFIED,
-  EMAIL_CAN_NOT_BE_UPDATED: 'لا يمكن تحديث البريد الإلكتروني',
-  SESSION_EXPIRED: 'قم بإعادة تسجيل الدخول',
   SESSION_NOT_FRESH: 'مضى وقت طويل على تسجيل دخولك، قم بتسجيل الدخول مرة أخرى',
-  ACCOUNT_NOT_FOUND: 'الحساب غير موجود',
 
   // ⚠️ `trustedOrigins` is unset, so a cross-origin front-end gets 403 on every
   // sign-in despite `CORS_POLICY`; set it if the front-end moves origin.
@@ -108,17 +84,10 @@ export const betterAuthMsg: Readonly<Record<string, string>> = {
   // No `METHOD_NOT_ALLOWED_DEFER_SESSION_REQUIRED`: `POST /get-session` is
   // answered 405 by `app.ts` from `BETTER_AUTH_ENDPOINTS` before Better Auth runs.
 
-  USER_ALREADY_EXISTS: MSG_USER_ALREADY_EXISTS,
-  USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL: MSG_USER_ALREADY_EXISTS,
-
   // `tests/integration/auth-error-localisation.test.ts` fails if another
   // unmapped code becomes reachable.
   VALIDATION_ERROR: MSG_INVALID_INPUT,
   BAD_REQUEST: MSG_INVALID_INPUT,
-
-  MISSING_RESPONSE: otpMsg.captchaFailed,
-  VERIFICATION_FAILED: otpMsg.captchaFailed,
-  UNKNOWN_ERROR: MSG_RETRY_OR_RELOAD,
 
   // The verifiers and passkey endpoints this deployment mounts. Most sit behind
   // a gate that answers first (`path-policy.ts`, the challenge check), so they

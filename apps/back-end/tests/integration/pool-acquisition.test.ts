@@ -12,8 +12,8 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 
 import { ConnectionTimeoutError } from '@/db/errors';
-import { DATABASE_RETRY_AFTER_S } from '@/db/limits';
-import { transactionRunner } from '@/db/transaction';
+import { DATABASE_RETRY_AFTER_S, POOL_ACQUIRE_TIMEOUT_MS } from '@/db/limits';
+import { reserveConnection, transactionRunner } from '@/db/transaction';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { MSG_SERVICE_UNAVAILABLE } from '@app/shared/messages/common';
@@ -109,6 +109,47 @@ describe('pool acquisition bound', () => {
     const [probe] =
       await pool`select to_regclass('pg_temp.pool_probe') is null as gone`;
     expect(probe).toEqual({ gone: true });
+  });
+});
+
+/**
+ * The bounded wait outside a transaction, which the maintenance election holds
+ * a session lock on. It used to raise the timer's raw `TimeoutError`, so the
+ * runbook's `ConnectionTimeoutError` search missed scheduled jobs.
+ */
+describe('a reserved connection', () => {
+  test(
+    'a wait on a full pool ends in ConnectionTimeoutError after the acquisition bound',
+    async () => {
+      const held = await pool.reserve();
+      const started = performance.now();
+      try {
+        await expect(reserveConnection(pool)).rejects.toBeInstanceOf(
+          ConnectionTimeoutError
+        );
+      } finally {
+        await held.release();
+      }
+      expect(performance.now() - started).toBeGreaterThanOrEqual(
+        POOL_ACQUIRE_TIMEOUT_MS - 20
+      );
+    },
+    POOL_ACQUIRE_TIMEOUT_MS + 5000
+  );
+
+  test('a cancelled wait rejects with the cancellation, not a timeout', async () => {
+    const held = await pool.reserve();
+    const stopping = new AbortController();
+    setTimeout(() => stopping.abort(), 50);
+    try {
+      const caught = await reserveConnection(pool, stopping.signal).catch(
+        (error: unknown) => error
+      );
+      expect(caught).toBe(stopping.signal.reason);
+      expect(caught).not.toBeInstanceOf(ConnectionTimeoutError);
+    } finally {
+      await held.release();
+    }
   });
 });
 

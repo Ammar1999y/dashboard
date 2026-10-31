@@ -14,7 +14,11 @@ import { drizzle } from 'drizzle-orm/bun-sql';
 
 import { DATABASE_URL } from '@/lib/env.server';
 
-import { DATA_TABLE_POOL_CONNECTIONS, MAX_POOL_CONNECTIONS } from './limits';
+import {
+  DATA_TABLE_POOL_CONNECTIONS,
+  MAX_POOL_CONNECTIONS,
+  PROBE_POOL_CONNECTIONS,
+} from './limits';
 import * as schema from './schema';
 import { transactionRunner } from './transaction';
 
@@ -61,11 +65,11 @@ export const withTransaction = transactionRunner(client);
 
 /**
  * A data-table list's statement text follows the client's filters and sorts,
- * and every distinct text on a preparing connection stays a server-side
- * prepared statement until the connection closes: backend memory without bound.
- * This pool prepares nothing, at the price of planning each list statement;
- * the fixed statements on `client` stay prepared, where planning would about
- * double a short lookup.
+ * so on a preparing connection every distinct text would take a slot in Bun's
+ * per-connection cache of 1,024 prepared statements and evict the fixed ones
+ * that sign-in and session reads reuse. This pool prepares nothing, at the
+ * price of planning each list statement; the fixed statements on `client` stay
+ * prepared, where planning would about double a short lookup.
  *
  * Read-only for the session: unprepared, `bun:sql` types a parameter from its
  * JavaScript value, so the `jsonb` column type in `./schema.ts` would store an
@@ -93,7 +97,7 @@ export const dataTableDb = drizzle({ client: dataTableClient });
 export const PROBE_TIMEOUT_MS = 2000;
 
 const probeClient = new SQL(DATABASE_URL, {
-  max: 1,
+  max: PROBE_POOL_CONNECTIONS,
   connectionTimeout: Math.ceil(PROBE_TIMEOUT_MS / 1000),
   connection: { statement_timeout: String(PROBE_TIMEOUT_MS) },
 });

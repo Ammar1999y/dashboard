@@ -13,9 +13,6 @@ export type BodyPolicy = 'none' | 'json' | 'multipart';
  * checks can run before any body byte is read.
  */
 export interface HandlerRequestMeta {
-  query: URLSearchParams;
-  /** Route params resolved by the adapter (e.g. `{ id: '...' }`). */
-  params: Record<string, string>;
   headers: Headers;
   /** Absolute request URL. */
   url: string;
@@ -27,30 +24,19 @@ export interface HandlerRequestMeta {
   /** Pathname only, no host or query. */
   apiPath: string;
   /**
-   * ⚠️ Only `headers`, `url` and `method` are safe to read: the body may
-   * already have been consumed by `readJson()` or `readFormData()`, and a web
-   * `Request` body reads once. Clone it at the call site if the raw body is
-   * genuinely needed.
+   * ⚠️ Only `headers`, `url` and `method` are safe to read: the gate's JSON
+   * reader or `readFormData()` may already have consumed the body, which a web
+   * `Request` reads once.
    */
   rawRequest: Request;
 }
 
-/** Framework-agnostic request context, built by the adapter layer. */
+/** A multipart route's request context. */
 export interface HandlerInput extends HandlerRequestMeta {
   /**
-   * The parsed JSON body, or null when the route's policy is not `json`, no
-   * body was sent, the media type was not `application/json`, or parsing
-   * failed. A function so nothing is read until the handler has run its own
-   * admission checks; memoised.
-   */
-  readJson: () => Promise<unknown>;
-  /**
-   * The multipart form, or null when the route's policy is not `multipart` or
-   * the media type was not `multipart/form-data`. A function for the same
-   * reason as `readJson`; memoised.
-   *
-   * Parsed by the adapter rather than from `rawRequest`: on Elysia
-   * `rawRequest.formData()` throws `Body has already been used`.
+   * `lazyFormData`: a function so nothing is read until the handler has run
+   * its own admission checks. Never `rawRequest.formData()`, which would skip
+   * the route's byte ceiling.
    */
   readFormData: () => Promise<FormData | null>;
 }

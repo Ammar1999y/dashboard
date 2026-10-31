@@ -60,7 +60,9 @@ import { usageLabels, usedIds } from './usages';
 
 /**
  * Per user per minute, one budget for every route that runs the operation, so
- * a deprecated route or the single-folder delete adds none of its own.
+ * a deprecated route or the single-folder delete adds none of its own. The
+ * single-item `PUT`s, which also move, keep their own budgets: charging this
+ * one would charge their renames too.
  */
 export const MOVE_LIMIT = { scope: 'media.move', limit: 30 } as const;
 export const DELETE_LIMIT = { scope: 'media.delete', limit: 30 } as const;

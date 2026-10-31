@@ -15,19 +15,23 @@ import { app } from '@/app';
 import { db } from '@/db';
 import {
   auditLogs,
+  passkeys,
+  sessions,
   trustedDevices,
   twoFactorCredentials,
   twoFactorMethods,
   users,
   verifications,
 } from '@/db/schema';
+import { createOTP } from '@better-auth/utils/otp';
 import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
+import { MSG_NOT_FOUND } from '@app/shared/messages/common';
 import { otpMsg } from '@app/shared/messages/otp';
+import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 
-import { auth } from '@/lib/auth';
 import { TWO_FACTOR_LOCKOUT_MAX_FAILURES } from '@/lib/auth/recovery/second-factor';
 import { totpEnrolmentKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
@@ -360,9 +364,7 @@ describe('removing one method', () => {
       })
     ).not.toBe(oldSecret);
 
-    const { code: oldCode } = await auth.api.generateTOTP({
-      body: { secret: oldSecret },
-    });
+    const oldCode = await createOTP(oldSecret).totp();
     const reconfirmed = await call(
       'POST',
       '/api/auth/two-factor/totp/confirm',
@@ -385,14 +387,12 @@ describe('removing one method', () => {
       .from(twoFactorCredentials)
       .where(eq(twoFactorCredentials.userId, user.userId));
     if (!credential) throw new Error('start stored no TOTP credential');
-    const { code: newCode } = await auth.api.generateTOTP({
-      body: {
-        secret: await symmetricDecrypt({
-          key: BETTER_AUTH_SECRET,
-          data: credential.secret,
-        }),
-      },
-    });
+    const newCode = await createOTP(
+      await symmetricDecrypt({
+        key: BETTER_AUTH_SECRET,
+        data: credential.secret,
+      })
+    ).totp();
     const confirmed = await call(
       'POST',
       '/api/auth/two-factor/totp/confirm',
@@ -416,14 +416,12 @@ describe('confirming TOTP with no start pending', () => {
       .from(twoFactorCredentials)
       .where(eq(twoFactorCredentials.userId, userId));
     if (!credential) throw new Error('no TOTP credential row');
-    const { code } = await auth.api.generateTOTP({
-      body: {
-        secret: await symmetricDecrypt({
-          key: BETTER_AUTH_SECRET,
-          data: credential.secret,
-        }),
-      },
-    });
+    const code = await createOTP(
+      await symmetricDecrypt({
+        key: BETTER_AUTH_SECRET,
+        data: credential.secret,
+      })
+    ).totp();
     return code;
   }
 
@@ -778,6 +776,142 @@ describe('regenerating backup codes', () => {
     await generate(user, cookie);
     expect(await trustOf(user.userId)).toHaveLength(1);
   });
+
+  test('replacing an offered set leaves a backup-code-only user able to sign in before acknowledging', async () => {
+    // The acknowledgement may never land (a closed tab). Held back for it, the
+    // new set left this user with nothing to sign in with.
+    const user = await seedUser();
+    const cookie = await signInCookie(user, false);
+    const firstSetId = await generate(user, cookie);
+    const acknowledged = await call(
+      'POST',
+      '/api/auth/two-factor/backup-codes/acknowledge',
+      { password: user.password, setId: firstSetId },
+      cookie
+    );
+    expect(acknowledged.status).toBe(HTTP_STATUS.OK);
+    const generateCodes = async () => {
+      const response = await call(
+        'POST',
+        '/api/auth/two-factor/generate-backup-codes',
+        { password: user.password },
+        cookie
+      );
+      expect(response.status).toBe(HTTP_STATUS.OK);
+      const body = (await response.json()) as {
+        data?: { backupCodes?: string[] };
+      };
+      return body.data?.backupCodes ?? [];
+    };
+    const oldCodes = await generateCodes();
+    // Replaced again, and this set is never acknowledged.
+    const codes = await generateCodes();
+    expect(codes.length).toBeGreaterThan(0);
+    expect(oldCodes.length).toBeGreaterThan(0);
+
+    const challenged = await call('POST', '/api/auth/sign-in/email', {
+      email: user.email,
+      password: user.password,
+    });
+    expect(challenged.status).toBe(HTTP_STATUS.OK);
+    expect(await challenged.json()).toMatchObject({
+      twoFactorMethods: ['backup_code'],
+    });
+    const challenge = cookieHeader(challenged.headers.getSetCookie());
+
+    // The replaced set stopped working when it was replaced.
+    const sessionsBefore = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.userId, user.userId));
+    const stale = await call(
+      'POST',
+      '/api/auth/two-factor/verify-backup-code',
+      { code: oldCodes[0] },
+      challenge
+    );
+    expect(stale.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+    expect(
+      await db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.userId, user.userId))
+    ).toEqual(sessionsBefore);
+
+    const completed = await call(
+      'POST',
+      '/api/auth/two-factor/verify-backup-code',
+      { code: codes[0] },
+      challenge
+    );
+    expect(completed.status).toBe(HTTP_STATUS.OK);
+  });
+
+  test('an unconfirmed replacement is never left as the only factor', async () => {
+    // Offered at sign-in, but the user may have discarded it: removing the
+    // factor they did save is refused until they confirm the new set.
+    const user = await seedUser();
+    // Signed in first: an enrolled account answers a challenge.
+    const cookie = await signInCookie(user, false);
+    await enrolTotpBySql(user.userId);
+    const firstSetId = await generate(user, cookie);
+    const acknowledged = await call(
+      'POST',
+      '/api/auth/two-factor/backup-codes/acknowledge',
+      { password: user.password, setId: firstSetId },
+      cookie
+    );
+    expect(acknowledged.status).toBe(HTTP_STATUS.OK);
+    const replacedSetId = await generate(user, cookie);
+
+    const removeTotp = () =>
+      call(
+        'POST',
+        '/api/auth/two-factor/methods/disable',
+        { method: 'totp', password: user.password },
+        cookie
+      );
+    const refused = await removeTotp();
+    expect(refused.status).toBe(HTTP_STATUS.CONFLICT);
+    expect(await methodsOf(user.userId)).toEqual(['backup_code', 'totp']);
+
+    const confirmed = await call(
+      'POST',
+      '/api/auth/two-factor/backup-codes/acknowledge',
+      { password: user.password, setId: replacedSetId },
+      cookie
+    );
+    expect(confirmed.status).toBe(HTTP_STATUS.OK);
+    const removed = await removeTotp();
+    expect(removed.status).toBe(HTTP_STATUS.OK);
+  });
+
+  test('an unconfirmed replacement does not block a change that takes nothing relied on', async () => {
+    // Backup codes are the only method and no OTP is enrolled: changing the
+    // email removes no factor, confirmed or not.
+    const user = await seedUser();
+    const cookie = await signInCookie(user, false);
+    const acknowledged = await call(
+      'POST',
+      '/api/auth/two-factor/backup-codes/acknowledge',
+      { password: user.password, setId: await generate(user, cookie) },
+      cookie
+    );
+    expect(acknowledged.status).toBe(HTTP_STATUS.OK);
+    await generate(user, cookie);
+
+    const changed = await call(
+      'POST',
+      '/api/dash/users/me/change-email',
+      {
+        currentPassword: user.password,
+        newEmail: `unconfirmed.${user.userId.slice(-8)}@gmail.com`,
+      },
+      cookie
+    );
+    expect(changed.status).toBe(HTTP_STATUS.OK);
+    expect(await methodsOf(user.userId)).toEqual(['backup_code']);
+  });
 });
 
 describe('password recovery against a second factor', () => {
@@ -919,7 +1053,7 @@ describe('password recovery against a second factor', () => {
     });
     expect(beforeChange.status).not.toBe(HTTP_STATUS.OK);
 
-    const { code } = await auth.api.generateTOTP({ body: { secret } });
+    const code = await createOTP(secret).totp();
     const completed = await call('POST', '/api/auth/forgot-password/complete', {
       grant,
       option: 'totp',
@@ -929,11 +1063,11 @@ describe('password recovery against a second factor', () => {
     expect(completed.status).toBe(HTTP_STATUS.OK);
 
     // And the grant is single-use, so a replay cannot rewrite it again.
-    const replayCode = await auth.api.generateTOTP({ body: { secret } });
+    const replayCode = await createOTP(secret).totp();
     const replayed = await call('POST', '/api/auth/forgot-password/complete', {
       grant,
       option: 'totp',
-      code: replayCode.code,
+      code: replayCode,
       newPassword: 'Another-Pass-1!',
     });
     expect(replayed.status).not.toBe(HTTP_STATUS.OK);
@@ -1061,7 +1195,7 @@ describe('password recovery against a second factor', () => {
       .where(eq(twoFactorCredentials.userId, user.userId));
     const lockedBefore = await credentialOf();
 
-    const { code } = await auth.api.generateTOTP({ body: { secret } });
+    const code = await createOTP(secret).totp();
     const locked = await call('POST', '/api/auth/forgot-password/complete', {
       grant,
       option: 'totp',
@@ -1417,14 +1551,18 @@ describe('the administrative reset', () => {
       {},
       await signInCookie(narrowActor)
     );
-    // Collapsed to the answer every other reachability gate gives, so the caller
-    // cannot tell "outranks me" from "does not exist".
-    expect(refused.status).toBe(HTTP_STATUS.NOT_FOUND);
+    expect(refused.status).toBe(HTTP_STATUS.FORBIDDEN);
+    expect(((await refused.json()) as { detail: string }).detail).toBe(
+      MSG_INSUFFICIENT_PERMISSIONS
+    );
     expect(await methodsOf(target.userId)).toEqual(['totp']);
+    expect(await storedTarget(target.userId)).toEqual({
+      name: 'Harness User',
+      twoFactorEnabled: true,
+    });
 
     // The same actor, holding `users.edit`, is refused the parent `PUT` on the
-    // same id by the SAME gate, with the SAME status. That agreement is the
-    // finding: measured, both answer 404 rather than one leaking a 403.
+    // same id by the SAME gate, with the SAME answer.
     const edit = await call(
       'PUT',
       `/api/dash/users/${target.userId}`,
@@ -1436,6 +1574,97 @@ describe('the administrative reset', () => {
       },
       await signInCookie(narrowActor)
     );
-    expect(edit.status).toBe(HTTP_STATUS.NOT_FOUND);
+    expect(edit.status).toBe(HTTP_STATUS.FORBIDDEN);
+    expect(((await edit.json()) as { detail: string }).detail).toBe(
+      MSG_INSUFFICIENT_PERMISSIONS
+    );
+    const after = await storedTarget(target.userId);
+    expect(after?.name).toBe('Harness User');
+  });
+
+  test.each([
+    ['no view grant', {}],
+    ['only `viewOwn`', { viewOwn: true }],
+  ])(
+    'answers 404 to a caller with %s, who cannot read the target',
+    async (_, view) => {
+      // Created by nobody the caller is, so `viewOwn` does not reach it either.
+      const target = await seedUser();
+      await enrol(target.userId, 'totp');
+      const resetOnly = await seedUser({
+        permissions: { users: { ...view, resetTwoFactor: true } },
+      });
+
+      const refused = await call(
+        'POST',
+        `/api/dash/users/${target.userId}/two-factor/reset`,
+        {},
+        await signInCookie(resetOnly)
+      );
+      expect(refused.status).toBe(HTTP_STATUS.NOT_FOUND);
+      expect(((await refused.json()) as { detail: string }).detail).toBe(
+        MSG_NOT_FOUND
+      );
+      expect(await methodsOf(target.userId)).toEqual(['totp']);
+    }
+  );
+});
+
+async function storedTarget(userId: string) {
+  const [row] = await db
+    .select({ name: users.name, twoFactorEnabled: users.twoFactorEnabled })
+    .from(users)
+    .where(eq(users.id, userId));
+  return row;
+}
+
+test('deleting a user takes their second-factor enrolment and passkeys with it', async () => {
+  // The row is soft-deleted and never purged, so nothing else ever would.
+  const target = await seedUser();
+  await enrolTotpBySql(target.userId);
+  await enrol(target.userId, 'passkey');
+  await db.insert(passkeys).values({
+    userId: target.userId,
+    credentialID: `deleted-user-credential-${target.userId}`,
+    publicKey: Buffer.from('not-a-real-key').toString('base64'),
+    counter: 0,
+    deviceType: 'singleDevice',
+    backedUp: false,
+  });
+
+  const deleted = await app.handle(
+    new Request(`http://localhost/api/dash/users/${target.userId}`, {
+      method: 'DELETE',
+      headers: baseHeaders({
+        origin: PUBLIC_ORIGIN,
+        cookie: await signInCookie(await seedUser()),
+      }),
+    })
+  );
+  expect(deleted.status).toBe(HTTP_STATUS.OK);
+
+  const rowsOf = async () => {
+    const [user] = await db
+      .select({ enabled: users.twoFactorEnabled })
+      .from(users)
+      .where(eq(users.id, target.userId));
+    return {
+      methods: await methodsOf(target.userId),
+      credentials: await db
+        .select({ id: twoFactorCredentials.id })
+        .from(twoFactorCredentials)
+        .where(eq(twoFactorCredentials.userId, target.userId)),
+      passkeys: await db
+        .select({ id: passkeys.id })
+        .from(passkeys)
+        .where(eq(passkeys.userId, target.userId)),
+      enabled: user?.enabled,
+    };
+  };
+  expect(await rowsOf()).toEqual({
+    methods: [],
+    credentials: [],
+    passkeys: [],
+    enabled: false,
   });
 });

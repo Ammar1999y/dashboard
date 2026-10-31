@@ -186,9 +186,8 @@ export async function seedUser(options: SeedOptions = {}): Promise<SeededUser> {
 
   await db.insert(accounts).values({
     id: generateUuidV7(),
-    // `(issuer, accountId)` is the pair Better Auth 1.7 resolves an account by;
-    // `accountId` is the user id here for the same reason the production insert
-    // sites use it.
+    // Better Auth finds the credential account by provider and
+    // `accountId === user.id`, the shape the production insert sites write.
     accountId: userId,
     issuer: CREDENTIAL_ISSUER,
     providerId: CREDENTIAL_PROVIDER_ID,

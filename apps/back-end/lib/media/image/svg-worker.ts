@@ -4,7 +4,7 @@
  */
 import type { SvgJob } from './svg-protocol';
 
-import { errorTypeOf } from '@/utils/log';
+import { errorClassOf } from '@/utils/log';
 
 import { optimizeSvgServer, sanitizeSvgServer } from './svg';
 import { SVG_WORKER_READY } from './svg-protocol';
@@ -34,7 +34,7 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
         : optimizeSvgServer(job.markup);
     self.postMessage({ id: job.id, result });
   } catch (error) {
-    self.postMessage({ id: job.id, fault: errorTypeOf(error) });
+    self.postMessage({ id: job.id, fault: errorClassOf(error) });
   }
 });
 

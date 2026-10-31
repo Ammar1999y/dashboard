@@ -65,7 +65,7 @@ const PEPPER_SECRET = randomBytes(32).toString('base64url');
  * A satisfying value per variable name, so the environment handed to the child
  * can be BUILT from the extracted lists instead of mirroring them.
  *
- * The keyrings share one 32-byte base64url secret — `lib/auth/keyring.ts` parses
+ * The keyrings share one 32-byte base64url secret — `lib/crypto/keyring.ts` parses
  * both and validates the decoded length, so a string of the right character count
  * is not enough.
  */

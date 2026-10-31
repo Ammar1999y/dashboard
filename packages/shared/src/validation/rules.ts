@@ -4,7 +4,6 @@ import { MSG_INVALID_INPUT } from '../messages/common';
 import {
   idRequired,
   ISSUE_FALLBACKS,
-  MSG_COLOR_INVALID,
   MSG_EMAIL_INVALID,
   MSG_EMAIL_PROVIDER_NOT_ACCEPTED,
   MSG_EMAIL_TOO_LONG,
@@ -14,9 +13,6 @@ import {
   MSG_PASSWORD_TOO_SHORT,
   MSG_PHONE_INVALID,
   MSG_PHONE_REQUIRED,
-  MSG_SLUG_DIGITS_ONLY,
-  MSG_SLUG_INVALID_CHARACTERS,
-  MSG_SLUG_TOO_LONG,
   MSG_UNRECOGNIZED_KEYS,
 } from '../messages/validation';
 import {
@@ -32,9 +28,28 @@ import {
   PHONE_NUMBER_MAX,
 } from './constants';
 
-/** What `STRICT_TEXT_DESCRIPTION` (`rules.docs.ts`) tells the document; keep the two in step. */
+/**
+ * What `STRICT_TEXT_DESCRIPTION` (`rules.docs.ts`) tells the document; keep the
+ * two in step. A default-ignorable code point renders as nothing even where
+ * it is a letter (U+3164) or a mark (U+034F), so it is stripped too: one would
+ * let a name display blank, or as a look-alike of another.
+ */
 const STRIPPED_CHARACTERS =
-  /[^\p{L}\p{M}\p{N}\p{Zs}\n\.,!?:/\\;\-+=\(\)\[\]''"؟،؛@#_&%]/gu;
+  /[^\p{L}\p{M}\p{N}\p{Zs}\n\.,!?:/\\;\-+=\(\)\[\]''"؟،؛@#_&%]|\p{Default_Ignorable_Code_Point}/gu;
+const LINE_BREAK = /\r\n?|[\u{85}\p{Zl}\p{Zp}]/gu;
+const INLINE_SPACE = /[\t\v\f]/g;
+
+/**
+ * Breaks and tabs become whitespace before the strip, which would otherwise
+ * delete them and join the words on either side. NFC runs last because a
+ * stripped character can leave a base and its mark newly adjacent.
+ */
+const sanitizeText = (v: string) =>
+  v
+    .replaceAll(LINE_BREAK, '\n')
+    .replaceAll(INLINE_SPACE, ' ')
+    .replaceAll(STRIPPED_CHARACTERS, '')
+    .normalize('NFC');
 
 /**
  * ⚠️ The parameter annotation on every preprocess callback in this package is
@@ -46,12 +61,10 @@ const STRIPPED_CHARACTERS =
  * JSON carried — and both have to stay.
  */
 export const sanitizeStrict = (v: string) =>
-  typeof v === 'string' ? v.replaceAll(STRIPPED_CHARACTERS, '').trim() : v;
+  typeof v === 'string' ? sanitizeText(v).trim() : v;
 
 export const sanitizeStrictSingleLine = (v: string) =>
-  typeof v === 'string'
-    ? v.replaceAll(STRIPPED_CHARACTERS, '').replaceAll(/\s+/g, ' ').trim()
-    : v;
+  typeof v === 'string' ? sanitizeText(v).replaceAll(/\s+/g, ' ').trim() : v;
 
 /**
  * Does this message come from this project, or from Zod?
@@ -166,7 +179,7 @@ export const digitStringSchema = (message?: string) =>
 
 /** `null` means "none"; where a key may be omitted, a missing one means "unchanged". */
 export const nullableIdSchema = z.preprocess(
-  (value: string | null) => (value == null ? null : validID(value) || 0),
+  (value: string | null) => (value == null ? null : validID(value) || ''),
   idStringSchema.nullable()
 );
 
@@ -189,10 +202,16 @@ export const EMAIL_PROVIDER_DOMAINS = [
 /* eslint-disable-next-line security/detect-non-literal-regexp -- built from the
    module-local literal tuple above, which no caller can influence */
 const EMAIL_ALLOWLIST_PATTERN = new RegExp(
-  `^[A-Za-z0-9._%+-]+@(?:${EMAIL_PROVIDER_DOMAINS.map((domain) =>
+  `^[A-Za-z0-9._+-]+@(?:${EMAIL_PROVIDER_DOMAINS.map((domain) =>
     domain.replaceAll('.', String.raw`\.`)
   ).join('|')})$`
 );
+
+/**
+ * The one non-ASCII character `toLowerCase()` folds into what the address may
+ * hold, so the raw-input pattern has to admit it wherever it admits `k`.
+ */
+const KELVIN_SIGN = String.fromCodePoint(0x21_2a);
 
 /**
  * One literal, spelled so a flagless pattern matches it case-insensitively.
@@ -205,7 +224,8 @@ function caseInsensitiveLiteral(literal: string): string {
     .map((character) => {
       const lower = character.toLowerCase();
       const upper = character.toUpperCase();
-      if (lower !== upper) return `[${lower}${upper}]`;
+      if (lower !== upper)
+        return `[${lower}${upper}${lower === 'k' ? KELVIN_SIGN : ''}]`;
       return /[a-zA-Z0-9]/.test(character) ? character : `\\${character}`;
     })
     .join('');
@@ -230,7 +250,7 @@ function caseInsensitiveLiteral(literal: string): string {
 const EMAIL_LOCAL_MAX =
   EMAIL_MAX - 1 - Math.min(...EMAIL_PROVIDER_DOMAINS.map((d) => d.length));
 
-const EMAIL_INPUT_PATTERN = String.raw`^\s*[A-Za-z0-9._%+-]{1,${EMAIL_LOCAL_MAX}}@(?:${EMAIL_PROVIDER_DOMAINS.map(
+const EMAIL_INPUT_PATTERN = String.raw`^\s*[A-Za-z0-9._+${KELVIN_SIGN}-]{1,${EMAIL_LOCAL_MAX}}@(?:${EMAIL_PROVIDER_DOMAINS.map(
   (domain) => caseInsensitiveLiteral(domain)
 ).join('|')})\s*$`;
 
@@ -409,74 +429,7 @@ export const optionalPhoneSchema = z
     anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }],
   });
 
-/**
- * Passes a non-string through for the same reason as `slugPreprocess`.
- * @knipignore
- */
-export const trimed = (v: string) => (typeof v === 'string' ? v.trim() : v);
-/** @knipignore */
-export const richTextSchema = z.unknown();
-
-// eslint-disable-next-line security/detect-unsafe-regex
-const colorRegex = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
-const opaqueColorRegex = /^#[0-9A-Fa-f]{6}$/;
-
-/** @knipignore */
-export const getColorSchema = (
-  props: {
-    optional?: boolean;
-    alpha?: boolean;
-  } = {}
-) => {
-  const { optional = false, alpha = true } = props;
-
-  const schema = z
-    .string(MSG_COLOR_INVALID)
-    .regex(alpha ? colorRegex : opaqueColorRegex, MSG_COLOR_INVALID);
-
-  const empty = optional ? null : '';
-
-  return z.preprocess(
-    (v: string | null | undefined) => {
-      if (typeof v === 'string')
-        return v.replaceAll(/\s+/g, '').toUpperCase() || empty;
-      return v ?? empty;
-    },
-    optional ? schema.nullish() : schema
-  );
-};
-
-/** Named because the document carries it as prose. */
-export const SLUG_MAX = 150;
-
-/**
- * Passes a non-string through rather than coercing it to `''`, which would
- * satisfy the inner schema's `v === ''` escape hatches and accept `123`.
- */
-export const slugPreprocess = (v: string) => {
-  if (typeof v !== 'string') return v;
-
-  return v
-    .toLowerCase()
-    .trim()
-    .replaceAll(/\s+/g, '-')
-    .replaceAll(/-+/g, '-')
-    .replaceAll(/^-+|-+$/g, '');
-};
-
-export const slugSchema = z.preprocess(
-  slugPreprocess,
-  z
-    .string()
-    .max(SLUG_MAX, MSG_SLUG_TOO_LONG)
-    .meta({ maxLength: undefined })
-    .refine(
-      (v) => v === '' || /^[a-z0-9-]+$/.test(v),
-      MSG_SLUG_INVALID_CHARACTERS
-    )
-    .refine((v) => v === '' || /[a-z]/.test(v), MSG_SLUG_DIGITS_ONLY)
-);
-// ⚠️ Nothing in this module may import from `../images/`. `svg-optimizer`
+// ⚠️ Nothing in this module may import from `../images/`. `svg-sanitizer`
 // imports `isomorphic-dompurify`, whose Node entry constructs a jsdom window at
 // MODULE scope, so one import edge from here puts jsdom into every Next server
 // bundle that renders a form and every Bun handler that validates one. An SVG

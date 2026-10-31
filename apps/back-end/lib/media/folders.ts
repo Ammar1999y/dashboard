@@ -58,8 +58,8 @@ const FOLDER_COLUMNS = {
 } as const;
 
 /**
- * Direct contents only, active files only. `fileCount` reads heap rows: no
- * `folder_id` index carries `status`.
+ * Direct contents only, active files only. `fileCount` is an index-only count
+ * over `idx_files_folder_active`, but still one entry per file in the folder.
  *
  * ⚠️ The outer row is named `folders.id` in the text, not `${folders.id}`: in
  * a single-table select list Drizzle renders a column unqualified, which here
@@ -212,14 +212,20 @@ async function lockFolderFor(
   return folder;
 }
 
+/**
+ * Inside `tx`, the row stays `KEY SHARE` locked: a delete waits for the commit,
+ * so a file filed into it cannot fail its foreign key. Without one it is a
+ * check only, and a write after it needs `handleFolderForeignKeyViolation`.
+ */
 export async function requireFolder(
   folderId: EntityID,
-  executor: Executor = db
+  tx?: Tx
 ): Promise<void> {
-  const [folder] = await executor
+  const query = (tx ?? db)
     .select({ id: folders.id })
     .from(folders)
     .where(eq(folders.id, folderId));
+  const [folder] = await (tx ? query.for('key share') : query);
   if (!folder) throw folderNotFound();
 }
 
@@ -327,8 +333,8 @@ export async function searchFolders(
 
 /**
  * The whole subtree in one aggregate statement: every folder below this one,
- * and the active files and bytes at any depth. Unbounded in rows read, which
- * is why only this route, not a listing, carries it.
+ * and the active files and bytes at any depth: one index entry per file in
+ * the subtree, where a listing counts only each listed folder's own files.
  */
 async function subtreeTotals(
   executor: Executor,

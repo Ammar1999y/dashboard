@@ -20,6 +20,7 @@ export function recordOutboxDelivery(
   deliveries.push({ ...delivery, at: new Date() });
 }
 
+/** @internal */
 export function readOutbox(
   filter: Partial<
     Pick<OutboxDelivery, 'channel' | 'destination' | 'purpose'>
@@ -34,6 +35,7 @@ export function readOutbox(
   );
 }
 
+/** @internal */
 export function clearOutbox(): void {
   deliveries.length = 0;
 }

@@ -144,7 +144,10 @@ describe('the generated document', () => {
     expect(() => requestBody(z.object({ at: z.date() }), 'json')).toThrow();
   });
 
-  test('a success that sets cookies publishes `Set-Cookie`, and no other does', () => {
+  // A session read's refresh is the `sessionCookie` scheme's to describe; the
+  // integration tier holds every answer's cookies to this
+  // (`tests/helpers/document-check.ts`).
+  test('a binding whose handler returns cookies publishes `Set-Cookie`, and no other binding does', () => {
     const setsCookies = REGISTERED_BINDINGS.filter((binding) => {
       const responses = operation(binding).responses;
       const success = isJsonSchema(responses)

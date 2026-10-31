@@ -1,8 +1,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- fixed repository paths derived from this module */
 /**
  * The lint gate itself: do a `security/*` warning, a floating promise on a
- * type-aware path and an import across a core boundary actually FAIL the
- * check a developer and CI run?
+ * type-aware path, an import across a core boundary and an import the
+ * production image cannot resolve actually FAIL the check a developer and CI
+ * run?
  *
  * ESLint is spawned directly so a probe's type errors cannot prevent the rule
  * under test from running. The `lint` script is pinned separately below, by
@@ -51,6 +52,70 @@ const BOUNDARY_PROBE = path.join(
 );
 /** The docs loader, the one core file the field-docs boundary exempts. */
 const DOCS_LOADER = 'lib/http/openapi/docs.ts';
+const SHARED_ROOT = path.join(REPO_ROOT, '..', '..', 'packages', 'shared');
+
+/**
+ * Sources linted in memory under a real path, so the config's `files` scoping
+ * and type-aware project both apply. `flagged` holds the 1-based lines that
+ * import what the image's production install lacks; `literal` the lines that
+ * hide a module name from the import rules.
+ */
+const DEPENDENCY_CASES = [
+  {
+    cwd: REPO_ROOT,
+    file: 'lib/r2/buckets.ts',
+    lines: [
+      "import Ajv from 'ajv';",
+      "import { createRouter } from 'better-call';",
+      'export const used: unknown[] = [Ajv, createRouter];',
+    ],
+    flagged: [1, 2],
+    literal: [],
+  },
+  {
+    // Exempt for `better-call` alone, and only here.
+    cwd: REPO_ROOT,
+    file: 'lib/auth/session/read.ts',
+    lines: [
+      "import Ajv from 'ajv';",
+      "export const loader = () => import('@redocly/openapi-core');",
+      "import { createRouter } from 'better-call';",
+      "import { base64 } from '@better-auth/utils/base64';",
+      "import type { Options } from 'ajv';",
+      "import { version } from 'bun';",
+      "import * as z from 'zod';",
+      'export const used: unknown[] = [Ajv, createRouter, base64, version, z];',
+      'export type Used = Options;',
+    ],
+    flagged: [1, 2, 4],
+    literal: [],
+  },
+  {
+    cwd: REPO_ROOT,
+    file: 'scripts/healthcheck.ts',
+    lines: [
+      "import Ajv from 'ajv';",
+      'export const loader = () => import(`@redocly/openapi-core`);',
+      'export const used: unknown = Ajv;',
+    ],
+    flagged: [1],
+    literal: [2],
+  },
+  {
+    // `packages/shared` ships in both images and lints with its own manifest.
+    cwd: SHARED_ROOT,
+    file: 'src/images/svg-sanitizer.ts',
+    lines: [
+      "export { format } from 'prettier';",
+      "import type { Config } from 'svgo';",
+      "import * as z from 'zod';",
+      'export const used: unknown[] = [z];',
+      'export type Used = Config;',
+    ],
+    flagged: [1],
+    literal: [],
+  },
+] as const;
 
 /** One per line: each crosses a core boundary where `no-restricted-imports` cannot see it. */
 const BOUNDARY_CROSSINGS = [
@@ -150,6 +215,46 @@ async function lintWith(
   } finally {
     removeProbe(file);
   }
+}
+
+/** The real ESLint gate over `source`, linted as `file` under `cwd`; nothing is written. */
+async function lintSource(
+  cwd: string,
+  file: string,
+  source: string
+): Promise<{ exitCode: number | null; ruleLines: (rule: string) => number[] }> {
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      ESLINT_CLI,
+      '--stdin',
+      '--stdin-filename',
+      file,
+      '--format',
+      'json',
+      '--max-warnings',
+      '0',
+    ],
+    {
+      cwd,
+      env: { ...process.env, FORCE_COLOR: '0' },
+      stdin: new TextEncoder().encode(source),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }
+  );
+  const [stdout, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    child.exited,
+  ]);
+  const messages = eslintReport
+    .parse(JSON.parse(stdout))
+    .flatMap((result) => result.messages);
+  return {
+    exitCode,
+    ruleLines: (rule) =>
+      messages.filter(({ ruleId }) => ruleId === rule).map(({ line }) => line),
+  };
 }
 
 function fixtureSource(file = FIXTURE): string {
@@ -252,6 +357,24 @@ test(
       /import\('[^']+\.docs'\)/
     );
     expect(boundaryLines(path.join(REPO_ROOT, DOCS_LOADER))).toEqual([]);
+  },
+  LINT_RUN_TIMEOUT_MS
+);
+
+test.each(DEPENDENCY_CASES)(
+  'a production import the image cannot resolve fails the lint gate ($file)',
+  async ({ cwd, file, lines, flagged, literal }) => {
+    const { exitCode, ruleLines } = await lintSource(
+      cwd,
+      file,
+      lines.join('\n')
+    );
+
+    expect(exitCode).not.toBe(0);
+    expect(ruleLines('import-x/no-extraneous-dependencies')).toEqual([
+      ...flagged,
+    ]);
+    expect(ruleLines('no-restricted-syntax')).toEqual([...literal]);
   },
   LINT_RUN_TIMEOUT_MS
 );

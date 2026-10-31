@@ -1,8 +1,9 @@
 /**
- * `createAuthEndpoint` built from a plugin endpoint's shared entry: the path
- * and method come from the entry, and the handler's answers are typed as its
- * published 2xx body. The runtime check at the prefix route holds the same
- * body to the same schema.
+ * `createAuthEndpoint` built from a plugin endpoint's shared entry: the path,
+ * method, `query` and `body` come from the entry, and the handler's answers
+ * are typed as its published 2xx body. The runtime check at the prefix route
+ * holds the same body to the same schema. A handler that parses its own body
+ * passes `body` to override the entry's.
  */
 import type { REDIRECTING_PLUGIN_PATHS } from '@/lib/http/openapi/better-auth-tables';
 import type { PluginEndpoint, PluginPath } from '@app/shared/api/all';
@@ -36,9 +37,14 @@ export type PluginAnswer<E extends PluginEndpoint> =
   | ServerValue<z.output<E['response']['raw']>>
   | (PluginPath<E['path']> extends RedirectingRoute ? APIError : never);
 
+type EntrySchemas<E extends PluginEndpoint> = Pick<
+  E,
+  Extract<keyof E, 'query' | 'body'>
+>;
+
 // `Extract` lets the compiler see a generic `O` plus a method as endpoint options.
 type Options<E extends PluginEndpoint, O> = Extract<
-  O & { method: E['method'] },
+  Omit<EntrySchemas<E>, keyof O> & O & { method: E['method'] },
   EndpointOptions
 >;
 
@@ -52,7 +58,12 @@ export function pluginEndpoint<
     ctx: EndpointContext<PluginPath<E['path']>, Options<E, O>, AuthContext>
   ) => Promise<PluginAnswer<E>>
 ) {
-  const endpointOptions = { ...options, method: entry.method } as Options<E, O>;
+  const endpointOptions = {
+    ...('query' in entry && { query: entry.query }),
+    ...('body' in entry && { body: entry.body }),
+    ...options,
+    method: entry.method,
+  } as Options<E, O>;
   return createAuthEndpoint(
     pluginPathOf<E['path']>(entry.path),
     endpointOptions,

@@ -9,7 +9,7 @@
  * REGEX literals are tracked as well, and that is load-bearing: without it
  * `/it's/` opens a fake string that runs to the next apostrophe, every `//` in
  * between survives as code, and a comment can become a false import edge for
- * `find-unused-files.ts` or hide code from `tests/unit/harness-layout.test.ts`.
+ * `tests/unit/harness-layout.test.ts` or hide code from it.
  *
  * Comment bodies become spaces and newlines are kept, so no tokens are joined
  * and line numbers survive.

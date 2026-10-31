@@ -2,14 +2,13 @@ import { db } from '@/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { createAuthMiddleware } from 'better-auth/api';
-import { captcha, openAPI } from 'better-auth/plugins';
+import { openAPI } from 'better-auth/plugins';
 
 import {
   SESSION_ADDITIONAL_FIELDS,
   USER_ADDITIONAL_FIELDS,
 } from '@app/shared/auth-fields';
 
-import { turnstileHostnames, turnstileSecretKey } from '@/lib/captcha';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { TRUSTED_IP_HEADERS } from '@/lib/http/client-ip';
 
@@ -78,14 +77,14 @@ export const auth = betterAuth({
       // Custom OAuth stores identities only; unused generic token and image columns are absent.
       validateSchema: false,
     },
-    // Otherwise `x-forwarded-for`, which a client controls. The subnet matches
-    // `ipBucket`; `getClientIp`'s development fallback does not apply here.
+    // Otherwise `x-forwarded-for`, which a client controls. With its limiter
+    // off, the library reads it only for a new session's address, which
+    // `session.create.before` replaces with `getClientIp`'s.
     //
     // TODO(proxy-trust): the header is trusted on syntax alone — see
     // `TRUSTED_IP_HEADERS` in `lib/http/client-ip.ts`.
     ipAddress: {
       ipAddressHeaders: [...TRUSTED_IP_HEADERS],
-      ipv6Subnet: 64,
     },
   },
 
@@ -148,14 +147,6 @@ export const auth = betterAuth({
   },
 
   plugins: [
-    captcha({
-      provider: 'cloudflare-turnstile',
-      secretKey: turnstileSecretKey() ?? '',
-      allowedHostnames: turnstileHostnames(),
-      // Exact match: `'/sign-in'` protects nothing; a prefix is `'/sign-in/*'`.
-      // TODO: add the proper endpoints — and write each one in full.
-      endpoints: ['/sign-in/email'],
-    }),
     passwordless(),
     oauth(),
     reauthentication(),

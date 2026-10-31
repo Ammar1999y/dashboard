@@ -41,6 +41,7 @@ One implementation per concern. The codebase should read as though one person wr
 - **Reuse before writing.** Search the app and `@app/shared` for an existing helper, constant, message or error. Search by value, not only by name. Reimplementing what exists is a defect even when it works; if it almost fits, extend it.
 - **Follow the dominant pattern.** Before writing a kind of code the app already has, find how it is written across the app, not only next door, and match it. Where patterns compete, adopt the dominant one and note the divergence.
 - **Centralize real duplication.** Repeated logic becomes a shared helper. Repeated options or config become defaults. Boilerplate lives in one place. Abstract only duplication that exists now, with no speculative layers.
+- **Derive, don't mirror.** A list or table that restates another (allowed paths, forced fields, a published shape) is built from its source, or a test fails when the two drift.
 - **Every endpoint is one contract entry in `@app/shared/api`, served through `bind()`,** or, for a Better Auth plugin endpoint, built from its entry with `pluginEndpoint()`. Nothing registers a route by hand. Schemas are compiled only at registration, never through the global `zod/compile`: it would compile Better Auth's schemas too. Wire bodies come only from core's body builders, so a format change stays one function per body kind.
 - **Use Elysia features where they improve the code, and keep their calls in `app.ts` and `server/elysia/`.** Easing a future port is not a reason to avoid one.
 
@@ -55,7 +56,7 @@ One implementation per concern. The codebase should read as though one person wr
 
 ## Before claiming a defect
 
-Never call something missing, broken or unsupported based on memory or bundle greps.
+Never call something missing, broken or unsupported based on memory or bundle greps. The same applies before new code relies on how a library behaves (a default, a timeout, what it stores or refuses).
 
 1. Check the installed version.
 2. Read its source and local types.

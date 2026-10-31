@@ -24,8 +24,7 @@ import { generateUuidV7 } from '@/lib/id';
 
 import { PERMISSION_AUDIT_VERSION } from './audit';
 
-export type RolePolicyTarget =
-  { roleName?: string | null; scope?: string | null } | null | undefined;
+export type RolePolicyTarget = { scope?: string | null } | null | undefined;
 
 /**
  * `FOR SHARE` is only worth taking inside a transaction. On the autocommit `db`
@@ -93,52 +92,44 @@ export async function writeRoleMatrix(
     );
 }
 
-/**
- * With `existingRoleId`, rewrites that role's matrix and leaves its
- * `createdBy` untouched; otherwise mints a `custom` role stamped with
- * `createdBy`.
- */
-export async function createCustomRole(
+/** A new `custom` role holding `permissions`, stamped with `createdBy`. */
+export async function mintCustomRole(
   tx: Tx,
   permissions: PagePermissions,
-  existingRoleId?: EntityID | null,
-  createdBy?: EntityID
+  createdBy: EntityID
 ): Promise<EntityID> {
-  let roleId: EntityID;
+  const [customRole] = await tx
+    .insert(roles)
+    .values({
+      roleName: `${CUSTOM_ROLE_NAME_PREFIX}${generateUuidV7()}`,
+      scope: CUSTOM_ROLE_VALUE,
+      isActive: true,
+      createdBy,
+    })
+    .returning({ id: roles.id });
 
-  if (existingRoleId) {
-    roleId = existingRoleId;
-    // Lock the role row so concurrent writers serialize.
-    //
-    // Upsert + prune, not DELETE + INSERT: it preserves row identity and
-    // `created_at`, writes only what changed, and keeps the audit diff
-    // meaningful. Not for visibility — under MVCC no other transaction can see
-    // this one's intermediate state either way.
-    await tx
-      .select({ id: roles.id })
-      .from(roles)
-      .where(eq(roles.id, roleId))
-      .for('update');
-  } else {
-    const [customRole] = await tx
-      .insert(roles)
-      .values({
-        roleName: `${CUSTOM_ROLE_NAME_PREFIX}${generateUuidV7()}`,
-        scope: CUSTOM_ROLE_VALUE,
-        isActive: true,
-        createdBy: createdBy ?? null,
-      })
-      .returning({ id: roles.id });
+  if (!customRole)
+    throw new CustomError(MSG_CREATE_ERROR, HTTP_STATUS.INTERNAL_ERROR);
 
-    if (!customRole)
-      throw new CustomError(MSG_CREATE_ERROR, HTTP_STATUS.INTERNAL_ERROR);
+  await writeRoleMatrix(tx, customRole.id, permissions, { prune: false });
 
-    roleId = customRole.id;
-  }
+  return customRole.id;
+}
 
-  await writeRoleMatrix(tx, roleId, permissions, { prune: !!existingRoleId });
+/** Replaces a custom role's matrix; its `createdBy` stays. */
+export async function rewriteCustomRoleMatrix(
+  tx: Tx,
+  roleId: EntityID,
+  permissions: PagePermissions
+): Promise<void> {
+  // Concurrent writers of this matrix serialize on the role row.
+  await tx
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.id, roleId))
+    .for('update');
 
-  return roleId;
+  await writeRoleMatrix(tx, roleId, permissions, { prune: true });
 }
 
 /**

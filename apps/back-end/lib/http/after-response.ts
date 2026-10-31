@@ -107,6 +107,8 @@ export function pendingAfterResponse(): number {
 /**
  * Tasks enqueued so far. Every in-flight batch holds an enqueued task, so a
  * queue proven idle stays idle while this has not moved.
+ *
+ * @internal
  */
 export function enqueuedAfterResponse(): number {
   return enqueued.count;

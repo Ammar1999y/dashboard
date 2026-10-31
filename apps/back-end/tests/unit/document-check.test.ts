@@ -67,6 +67,20 @@ const DOCUMENT: OpenApiDocument = {
     },
     '/api/things/mine': {
       put: { responses: { '204': { description: 'Saved.' } } },
+      post: {
+        responses: {
+          '204': {
+            description: 'Remembered.',
+            headers: {
+              'Set-Cookie': { description: 'A cookie.', schema: {} },
+            },
+          },
+        },
+      },
+      get: {
+        security: [{}, { sessionCookie: [] }],
+        responses: { '204': { description: 'Read.' } },
+      },
     },
   },
 };
@@ -125,6 +139,28 @@ describe('an answer the document describes', () => {
   test('a static segment wins over a parameter, as in the router', async () => {
     expect(
       await ask('/api/things/mine', new Response(null, { status: 204 }), 'PUT')
+    ).toEqual([]);
+  });
+
+  test('cookies where the success publishes them, its operation reads the session, or the answer refuses', async () => {
+    const withCookie = (status: number, body: BodyInit | null = null) =>
+      new Response(body, {
+        status,
+        headers: {
+          'set-cookie': 'a=1; Path=/',
+          ...(body !== null && { 'content-type': PROBLEM_MEDIA_TYPE }),
+        },
+      });
+    expect(await ask('/api/things/mine', withCookie(204), 'POST')).toEqual([]);
+    expect(await ask('/api/things/mine', withCookie(204))).toEqual([]);
+    expect(
+      await ask(
+        '/api/things/x',
+        withCookie(
+          422,
+          JSON.stringify({ type: 'about:blank', status: 422, detail: 'x' })
+        )
+      )
     ).toEqual([]);
   });
 });
@@ -195,6 +231,17 @@ describe('an answer the document cannot describe fails', () => {
       )
     ).toEqual([
       'GET /api/things/{id} 422: body must NOT have additional properties',
+    ]);
+  });
+
+  test('a success or redirect setting cookies its operation does not publish', async () => {
+    const withCookie = (status: number) =>
+      new Response(null, { status, headers: { 'set-cookie': 'a=1; Path=/' } });
+    expect(await ask('/api/things/mine', withCookie(204), 'PUT')).toEqual([
+      'PUT /api/things/mine 204: sets cookies, where the document publishes no `Set-Cookie`',
+    ]);
+    expect(await ask('/api/things/x', withCookie(302))).toEqual([
+      'GET /api/things/{id} 302: sets cookies, where the document publishes no `Set-Cookie`',
     ]);
   });
 

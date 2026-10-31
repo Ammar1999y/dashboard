@@ -11,7 +11,6 @@ import { users } from '@/db/schema';
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
-import { CONTACT_LABEL } from '@app/shared/messages/otp';
 import { userMsg } from '@app/shared/messages/users';
 import { contactKindOf } from '@app/shared/validation/enums';
 
@@ -28,11 +27,11 @@ import {
   removeMethodIntent,
 } from '@/lib/auth/two-factor/methods';
 import { notFoundError } from '@/lib/http/response';
-import { markContactVerified } from '@/lib/otp/contact';
 import { processOtpSend } from '@/lib/otp/send';
 import { insufficientPermissions } from '@/lib/permissions/checker';
 import { enforceOtpSurfaceSendQuota } from '@/lib/rate-limit';
 
+import { markContactVerified } from './contact';
 import { asCurrentPasswordIncorrect } from './current-password';
 import { activeUser, liveUser } from './filters';
 
@@ -146,9 +145,6 @@ export async function sendContactChangeCode(
     identifier: destination,
     channel,
     purpose: kind === 'email' ? 'change_email' : 'change_phone',
-    targetIdentifier: destination,
-    sendTo: destination,
-    entityName: CONTACT_LABEL[kind],
   });
 }
 
@@ -199,7 +195,7 @@ export async function commitEmailChange({
   if (current.email === newEmail) {
     await markContactVerified(tx, {
       userId,
-      channel: 'email',
+      kind: 'email',
       auditMeta,
       onMissing: () => {
         throw notFoundError();
@@ -215,7 +211,7 @@ export async function commitEmailChange({
     .set({ email: newEmail, emailVerified: true })
     .where(eq(users.id, userId));
 
-  await unlinkGoogle(tx, userId, { userId, email: newEmail }, auditMeta);
+  await unlinkGoogle(tx, userId, { userId, email: current.email }, auditMeta);
   await revokeOtherSessions(tx, userId);
   await revokePendingProofs(tx, userId, keepVerificationSessionId);
 
@@ -261,8 +257,7 @@ export async function commitPhoneChange({
   if (current.phoneNumber === newPhoneNumber) {
     await markContactVerified(tx, {
       userId,
-      // Any phone channel names the same flag.
-      channel: 'sms',
+      kind: 'phone',
       auditMeta,
       onMissing: () => {
         throw notFoundError();

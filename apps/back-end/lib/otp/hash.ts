@@ -5,7 +5,10 @@
  */
 import crypto from 'node:crypto';
 
-import { BASE64URL_32_BYTES_PATTERN, KEY_ID_PATTERN } from '@/lib/auth/keyring';
+import {
+  BASE64URL_32_BYTES_PATTERN,
+  KEY_ID_PATTERN,
+} from '@/lib/crypto/keyring';
 
 import { getActiveOtpKey, getOtpKey } from './key';
 

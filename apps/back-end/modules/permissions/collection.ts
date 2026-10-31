@@ -1,9 +1,7 @@
-import type { PermissionRows } from '@app/shared/permissions/matrix';
-
 import { and, count, eq } from 'drizzle-orm';
 
 import { dataTableDb, withTransaction } from '@/db';
-import { rolePermissions, roles, users } from '@/db/schema';
+import { roles, users } from '@/db/schema';
 
 import { createPermission, listPermissions } from '@app/shared/api/permissions';
 import { PERMISSIONS_FILTER_COLUMNS } from '@app/shared/data-table/filterable-columns';
@@ -29,7 +27,7 @@ import { dataTableParameters } from '@/lib/data-table/query-parameters';
 import { bind } from '@/lib/http/binding';
 import { handlePermissionUniqueViolation } from '@/lib/http/constraint-errors';
 import { PERMISSION_AUDIT_VERSION } from '@/lib/permissions/audit';
-import { standardScopeFilter } from '@/lib/permissions/roles';
+import { standardScopeFilter, writeRoleMatrix } from '@/lib/permissions/roles';
 import { liveUser } from '@/lib/users/filters';
 
 export const listPermissionsBinding = bind(listPermissions, {
@@ -45,12 +43,12 @@ export const listPermissionsBinding = bind(listPermissions, {
     tags: ['Permissions'],
     parameters: dataTableParameters(PERMISSIONS_FILTER_COLUMNS),
   },
-  handler: async ({ actor, meta }) => {
+  handler: async ({ query, actor }) => {
     const { userId, scope } = actor;
 
     const { where, orderBy, limit, offset, paginationMeta } =
       parseDataTableParams(roles, {
-        url: meta.url,
+        query,
         filterableColumns: PERMISSIONS_FILTER_COLUMNS,
         searchableColumns: ['roleName', 'description'],
         defaultSort: { id: 'createdAt', desc: true },
@@ -120,8 +118,7 @@ export const createPermissionBinding = bind(createPermission, {
 
     assertStandardRoleName(input.roleName);
 
-    if (input.permissions.length > 0)
-      validatePermissionScope(actorPermissions, input.permissions);
+    validatePermissionScope(actorPermissions, input.permissions);
 
     const auditMeta = getAuditMeta(meta);
 
@@ -139,17 +136,10 @@ export const createPermissionBinding = bind(createPermission, {
       if (!newRole)
         throw new CustomError(MSG_CREATE_ERROR, HTTP_STATUS.INTERNAL_ERROR);
 
-      const newPermissionsForAudit: PermissionRows = [];
-
-      if (input.permissions.length > 0) {
-        const permissionsData = input.permissions.map((p) => ({
-          roleId: newRole.id,
-          pageName: p.name,
-          permissions: p.permissions,
-        }));
-        await tx.insert(rolePermissions).values(permissionsData);
-        newPermissionsForAudit.push(...toPermissionRows(input.permissions));
-      }
+      await writeRoleMatrix(tx, newRole.id, input.permissions, {
+        prune: false,
+      });
+      const newPermissionsForAudit = toPermissionRows(input.permissions);
 
       await auditLog(tx, {
         userId: actorUserId,
@@ -164,13 +154,11 @@ export const createPermissionBinding = bind(createPermission, {
           isActive: input.isActive,
           // The `{ pageName, permissions }` shape and `changedPermissions`
           // summary every role event uses; the request keys pages as `name`.
-          ...(newPermissionsForAudit.length > 0 && {
-            permissions: newPermissionsForAudit,
-            changedPermissions: diffPermissionMatrices(
-              [],
-              newPermissionsForAudit
-            ),
-          }),
+          permissions: newPermissionsForAudit,
+          changedPermissions: diffPermissionMatrices(
+            [],
+            newPermissionsForAudit
+          ),
         },
         meta: auditMeta,
       });

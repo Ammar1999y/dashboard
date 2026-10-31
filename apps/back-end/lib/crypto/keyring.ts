@@ -187,7 +187,7 @@ export function defineKeyring(spec: KeyringSpec): Keyring {
         `${spec.activeIdEnv} must identify a key present in ${spec.keyringEnv}`
       );
 
-    // `needsRehash` (`password/hash.ts`) reads generation as staleness.
+    // `needsRehash` (`lib/auth/password/hash.ts`) reads generation as staleness.
     const activeGeneration = keys.get(activeId)?.generation ?? 0;
     const newest = Math.max(
       ...keys.values().map((material) => material.generation)

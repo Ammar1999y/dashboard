@@ -146,7 +146,7 @@ const CONTROL_CHARACTERS = /\p{Cc}/gu;
 /** The control characters `searchFold` reads as a space. */
 const CONTROL_WHITESPACE = /[\t-\r\u{85}]+/gu;
 
-export function stripControlAndTrim(value: string): string {
+function stripControlAndTrim(value: string): string {
   return value.replaceAll(CONTROL_CHARACTERS, '').trim();
 }
 
@@ -229,7 +229,7 @@ function parseJsonArray(value: string): unknown[] | null {
   return Array.isArray(parsed) ? parsed : null;
 }
 
-export function parseSortingState<TData>(
+function parseSortingState<TData>(
   value: string | null | undefined,
   columnIds?: string[] | Set<string>,
   /**
@@ -360,7 +360,7 @@ function parseFilterItem(raw: unknown): FilterItemSchema | null {
   };
 }
 
-export function parseFiltersState<TData>(
+function parseFiltersState<TData>(
   value: string | null | undefined,
   columnIds?: string[] | Set<string>,
   /**
@@ -434,17 +434,6 @@ export const DATA_TABLE_PARAMS = {
   search: 'search',
 } as const;
 
-/**
- * Every top-level key this parser reads, so the caller that owns the URL can
- * refuse the rest: a misspelled `filtres` would otherwise be a broad 200 that
- * looks filtered.
- */
-export const DATA_TABLE_PARAM_KEYS: ReadonlySet<string> = new Set(
-  Object.values(DATA_TABLE_PARAMS).filter(
-    (key) => key !== DATA_TABLE_PARAMS.search
-  )
-);
-
 interface ParseTableParamsOptions {
   /**
    * The sortable column ids. Without them an unsortable id still counts as a
@@ -459,7 +448,7 @@ interface ParseTableParamsOptions {
   onFilterDropped?: () => void;
 }
 
-export interface ParseSearchParamsOptions<T> extends ParseTableParamsOptions {
+interface ParseSearchParamsOptions<T> extends ParseTableParamsOptions {
   /** Applied when the request expresses no sort the allowlist accepts. */
   defaultSort?: ExtendedColumnSort<T>;
 }

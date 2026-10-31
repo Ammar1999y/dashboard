@@ -2,7 +2,7 @@ import type { Tx } from '@/db';
 import type { PermissionRows } from '@app/shared/permissions/matrix';
 import type { EntityID } from '@app/shared/types';
 
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
 import { rolePermissions, roles, sessions, users } from '@/db/schema';
@@ -23,10 +23,7 @@ import {
   MSG_UPDATED,
 } from '@app/shared/messages/common';
 import { permissionMsg } from '@app/shared/messages/permissions';
-import {
-  REQUIRE_ROLE_FOR_LOGIN,
-  ROLE_SCOPE,
-} from '@app/shared/permissions/constants';
+import { ROLE_SCOPE } from '@app/shared/permissions/constants';
 import {
   diffPermissionMatrices,
   permissionsEqual,
@@ -42,7 +39,6 @@ import {
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import { revokeSessionsWhere } from '@/lib/auth/session/rotation';
-import { lockActor } from '@/lib/auth/user-eligibility';
 import { bind } from '@/lib/http/binding';
 import { handlePermissionUniqueViolation } from '@/lib/http/constraint-errors';
 import { notFoundError } from '@/lib/http/response';
@@ -60,6 +56,7 @@ import {
 import { assertRowsReachable } from '@/lib/permissions/scope';
 import { refreshRoleSessions } from '@/lib/permissions/session-refresh';
 import { liveUser } from '@/lib/users/filters';
+import { lockActor } from '@/lib/users/lock-order';
 
 /**
  * Takes no lock: every writer of an existing role's matrix holds that role
@@ -137,7 +134,7 @@ export const updatePermissionBinding = bind(updatePermission, {
   detail: {
     summary: 'Update a role permission matrix',
     description:
-      '`permissions`, when present, is the COMPLETE matrix and replaces the stored one: a page absent from the array has its grants REVOKED, and the answer is still 200. Send the whole matrix, not a diff. Omitting the key entirely is the only way to leave the current matrix untouched while changing `roleName`, `description` or `isActive`; an empty array is rejected. A role cannot edit its own matrix (403), and this operation requires re-authentication.',
+      '`permissions`, when present, is the COMPLETE matrix and replaces the stored one: a page absent from the array has its grants REVOKED, and the answer is still 200. Send the whole matrix, not a diff. Omitting the key entirely is the only way to leave the current matrix untouched while changing `roleName`, `description` or `isActive`; an empty array is rejected. The role the caller holds is refused 403 whatever the body changes, a rename or deactivation included, and this operation requires re-authentication.',
     tags: ['Permissions'],
   },
   handler: async ({ params, body: input, actor, meta }) => {
@@ -173,8 +170,6 @@ export const updatePermissionBinding = bind(updatePermission, {
       );
       const existingPermissions = await readRoleMatrix(tx, roleId);
 
-      // Reachability, because this is the role being EDITED: a 403 would tell
-      // an actor without `permissions.view` which roles outrank them.
       assertRowsReachable(actorPermissions, existingPermissions);
 
       const canDeactivate = holdsActionOn(
@@ -312,10 +307,8 @@ export const deletePermissionBinding = bind(deletePermission, {
     await withTransaction(async (tx) => {
       await lockActor(tx, actorUserId);
 
-      // Unlocked, before the member locks, so a caller the role is out of reach
-      // of gets its 404 without holding anyone's row. Repeated under the locks.
-      // A deletion grants nothing, so "this role outranks me" answers 404 like
-      // every unreachable-target gate.
+      // Unlocked, before the role lock, so a caller the role is out of reach of
+      // gets its refusal without queueing on the role. Repeated under the lock.
       await assertOwnedStandardRole(tx, roleId, deleteScope, actorUserId);
       assertRowsReachable(actorPermissions, await readRoleMatrix(tx, roleId));
 
@@ -329,19 +322,6 @@ export const deletePermissionBinding = bind(deletePermission, {
         .limit(1);
       if (liveMember) throw roleHasUsers();
 
-      // Users before the role, the order every writer of a user's role takes
-      // (`lockUser`). Held against a restore committing between the unpin and
-      // the NOT EXISTS check below, which would trip the FK or leave the restored
-      // user with no role. `NO KEY UPDATE`: an audit row's foreign key takes a
-      // key-share lock on its actor, and a full `UPDATE` lock would make any
-      // member writing one while holding this role a deadlock.
-      await tx
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.roleId, roleId))
-        .orderBy(users.id)
-        .for('no key update');
-
       const existingRole = await lockOwnedStandardRole(
         tx,
         roleId,
@@ -352,15 +332,8 @@ export const deletePermissionBinding = bind(deletePermission, {
       const existingPermissions = await readRoleMatrix(tx, roleId);
       assertRowsReachable(actorPermissions, existingPermissions);
 
-      // With REQUIRE_ROLE_FOR_LOGIN the FK is RESTRICT, so soft-deleted users
-      // still pinning `role_id` would block the DELETE; they are unpinned first.
-      // Without it the FK is `set null`.
-      if (REQUIRE_ROLE_FOR_LOGIN)
-        await tx
-          .update(users)
-          .set({ roleId: null })
-          .where(and(eq(users.roleId, roleId), isNotNull(users.deletedAt)));
-
+      // No soft-deleted user pins the role: `softDeleteUser` nulls `role_id` in
+      // the update that sets `deleted_at`, so the FK finds no row to restrict.
       // The scope condition mirrors `standardRoleFilter()`.
       const deleted = await tx.execute(sql`
       DELETE FROM roles r

@@ -1,10 +1,8 @@
 /**
  * `lib/maintenance/database.ts` — the retention sweep, run by `lib/maintenance/schedule.ts`.
  *
- * Ported from `scripts/probe/dev-live/database/retention-sweep.dev-probe.ts`,
- * which could not be a test while it ran against the developer's own database:
- * `runDatabaseSweep` deletes every qualifying row in the database, not only the
- * rows the fixture seeded. The per-worker disposable database is what makes it
+ * `runDatabaseSweep` can delete qualifying rows anywhere in the database, not
+ * only the rows the fixture seeded. The per-worker disposable database is what makes it
  * safe, and it is also what makes the strongest assertion here possible — the
  * EXACT per-table removal counts, which no prefix-scoped cleanup could check.
  *
@@ -13,16 +11,13 @@
  * deletes too much passes any test that only checks the target vanished — a
  * data-loss incident that looks like a passing suite.
  *
- * Three things the port replaced rather than translated:
+ * Three conditions it sets itself rather than inheriting:
  *
- * - The `afterAll` prefix-wide cleanup and the `PROBE_STAMP` names it needed.
- *   `resetTables()` covers both, plus the case the probe could not: a failure
- *   between its own inserts.
- * - `getR2ConfigStatus().configured`. The probe branched on whether the machine
- *   happened to hold R2 credentials, so its headline assertion — the row that
- *   must survive a failed delete — ran only on a machine with none.
- *   `failObjectStore('DeleteObjects')` states that condition outright, which
- *   also buys the pass the probe could never make: one where the delete
+ * - Cleanup. `resetTables()` empties the database, so no row needs a per-run
+ *   name, and a failure between inserts leaves nothing behind.
+ * - The object store. `failObjectStore('DeleteObjects')` decides whether the
+ *   delete fails, whatever R2 credentials the machine holds, so both passes run:
+ *   one where the row must survive a failed delete, and one where the delete
  *   SUCCEEDS, so the object goes first and the row second.
  * - The clock. Every cutoff in `lib/maintenance/database.ts` is computed in SQL
  *   (`now() - $1::interval`), so `setSystemTime` would move this process's clock
@@ -30,7 +25,7 @@
  *   that must stay sit an hour or a day inside each window, so an interval
  *   written in the wrong unit fails here.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import type { StoreOp } from '../helpers/object-store';
 import type { Tx } from '@/db';
 import type { DatabaseSweepResult } from '@/lib/maintenance/database';
@@ -52,11 +47,14 @@ import {
   verificationSessions,
 } from '@/db/schema';
 
-import { lockUser } from '@/lib/auth/user-eligibility';
-import { runDatabaseSweep } from '@/lib/maintenance/database';
+import {
+  runDatabaseSweep,
+  runVerificationSweep,
+} from '@/lib/maintenance/database';
 import { startSchedule } from '@/lib/maintenance/schedule';
 import { ORPHAN_DRAIN_BATCH } from '@/lib/media/orphaned-objects';
 import { TRANSITION_RETRY_BATCH } from '@/lib/media/visibility';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { compareCodeUnits } from '@/utils/text';
 
@@ -115,6 +113,11 @@ interface Pass {
    */
   ops: readonly StoreOp[];
 }
+
+/** The 15-minute `verifications` job, run over the healthy pass's rows. */
+const verificationPass: {
+  swept: Awaited<ReturnType<typeof runVerificationSweep>> | null;
+} = { swept: null };
 
 const passes: {
   healthy: Pass | null;
@@ -526,6 +529,7 @@ describe('a pass with a healthy object store', () => {
 
     await seedFiles(userId);
     passes.healthy = await sweepAndRecord();
+    verificationPass.swept = await runVerificationSweep();
   });
 
   test('reports ok, with the exact number of rows each table should have lost', () => {
@@ -539,7 +543,6 @@ describe('a pass with a healthy object store', () => {
       verificationSessions: { removed: 2, hasMore: false },
       verificationCodes: { removed: 1, hasMore: false },
       otpChallenges: { removed: 1, hasMore: false },
-      verifications: { removed: 1, hasMore: false },
       trustedDevices: { removed: 1, hasMore: false },
       // `stamped: 0`, with an active row in no folder present (`KEY.permanent`):
       // no owner table is registered here, and the unfiled guards fail closed
@@ -605,6 +608,14 @@ describe('a pass with a healthy object store', () => {
     expect(await proofExists(proofs.oldRowLiveChallenge)).toBe(true);
     expect(await challengeCount(proofs.oldRowLiveChallenge)).toBe(1);
     expect(await challengeCount(proofs.freshWithExpiredCode)).toBe(0);
+  });
+
+  test('the nightly pass leaves verifications to their own 15-minute job, which removes exactly the expired one', () => {
+    expect(verificationPass.swept).toMatchObject({
+      status: 'ok',
+      removed: { verifications: { removed: 1, hasMore: false } },
+      hasMore: false,
+    });
   });
 
   test('an expired 2FA challenge is removed; one still in flight stays', async () => {
@@ -819,6 +830,45 @@ describe('the scheduled job in front of it', () => {
     // than waiting out its budget.
     expect(await handle.stopAndDrain(5000)).toBe(true);
     // Registering runs nothing: the first sweep waits for its firing.
+    expect(await survivingSessionTokens()).toEqual([TOKEN.pastGrace]);
+    expect(storeOps()).toEqual([]);
+  });
+
+  test('verifications are swept by their own elected job every 15 minutes', async () => {
+    // The nightly ceiling reclaimed 20,000 rows a day, below what one
+    // captcha-solving caller of the Google start writes.
+    const logged = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const handle = startSchedule();
+      expect(await handle.stopAndDrain(5000)).toBe(true);
+      const started = logged.mock.calls
+        .map((call) => JSON.parse(String(call[0])) as Record<string, unknown>)
+        .find((line) => line.msg === 'maintenance schedule started');
+
+      expect(started?.jobs).toContainEqual(
+        expect.objectContaining({
+          name: 'verification-expiry-sweep',
+          expression: '*/15 * * * *',
+          shared: true,
+        })
+      );
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  test('a run the shutdown has stopped touches nothing and reports the rest as left over', async () => {
+    // Before the stop reached the passes, a deploy overlapping the nightly run
+    // waited on all of it and then forced the exit mid-R2 call.
+    const stopping = new AbortController();
+    stopping.abort();
+
+    const swept = await runDatabaseSweep(Date.now(), stopping.signal);
+
+    expect(swept.status).toBe('ok');
+    expect(swept.hasMore).toBe(true);
+    expect(swept.removed.sessions).toEqual({ removed: 0, hasMore: true });
+    expect(swept.removed.files).toMatchObject({ removed: 0, hasMore: true });
     expect(await survivingSessionTokens()).toEqual([TOKEN.pastGrace]);
     expect(storeOps()).toEqual([]);
   });

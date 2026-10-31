@@ -1,8 +1,8 @@
 /**
  * Every answer the application gives, held to the document it serves at
  * `GET /openapi.json`: the status must be one the operation publishes, a body
- * one of its published media types, and a JSON body must match the published
- * schema. The runtime check (`lib/http/response-check.ts`) holds answers to
+ * one of its published media types, a JSON body must match the published
+ * schema, and a success's cookies must be published. The runtime check (`lib/http/response-check.ts`) holds answers to
  * the shared schemas the document is generated from; this holds the generated
  * document itself, the Better Auth merge included, to what is really sent.
  *
@@ -29,6 +29,8 @@ interface Operation {
   /** The operation's JSON Pointer inside the document. */
   pointer: string;
   responses: JsonSchema;
+  /** Its `security` admits the session cookie, whose refresh the scheme describes. */
+  readsSession: boolean;
 }
 
 interface PathTemplate {
@@ -104,6 +106,13 @@ export function documentCheck(
         name: `${method.toUpperCase()} ${template}`,
         pointer: `#/paths/${pointerSegment(template)}/${method}`,
         responses: isJsonSchema(operation.responses) ? operation.responses : {},
+        readsSession:
+          Array.isArray(operation.security) &&
+          operation.security.some(
+            (requirement) =>
+              isJsonSchema(requirement) &&
+              Object.hasOwn(requirement, 'sessionCookie')
+          ),
       };
     }
     return null;
@@ -146,6 +155,30 @@ export function documentCheck(
     return schemaProblems(operation, status, mediaType, sent.json);
   }
 
+  /**
+   * A success or redirect that sets cookies publishes `Set-Cookie`, unless its
+   * operation reads the session. A refusal may expire what it refused.
+   */
+  function cookieProblems(
+    operation: Operation,
+    published: JsonSchema,
+    response: Response
+  ): string[] {
+    if (
+      response.status < 200 ||
+      response.status >= 400 ||
+      response.headers.getSetCookie().length === 0
+    )
+      return [];
+    const headers = isJsonSchema(published.headers) ? published.headers : {};
+    const publishes = Object.keys(headers).some(
+      (name) => name.toLowerCase() === 'set-cookie'
+    );
+    return publishes || operation.readsSession
+      ? []
+      : ['sets cookies, where the document publishes no `Set-Cookie`'];
+  }
+
   return async (request, response) => {
     // The CORS layer's, which the document leaves out.
     if (request.method === 'OPTIONS') return [];
@@ -171,7 +204,10 @@ export function documentCheck(
     const sent = sentBody(await response.clone().text());
     const published = operation.responses[status];
     const problems = isJsonSchema(published)
-      ? bodyProblems(operation, status, published, mediaType, sent)
+      ? [
+          ...bodyProblems(operation, status, published, mediaType, sent),
+          ...cookieProblems(operation, published, response),
+        ]
       : ['the operation does not publish this status'];
     const code =
       sent.parsed &&

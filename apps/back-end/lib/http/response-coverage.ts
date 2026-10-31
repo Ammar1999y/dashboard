@@ -5,7 +5,7 @@
  * `RESPONSE_CONTRACT_COVERAGE_DIR`, so a test's child processes count too;
  * `tests/helpers/run.ts` totals them after a tier.
  */
-import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AnyEndpoint } from '@app/shared/api/endpoint';
 
@@ -87,7 +87,11 @@ const idsOf = (name: string, site: UnionSite): string[] =>
     ? [memberId(name)]
     : site.members.map((_, index) => memberId(name, index));
 
-/** What a run that reached every answer would have recorded. */
+/**
+ * What a run that reached every answer would have recorded.
+ *
+ * @internal
+ */
 export function expectedResponseCoverage(): string[] {
   return [
     ...[...ANSWERING].flatMap(([key, entry]) => idsOf(key, entryUnion(entry))),
@@ -111,7 +115,11 @@ function siteOf(name: string): UnionSite {
   return route === undefined ? NO_UNION : pluginUnion(route);
 }
 
-/** The keys of a union member, which say what `NAME #n` is in a report. */
+/**
+ * The keys of a union member, which say what `NAME #n` is in a report.
+ *
+ * @internal
+ */
 export function describeResponseCoverage(id: string): string {
   const [name, member] = id.split(' #', 2);
   if (name === undefined || member === undefined) return id;
@@ -151,16 +159,4 @@ export function recordResponseCoverage(id: string): void {
     path.join(dir, `${process.pid}.jsonl`),
     `${JSON.stringify(id)}\n`
   );
-}
-
-/** Every id the processes of one run recorded under `dir`. */
-export function readResponseCoverage(dir: string): Set<string> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- the directory the runner created for this run
-  const files = readdirSync(dir).map((name) => path.join(dir, name));
-  const ids = files
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a file a process of this run wrote there
-    .flatMap((file) => readFileSync(file, 'utf8').split('\n'))
-    .filter((line) => line !== '')
-    .map((line): unknown => JSON.parse(line));
-  return new Set(ids.filter((id) => typeof id === 'string'));
 }

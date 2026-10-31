@@ -2,7 +2,7 @@ import type { Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { OtpPurpose } from '@app/shared/validation/enums';
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { verificationSessions } from '@/db/schema';
 
@@ -12,7 +12,12 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import { otpMsg } from '@app/shared/messages/otp';
 import { OTP_BASE_RESEND_DELAY_S } from '@app/shared/validation/constants';
 
-import { OTP_BLOCK_DURATION_HOURS } from './limits';
+import { expiresIn } from '@/lib/auth/verifications';
+
+import {
+  OTP_BLOCK_DURATION_HOURS,
+  OTP_DAILY_VERIFY_WINDOW_HOURS,
+} from './limits';
 
 /**
  * Anonymous sends answer one body for real and invented identifiers, so they can
@@ -44,21 +49,45 @@ export function calculateNextAllowedAt(
   const delaySeconds = isFlatResendPurpose(purpose)
     ? OTP_BASE_RESEND_DELAY_S
     : OTP_BASE_RESEND_DELAY_S * Math.pow(2, attemptNumber - 1);
-  return new Date(Date.now() + delaySeconds * 1000);
+  return expiresIn(delaySeconds);
 }
 
 export function resendWaitError(nextAllowedAt: Date, now: Date): CustomError {
   const waitSeconds = Math.ceil(
     (nextAllowedAt.getTime() - now.getTime()) / 1000
   );
-  return new CustomError(
+  const error = new CustomError(
     otpMsg.resendWait(waitSeconds),
     HTTP_STATUS.TOO_MANY_REQUESTS
   );
+  error.responseHeaders = { 'Retry-After': String(waitSeconds) };
+  return error;
 }
 
 export function calculateBlockDuration(): Date {
-  return new Date(Date.now() + OTP_BLOCK_DURATION_HOURS * 60 * 60 * 1000);
+  return expiresIn(OTP_BLOCK_DURATION_HOURS * 60 * 60);
+}
+
+/** Judged by the database clock, which stamps the anchor. */
+export const dailyVerifyWindowExpired = sql`NOW() - ${verificationSessions.verifyAttemptWindowStart} > make_interval(hours => ${OTP_DAILY_VERIFY_WINDOW_HOURS})`;
+
+/** `verifyAttemptDaily` as it counts now: zero once its window has aged out. */
+export const dailyVerifyAttemptsUsed =
+  sql<number>`CASE WHEN ${dailyVerifyWindowExpired} THEN 0 ELSE ${verificationSessions.verifyAttemptDaily} END`.mapWith(
+    Number
+  );
+
+/**
+ * A new code does not lift this cap, so unlike `otpMsg.verifyBlocked` the
+ * refusal must not tell the user to request one.
+ */
+export function dailyVerifyCapError(windowStart: Date): CustomError {
+  return blockedError(
+    otpMsg.dailyVerifyCapReached,
+    new Date(
+      windowStart.getTime() + OTP_DAILY_VERIFY_WINDOW_HOURS * 60 * 60 * 1000
+    )
+  );
 }
 
 /**

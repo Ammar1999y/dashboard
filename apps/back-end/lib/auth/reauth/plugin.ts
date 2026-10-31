@@ -8,10 +8,10 @@ import * as z from 'zod';
 
 import * as contract from '@app/shared/api/better-auth';
 import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
-import { reauthPasskeySchema } from '@app/shared/validation/reauth';
 import { isTwoFactorMethodEnabled } from '@app/shared/validation/two-factor';
 
 import { auditLog } from '@/lib/audit';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { logSanitized } from '@/utils/log';
 
@@ -25,7 +25,6 @@ import {
 import { pluginEndpoint } from '../plugin-endpoint';
 import { authenticationStartedAt } from '../session/authentication-time';
 import { lockSessionOwner } from '../session/live';
-import { lockUser } from '../user-eligibility';
 import { expiresIn, reauthPasskeyKey } from '../verifications';
 import { availableReauthMethods } from './methods';
 import { enforceReauthAttemptLimit, requireReauthSession } from './session';
@@ -82,7 +81,7 @@ export const reauthentication = () =>
         ),
         reauthPasskeyVerify: pluginEndpoint(
           contract.reauthPasskeyVerify,
-          { body: reauthPasskeySchema },
+          {},
           async (ctx) => {
             try {
               const { userId, sessionId, userEmail } =

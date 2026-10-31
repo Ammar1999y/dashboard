@@ -40,9 +40,6 @@ type ActorOf<E extends AnyEndpoint> = E['policy']['auth'] extends 'permission'
 
 type OutputOf<S> = S extends z.ZodType ? z.output<S> : undefined;
 
-/** The request head, with the typed parts left to `params`, `query` and `body`. */
-type BindingMeta = Omit<HandlerRequestMeta, 'params' | 'query'>;
-
 interface BindingInput<
   E extends AnyEndpoint,
   Floored extends boolean,
@@ -52,7 +49,7 @@ interface BindingInput<
   query: OutputOf<E['query']>;
   body: E['bodyKind'] extends 'json' ? OutputOf<E['body']> : undefined;
   actor: ActorOf<E>;
-  meta: BindingMeta &
+  meta: HandlerRequestMeta &
     (Floored extends true
       ? { startFloor: StartTimingFloor }
       : { startFloor?: never }) &
@@ -227,7 +224,10 @@ interface BindingOptions {
   timeoutSeconds?: number;
   /** `false` while the build-time feature behind the route is off. */
   enabled?: boolean;
-  /** The coarse per-IP admission limit runs unless this says otherwise. */
+  /**
+   * The coarse per-IP admission limit runs unless this says otherwise; on a
+   * signed-in route, only for a request that sends a session token.
+   */
   preAuthIpLimit?: false;
   /**
    * The route's own credential, read from the request head: an answer refuses
@@ -295,7 +295,7 @@ export interface AnyBinding {
     query: unknown;
     body: unknown;
     actor: Actor;
-    meta: BindingMeta & {
+    meta: HandlerRequestMeta & {
       startFloor?: StartTimingFloor;
       chargeRateLimit?: () => Promise<void>;
       readFormData?: () => Promise<FormData | null>;
@@ -309,6 +309,8 @@ const created: AnyBinding[] = [];
  * Every binding `bind()` has made in this process, for the check that each one
  * is registered: one held only in an unexported constant or an inline array
  * is unreachable to a scan of what modules export.
+ *
+ * @internal
  */
 export const createdBindings = (): readonly AnyBinding[] => [...created];
 

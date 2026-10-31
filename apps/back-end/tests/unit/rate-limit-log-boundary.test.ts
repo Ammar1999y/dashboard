@@ -185,7 +185,7 @@ describe('the error class comes from the real driver', () => {
       identifier: 'otp.send.global:email',
     });
 
-    expect(d.errorClass).toBe('Unknown');
+    expect(d.errorClass).toBe('string');
     expect(d.scope).toBe('otp.send.global');
   });
 });

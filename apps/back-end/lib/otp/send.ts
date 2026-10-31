@@ -9,27 +9,34 @@ import { verificationCodes, verificationSessions } from '@/db/schema';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { otpMsg } from '@app/shared/messages/otp';
+import { CONTACT_LABEL, otpMsg } from '@app/shared/messages/otp';
 import {
   OTP_CODE_LENGTH,
   OTP_EXPIRY_MINUTES,
 } from '@app/shared/validation/constants';
 import { contactKindOf } from '@app/shared/validation/enums';
 
-import { lockUser } from '@/lib/auth/user-eligibility';
+import { expiresIn } from '@/lib/auth/verifications';
 import { enforceOtpGlobalSendBudget } from '@/lib/rate-limit';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { logSanitized } from '@/utils/log';
 
 import { deliverOtp } from './delivery';
 import { hashOtpCode } from './hash';
-import { OTP_BLOCK_DURATION_HOURS, OTP_MAX_ATTEMPTS } from './limits';
+import {
+  OTP_BLOCK_DURATION_HOURS,
+  OTP_MAX_ATTEMPTS,
+  OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+} from './limits';
 import {
   BLOCK_EXPIRY_RESET,
   blockedError,
   blockSession,
   calculateBlockDuration,
   calculateNextAllowedAt,
+  dailyVerifyAttemptsUsed,
+  dailyVerifyCapError,
   resendWaitError,
   VERIFY_BLOCK_CLEARED_BY_RESEND,
 } from './throttle';
@@ -41,20 +48,18 @@ export function generateOtpCode(): string {
 }
 
 export function calculateOtpExpiry(): Date {
-  return new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+  return expiresIn(OTP_EXPIRY_MINUTES * 60);
 }
 
 interface ProcessOtpSendOptions {
   userId: EntityID;
-  /** Normalised; verify must present the same value. */
+  /**
+   * Normalised; verify must present the same value. Also where the code goes,
+   * and for a contact change the NEW contact, which verify commits.
+   */
   identifier: string;
   channel: OtpChannel;
   purpose: OtpPurpose;
-  /** Contact-change purposes only: the NEW contact, which verify commits. */
-  targetIdentifier?: string | null;
-  sendTo: string;
-  /** Localised label for error messages. */
-  entityName: string;
   /**
    * ⚠️ Anonymous send endpoints must pass it: a provider call on the response
    * path outruns any timing floor and makes the send an existence oracle.
@@ -64,7 +69,6 @@ interface ProcessOtpSendOptions {
 
 interface ProcessOtpSendResult {
   nextAllowedIn: number;
-  attemptsRemaining: number;
 }
 
 async function refundFailedDelivery(
@@ -101,12 +105,14 @@ export async function processOtpSend({
   identifier,
   channel,
   purpose,
-  targetIdentifier = null,
-  sendTo,
-  entityName,
   deferDelivery,
 }: ProcessOtpSendOptions): Promise<ProcessOtpSendResult> {
   const contactKind = contactKindOf(channel);
+  // Exactly what `chk_change_purpose_has_target` admits.
+  const targetIdentifier =
+    purpose === 'change_email' || purpose === 'change_phone'
+      ? identifier
+      : null;
 
   const otpCode = generateOtpCode();
   const hashedCode = hashOtpCode(otpCode);
@@ -135,6 +141,8 @@ export async function processOtpSend({
         isBlocked: verificationSessions.isBlocked,
         blockedUntil: verificationSessions.blockedUntil,
         nextAllowedAt: verificationSessions.nextAllowedAt,
+        dailyUsed: dailyVerifyAttemptsUsed,
+        dailyWindowStart: verificationSessions.verifyAttemptWindowStart,
       })
       .from(verificationSessions)
       .where(
@@ -145,6 +153,11 @@ export async function processOtpSend({
         )
       )
       .for('update');
+
+    // First: verify refuses every code until this window ages out, so a send
+    // now would be a paid message that cannot be used.
+    if (session && session.dailyUsed >= OTP_MAX_DAILY_VERIFY_ATTEMPTS)
+      throw dailyVerifyCapError(session.dailyWindowStart);
 
     // Before the clear below, so the max-attempts branch keeps the old deadline.
     const existingBlockedUntil = session?.isBlocked
@@ -168,7 +181,7 @@ export async function processOtpSend({
           blockedUntil: verificationSessions.blockedUntil,
           nextAllowedAt: verificationSessions.nextAllowedAt,
         });
-      session = unblocked;
+      session = unblocked && { ...session, ...unblocked };
     }
 
     if (session?.nextAllowedAt && session.nextAllowedAt > now)
@@ -186,7 +199,10 @@ export async function processOtpSend({
       await blockSession(tx, session.id, blockedUntil);
 
       deferredError = blockedError(
-        otpMsg.sendBlocked(entityName, OTP_BLOCK_DURATION_HOURS),
+        otpMsg.sendBlocked(
+          CONTACT_LABEL[contactKind],
+          OTP_BLOCK_DURATION_HOURS
+        ),
         blockedUntil
       );
       return null;
@@ -232,10 +248,7 @@ export async function processOtpSend({
           nextAllowedAt,
         },
       })
-      .returning({
-        id: verificationSessions.id,
-        attemptNumber: verificationSessions.attemptNumber,
-      });
+      .returning({ id: verificationSessions.id });
 
     if (!updatedSession)
       throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
@@ -263,7 +276,6 @@ export async function processOtpSend({
       nextAllowedIn: Math.ceil(
         (nextAllowedAt.getTime() - now.getTime()) / 1000
       ),
-      attemptsRemaining: OTP_MAX_ATTEMPTS - updatedSession.attemptNumber,
       sessionId: updatedSession.id,
     };
   });
@@ -274,17 +286,14 @@ export async function processOtpSend({
     throw new CustomError(otpMsg.sendError, HTTP_STATUS.INTERNAL_ERROR);
   await deliverOrRefund({
     channel,
-    sendTo,
+    sendTo: identifier,
     code: otpCode,
     purpose,
     deferDelivery,
     refund: () => refundFailedDelivery(userId, result.sessionId, hashedCode),
   });
 
-  return {
-    nextAllowedIn: result.nextAllowedIn,
-    attemptsRemaining: result.attemptsRemaining,
-  };
+  return { nextAllowedIn: result.nextAllowedIn };
 }
 
 /**

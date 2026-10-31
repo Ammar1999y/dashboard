@@ -29,16 +29,17 @@ import { db, withTransaction } from '@/db';
 
 import { isTrigramIndexable } from '@app/shared/data-table/parsers';
 
-import { escapeLike } from '@/lib/data-table/filter-columns';
-
 import { assertHarnessDatabase } from '../helpers/database';
 
 const TABLE = 'trigram_floor_probe';
 const ROWS = 20_000;
 
-/** The pattern the production code builds for each operator shape. */
+/**
+ * `search_pattern`'s pattern without its fold: the class is measured on the
+ * characters as typed, which the fold would strip of the marks it is tested on.
+ */
 function patternFor(term: string, anchor: SearchAnchor): string {
-  const escaped = escapeLike(term);
+  const escaped = term.replaceAll(/[%_\\]/g, String.raw`\$&`);
   if (anchor === 'prefix') return `${escaped}%`;
   if (anchor === 'suffix') return `%${escaped}`;
   return `%${escaped}%`;

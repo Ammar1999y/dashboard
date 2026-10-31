@@ -1,5 +1,5 @@
 /**
- * Shared by the upload pipeline and `images/svg-optimizer.ts` (rasters inlined
+ * Shared by the upload pipeline and `images/svg-sanitizer.ts` (rasters inlined
  * as `data:` URIs): a check living in only one of them admits through the
  * other. `Uint8Array`, not `Buffer`: the sanitizer runs with no Node globals.
  */
@@ -228,7 +228,7 @@ export interface EmbeddedIccProfile {
 
 /**
  * `Bun.Image` copies this profile, and no other metadata, into its output, so
- * the bound in `lib/media/image/optimize.ts` is complete only while both hold
+ * the bound in `lib/media/image/icc.ts` is complete only while both hold
  * (`tests/unit/upload-validation.test.ts` asserts them). Left unexpanded: that
  * bound belongs to the caller that has `node:zlib`.
  */

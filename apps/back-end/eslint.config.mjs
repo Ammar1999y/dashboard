@@ -1,7 +1,6 @@
 import { FlatCompat } from '@eslint/eslintrc';
 import eslintPluginDrizzle from 'eslint-plugin-drizzle';
 import * as eslintPluginImportX from 'eslint-plugin-import-x';
-import eslintPluginPrettier from 'eslint-plugin-prettier';
 import eslintPluginUnicorn from 'eslint-plugin-unicorn';
 import globals from 'globals';
 import { configs as tseslintConfigs } from 'typescript-eslint';
@@ -14,6 +13,38 @@ const CORE_FILES = [
   'db/**/*.ts',
   'utils/**/*.ts',
 ];
+
+/** What else ships and runs in the image. */
+const RUNTIME_OUTSIDE_CORE = [
+  'server/**/*.ts',
+  'scripts/**/*.ts',
+  'app.ts',
+  'server.ts',
+];
+
+/**
+ * Packages installed only beneath Better Auth and its passkey plugin. The owner
+ * declined declaring them (root `CLAUDE.md`), so each is allowed in the file
+ * that imports it and nowhere else.
+ */
+const UNDECLARED_IMPORTS = {
+  'lib/auth/oauth/token-exchange.ts': ['@better-fetch/fetch'],
+  'lib/auth/passkey-assertion.ts': ['@simplewebauthn/server'],
+  'lib/auth/session/read.ts': ['better-call'],
+  'lib/auth/password/compromise.ts': ['@better-fetch/fetch'],
+  'lib/auth/transaction.ts': ['@better-auth/core'],
+  'lib/auth/two-factor/enrolment.ts': ['@better-auth/utils'],
+  'lib/auth/two-factor/totp-replay.ts': ['@better-auth/utils'],
+  'lib/auth/two-factor/trusted-device.ts': ['@better-auth/utils'],
+};
+
+/** Exported for `packages/shared`, whose sources ship in both images. */
+export const productionDependenciesOnly = (whitelist = []) => ({
+  'import-x/no-extraneous-dependencies': [
+    'error',
+    { devDependencies: false, whitelist },
+  ],
+});
 
 // `group` is for `no-restricted-imports`, `source` the same set as an esquery
 // regex; a change to one changes the other. Exported for `packages/shared`.
@@ -29,6 +60,12 @@ export const DOCS_BOUNDARY = {
     'Field docs load only for the document, through lib/http/openapi/docs.ts.',
 };
 
+/** The import rules read only a module named literally. */
+const LITERAL_IMPORT = {
+  selector: "ImportExpression[source.type!='Literal']",
+  message: 'Name the module literally, so the import rules can read it.',
+};
+
 /**
  * `no-restricted-imports` reads static imports only, so the same boundaries
  * are held on `import()` and `import('…')` types by syntax, and a dynamic
@@ -41,11 +78,7 @@ export const importBoundaries = (boundaries) => ({
   ],
   'no-restricted-syntax': [
     'error',
-    {
-      selector: "ImportExpression[source.type!='Literal']",
-      message:
-        'Name the module literally, so the import boundaries can read it.',
-    },
+    LITERAL_IMPORT,
     ...boundaries.map(({ source, message }) => ({
       selector: `:matches(ImportExpression, TSImportType)[source.value=${source}]`,
       message,
@@ -88,10 +121,14 @@ const eslintConfig = [
         },
         node: true,
       },
+      // Bun's own module; the resolver finds it as `@types/bun`.
+      'import-x/core-modules': ['bun'],
     },
     rules: {
       // Not part of `flatConfigs.recommended`.
       'import-x/no-anonymous-default-export': 'warn',
+      'arrow-body-style': ['error', 'as-needed'],
+      'prefer-arrow-callback': 'error',
 
       '@typescript-eslint/no-unused-vars': [
         'warn',
@@ -252,6 +289,29 @@ const eslintConfig = [
     rules: importBoundaries([FRAMEWORK_BOUNDARY]),
   },
   {
+    // The image installs `dependencies` alone, so a devDependency imported
+    // here passes every check run from a checkout and fails in production. A
+    // tool under `scripts/` that needs one gets its own block.
+    files: [...CORE_FILES, ...RUNTIME_OUTSIDE_CORE],
+    rules: productionDependenciesOnly(),
+  },
+  {
+    // Core gets this from `importBoundaries`; a later `no-restricted-syntax`
+    // there would replace its boundaries.
+    files: RUNTIME_OUTSIDE_CORE,
+    rules: { 'no-restricted-syntax': ['error', LITERAL_IMPORT] },
+  },
+  ...Object.entries(UNDECLARED_IMPORTS).map(([file, packages]) => ({
+    files: [file],
+    rules: productionDependenciesOnly(packages),
+  })),
+  {
+    // A pre-push and CI gate the image never runs. It loads TypeScript's parser
+    // only to confirm that a failure sits in a real comment.
+    files: ['scripts/check-doc-references.ts'],
+    rules: productionDependenciesOnly(['typescript']),
+  },
+  {
     // Bun's built-in modules have no package on disk for the resolver to find.
     files: ['**/*.{ts,mts,cjs}'],
     rules: {
@@ -266,17 +326,6 @@ const eslintConfig = [
     rules: {
       'drizzle/enforce-delete-with-where': ['error', { drizzleObjectName }],
       'drizzle/enforce-update-with-where': ['error', { drizzleObjectName }],
-    },
-  },
-  {
-    plugins: {
-      prettier: eslintPluginPrettier,
-    },
-    rules: {
-      'prettier/prettier': 'warn',
-      // Prettier reformats both of these, so ESLint's opinion on them conflicts.
-      'arrow-body-style': 'off',
-      'prefer-arrow-callback': 'off',
     },
   },
 ];

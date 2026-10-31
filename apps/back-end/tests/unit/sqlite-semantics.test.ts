@@ -72,8 +72,6 @@ async function runChild(): Promise<ChildResult> {
     rateLimitDdl: extractDdl(STORE, 'rate_limit'),
     cacheDdl: extractDdl(CACHE, 'cache'),
     consume: extractSql(STORE, 'SQL_CONSUME'),
-    sweepRateLimit: extractSql(STORE, 'SQL_SWEEP_RATE_LIMIT'),
-    anyExpired: extractSql(STORE, 'SQL_ANY_EXPIRED'),
     deletePrefix: extractSql(CACHE, 'SQL_DELETE_PREFIX'),
   };
 
@@ -108,5 +106,5 @@ for (const result of outcome.results) {
 test('every semantic assertion ran', () => {
   // Guards against a child that silently stopped early: a shrinking suite would
   // otherwise look like a passing one.
-  expect(outcome.results.length).toBe(15);
+  expect(outcome.results.length).toBe(13);
 });

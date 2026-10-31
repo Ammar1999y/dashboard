@@ -1,5 +1,7 @@
 import type { BetterAuthPlugin } from 'better-auth';
 
+import { eq } from 'drizzle-orm';
+
 import { db } from '@/db';
 import { users } from '@/db/schema';
 import * as z from 'zod';
@@ -7,6 +9,7 @@ import * as z from 'zod';
 import * as contract from '@app/shared/api/better-auth';
 import { PASSWORDLESS_ENABLED } from '@app/shared/config';
 import { HTTP_STATUS } from '@app/shared/http-status';
+import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import { MSG_PAGE_NOT_FOUND } from '@app/shared/messages/common';
 import { otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
@@ -16,29 +19,33 @@ import {
 } from '@app/shared/validation/otp';
 
 import { auditLog } from '@/lib/audit';
-import { verifyTurnstileRequest } from '@/lib/captcha';
 import { timingFloor } from '@/lib/http/timing-floor';
 import { verifyRequesterOtp } from '@/lib/otp/challenge';
-import { markContactVerified } from '@/lib/otp/contact';
 import { readRequester } from '@/lib/otp/requester';
 import {
   collapseProofThrottle,
   invalidOrExpiredCode,
 } from '@/lib/otp/throttle';
-import { activeUserWithContact, contactIdentifier } from '@/lib/users/contact';
-
-import { logSanitized } from '@/utils/log';
+import {
+  activeUserWithContact,
+  contactIdentifier,
+  markContactVerified,
+} from '@/lib/users/contact';
 
 import { authAuditMeta, parseAuthBody, requestHeaders } from './context';
 import { asAuthError, authError } from './errors';
 import { pluginEndpoint } from './plugin-endpoint';
-import { recordAbandonedSession } from './session/audit';
+import { authenticationStartedAt } from './session/authentication-time';
 import { deliverSessionCookie } from './session/cookie';
 import { submittedRememberMe } from './session/remember-me';
+import { rotatedSince } from './session/rotation';
+import { withAuthTransaction } from './transaction';
 import {
+  abandonFirstFactorSession,
   issueTwoFactorChallenge,
   twoFactorUnavailableError,
 } from './two-factor/issue';
+import { lockEligibleAuthUser } from './user-eligibility';
 
 // A Better Auth endpoint only because the signed session cookie and the
 // session-creation hook exist only in its context.
@@ -58,10 +65,6 @@ export const passwordless = () =>
           try {
             if (!OTP_ENABLED || !PASSWORDLESS_ENABLED)
               throw authError(HTTP_STATUS.NOT_FOUND, MSG_PAGE_NOT_FOUND);
-
-            const captchaOk = await verifyTurnstileRequest(headers);
-            if (!captchaOk)
-              throw authError(HTTP_STATUS.FORBIDDEN, otpMsg.captchaFailed);
 
             const input = parseAuthBody(
               ctx,
@@ -84,6 +87,7 @@ export const passwordless = () =>
             if (!userData) throw invalidOrExpiredCode();
 
             const auditMeta = authAuditMeta(ctx, '/passwordless/verify');
+            const proof: { startedAt: number | null } = { startedAt: null };
 
             // The code proves control of the contact, so it also satisfies the
             // verification gate in `session.create.before`.
@@ -96,9 +100,12 @@ export const passwordless = () =>
               requester: readRequester(headers),
               deadline,
               onVerified: async (tx, matched) => {
+                // Under the verify's user lock: a rotation that commits after
+                // this transaction stamps a later time.
+                proof.startedAt = await authenticationStartedAt(tx);
                 await markContactVerified(tx, {
                   userId: userData.id,
-                  channel,
+                  kind: contactKindOf(channel),
                   auditMeta,
                   onMissing: () => {
                     throw invalidOrExpiredCode();
@@ -122,62 +129,76 @@ export const passwordless = () =>
               },
             });
 
-            // Before `createSession`, so a failure here cannot orphan a row.
-            const user = await ctx.context.internalAdapter.findUserById(
-              userData.id
-            );
-            if (!user) throw invalidOrExpiredCode();
+            // Under the lock rotation takes, so the session and any challenge
+            // either precede a rotation, which then sweeps them, or are refused.
+            let recordRefusal: (() => Promise<void>) | undefined;
+            const { user, session, outcome } = await withAuthTransaction(
+              ctx,
+              async (tx) => {
+                const eligible = await lockEligibleAuthUser(
+                  tx,
+                  eq(users.id, userData.id)
+                );
+                if (!eligible)
+                  throw authError(
+                    HTTP_STATUS.UNAUTHORIZED,
+                    MSG_INVALID_CREDENTIALS
+                  );
+                // As if the rotation had landed first and taken the code.
+                if (
+                  proof.startedAt === null ||
+                  rotatedSince(eligible, proof.startedAt)
+                )
+                  throw invalidOrExpiredCode();
 
-            // `createSession` runs `session.create.before`, so passwordless
-            // logins pass the same gates as password logins.
-            const dontRememberMe = !rememberMe;
-            const session = await ctx.context.internalAdapter.createSession(
-              userData.id,
-              dontRememberMe
-            );
-            if (!session) throw invalidOrExpiredCode();
+                const found = await ctx.context.internalAdapter.findUserById(
+                  userData.id
+                );
+                if (!found) throw invalidOrExpiredCode();
 
-            // No plugin hook covers this path. The proven contact kind is
-            // excluded; if nothing is left the login is refused, not completed.
-            const outcome = await issueTwoFactorChallenge(ctx, {
-              userId: userData.id,
-              userEmail: userData.email,
-              session: { id: session.id, token: session.token },
-              firstFactor: 'passwordless',
-              rememberMe,
-              excludeContactKind: contactKindOf(channel),
-              auditMeta,
+                // `createSession` runs `session.create.before`, so passwordless
+                // logins pass the same gates as password logins.
+                const created = await ctx.context.internalAdapter.createSession(
+                  userData.id,
+                  !rememberMe
+                );
+                if (!created) throw invalidOrExpiredCode();
+
+                // No plugin hook covers this path. The proven contact kind is
+                // excluded; if nothing is left the login is refused, not
+                // completed.
+                const issued = await issueTwoFactorChallenge(ctx, {
+                  userId: userData.id,
+                  userEmail: userData.email,
+                  session: { id: created.id },
+                  firstFactor: 'passwordless',
+                  transaction: tx,
+                  rememberMe,
+                  excludeContactKind: contactKindOf(channel),
+                  auditMeta,
+                });
+                if (issued.kind === 'refused') {
+                  recordRefusal = issued.recordRefusal;
+                  throw twoFactorUnavailableError();
+                }
+                return { user: found, session: created, outcome: issued };
+              }
+            ).catch(async (error: unknown) => {
+              await recordRefusal?.();
+              throw error;
             });
-            if (outcome.kind !== 'proceed') {
-              if (outcome.kind === 'refused') throw twoFactorUnavailableError();
-              return ctx.json(outcome.body);
-            }
+            if (outcome.kind === 'challenge') return ctx.json(outcome.body);
 
             try {
-              await deliverSessionCookie(
-                ctx,
-                { session, user },
-                !dontRememberMe
-              );
+              await deliverSessionCookie(ctx, { session, user }, rememberMe);
             } catch (cookieError) {
-              // `session.create.after` already logged `loginSuccess`; the
-              // append-only log needs the compensating event.
-              await recordAbandonedSession({
+              await abandonFirstFactorSession(ctx, {
                 userId: userData.id,
                 userEmail: userData.email,
-                sessionId: session.id,
+                session,
                 auditMeta,
+                reason: 'cookie_delivery_failed',
               });
-              await ctx.context.internalAdapter
-                .deleteSession(session.token)
-                .catch(() => {
-                  // ⚠️ Never log the error: it embeds the bound session token.
-                  logSanitized('error', {
-                    msg: 'passwordless.orphanSessionCleanup.failed',
-                    userId: userData.id,
-                    sessionId: session.id,
-                  });
-                });
               throw cookieError;
             }
 

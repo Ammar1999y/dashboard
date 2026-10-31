@@ -31,7 +31,7 @@ import {
  * second factor delivered to the contact that can reset the password is not a
  * second factor against anyone holding that contact.
  */
-const ENABLED_TWO_FACTOR_OTP_CHANNELS: readonly OtpChannel[] =
+export const ENABLED_TWO_FACTOR_OTP_CHANNELS: readonly OtpChannel[] =
   parseTwoFactorOtpChannels(
     process.env.NEXT_PUBLIC_ENABLED_2FA_OTP_CHANNELS
   ).filter((channel) => PHONE_ENABLED || !isPhoneChannel(channel));
@@ -58,8 +58,6 @@ export function isTwoFactorOtpChannelEnabled(
 
 export const TWO_FACTOR_OTP_AVAILABLE =
   METHOD_SET.has('otp') && ENABLED_TWO_FACTOR_OTP_CHANNELS.length > 0;
-
-export const TWO_FACTOR_OTP_CHANNELS = ENABLED_TWO_FACTOR_OTP_CHANNELS;
 
 // Refusing to load is this gate's contract; see the root CLAUDE.md.
 assertTwoFactorListsCoherent(

@@ -35,3 +35,5 @@ export const dataTableQuerySchema = z.strictObject({
     .optional(),
   [DATA_TABLE_PARAMS.search]: z.string().optional(),
 } satisfies Record<DataTableParam, z.ZodType>);
+
+export type DataTableQuery = z.output<typeof dataTableQuerySchema>;

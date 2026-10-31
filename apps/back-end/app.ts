@@ -43,7 +43,7 @@ import { routeShapeOf } from '@/lib/http/binding';
 import {
   bodyTooLarge,
   declaresBodyOver,
-  MAX_REQUEST_BODY_BYTES,
+  SERVER_BODY_LIMIT_BYTES,
 } from '@/lib/http/request';
 import { handleApiError, toWebResponse } from '@/lib/http/response';
 import { createRouting, isRoutableHost, notFound } from '@/lib/http/routing';
@@ -127,9 +127,7 @@ function createBase(routing: Routing) {
       serve: {
         // Fail a second bind instead of letting the kernel split traffic silently.
         reusePort: false,
-        // Bun's default is buffered before any per-file check can run. The
-        // per-file limit stays: it is per file, this is per request.
-        maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
+        maxRequestBodySize: SERVER_BODY_LIMIT_BYTES,
       },
     })
       .onRequest(({ set, request }) => {

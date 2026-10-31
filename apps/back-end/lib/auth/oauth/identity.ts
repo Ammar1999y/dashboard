@@ -13,7 +13,7 @@ import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
 import { emailSchema } from '@app/shared/validation/rules';
 
 import { auditLog } from '@/lib/audit';
-import { markContactVerified } from '@/lib/otp/contact';
+import { markContactVerified } from '@/lib/users/contact';
 
 import { GOOGLE_PROVIDER_ID } from '../credential';
 import { lockEligibleAuthUser } from '../user-eligibility';
@@ -157,7 +157,7 @@ export async function resolveGoogleIdentity(
   }
   await markContactVerified(tx, {
     userId: user.id,
-    channel: 'email',
+    kind: 'email',
     auditMeta,
     onMissing: () => {
       throw new GoogleIdentityDenied('user_ineligible');

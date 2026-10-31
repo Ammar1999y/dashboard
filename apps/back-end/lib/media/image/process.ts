@@ -1,51 +1,15 @@
 import { encode } from 'blurhash';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
-import {
-  hasRasterSignature,
-  isAnimatedRaster,
-  matchesMagicBytes,
-} from '@app/shared/images/raster-bytes';
 import { svgRefusalMessage } from '@app/shared/images/svg-refusal';
 import { uploadMsg } from '@app/shared/messages/media';
 
-import { errorTypeOf, logSanitized } from '@/utils/log';
+import { errorClassOf, logSanitized } from '@/utils/log';
 
-import { FILE_TYPE_TABLE } from '../allowlist';
-import { contentRefused, imageTooLarge, typeNotAllowed } from '../errors';
+import { contentRefused, imageTooLarge } from '../errors';
 import { optimizeImage } from './optimize';
 import { imageToRgba } from './rgba';
 import { optimizeSvgInWorker, sanitizeSvgInWorker } from './svg-jobs';
-
-/**
- * `tests/unit/upload-validation.test.ts` walks this to prove every entry has a
- * magic-byte check or is the SVG exemption.
- */
-export const ALLOWED_IMAGE_TYPES: readonly string[] = FILE_TYPE_TABLE.entries()
-  .filter(([, spec]) => spec.kind === 'image')
-  .map(([mimeType]) => mimeType)
-  .toArray();
-
-export function isAllowedImageType(mimeType: string): boolean {
-  return ALLOWED_IMAGE_TYPES.includes(mimeType);
-}
-
-/**
- * ⚠️ Fails open for a type with no signature entry; see `ALLOWED_IMAGE_TYPES`.
- * SVG's check is `validateSvgUpload`.
- */
-export function validateMagicBytes(
-  buffer: Buffer,
-  mimeType: string
-): { valid: boolean; animated?: boolean } {
-  if (mimeType === 'image/svg+xml' || !hasRasterSignature(mimeType))
-    return { valid: true };
-  if (!matchesMagicBytes(buffer, mimeType)) return { valid: false };
-  if (isAnimatedRaster(buffer, mimeType))
-    return { valid: false, animated: true };
-
-  return { valid: true };
-}
 
 /**
  * `blurhash.encode` ignores alpha, so transparency is composited onto this
@@ -68,7 +32,7 @@ async function generateBlurhash(
     logSanitized('error', {
       msg: 'image.blurhash skipped',
       effect: 'the file is stored without a placeholder',
-      errorClass: errorTypeOf(error),
+      errorClass: errorClassOf(error),
     });
     return undefined;
   }
@@ -106,13 +70,16 @@ export interface ValidatedSvgUpload {
   embeddedRasterMegapixels: number;
 }
 
-interface UploadImageInput {
-  file: File;
-  buffer: Buffer;
-  /** Normalized by `admitUpload`; `file.type` still carries client parameters. */
-  mimeType: string;
-  validatedSvg?: ValidatedSvgUpload;
-}
+/** What `admitUpload` admitted: an SVG only ever arrives already sanitised. */
+type UploadImageInput =
+  | { validatedSvg: ValidatedSvgUpload }
+  | {
+      file: File;
+      buffer: Buffer;
+      /** Normalized by `admitUpload`; `file.type` still carries client parameters. */
+      mimeType: string;
+      validatedSvg?: undefined;
+    };
 
 export async function validateSvgUpload(
   buffer: Buffer,
@@ -157,52 +124,31 @@ export async function optimizeSvgUpload(cleanedSvg: string): Promise<string> {
 export async function processImage(
   input: UploadImageInput
 ): Promise<ProcessedImage> {
-  const { file, mimeType } = input;
-  if (!isAllowedImageType(mimeType)) {
-    throw typeNotAllowed(uploadMsg.invalidMimeType(mimeType));
-  }
-
-  let buffer = input.buffer;
-  let finalMimeType: string = mimeType;
-  let finalSize = file.size;
-  let width: number | undefined;
-  let height: number | undefined;
-  let blurhash: string | undefined;
-  let finalExtension: string;
-
-  if (mimeType === 'image/svg+xml') {
-    const sanitizeResult =
-      input.validatedSvg ?? (await validateSvgUpload(buffer, file.name));
-
-    const optimizedSvg = await optimizeSvgUpload(sanitizeResult.cleanedSvg);
-    buffer = Buffer.from(optimizedSvg, 'utf8');
-    finalSize = buffer.length;
-    finalExtension = 'svg';
+  if (input.validatedSvg) {
+    const buffer = Buffer.from(
+      await optimizeSvgUpload(input.validatedSvg.cleanedSvg),
+      'utf8'
+    );
     // No blurhash for SVG: `Bun.Image` cannot rasterise it, and consumers
     // already tolerate a null `files.blurhash`.
-  } else {
-    const optimized = await optimizeImage(buffer);
-
-    buffer = optimized.buffer;
-    finalMimeType = 'image/webp';
-    finalSize = optimized.size;
-    width = optimized.width;
-    height = optimized.height;
-    blurhash = await generateBlurhash(buffer);
-    finalExtension = 'webp';
+    return {
+      buffer,
+      mimeType: 'image/svg+xml',
+      extension: 'svg',
+      sizeBytes: buffer.length,
+    };
   }
 
+  const optimized = await optimizeImage(input.buffer);
   return {
-    buffer,
-    mimeType: finalMimeType,
-    extension: finalExtension,
-    sizeBytes: finalSize,
-    width,
-    height,
-    blurhash,
-    ...(finalMimeType === 'image/webp' && {
-      originalMimeType: mimeType,
-      originalSize: file.size,
-    }),
+    buffer: optimized.buffer,
+    mimeType: 'image/webp',
+    extension: 'webp',
+    sizeBytes: optimized.size,
+    width: optimized.width,
+    height: optimized.height,
+    blurhash: await generateBlurhash(optimized.buffer),
+    originalMimeType: input.mimeType,
+    originalSize: input.file.size,
   };
 }

@@ -4,9 +4,30 @@
 // Unique indexes follow `ux_<table>_<column>`. Violation resolvers match the
 // full index name, so keep names unique across tables.
 //
-// ⚠️ A column searchable via ILIKE in the data-table UI needs a trigram (GIN)
-// index on `search_fold(column)` in a `db/migrations/` SQL file, the expression
-// `foldedColumn` matches, or every search is a full scan.
+// ⚠️ A column searchable via ILIKE in the data-table UI needs a stored
+// `<column>_folded` column generated from `search_fold(column)`, a trigram (GIN)
+// index on it, and an entry in `FOLDED_COLUMNS`
+// (`lib/data-table/filter-columns.ts`), or every search is a full scan.
+//
+// ⚠️ Index changes on an existing table, and anything that calls a function
+// from `db/migrations/`, take this path, because `db:migrate` applies all of
+// `db/drizzle/` in one transaction BEFORE `db/migrations/`:
+//   1. Declare the change here when Drizzle can express it, so the snapshot
+//      stays the schema; note it beside the table when it cannot.
+//   2. `bun run db:generate`, then replace the generated file's body with a
+//      comment naming the hand-written files. Keep the file: the journal and
+//      snapshot entry are what stop the next `db:generate` from repeating it.
+//   3. Write the statements in `db/migrations/`. `CREATE`/`DROP INDEX
+//      CONCURRENTLY` take a file each, with `IF [NOT] EXISTS`; a failed build
+//      leaves an INVALID index the ledger refuses until it is dropped
+//      concurrently. A concurrent statement in `db/drizzle/` fails at deploy.
+//      ANALYZE an added column: its indexes bring the planner no statistics.
+//   4. An index a constraint error is mapped by (`lib/http/constraint-errors.ts`)
+//      keeps its name: build the replacement under a temporary name, drop the
+//      old one, then rename (`013`–`015`), so uniqueness never lapses. Between
+//      the drop and the rename a violation names the temporary index, which
+//      the serving release answers with a 500; under live traffic, first ship
+//      a release that maps that name too.
 //
 // ⚠️ Every imported constant is DDL — enum labels, widths, OTP budgets,
 // `PHONE_NUMBER_MODE`, `REQUIRE_ROLE_FOR_LOGIN` — so changing one requires a new
@@ -112,6 +133,15 @@ function timestamptz<TName extends string>(name: TName) {
 
 const createdAt = () => timestamptz('created_at').defaultNow().notNull();
 
+/**
+ * `search_fold(source)`, stored for the trigram index on it. Its values are
+ * what the function computed when each row was written, which is why migration
+ * 004 forbids changing `search_fold`: a new fold is a new column.
+ */
+function foldedText<TName extends string>(name: TName, source: string) {
+  return text(name).generatedAlwaysAs(sql.raw(`search_fold(${source})`));
+}
+
 const timestamps = {
   createdAt: createdAt(),
   updatedAt: timestamptz('updated_at')
@@ -164,8 +194,7 @@ export const fileKind = pgEnum('file_kind', FILE_KINDS);
  * bucket (`to_public`/`to_private`), or the copy is done and the stale one
  * awaits deletion (`cleanup`). `NULL` is the settled state.
  */
-export const fileTransitionEnum = FILE_TRANSITIONS;
-export const fileTransition = pgEnum('file_transition', fileTransitionEnum);
+export const fileTransition = pgEnum('file_transition', FILE_TRANSITIONS);
 
 export const users = pgTable(
   'users',
@@ -203,21 +232,31 @@ export const users = pgTable(
     lockedUntil: timestamptz('locked_until'),
     // Soft delete, deliberately with NO purge sweep: `auditLogs.userId` is
     // `onDelete: 'restrict'`, so a purge would fail for exactly the users who
-    // did anything. The partial unique indexes below release the email and
-    // phone for reuse. Erasing a user for real is a data-subject request that
-    // has to decide the fate of their audit trail, not a cron job.
+    // did anything. `softDeleteUser` rewrites the email and the partial phone
+    // index skips the row, which releases both for reuse. Erasing a user for
+    // real is a data-subject request that has to decide the fate of their
+    // audit trail, not a cron job.
     deletedAt: timestamptz('deleted_at'),
+    nameFolded: foldedText('name_folded', 'name'),
+    emailFolded: foldedText('email_folded', 'email'),
     ...timestamps,
   },
   (t) => [
-    uniqueIndex('ux_users_email')
-      .on(t.email)
-      .where(sql`deleted_at IS NULL`),
+    // Not partial, unlike the phone index: Better Auth looks a user up by email
+    // alone, which a partial index cannot serve. Soft delete rewrites the
+    // email to a unique `…_del_<uuid>`, so deleted rows never collide.
+    uniqueIndex('ux_users_email').on(t.email),
     uniqueIndex('ux_users_phone_number')
       .on(t.phoneNumber)
       .where(sql`deleted_at IS NULL AND phone_number IS NOT NULL`),
-    index('idx_users_role_active')
-      .on(t.roleId)
+    // Not partial: the `users_role_id_roles_id_fk` check on a role delete and
+    // the role-member lock read every member, deleted or not.
+    index('idx_users_role_id').on(t.roleId),
+    index('idx_users_name_folded_trgm')
+      .using('gin', t.nameFolded.op('gin_trgm_ops'))
+      .where(sql`deleted_at IS NULL`),
+    index('idx_users_email_folded_trgm')
+      .using('gin', t.emailFolded.op('gin_trgm_ops'))
       .where(sql`deleted_at IS NULL`),
     index('idx_users_created_at')
       .on(t.createdAt)
@@ -298,10 +337,10 @@ export const accounts = pgTable(
   {
     id: uuid('id').primaryKey().$defaultFn(generateId),
     accountId: varchar('account_id', { length: 255 }).notNull(),
-    // Better Auth identifies an account by (issuer, accountId), not by
-    // `provider_id`. `/sign-in/email` requires `CREDENTIAL_ISSUER` here and
-    // answers a plain 401 otherwise, so NOT NULL with a default: a row without
-    // it is an unauthenticatable user.
+    // Project-owned: the Google identity path writes and checks it. Better
+    // Auth never writes or reads it (it finds a credential account by
+    // `provider_id` and user id), so the default is what lets the library's
+    // own account inserts pass NOT NULL and `chk_credential_issuer`.
     issuer: varchar('issuer', { length: 255 })
       .notNull()
       .default(CREDENTIAL_ISSUER),
@@ -315,11 +354,6 @@ export const accounts = pgTable(
   (t) => [
     uniqueIndex('ux_accounts_provider_user').on(t.providerId, t.userId),
     uniqueIndex('ux_accounts_provider_account').on(t.providerId, t.accountId),
-    // The uniqueness Better Auth itself assumes over the pair it looks accounts
-    // up by. Redundant with ux_accounts_provider_account while `provider_id` has
-    // one possible value; the two diverge as soon as a second provider exists,
-    // and only this one matches the library's own index.
-    uniqueIndex('ux_accounts_issuer_account').on(t.issuer, t.accountId),
     index('idx_accounts_user_id').on(t.userId),
     check(
       'chk_password_hash_length',
@@ -330,8 +364,8 @@ export const accounts = pgTable(
       'chk_credential_password',
       sql`provider_id <> 'credential' OR password IS NOT NULL`
     ),
-    // Pins the pair the sign-in lookup matches on: a caller writing a different
-    // issuer would be a silent login outage rather than an error.
+    // One issuer per provider, so `ux_accounts_provider_account` is also unique
+    // over (issuer, account_id).
     //
     // Literals, not CREDENTIAL_PROVIDER_ID / CREDENTIAL_ISSUER: drizzle-kit
     // DROPS interpolated params from a check constraint, generating invalid DDL
@@ -416,14 +450,14 @@ export const twoFactorCredentials = pgTable(
       .default(0)
       .notNull(),
     lockedUntil: timestamptz('locked_until'),
-    // Ours: until the user confirms they stored the codes, `backup_code` is not
-    // offered as a method.
+    // Ours: when the user confirmed storing the current set. Until then the set
+    // is never the factor a removal may leave (`removalStrandsTwoFactor`).
     backupCodesAcknowledgedAt: timestamptz('backup_codes_acknowledged_at'),
     /**
-     * ⚠️ Acknowledgement is bound to a SET, not to the column above.
-     * Regenerating replaces every code and mints a new id; an acknowledgement
-     * naming the previous set then no longer matches, so the method stops being
-     * offered until the user confirms the new codes.
+     * ⚠️ `backupCodesAcknowledgedSetId` names the set offered at sign-in. A first
+     * set is offered only once acknowledged; a set replacing an offered one is
+     * offered at once (`generateBackupCodes`). Every generation mints a new id,
+     * so an acknowledgement naming an earlier set no longer matches.
      *
      * An id rather than a per-row counter: `/two-factor/disable` deletes this
      * row and the next generation recreates it, so a restarted counter would let
@@ -513,8 +547,8 @@ export const twoFactorMethods = pgTable(
     // predicates.
     //
     // ⚠️ None of the three serves `WHERE user_id = $1`, which every sign-in
-    // runs (`readEnrolment`); `idx_two_factor_methods_user` does, built
-    // concurrently in `db/migrations/012_two_factor_methods_user.sql`.
+    // runs (`readEnrolment`); `idx_two_factor_methods_user` does.
+    index('idx_two_factor_methods_user').on(t.userId),
     uniqueIndex('ux_two_factor_methods_user_otp_contact')
       .on(t.userId, t.contactKind)
       .where(sql`method = 'otp'`),
@@ -639,8 +673,9 @@ export const userPreferences = pgTable(
  * `UPDATE` and no URL changes.
  *
  * Depth (≤ `FOLDER_MAX_DEPTH`) and fan-out (≤ `FOLDER_MAX_CHILDREN`) are
- * enforced in `lib/media/folders.ts` under a `FOR UPDATE` on the parent — a
- * CHECK cannot see other rows.
+ * enforced in `lib/media/folders.ts` under `lockTree`, the transaction advisory
+ * lock every structural writer takes — a CHECK cannot see other rows, and the
+ * root has no parent row to lock.
  */
 export const folders = pgTable(
   'folders',
@@ -651,9 +686,14 @@ export const folders = pgTable(
     createdBy: uuid('created_by').references(() => users.id, {
       onDelete: 'set null',
     }),
+    nameFolded: foldedText('name_folded', 'name'),
     ...timestamps,
   },
   (t) => [
+    index('idx_folders_name_folded_trgm').using(
+      'gin',
+      t.nameFolded.op('gin_trgm_ops')
+    ),
     // Case-insensitive within a parent; two partial indexes because NULLs are
     // distinct to a unique index, so one over `(parent_id, lower(name))` would
     // admit any number of root folders with the same name.
@@ -746,9 +786,19 @@ export const files = pgTable(
     // `UNFILED_RETENTION_DAYS` (`lib/media/lifecycle.ts`) after the stamp the
     // sweep deletes the file.
     unfiledAt: timestamptz('unfiled_at'),
+    displayNameFolded: foldedText('display_name_folded', 'display_name'),
     ...timestamps,
   },
   (t) => [
+    // Partial: the library lists active files only.
+    index('idx_files_display_name_active_folded_trgm')
+      .using('gin', t.displayNameFolded.op('gin_trgm_ops'))
+      .where(sql`status = 'active'`),
+    // A folder's active-file count and bytes, index-only (`FOLDER_FIGURES`,
+    // `subtreeTotals` in `lib/media/folders.ts`).
+    index('idx_files_folder_active')
+      .on(t.folderId, t.sizeBytes)
+      .where(sql`status = 'active'`),
     index('idx_files_uploaded_by').on(t.uploadedBy),
     uniqueIndex('ux_files_r2_key').on(t.r2Key),
     unique('ux_files_id_status').on(t.id, t.status),
@@ -889,9 +939,18 @@ export const roles = pgTable(
     createdBy: uuid('created_by').references((): AnyPgColumn => users.id, {
       onDelete: 'set null',
     }),
+    roleNameFolded: foldedText('role_name_folded', 'role_name'),
+    descriptionFolded: foldedText('description_folded', 'description'),
     ...timestamps,
   },
   (t) => [
+    index('idx_roles_role_name_folded_trgm').using(
+      'gin',
+      t.roleNameFolded.op('gin_trgm_ops')
+    ),
+    index('idx_roles_description_folded_trgm')
+      .using('gin', t.descriptionFolded.op('gin_trgm_ops'))
+      .where(sql`description_folded IS NOT NULL`),
     index('idx_roles_scope_active_created').on(
       t.scope,
       t.isActive,
@@ -1088,23 +1147,6 @@ export const otpChallenges = pgTable(
   ]
 );
 
-export const verificationSessionsRelations = relations(
-  verificationSessions,
-  ({ many }) => ({
-    codes: many(verificationCodes),
-  })
-);
-
-export const verificationCodesRelations = relations(
-  verificationCodes,
-  ({ one }) => ({
-    session: one(verificationSessions, {
-      fields: [verificationCodes.sessionId],
-      references: [verificationSessions.id],
-    }),
-  })
-);
-
 // `users` (on sessions and accounts) and `accountss` are the keys Better Auth's
 // Drizzle adapter derives for its native joins; renaming one fails every
 // sign-in and session read.
@@ -1117,7 +1159,6 @@ export const usersRelations = relations(users, ({ one, many }) => ({
 }));
 
 export const rolesRelations = relations(roles, ({ many }) => ({
-  users: many(users),
   rolePermissions: many(rolePermissions),
 }));
 
@@ -1147,4 +1188,3 @@ export const accountsRelations = relations(accounts, ({ one }) => ({
 
 export type AuditAction = (typeof auditLogAction.enumValues)[number];
 export type File = typeof files.$inferSelect;
-export type FileTransition = (typeof fileTransitionEnum)[number];

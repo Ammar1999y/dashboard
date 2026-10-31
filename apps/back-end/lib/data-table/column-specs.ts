@@ -1,9 +1,14 @@
 import type { FilterColumnSpecs } from '@app/shared/data-table/column-specs';
 
 import {
+  isScanOnlyOperator,
   isSearchOperator,
   operatorsForSpec,
 } from '@app/shared/data-table/column-specs';
+import { MIN_SEARCH_LENGTH } from '@app/shared/data-table/parsers';
+
+const codeList = (items: readonly string[]) =>
+  items.map((item) => `\`${item}\``).join(', ');
 
 /**
  * The filter contract of one descriptor map, as published prose. Derived from
@@ -11,20 +16,26 @@ import {
  * allowlist, operators and closed-set members cannot drift from the enforced
  * ones.
  */
-export function describeFilterColumns(
-  specs: FilterColumnSpecs,
-  defaultMinSearchLength: number
-): string {
+export function describeFilterColumns(specs: FilterColumnSpecs): string {
   return Object.entries(specs)
     .map(([id, spec]) => {
-      const floor = spec.minSearchLength ?? defaultMinSearchLength;
       const operators = operatorsForSpec(spec);
+      const indexed = operators.filter(
+        (operator) =>
+          isSearchOperator(operator) && !isScanOnlyOperator(operator)
+      );
+      const scanOnly = operators.filter(isScanOnlyOperator);
       const parts = [
         spec.type,
         ...(spec.values ? [`one of ${spec.values.join('|')}`] : []),
-        ...(operators.some(isSearchOperator)
+        ...(indexed.length > 0
           ? [
-              `substring searches need ${floor}+ characters once folded, including letters or digits the trigram index can key on`,
+              `${codeList(indexed)} need ${MIN_SEARCH_LENGTH}+ characters once folded, including letters or digits the trigram index can key on`,
+            ]
+          : []),
+        ...(scanOnly.length > 0
+          ? [
+              `${codeList(scanOnly)} needs only ${MIN_SEARCH_LENGTH}+ characters once folded`,
             ]
           : []),
         `operators: ${operators.join(', ')}`,
@@ -36,7 +47,5 @@ export function describeFilterColumns(
 
 /** Just the ids, for the parameters that take no operator. */
 export function filterColumnIds(specs: FilterColumnSpecs): string {
-  return Object.keys(specs)
-    .map((id) => `\`${id}\``)
-    .join(', ');
+  return codeList(Object.keys(specs));
 }

@@ -4,6 +4,8 @@
  * (8-bit, non-interlaced, colour type 0/2/4/6) are accepted: a general decoder
  * is a much larger surface than this needs.
  */
+import { inflateSync } from 'node:zlib';
+
 import { boundedImage } from './bounded';
 
 const CHANNELS_BY_COLOUR_TYPE: Record<number, number> = {
@@ -91,11 +93,7 @@ function decodePng(bytes: Uint8Array): DecodedPng {
   if (width <= 0 || height <= 0) throw new Error('rgba: empty PNG');
 
   const stride = width * channels;
-  // `windowBits: 15` is required: `Bun.inflateSync` defaults to RAW deflate,
-  // and a PNG's IDAT stream is zlib-wrapped.
-  const raw = Buffer.from(
-    Bun.inflateSync(Buffer.concat(idat), { windowBits: 15 })
-  );
+  const raw = inflateSync(Buffer.concat(idat));
   if (raw.length < (stride + 1) * height) throw new Error('rgba: short IDAT');
 
   const out = Buffer.alloc(stride * height);

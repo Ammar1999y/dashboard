@@ -18,13 +18,13 @@
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import type { CoverageProvenance } from '../tests/helpers/coverage';
+import type { CoverageProvenance } from './coverage-provenance';
 
 import * as z from 'zod';
 
 import { logLine } from '@/utils/log';
 
-import { reportDigest } from '../tests/helpers/coverage';
+import { reportDigest } from './coverage-provenance';
 
 /**
  * A few points under the WORST measured integration-tier run, from this gate's

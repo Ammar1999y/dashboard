@@ -1,12 +1,10 @@
 /**
  * `Bun.Image` cannot decode SVG or animated WebP; `processImage` routes SVG to
- * the sanitiser and `validateMagicBytes` refuses animated WebP before this.
+ * the sanitiser and `admitUpload` refuses animated rasters before this.
  */
-import { inflateSync } from 'node:zlib';
-
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { iccProfileChunk, isLossyWebp } from '@app/shared/images/raster-bytes';
+import { isLossyWebp } from '@app/shared/images/raster-bytes';
 import { uploadMsg } from '@app/shared/messages/media';
 import {
   MAX_IMAGE_EDGE,
@@ -22,6 +20,7 @@ import { logLine } from '@/utils/log';
 import { contentRefused, imageNotCompressible, imageTooLarge } from '../errors';
 import { createAdmission } from './admission';
 import { boundedImage } from './bounded';
+import { iccProfileFits, MAX_ICC_PROFILE_BYTES } from './icc';
 
 const UNDECODABLE_CODES = new Set([
   'ERR_IMAGE_DECODE_FAILED',
@@ -53,13 +52,20 @@ function toUploadError(error: unknown): CustomError {
   return serverFault(uploadMsg.uploadFailed, error);
 }
 
+/** `MAX_IMAGE_PIXELS` bounds area, not a side the output format cannot hold. */
+function assertEdgesFit(width: number, height: number): void {
+  if (width > MAX_IMAGE_EDGE || height > MAX_IMAGE_EDGE)
+    throw imageTooLarge(uploadMsg.edgeTooLong(MAX_IMAGE_EDGE));
+}
+
 /**
  * From the header alone, and BEFORE the encoder slot is taken, so a pixel bomb
- * is refused ahead of the queue.
+ * or an over-long side is refused ahead of the queue.
  */
 export async function measureEncodeCost(input: Buffer): Promise<number> {
   try {
     const { width, height } = await boundedImage(input).metadata();
+    assertEdgesFit(width, height);
     return Math.max(1, Math.ceil((width * height) / 1_000_000));
   } catch (error) {
     throw toUploadError(error);
@@ -100,7 +106,6 @@ interface OptimizeImageResult {
   width: number;
   height: number;
   size: number;
-  format: 'webp';
   iterations: number;
 }
 
@@ -279,9 +284,7 @@ async function optimizeImageWithinSlot(
   const startedAt = performance.now();
   try {
     const metadata = await boundedImage(input).metadata();
-    // `MAX_IMAGE_PIXELS` bounds area, not a side the output format cannot hold.
-    if (metadata.width > MAX_IMAGE_EDGE || metadata.height > MAX_IMAGE_EDGE)
-      throw imageTooLarge(uploadMsg.edgeTooLong(MAX_IMAGE_EDGE));
+    assertEdgesFit(metadata.width, metadata.height);
 
     const originalWidth = metadata.width || initialWidth;
     const originalHeight = metadata.height || initialWidth;
@@ -361,7 +364,6 @@ async function optimizeImageWithinSlot(
       width: chosen.width,
       height: chosen.height,
       size: chosen.size,
-      format: 'webp',
       iterations,
     };
   } catch (error) {
@@ -370,13 +372,14 @@ async function optimizeImageWithinSlot(
   }
 }
 
-const acquireEncoder = createAdmission(4);
-
 /**
- * The one input metadata `Bun.Image` carries into its output. Above ordinary
- * profiles, far below a hostile one.
+ * Encodes at once in this process. Each slot is memory held together: one
+ * encode at the pixel cap peaks near 240 MiB, so raise it only against the
+ * host's free memory, not its core count.
  */
-export const MAX_ICC_PROFILE_BYTES = 64 * 1024;
+const ENCODER_SLOTS = 1;
+
+const acquireEncoder = createAdmission({ slots: ENCODER_SLOTS, queueLimit: 4 });
 
 /**
  * Requests are priced in pixels, yet a small PNG with a huge deflated profile
@@ -384,26 +387,13 @@ export const MAX_ICC_PROFILE_BYTES = 64 * 1024;
  * visibly shifts wide-gamut colour.
  *
  * ⚠️ Must run BEFORE the encoder slot is taken, or a bomb holds the queue while
- * it is priced; `maxOutputLength` makes the expansion refuse, not allocate.
+ * it is priced.
  */
 function assertIccProfileBounded(input: Buffer): void {
-  const profile = iccProfileChunk(input);
-  if (profile === null) return;
-
-  const tooLarge = imageTooLarge(
-    uploadMsg.iccProfileTooLarge(Math.floor(MAX_ICC_PROFILE_BYTES / 1024))
-  );
-
-  if (!profile.deflated) {
-    if (profile.data.byteLength > MAX_ICC_PROFILE_BYTES) throw tooLarge;
-    return;
-  }
-  try {
-    inflateSync(profile.data, { maxOutputLength: MAX_ICC_PROFILE_BYTES });
-  } catch {
-    // Over the bound, or not deflate at all: either way not carried.
-    throw tooLarge;
-  }
+  if (!iccProfileFits(input))
+    throw imageTooLarge(
+      uploadMsg.iccProfileTooLarge(Math.floor(MAX_ICC_PROFILE_BYTES / 1024))
+    );
 }
 
 export async function optimizeImage(

@@ -19,13 +19,13 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { CoverageProvenance } from '../helpers/coverage';
+import type { CoverageProvenance } from '@/scripts/coverage-provenance';
 
 import {
   configurationCoverageFlags,
   coverageRequested,
   stampCoverageProvenance,
-} from '../helpers/coverage';
+} from '@/scripts/coverage-provenance';
 
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 const GATE = path.join(REPO_ROOT, 'scripts', 'check-coverage.ts');

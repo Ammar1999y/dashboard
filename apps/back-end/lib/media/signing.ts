@@ -1,3 +1,5 @@
+import { getPresignedUrl } from '@/lib/r2/client';
+
 /**
  * Seconds a signed link repeats, so a browser can reuse what it fetched. No
  * `@/db` import: `tests/fixtures/_presign-child.ts` runs this against the
@@ -22,6 +24,41 @@ export function signingWindow(nowMs: number): SigningWindow {
     signingDate: new Date(nowMs - (nowMs % windowMs)),
     expiresIn: SIGNING_WINDOW_S + SIGNED_LINK_MIN_LIFETIME_S,
   };
+}
+
+type WindowedSigning = Parameters<typeof getPresignedUrl>[0] & SigningWindow;
+
+const SIGNED_LINKS_MAX = 5000;
+const signedLinks = { windowStart: 0, byParams: new Map<string, string>() };
+
+/**
+ * `getPresignedUrl`, reusing a link already signed in this window: a link signed
+ * inside one window is byte-identical (`tests/unit/presign-window.test.ts`).
+ * Keyed on every parameter but the date, so a parameter added later can only
+ * miss, never return another link.
+ */
+export async function presignInWindow(
+  params: WindowedSigning
+): Promise<string> {
+  const { signingDate, ...signed } = params;
+  const windowStart = signingDate.getTime();
+  if (windowStart > signedLinks.windowStart) {
+    signedLinks.byParams.clear();
+    signedLinks.windowStart = windowStart;
+  }
+  const id = JSON.stringify(signed);
+  const hit =
+    windowStart === signedLinks.windowStart && signedLinks.byParams.get(id);
+  if (hit) return hit;
+
+  const url = await getPresignedUrl(params);
+  // The window may have turned while this one was signed.
+  if (windowStart === signedLinks.windowStart) {
+    if (signedLinks.byParams.size >= SIGNED_LINKS_MAX)
+      signedLinks.byParams.clear();
+    signedLinks.byParams.set(id, url);
+  }
+  return url;
 }
 
 /**

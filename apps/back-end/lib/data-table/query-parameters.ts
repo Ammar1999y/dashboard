@@ -1,7 +1,5 @@
 import type { FilterColumnSpecs } from '@app/shared/data-table/column-specs';
 
-import { MIN_SEARCH_LENGTH } from '@app/shared/data-table/parsers';
-
 import { describeFilterColumns, filterColumnIds } from './column-specs';
 
 /**
@@ -12,5 +10,5 @@ export const dataTableParameters = (
   specs: FilterColumnSpecs
 ): Readonly<Record<'sort' | 'filters', string>> => ({
   sort: `Allowed ids: ${filterColumnIds(specs)}.`,
-  filters: `Columns: ${describeFilterColumns(specs, MIN_SEARCH_LENGTH)}.`,
+  filters: `Columns: ${describeFilterColumns(specs)}.`,
 });

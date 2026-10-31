@@ -4,9 +4,11 @@ import { withTransaction } from '@/db';
 import { roles, users } from '@/db/schema';
 
 import { resetUserTwoFactor } from '@app/shared/api/users';
+import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
-import { MSG_NOT_FOUND, MSG_UPDATE_ERROR } from '@app/shared/messages/common';
+import { MSG_UPDATE_ERROR } from '@app/shared/messages/common';
+import { holdsActionOn } from '@app/shared/permissions/scope';
 
 import { auditLog, getAuditMeta } from '@/lib/audit';
 import {
@@ -14,13 +16,12 @@ import {
   revokePendingProofs,
 } from '@/lib/auth/session/rotation';
 import { clearTwoFactorEnrolment } from '@/lib/auth/two-factor/methods';
-import { lockTargetAndActor } from '@/lib/auth/user-eligibility';
 import { bind } from '@/lib/http/binding';
 import { notFoundError } from '@/lib/http/response';
-import { validateRolePermissionScope } from '@/lib/permissions/scope';
 import { liveUser } from '@/lib/users/filters';
+import { lockTargetAndActor } from '@/lib/users/lock-order';
 import {
-  assertTargetUserVisible,
+  assertTargetUserReachable,
   assertTargetUserVisibleUnlocked,
 } from '@/lib/users/target-user';
 
@@ -51,10 +52,6 @@ export const resetUserTwoFactorBinding = bind(resetUserTwoFactor, {
     limit: 10,
     failClosed: true,
     by: 'user',
-  },
-  // A malformed id reads like an id that matched nothing.
-  refusals: {
-    params: { status: HTTP_STATUS.NOT_FOUND, message: MSG_NOT_FOUND },
   },
   failure: MSG_UPDATE_ERROR,
   detail: {
@@ -89,7 +86,6 @@ export const resetUserTwoFactorBinding = bind(resetUserTwoFactor, {
           roleId: users.roleId,
           createdBy: users.createdBy,
           twoFactorEnabled: users.twoFactorEnabled,
-          roleName: roles.roleName,
           roleScope: roles.scope,
         })
         .from(users)
@@ -99,24 +95,41 @@ export const resetUserTwoFactorBinding = bind(resetUserTwoFactor, {
 
       if (!target) throw notFoundError();
 
-      const targetRoleId = assertTargetUserVisible({
-        isSelf: target.id === actorUserId,
-        roleId: target.roleId,
-        createdBy: target.createdBy,
-        role: { roleName: target.roleName, scope: target.roleScope },
-        actorUserId,
-        scope,
-      });
-
-      // `resetTwoFactor` has no `Own` variant, so the `createdBy` narrowing never
-      // fires; without this an actor refused a `PUT` on this id could still strip
-      // its second factor.
-      await validateRolePermissionScope(
-        actorPermissions,
-        targetRoleId,
-        tx,
-        'reachability'
-      );
+      const isSelf = target.id === actorUserId;
+      // Reachable, not only visible: `resetTwoFactor` has no `Own` variant, so
+      // the `createdBy` narrowing never fires, and without the role check an
+      // actor refused a `PUT` on this id could still strip its second factor.
+      try {
+        await assertTargetUserReachable(tx, {
+          isSelf,
+          roleId: target.roleId,
+          createdBy: target.createdBy,
+          role: { scope: target.roleScope },
+          actorUserId,
+          scope,
+          actorPermissions,
+        });
+      } catch (error) {
+        // `resetTwoFactor` needs no `view`, so unlike its siblings this route
+        // can be refused a user the caller cannot read: that one stays a 404,
+        // or the 403 would tell the caller it exists.
+        const readable =
+          isSelf ||
+          holdsActionOn(
+            actorPermissions,
+            'users',
+            'view',
+            target.createdBy,
+            actorUserId
+          );
+        if (
+          !readable &&
+          error instanceof CustomError &&
+          error.status === HTTP_STATUS.FORBIDDEN
+        )
+          throw notFoundError();
+        throw error;
+      }
 
       await clearTwoFactorEnrolment(tx, targetId, { deletePasskeys: true });
 

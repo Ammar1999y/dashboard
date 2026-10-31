@@ -19,6 +19,7 @@ const REFUSAL_REASONS = [
   'macros',
   'embedded',
   'encrypted',
+  'complex',
 ] as const satisfies readonly MediaRefusalReason[];
 
 describe('shared upload messages preserve the filename direction', () => {

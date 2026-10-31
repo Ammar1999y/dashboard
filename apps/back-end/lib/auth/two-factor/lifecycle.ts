@@ -10,10 +10,10 @@ import { withTransaction } from '@/db';
 import { passkeys } from '@/db/schema';
 
 import { auditLog } from '@/lib/audit';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { authAuditMeta } from '../context';
 import { revokeOtherSessions } from '../session/rotation';
-import { lockUser } from '../user-eligibility';
 import { recordEnabledMethod } from './methods';
 
 export async function auditLifecycle(

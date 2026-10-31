@@ -16,27 +16,35 @@ import {
 } from '@/db/schema';
 
 import { CustomError } from '@app/shared/error-class';
+import { OTP_PROOF_THROTTLE_CODE } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
+import { otpMsg } from '@app/shared/messages/otp';
 
 import { MAX_FAILED_ATTEMPTS } from '@/lib/auth/login-guard';
 import { generateUuidV7 } from '@/lib/id';
 import { hashOtpCode } from '@/lib/otp/hash';
-import { OTP_MAX_ATTEMPTS, OTP_MAX_VERIFY_ATTEMPTS } from '@/lib/otp/limits';
+import {
+  OTP_MAX_ATTEMPTS,
+  OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+  OTP_MAX_VERIFY_ATTEMPTS,
+} from '@/lib/otp/limits';
 import { processOtpSend } from '@/lib/otp/send';
-import { processOtpVerify } from '@/lib/otp/verify';
+import { otpGuessWasEvaluated, processOtpVerify } from '@/lib/otp/verify';
 import { parseCursor } from '@/lib/users/session-page';
 
 import { resetTables } from '../helpers/database';
-import { sentMail, settleDelivery } from '../helpers/mailbox';
+import { resetMailbox, sentMail, settleDelivery } from '../helpers/mailbox';
 import {
   authedRequest,
   baseHeaders,
   seedUser,
   signedInUser,
+  uniqueEmail,
 } from '../helpers/session';
 
 const FIVE_MINUTES = 5 * 60 * 1000;
 const RIGHT_CODE = '123456';
+const WRONG_CODE = '000000';
 
 interface Fixture {
   locked: SeededUser;
@@ -59,6 +67,10 @@ async function rejected(operation: Promise<unknown>): Promise<CustomError> {
     throw error;
   }
   throw new Error('expected operation to reject');
+}
+
+function retryAfter(error: CustomError): number {
+  return Number(error.responseHeaders?.['Retry-After']);
 }
 
 async function otpState(id: string) {
@@ -188,8 +200,6 @@ describe('future timestamps remain future outside UTC', () => {
         identifier: fx().otp.email,
         channel: 'email',
         purpose: 'verify_contact',
-        sendTo: fx().otp.email,
-        entityName: 'email',
       })
     );
 
@@ -225,8 +235,6 @@ describe('future timestamps remain future outside UTC', () => {
       identifier: '+966500000111',
       channel: 'sms',
       purpose: 'passwordless_login',
-      sendTo: '+966500000111',
-      entityName: 'phone',
     });
 
     const after = await otpState(session.id);
@@ -268,6 +276,8 @@ describe('future timestamps remain future outside UTC', () => {
     );
 
     expect(error.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+    // A per-cycle block: a new code does lift it.
+    expect(error.message).toBe(otpMsg.verifyBlocked);
     expect(await otpState(session.id)).toEqual(before);
     expect(
       await db
@@ -298,12 +308,12 @@ describe('future timestamps remain future outside UTC', () => {
         identifier: fx().otp.email,
         channel: 'email',
         purpose: 'passwordless_login',
-        sendTo: fx().otp.email,
-        entityName: 'email',
       })
     );
 
     expect(error.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+    expect(retryAfter(error)).toBeGreaterThan(FIVE_MINUTES / 1000 - 5);
+    expect(retryAfter(error)).toBeLessThanOrEqual(FIVE_MINUTES / 1000);
     expect(await otpState(session.id)).toEqual(before);
     await settleDelivery();
     expect(sentMail()).toEqual([]);
@@ -368,5 +378,206 @@ describe('future timestamps remain future outside UTC', () => {
     expect(second.status).toBe(HTTP_STATUS.OK);
     expect(secondBody.data?.sessions?.map((row) => row.id)).toEqual([olderId]);
     expect(secondBody.data?.nextCursor).toBeNull();
+  });
+});
+
+/**
+ * The daily verify cap holds whatever code is sent, until its window, anchored
+ * by the database clock, ages out.
+ */
+describe('the daily verify cap', () => {
+  const HOUR_S = 60 * 60;
+  /** A window anchored an hour ago has 23 hours left. */
+  const REMAINING_S = 23 * HOUR_S;
+
+  function expectDailyCapRefusal(error: CustomError): void {
+    expect(error.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+    expect(error.code).toBe(OTP_PROOF_THROTTLE_CODE);
+    // Must not tell the user to request a new code.
+    expect(error.message).toBe(otpMsg.dailyVerifyCapReached);
+    expect(retryAfter(error)).toBeGreaterThan(REMAINING_S - 120);
+    expect(retryAfter(error)).toBeLessThanOrEqual(REMAINING_S);
+  }
+
+  test('refuses a send without a code, a delivery or a mutation', async () => {
+    resetMailbox();
+    // What a verify that spent the cap leaves: the row blocked for six hours.
+    const [session] = await db
+      .insert(verificationSessions)
+      .values({
+        userId: fx().otp.userId,
+        channel: 'email',
+        identifier: fx().otp.email,
+        purpose: 'two_factor',
+        attemptNumber: 1,
+        verifyAttemptDaily: OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+        verifyAttemptWindowStart: sql`now() - interval '1 hour'`,
+        isBlocked: true,
+        blockedUntil: new Date(Date.now() + 6 * HOUR_S * 1000),
+      })
+      .returning({ id: verificationSessions.id });
+    if (!session) throw new Error('daily-capped fixture was not inserted');
+    const before = await otpState(session.id);
+
+    expectDailyCapRefusal(
+      await rejected(
+        processOtpSend({
+          userId: fx().otp.userId,
+          identifier: fx().otp.email,
+          channel: 'email',
+          purpose: 'two_factor',
+        })
+      )
+    );
+
+    expect(await otpState(session.id)).toEqual(before);
+    expect(
+      await db
+        .select({ id: verificationCodes.id })
+        .from(verificationCodes)
+        .where(eq(verificationCodes.sessionId, session.id))
+    ).toEqual([]);
+    await settleDelivery();
+    expect(sentMail()).toEqual([]);
+  });
+
+  const verifyCases = [
+    {
+      name: 'refuses a correct code under a spent cap',
+      dailyBefore: OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+      blockedForMs: null,
+      codeLiveForMs: FIVE_MINUTES,
+      code: RIGHT_CODE,
+      evaluated: false,
+    },
+    {
+      name: 'refuses a correct code under a live block on a spent cap',
+      dailyBefore: OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+      blockedForMs: 6 * HOUR_S * 1000,
+      codeLiveForMs: FIVE_MINUTES,
+      code: RIGHT_CODE,
+      evaluated: false,
+    },
+    {
+      name: 'answers the wrong guess that spends the cap',
+      dailyBefore: OTP_MAX_DAILY_VERIFY_ATTEMPTS - 1,
+      blockedForMs: null,
+      codeLiveForMs: FIVE_MINUTES,
+      code: WRONG_CODE,
+      evaluated: true,
+    },
+    {
+      name: 'answers an expired code under a spent cap, stamping no block',
+      dailyBefore: OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+      blockedForMs: -60_000,
+      codeLiveForMs: -60_000,
+      code: RIGHT_CODE,
+      evaluated: false,
+    },
+    {
+      name: 'answers a code under a retired key under a spent cap',
+      dailyBefore: OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+      blockedForMs: null,
+      codeLiveForMs: FIVE_MINUTES,
+      code: RIGHT_CODE,
+      evaluated: false,
+      retiredKey: true,
+    },
+  ] as const;
+
+  test.each(verifyCases)('$name', async (scenario) => {
+    const retiredKey = 'retiredKey' in scenario && scenario.retiredKey;
+    const user = await seedUser();
+    const [session] = await db
+      .insert(verificationSessions)
+      .values({
+        userId: user.userId,
+        channel: 'email',
+        identifier: user.email,
+        purpose: 'change_password',
+        attemptNumber: 1,
+        verifyAttemptDaily: scenario.dailyBefore,
+        verifyAttemptWindowStart: sql`now() - interval '1 hour'`,
+        ...(scenario.blockedForMs !== null && {
+          isBlocked: true,
+          blockedUntil: new Date(Date.now() + scenario.blockedForMs),
+        }),
+      })
+      .returning({ id: verificationSessions.id });
+    if (!session) throw new Error('daily-capped fixture was not inserted');
+    await db.insert(verificationCodes).values({
+      sessionId: session.id,
+      // A well-formed envelope naming a key the keyring no longer holds.
+      code: retiredKey
+        ? `o1:removedgen:${'A'.repeat(43)}`
+        : hashOtpCode(RIGHT_CODE),
+      expiresAt: new Date(Date.now() + scenario.codeLiveForMs),
+    });
+    const before = await otpState(session.id);
+    const verified = { called: false };
+
+    const error = await rejected(
+      processOtpVerify({
+        userId: user.userId,
+        channel: 'email',
+        purpose: 'change_password',
+        identifier: user.email,
+        code: scenario.code,
+        onVerified: async () => {
+          verified.called = true;
+        },
+      })
+    );
+
+    expectDailyCapRefusal(error);
+    expect(otpGuessWasEvaluated(error)).toBe(scenario.evaluated);
+    expect(verified.called).toBe(false);
+    const after = await otpState(session.id);
+    expect(after?.verifyAttemptDaily).toBe(OTP_MAX_DAILY_VERIFY_ATTEMPTS);
+    if (scenario.codeLiveForMs < 0) expect(after?.isBlocked).toBe(false);
+    // Nothing read a code, so nothing may change.
+    if (retiredKey) expect(after).toEqual(before);
+    expect(
+      await db
+        .select({ id: verificationCodes.id })
+        .from(verificationCodes)
+        .where(eq(verificationCodes.sessionId, session.id))
+    ).toHaveLength(1);
+  });
+
+  test('lets a send through once its window has aged out', async () => {
+    resetMailbox();
+    const oldEmail = uniqueEmail();
+    const newEmail = uniqueEmail();
+    const [session] = await db
+      .insert(verificationSessions)
+      .values({
+        userId: fx().otp.userId,
+        channel: 'email',
+        identifier: oldEmail,
+        targetIdentifier: oldEmail,
+        purpose: 'change_email',
+        attemptNumber: 1,
+        verifyAttemptDaily: OTP_MAX_DAILY_VERIFY_ATTEMPTS,
+        verifyAttemptWindowStart: sql`now() - interval '25 hours'`,
+      })
+      .returning({ id: verificationSessions.id });
+    if (!session) throw new Error('aged fixture was not inserted');
+
+    await processOtpSend({
+      userId: fx().otp.userId,
+      identifier: newEmail,
+      channel: 'email',
+      purpose: 'change_email',
+    });
+
+    const [row] = await db
+      .select({ targetIdentifier: verificationSessions.targetIdentifier })
+      .from(verificationSessions)
+      .where(eq(verificationSessions.id, session.id));
+    // A contact change proves, and later commits, the contact it went to.
+    expect(row?.targetIdentifier).toBe(newEmail);
+    await settleDelivery();
+    expect(sentMail().map((mail) => mail.to)).toEqual([newEmail]);
   });
 });

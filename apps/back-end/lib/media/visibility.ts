@@ -1,9 +1,8 @@
 import type { Actor } from './actor';
 import type { MediaFileRow } from './files';
 import type { PassBudget } from './orphaned-objects';
-import type { FileTransition } from '@/db/schema';
 import type { EntityID } from '@app/shared/types';
-import type { BucketType } from '@app/shared/validation/enums';
+import type { BucketType, FileTransition } from '@app/shared/validation/enums';
 
 import { and, eq, isNotNull, lt, ne, sql } from 'drizzle-orm';
 
@@ -21,7 +20,7 @@ import {
   isVisibilityEnabled,
 } from '@/lib/r2/client';
 
-import { errorTypeOf, logSanitized } from '@/utils/log';
+import { errorClassOf, logSanitized } from '@/utils/log';
 
 import { auditAs, withinScope } from './actor';
 import {
@@ -280,8 +279,15 @@ export async function transitionFile(params: {
       (governed !== null && !governed.has(id))
     )
       throw fileNotFound();
-    if (row.status !== 'active' || row.transition) throw fileBusy([id]);
-    if (row.bucketType === to) return { row, done: true as const };
+    if (row.status !== 'active') throw fileBusy([id]);
+    // A `cleanup` only removes the copy in the other bucket, so the object
+    // here is already live; it can lag for a day after a failed delete.
+    if (
+      row.bucketType === to &&
+      (row.transition === null || row.transition === 'cleanup')
+    )
+      return { row, done: true as const };
+    if (row.transition) throw fileBusy([id]);
     if (to === 'private' && (await hasPublicUsage(id, tx)))
       throw unpublishInUse();
 
@@ -318,7 +324,7 @@ export async function transitionFile(params: {
   } catch (error) {
     const failure = {
       msg: 'media.transition copy failed',
-      errorClass: errorTypeOf(error),
+      errorClass: errorClassOf(error),
       id,
     };
     const reverted = await removeStaleCopy(
@@ -437,7 +443,7 @@ async function claimStale(
  *
  * `hasMore` is backlog, not failure; the retention job signals them differently.
  */
-export async function retryTransitions(): Promise<{
+export async function retryTransitions(stopping?: AbortSignal): Promise<{
   reverted: number;
   finished: number;
   failed: number;
@@ -449,7 +455,7 @@ export async function retryTransitions(): Promise<{
     .where(and(isNotNull(files.transition), staleTransition()))
     .limit(TRANSITION_RETRY_BATCH);
 
-  const budget = passBudget();
+  const budget = passBudget(stopping);
   let reverted = 0;
   let finished = 0;
   let failed = 0;

@@ -166,11 +166,11 @@ describe('sign-in fixture', () => {
     if (created.userId === null)
       throw new Error('dev sign-up returned 201 with no id');
 
-    // Better Auth 1.7 resolves an account by `(providerId, issuer, accountId)`.
-    // A wrong `issuer` answers a clean 401 for a correct password — the exact
-    // shape of the outage that passed `tsc` and 150/150 probes — so the row is
-    // asserted at the cause, not four layers downstream. The full §7.7 surface
-    // belongs to its own shard; this is the fixture guarantee.
+    // Better Auth finds the credential account by provider and
+    // `accountId === user.id`. A wrong `accountId` answers a clean 401 for a
+    // correct password, so the row is asserted at the cause, not four layers
+    // downstream. The full §7.7 surface belongs to its own shard; this is the
+    // fixture guarantee.
     const account = await accountRowFor(created.userId);
     expect(account).not.toBeNull();
     expect(account?.issuer).toBe('local:credential');
@@ -274,7 +274,7 @@ describe('object-store boundary', () => {
   test('a real uploadToR2 call lands in the stub and opens no socket', async () => {
     const { uploadToR2 } = await import('@/lib/r2/client');
 
-    const result = await uploadToR2({
+    await uploadToR2({
       file: Buffer.from('harness-bytes'),
       key: 'harness/one.png',
       bucketType: 'public',
@@ -282,7 +282,6 @@ describe('object-store boundary', () => {
       sha256: digestOf('harness-bytes'),
     });
 
-    expect(result).toEqual({ success: true, key: 'harness/one.png' });
     const puts = storeOpsOf('PutObject');
     expect(puts.length).toBe(1);
     expect(puts[0]?.key).toBe('harness/one.png');

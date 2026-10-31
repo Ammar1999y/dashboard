@@ -8,7 +8,6 @@ import { and, eq, gt, sql } from 'drizzle-orm';
 import { withTransaction } from '@/db';
 import {
   otpChallenges,
-  users,
   verificationCodes,
   verificationSessions,
 } from '@/db/schema';
@@ -21,6 +20,7 @@ import { otpMsg } from '@app/shared/messages/otp';
 import { contactKindOf } from '@app/shared/validation/enums';
 
 import { auditLog } from '@/lib/audit';
+import { lockUser } from '@/lib/users/lock-order';
 
 import { logLine, logSanitized } from '@/utils/log';
 
@@ -34,6 +34,9 @@ import {
   blockedError,
   blockSession,
   calculateBlockDuration,
+  dailyVerifyAttemptsUsed,
+  dailyVerifyCapError,
+  dailyVerifyWindowExpired,
   invalidOrExpiredCode,
 } from './throttle';
 
@@ -44,7 +47,7 @@ import {
  */
 const evaluatedGuesses = new WeakSet<object>();
 
-export function markEvaluatedGuess<E extends object>(error: E): E {
+function markEvaluatedGuess<E extends object>(error: E): E {
   evaluatedGuesses.add(error);
   return error;
 }
@@ -114,6 +117,8 @@ export type VerifyOutcome =
       blockedUntil: Date | null;
       /** Whether a submitted code was compared before the block was raised. */
       evaluated: boolean;
+      /** Set when the daily cap, which no new code lifts, is the reason. */
+      dailyWindowStart?: Date;
     };
 
 /**
@@ -163,7 +168,9 @@ export function settleVerifyOutcome(outcome: VerifyOutcome): void {
   if (outcome.kind === 'no-code')
     throw new CustomError(otpMsg.codeExpired, HTTP_STATUS.BAD_REQUEST);
   if (outcome.kind === 'blocked') {
-    const blocked = blockedError(otpMsg.verifyBlocked, outcome.blockedUntil);
+    const blocked = outcome.dailyWindowStart
+      ? dailyVerifyCapError(outcome.dailyWindowStart)
+      : blockedError(otpMsg.verifyBlocked, outcome.blockedUntil);
     throw outcome.evaluated ? markEvaluatedGuess(blocked) : blocked;
   }
   throw markEvaluatedGuess(
@@ -189,13 +196,7 @@ export async function processOtpVerify(
 
   const outcome = await transactionWithin<VerifyOutcome>(async (tx) => {
     // `users` first: the canonical lock order, and `onVerified` reaches it.
-    await tx
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.id, userId))
-      .for('update');
-
-    const windowExpired = sql`NOW() - ${verificationSessions.verifyAttemptWindowStart} > INTERVAL '24 hours'`;
+    await lockUser(tx, userId);
 
     const [session] = await tx
       .select({
@@ -205,14 +206,11 @@ export async function processOtpVerify(
         targetIdentifier: verificationSessions.targetIdentifier,
         // For the audit row: the request's `channel` may misreport delivery.
         channel: verificationSessions.channel,
-        // Zero once the window has aged out. Per purpose on purpose: wider,
-        // failed verify_contact attempts would deny forgot_password.
-        // Read-then-write is safe under the `users` lock, and nothing below
-        // touches the counter before its charge.
-        dailyUsed:
-          sql<number>`CASE WHEN ${windowExpired} THEN 0 ELSE ${verificationSessions.verifyAttemptDaily} END`.mapWith(
-            Number
-          ),
+        // Per purpose on purpose: wider, failed verify_contact attempts would
+        // deny forgot_password. Read-then-write is safe under the `users`
+        // lock, and nothing below touches the counter before its charge.
+        dailyUsed: dailyVerifyAttemptsUsed,
+        dailyWindowStart: verificationSessions.verifyAttemptWindowStart,
       })
       .from(verificationSessions)
       .where(
@@ -228,6 +226,24 @@ export async function processOtpVerify(
     if (!session)
       throw new CustomError(otpMsg.codeNotSent, HTTP_STATUS.NOT_FOUND);
 
+    const dailyCapWindow = (used: number) =>
+      used >= OTP_MAX_DAILY_VERIFY_ATTEMPTS
+        ? session.dailyWindowStart
+        : undefined;
+    // "Request a new code" would be false under a spent daily cap. Nothing is
+    // written: a request that read no code must not stamp a block.
+    const noCode = (): VerifyOutcome => {
+      const dailyWindowStart = dailyCapWindow(session.dailyUsed);
+      return dailyWindowStart
+        ? {
+            kind: 'blocked',
+            blockedUntil: null,
+            evaluated: false,
+            dailyWindowStart,
+          }
+        : { kind: 'no-code' };
+    };
+
     // A send-cap block can be set while the verify counters are under their
     // caps; without this, a leftover live code would still verify.
     if (session.isBlocked && session.blockedUntil) {
@@ -236,6 +252,7 @@ export async function processOtpVerify(
           kind: 'blocked',
           blockedUntil: session.blockedUntil,
           evaluated: false,
+          dailyWindowStart: dailyCapWindow(session.dailyUsed),
         };
 
       await tx
@@ -261,7 +278,7 @@ export async function processOtpVerify(
       )
       .limit(1);
 
-    if (!activeCode) return { kind: 'no-code' };
+    if (!activeCode) return noCode();
 
     // Before the counters, so a mis-timed key rotation spends no budget.
     if (!canEvaluateOtp(activeCode.code)) {
@@ -272,7 +289,7 @@ export async function processOtpVerify(
         purpose,
         contactKind,
       });
-      return { kind: 'no-code' };
+      return noCode();
     }
 
     const auditBlockTransition = async (reason: string) => {
@@ -305,6 +322,7 @@ export async function processOtpVerify(
         kind: 'blocked',
         blockedUntil: await blockOnce('daily_cap_reached'),
         evaluated: false,
+        dailyWindowStart: session.dailyWindowStart,
       };
 
     // The per-cycle bound in the WHERE is defence in depth if the lock goes.
@@ -314,8 +332,8 @@ export async function processOtpVerify(
         verifyAttemptNumber: sql`${verificationSessions.verifyAttemptNumber} + 1`,
         // Anchored, not rolling: two full budgets can straddle an anchor's
         // expiry. Accepted.
-        verifyAttemptDaily: sql`CASE WHEN ${windowExpired} THEN 1 ELSE ${verificationSessions.verifyAttemptDaily} + 1 END`,
-        verifyAttemptWindowStart: sql`CASE WHEN ${windowExpired} THEN NOW() ELSE ${verificationSessions.verifyAttemptWindowStart} END`,
+        verifyAttemptDaily: sql`CASE WHEN ${dailyVerifyWindowExpired} THEN 1 ELSE ${verificationSessions.verifyAttemptDaily} + 1 END`,
+        verifyAttemptWindowStart: sql`CASE WHEN ${dailyVerifyWindowExpired} THEN NOW() ELSE ${verificationSessions.verifyAttemptWindowStart} END`,
       })
       .where(
         and(
@@ -358,7 +376,12 @@ export async function processOtpVerify(
 
     if (shouldBlock) {
       await auditBlockTransition('threshold_crossed');
-      return { kind: 'blocked', blockedUntil: blockUntil, evaluated: true };
+      return {
+        kind: 'blocked',
+        blockedUntil: blockUntil,
+        evaluated: true,
+        dailyWindowStart: dailyCapWindow(dailyUsed + 1),
+      };
     }
     return { kind: 'mismatch' };
   }, options);

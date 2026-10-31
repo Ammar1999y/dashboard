@@ -22,7 +22,7 @@ import {
   emailSchema,
   passwordSchema,
   phoneSchema,
-  sanitizeStrictSingleLine,
+  sanitizeStrict,
 } from './rules';
 
 /**
@@ -81,8 +81,13 @@ function channelEnabledRefine(data: { channel: string }, ctx: z.RefinementCtx) {
   }
 }
 
+/**
+ * Every space goes, not only the padding: a code is often shown grouped
+ * (`123 456`), and the sanitizer already turns a tab inside one into a space.
+ */
 export const otpCodeSchema = z.preprocess(
-  sanitizeStrictSingleLine,
+  (v: string) =>
+    typeof v === 'string' ? sanitizeStrict(v).replaceAll(/\s/g, '') : v,
   z
     .string(MSG_OTP_REQUIRED)
     .length(OTP_CODE_LENGTH, MSG_OTP_WRONG_LENGTH)

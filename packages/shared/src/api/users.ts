@@ -16,6 +16,11 @@ import {
   userDetailSchema,
   userRowsSchema,
 } from '../responses/users';
+import { preferencesSchema } from '../validation/preferences';
+import {
+  deleteSessionsSchema,
+  sessionsQuerySchema,
+} from '../validation/sessions';
 import {
   adminUpdateUserBodySchema,
   changeEmailSchema,
@@ -25,12 +30,7 @@ import {
   changePhoneVerifySchema,
   createUserSchema,
   selfUpdateUserBodySchema,
-} from '../validation/auth';
-import { preferencesSchema } from '../validation/preferences';
-import {
-  deleteSessionsSchema,
-  sessionsQuerySchema,
-} from '../validation/sessions';
+} from '../validation/users';
 import { GRANTED, idParams } from './common';
 import { endpoint } from './endpoint';
 

@@ -21,18 +21,6 @@ import { logSanitized } from '@/utils/log';
 
 import { handleApiError } from './response';
 
-function getErrorHeaders(error: unknown): Record<string, string> | undefined {
-  if (!error || typeof error !== 'object' || !('responseHeaders' in error))
-    return undefined;
-  const headers = error.responseHeaders;
-  if (!headers || typeof headers !== 'object' || Array.isArray(headers))
-    return undefined;
-  const entries = Object.entries(headers);
-  if (!entries.every(([, value]) => typeof value === 'string'))
-    return undefined;
-  return Object.fromEntries(entries) as Record<string, string>;
-}
-
 /**
  * An unrecognised constraint is a code/schema mismatch, not something the
  * client can correct, so it stays a 500 rather than hiding behind a 409.
@@ -57,7 +45,6 @@ const USER_UNIQUE_CONSTRAINTS = new Map<string, string>([
 
 const PERMISSION_UNIQUE_CONSTRAINTS = new Map<string, string>([
   ['ux_roles_role_name', permissionMsg.nameExists],
-  ['ux_role_permissions_role_page', permissionMsg.duplicatePagePermission],
 ]);
 
 function uniqueViolationConflict(
@@ -70,11 +57,7 @@ function uniqueViolationConflict(
     constraints.get(getConstraintName(error)) ??
     reportUnknownUniqueViolation(scope, error);
   if (!message) return undefined;
-  return handleApiError(
-    new CustomError(message, HTTP_STATUS.CONFLICT),
-    undefined,
-    getErrorHeaders(error)
-  );
+  return handleApiError(new CustomError(message, HTTP_STATUS.CONFLICT));
 }
 
 /**
@@ -115,9 +98,8 @@ function isMappedForeignKeyViolation(
 }
 
 /** A known users FK violation as a 400; same `undefined` contract. */
-export function handleUserForeignKeyViolation(
-  error: unknown,
-  messages: { roleNotFound: string }
+function handleUserForeignKeyViolation(
+  error: unknown
 ): HandlerError | undefined {
   // Deliberately unmapped: `role_permissions_role_id_roles_id_fk` can only fail
   // on a role this transaction created or locked, a server invariant break
@@ -125,9 +107,7 @@ export function handleUserForeignKeyViolation(
   if (!isMappedForeignKeyViolation(error, USER_FK_CONSTRAINTS, 'users'))
     return undefined;
   return handleApiError(
-    new CustomError(messages.roleNotFound, HTTP_STATUS.BAD_REQUEST),
-    undefined,
-    getErrorHeaders(error)
+    new CustomError(userMsg.roleNotFound, HTTP_STATUS.BAD_REQUEST)
   );
 }
 
@@ -136,8 +116,7 @@ export function handleUserConstraintViolation(
   error: unknown
 ): HandlerError | undefined {
   return (
-    handleUserUniqueViolation(error) ??
-    handleUserForeignKeyViolation(error, userMsg)
+    handleUserUniqueViolation(error) ?? handleUserForeignKeyViolation(error)
   );
 }
 

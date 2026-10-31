@@ -10,7 +10,7 @@ import type { AuditMeta } from '@/lib/audit';
 import type { EntityID } from '@app/shared/types';
 import type { SQL } from 'drizzle-orm';
 
-import { and, eq, inArray, like, ne, sql } from 'drizzle-orm';
+import { and, eq, like, ne, sql } from 'drizzle-orm';
 
 import {
   accounts,
@@ -35,6 +35,34 @@ import {
 } from '../verifications';
 
 /**
+ * A proof whose verification started at `startedAt` (`authenticationStartedAt`)
+ * is void once a rotation stamped at or after it. Read under the user lock.
+ */
+export function rotatedSince(
+  user: { authRevokedAt: Date | null },
+  startedAt: number
+): boolean {
+  return (
+    user.authRevokedAt !== null && user.authRevokedAt.getTime() >= startedAt
+  );
+}
+
+// ⚠️ One array parameter, not `inArray`: a list binds one parameter per key,
+// PostgreSQL refuses a statement past 65,535, and a user can hold enough
+// sessions or challenges to reach it, which would fail every rotation of theirs.
+async function deleteVerifications(
+  executor: Executor,
+  identifiers: readonly string[]
+): Promise<void> {
+  if (identifiers.length === 0) return;
+  await executor
+    .delete(verifications)
+    .where(
+      sql`${verifications.identifier} = any(${sql.param(identifiers)}::text[])`
+    );
+}
+
+/**
  * ⚠️ These rows hold no user id, so every session delete owes this call —
  * Better Auth's via `session.delete.after` (`hooks.ts`), after its transaction
  * committed, hence `Executor`.
@@ -43,22 +71,18 @@ export async function revokeSessionArtifacts(
   tx: Executor,
   sessionIds: readonly string[]
 ): Promise<void> {
-  if (sessionIds.length === 0) return;
-  const keys = sessionIds.flatMap((id) => [
-    twoFactorProofKey(id),
-    reauthMethodKey(id),
-    reauthPasskeyKey(id),
-  ]);
-  // ⚠️ One array parameter, not `inArray`: a list binds one parameter per key,
-  // PostgreSQL refuses a statement past 65,535, and a user can hold enough
-  // sessions to reach it, which would fail every revocation of theirs.
-  await tx
-    .delete(verifications)
-    .where(sql`${verifications.identifier} = any(${sql.param(keys)}::text[])`);
+  await deleteVerifications(
+    tx,
+    sessionIds.flatMap((id) => [
+      twoFactorProofKey(id),
+      reauthMethodKey(id),
+      reauthPasskeyKey(id),
+    ])
+  );
 }
 
 export async function revokeSessionsWhere(
-  tx: Tx,
+  tx: Executor,
   where: SQL | undefined
 ): Promise<string[]> {
   const removed = await tx
@@ -89,16 +113,14 @@ async function revokeVerificationArtifacts(
     )
     .returning({ identifier: verifications.identifier });
 
-  for (const challenge of challenges)
-    await tx
-      .delete(verifications)
-      .where(
-        inArray(verifications.identifier, [
-          twoFactorAttemptsKey(challenge.identifier),
-          twoFactorStateKey(challenge.identifier),
-          twoFactorWebauthnKey(challenge.identifier),
-        ])
-      );
+  await deleteVerifications(
+    tx,
+    challenges.flatMap(({ identifier }) => [
+      twoFactorAttemptsKey(identifier),
+      twoFactorStateKey(identifier),
+      twoFactorWebauthnKey(identifier),
+    ])
+  );
 
   await tx.delete(verifications).where(eq(verifications.value, userId));
 

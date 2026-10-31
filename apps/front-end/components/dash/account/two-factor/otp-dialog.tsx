@@ -7,7 +7,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { contactKindOf } from '@app/shared/validation/enums';
-import { TWO_FACTOR_OTP_CHANNELS } from '@app/shared/validation/two-factor';
+import { ENABLED_TWO_FACTOR_OTP_CHANNELS } from '@app/shared/validation/two-factor';
 import {
   MSG_CODE_SENT_TO,
   MSG_CODE_WILL_GO_TO,
@@ -33,7 +33,9 @@ import { otpDialog } from '../dialogs';
 import { useAccount } from '../use-account';
 
 const channelsOf = (kind: ContactKind) =>
-  TWO_FACTOR_OTP_CHANNELS.filter((channel) => contactKindOf(channel) === kind);
+  ENABLED_TWO_FACTOR_OTP_CHANNELS.filter(
+    (channel) => contactKindOf(channel) === kind
+  );
 
 const UNSENT: OtpSendState = { sent: false, availableAt: 0 };
 

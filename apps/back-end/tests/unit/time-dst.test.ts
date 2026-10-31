@@ -6,7 +6,7 @@ import { users } from '@/db/schema';
 
 import { BUSINESS_TIMEZONE } from '@app/shared/config';
 /**
- * DST / calendar-boundary probe for utils/time.ts (C-14).
+ * DST / calendar-boundary probe for `@app/shared/time` (C-14).
  *
  * Asserts the half-open [start, nextDayStart) contract holds in zones the
  * shipped default (Asia/Riyadh, no DST) can never exercise:
@@ -190,7 +190,7 @@ check('accepts 9999-12-31', zonedNextDayStart('9999-12-31', 'UTC') !== null);
  * every dashboard list by the business offset with the whole suite still green.
  *
  * The bounds are checked by round trip through `Intl` rather than against a
- * recomputed instant: this file must not reimplement `utils/time.ts` to check
+ * recomputed instant: this file must not reimplement `@app/shared/time` to check
  * it. `formatInBusinessZone` is the independent half — the same
  * `Intl.DateTimeFormat` the application's helpers build on, but reached
  * directly, so a default that stops resolving the business zone fails here

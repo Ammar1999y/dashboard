@@ -29,9 +29,11 @@ import {
 } from '@app/shared/validation/otp';
 
 import { auditLog, boundedAuditMeta, boundedUserAgent } from '@/lib/audit';
+import { getClientIp } from '@/lib/http/client-ip';
 
 import { logSanitized } from '@/utils/log';
 
+import { requestHeaders } from '../context';
 import { authError } from '../errors';
 import { authDatabase } from '../transaction';
 import { roleAllowsLogin } from '../user-eligibility';
@@ -129,11 +131,17 @@ export const sessionDatabaseHooks = {
 
       // Better Auth copies the header verbatim.
       const userAgent = boundedUserAgent(session.userAgent);
+      // The address every other audit row stores. Better Auth's own is the
+      // expanded IPv6 form, cut to /64 by default, which joins none of them.
+      const ipAddress = context
+        ? getClientIp(requestHeaders(context))
+        : session.ipAddress;
 
       if (!userData.roleId || !userData.role) {
         return {
           data: {
             ...session,
+            ipAddress,
             userAgent,
             metadata: {},
           },
@@ -143,6 +151,7 @@ export const sessionDatabaseHooks = {
       return {
         data: {
           ...session,
+          ipAddress,
           userAgent,
           metadata: {
             roleId: userData.roleId,

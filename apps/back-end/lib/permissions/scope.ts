@@ -10,24 +10,18 @@ import { rolePermissions } from '@/db/schema';
 import { CustomError } from '@app/shared/error-class';
 import { assertRowsWithinScope } from '@app/shared/permissions/scope';
 
-import { notFoundError } from '@/lib/http/response';
-
+import { insufficientPermissions } from './checker';
 import { holdsLocks } from './roles';
 
 /**
- * `reachability` — "may this caller act on this target at all", answered 404.
- * `grant` — "may this caller confer these permissions", answered 403.
+ * `reachability` — "may this caller act on this target at all".
+ * `grant` — "may this caller confer these permissions".
  *
- * The distinction is a disclosure boundary, not a style choice. Every
- * neighbouring unreachable-target gate answers **404 `MSG_NOT_FOUND`**, and
- * `handleApiError` passes a `CustomError`'s status through verbatim. A 403 on
- * reachability would tell an actor holding `users.view` + `users.edit` but NOT
- * `permissions.view` that an account exists and its role holds a permission
- * they do not — enough, one `PUT` per listed user, to reconstruct the relative
- * privilege ranking of every account without the grant that gates it.
- *
- * Required rather than defaulted: a new call site must decide which question it
- * is asking, because getting it wrong is silent in both directions.
+ * Both answer 403 and differ only in the message. Reachability is not hidden
+ * behind a 404: the detail routes show the target's whole matrix to any holder
+ * of the page's `view` or `viewOwn`, which `edit` and `delete` require. The
+ * 2FA reset, which needs neither, answers 404 itself for a target the caller
+ * cannot read.
  */
 export type RoleScopeCheck = 'reachability' | 'grant';
 
@@ -43,9 +37,8 @@ export function assertRowsReachable(
     assertRowsWithinScope(actorPermissions, rows);
   } catch (error) {
     if (!(error instanceof CustomError)) throw error;
-    // Collapsed into the answer every other reachability gate gives, so a
-    // caller cannot tell "outranks me" from "does not exist".
-    throw notFoundError();
+    // Not the grant message: acting on a target grants nothing.
+    throw insufficientPermissions();
   }
 }
 

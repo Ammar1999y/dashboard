@@ -45,7 +45,7 @@ import { sweepOrphanedObjects } from '@/lib/media/orphaned-objects';
 import { retryTransitions } from '@/lib/media/visibility';
 
 import { yieldToEventLoop } from '@/utils/event-loop';
-import { errorTypeOf, logSanitized } from '@/utils/log';
+import { errorClassOf, logSanitized } from '@/utils/log';
 
 /**
  * How long a row survives past the point it stopped being useful.
@@ -83,8 +83,8 @@ interface SweepCount {
   removed: number;
   /**
    * True when a row already due when the run began is still there: the per-run
-   * ceiling was reached, or another transaction held the row and the sweep
-   * skipped it. The next scheduled run takes either.
+   * ceiling was reached, another transaction held the row and the sweep
+   * skipped it, or shutdown stopped the run. The next scheduled run takes any.
    */
   hasMore: boolean;
 }
@@ -119,7 +119,7 @@ async function guarded<T>(
     logSanitized('error', {
       msg: 'sweep step failed',
       step,
-      errorClass: errorTypeOf(error),
+      errorClass: errorClassOf(error),
     });
     return fallback;
   }
@@ -139,7 +139,6 @@ export interface DatabaseSweepResult {
     verificationSessions: SweepCount;
     verificationCodes: SweepCount;
     otpChallenges: SweepCount;
-    verifications: SweepCount;
     trustedDevices: SweepCount;
     files: FileSweepCount;
     transitions: TransitionSweepCount;
@@ -161,11 +160,13 @@ export interface DatabaseSweepResult {
  */
 async function sweepBatched(
   deleteBatch: () => Promise<number>,
-  anyLeft: () => Promise<boolean>
+  anyLeft: () => Promise<boolean>,
+  stopping: AbortSignal | undefined
 ): Promise<SweepCount> {
   let removed = 0;
 
   for (let batch = 0; batch < MAX_BATCHES; batch++) {
+    if (stopping?.aborted) return { removed, hasMore: true };
     const deleted = await deleteBatch();
     removed += deleted;
     if (deleted < BATCH_SIZE) return { removed, hasMore: await anyLeft() };
@@ -223,7 +224,8 @@ const atClock = (clock: SQL): SQL => clock;
 function sweepExpired(
   table: ExpiringTable,
   cutoff: (clock: SQL) => SQL,
-  runStart: SQL
+  runStart: SQL,
+  stopping: AbortSignal | undefined
 ): Promise<SweepCount> {
   return sweepBatched(
     async () => {
@@ -251,7 +253,8 @@ function sweepExpired(
           .from(table)
           .where(lt(table.expiresAt, cutoff(runStart)))
           .limit(1)
-      )
+      ),
+    stopping
   );
 }
 
@@ -276,7 +279,10 @@ function sweepExpired(
  * The OTP proof tables have no index on the columns filtered here; the
  * trade-off is the one `sweepExpired` states.
  */
-function sweepVerificationSessions(runStart: SQL): Promise<SweepCount> {
+function sweepVerificationSessions(
+  runStart: SQL,
+  stopping: AbortSignal | undefined
+): Promise<SweepCount> {
   /**
    * Abandoned, judged from the row's LAST activity rather than its birth.
    *
@@ -360,8 +366,40 @@ function sweepVerificationSessions(runStart: SQL): Promise<SweepCount> {
           .from(verificationSessions)
           .where(abandonedAt(runStart))
           .limit(1)
-      )
+      ),
+    stopping
   );
+}
+
+/**
+ * `verifications` alone, on the 15-minute schedule rather than the nightly
+ * pass: an anonymous caller writes two rows per Google sign-in start, past a
+ * captcha only, faster than one nightly ceiling reclaims them. Readers skip an
+ * expired row (`consumeVerificationValue` deletes it and returns null), so this
+ * reclaims disk and keeps the table small for the scans by `value` in
+ * credential rotation.
+ */
+export async function runVerificationSweep(
+  startedAt = Date.now(),
+  stopping?: AbortSignal
+): Promise<{
+  status: 'ok';
+  durationMs: number;
+  removed: { verifications: SweepCount };
+  hasMore: boolean;
+}> {
+  const swept = await sweepExpired(
+    verifications,
+    atClock,
+    await runClock(),
+    stopping
+  );
+  return {
+    status: 'ok',
+    durationMs: Date.now() - startedAt,
+    removed: { verifications: swept },
+    hasMore: swept.hasMore,
+  };
 }
 
 /**
@@ -378,33 +416,49 @@ function sweepVerificationSessions(runStart: SQL): Promise<SweepCount> {
  * between phases, and visibility copies that never flipped or never cleaned up.
  * Those are the only sweeps here that talk to the object store, which is why
  * they alone can report `degraded`.
+ *
+ * `stopping` ends the run between batches and R2 calls; what it did not reach
+ * is reported as `hasMore`, not as degraded.
  */
 export async function runDatabaseSweep(
-  startedAt = Date.now()
+  startedAt = Date.now(),
+  stopping?: AbortSignal
 ): Promise<DatabaseSweepResult> {
   const runStart = await runClock();
   const removed = {
     // Verification sessions first: the cascade removes their codes, so the code
     // sweep that follows has less to look at.
-    verificationSessions: await sweepVerificationSessions(runStart),
+    verificationSessions: await sweepVerificationSessions(runStart, stopping),
     // Codes that expired while their session stays live, which the cascade
     // above leaves behind. `processOtpVerify` filters on `expires_at`, so this
     // only reclaims rows.
-    verificationCodes: await sweepExpired(verificationCodes, atClock, runStart),
-    otpChallenges: await sweepExpired(otpChallenges, atClock, runStart),
-    // `consumeVerificationValue` deletes a row past its `expiresAt` and returns
-    // null, so an unswept row can never be redeemed; this reclaims disk on the
-    // fastest-growing table here.
-    verifications: await sweepExpired(verifications, atClock, runStart),
+    verificationCodes: await sweepExpired(
+      verificationCodes,
+      atClock,
+      runStart,
+      stopping
+    ),
+    otpChallenges: await sweepExpired(
+      otpChallenges,
+      atClock,
+      runStart,
+      stopping
+    ),
     // The sign-in check filters on `expiresAt`; this keeps the user-visible
     // settings list free of devices that already stopped working.
-    trustedDevices: await sweepExpired(trustedDevices, atClock, runStart),
+    trustedDevices: await sweepExpired(
+      trustedDevices,
+      atClock,
+      runStart,
+      stopping
+    ),
     sessions: await sweepExpired(
       sessions,
       (clock) => sql`${clock} - ${SESSION_GRACE}::interval`,
-      runStart
+      runStart,
+      stopping
     ),
-    files: await guarded('files', sweepFiles, {
+    files: await guarded('files', () => sweepFiles(stopping), {
       removed: 0,
       unfiled: { stamped: 0, reaped: 0 },
       hasMore: true,
@@ -413,7 +467,7 @@ export async function runDatabaseSweep(
     transitions: await guarded(
       'transitions',
       async () => {
-        const outcome = await retryTransitions();
+        const outcome = await retryTransitions(stopping);
         return { ...outcome, degraded: outcome.failed > 0 };
       },
       { reverted: 0, finished: 0, failed: 0, hasMore: true, degraded: true }
@@ -422,7 +476,7 @@ export async function runDatabaseSweep(
     orphanedObjects: await guarded(
       'orphanedObjects',
       async () => {
-        const outcome = await sweepOrphanedObjects();
+        const outcome = await sweepOrphanedObjects(stopping);
         return { ...outcome, degraded: outcome.failed > 0 };
       },
       { removed: 0, failed: 0, hasMore: true, degraded: true }
@@ -447,7 +501,6 @@ export async function runDatabaseSweep(
       removed.verificationSessions.hasMore ||
       removed.verificationCodes.hasMore ||
       removed.otpChallenges.hasMore ||
-      removed.verifications.hasMore ||
       removed.trustedDevices.hasMore ||
       removed.files.hasMore ||
       removed.transitions.hasMore ||

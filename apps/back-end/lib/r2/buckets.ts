@@ -9,9 +9,8 @@
  * Whitespace-only is unset: an empty name would name no bucket anyway, and the
  * env rules treat an absent bucket as a disabled visibility.
  */
-const named = (value: string | undefined): string | undefined => {
-  return value?.trim() || undefined;
-};
+const named = (value: string | undefined): string | undefined =>
+  value?.trim() || undefined;
 
 export const R2_PUBLIC_BUCKET = named(process.env.R2_PUBLIC_BUCKET);
 export const R2_PRIVATE_BUCKET = named(process.env.R2_PRIVATE_BUCKET);

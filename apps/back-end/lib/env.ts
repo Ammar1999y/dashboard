@@ -12,38 +12,16 @@
 /** Hostnames browsers treat as a secure context regardless of scheme. */
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-/** Accepted names, in precedence order. `NEXT_PUBLIC_URL` is the legacy name. */
-const ORIGIN_ENV_NAMES = ['PUBLIC_URL', 'NEXT_PUBLIC_URL'] as const;
+const ORIGIN_ENV_NAME = 'PUBLIC_URL';
 
-interface ConfiguredOrigin {
-  name: string;
-  value: string;
-}
-
-function readOriginEnv(): ConfiguredOrigin {
-  const present: ConfiguredOrigin[] = [];
-  for (const name of ORIGIN_ENV_NAMES) {
-    const value = process.env[name]?.trim();
-    if (value) present.push({ name, value });
-  }
-
-  if (present.length === 0)
+function readOriginEnv(): string {
+  const value = process.env.PUBLIC_URL?.trim();
+  if (!value)
     throw new Error(
-      `⚠️ Missing required environment variable: ${ORIGIN_ENV_NAMES[0]} (legacy name: ${ORIGIN_ENV_NAMES[1]}). ` +
+      `⚠️ Missing required environment variable: ${ORIGIN_ENV_NAME}. ` +
         'It must be an absolute origin, e.g. "https://app.example.com".'
     );
-
-  const [first, ...rest] = present;
-  // `present.length === 0` is rejected above, so this only narrows the type.
-  if (!first) throw new Error('unreachable: no configured origin');
-  for (const other of rest)
-    if (other.value !== first.value)
-      throw new Error(
-        `⚠️ ${first.name} and ${other.name} are both set to different values. ` +
-          `Unset ${other.name} and keep ${first.name}.`
-      );
-
-  return first;
+  return value;
 }
 
 /**
@@ -96,8 +74,6 @@ function parseOrigin(raw: string, name: string): string {
   return url.origin;
 }
 
-const configured = readOriginEnv();
-
 /**
  * The browser origin WITH its port (`http://localhost:3000`), and the only
  * exported form of the setting.
@@ -106,4 +82,4 @@ const configured = readOriginEnv();
  * and configure Better Auth `trustedOrigins` explicitly; do not derive a
  * second value from this one.
  */
-export const PUBLIC_ORIGIN = parseOrigin(configured.value, configured.name);
+export const PUBLIC_ORIGIN = parseOrigin(readOriginEnv(), ORIGIN_ENV_NAME);

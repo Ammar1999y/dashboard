@@ -33,6 +33,8 @@ interface Harness {
   logs: Record<string, unknown>[];
   errors: Record<string, unknown>[];
   calls: { closeStores: number; stopServer: number };
+  /** Every dependency call, in the order the coordinator made them. */
+  order: string[];
   sweepTimeouts: number[];
   drainTimeouts: number[];
   /** Resolves once `exit` has been called, or after the whole budget plus slack. */
@@ -42,6 +44,7 @@ interface Harness {
 function harness(
   overrides: {
     stopServer?: () => Promise<void>;
+    haltSweeps?: () => void;
     stopSweeps?: (timeoutMs: number) => Promise<boolean>;
     drainAfterResponse?: (timeoutMs: number) => Promise<boolean>;
     closeStores?: () => Promise<void>;
@@ -51,6 +54,7 @@ function harness(
   const logs: Record<string, unknown>[] = [];
   const errors: Record<string, unknown>[] = [];
   const calls = { closeStores: 0, stopServer: 0 };
+  const order: string[] = [];
   const sweepTimeouts: number[] = [];
   const drainTimeouts: number[] = [];
   const exited = Promise.withResolvers<void>();
@@ -59,9 +63,15 @@ function harness(
     {
       stopServer: async () => {
         calls.stopServer += 1;
+        order.push('stopServer');
         await overrides.stopServer?.();
       },
+      haltSweeps: () => {
+        order.push('haltSweeps');
+        overrides.haltSweeps?.();
+      },
       stopSweeps: async (timeoutMs) => {
+        order.push('stopSweeps');
         sweepTimeouts.push(timeoutMs);
         return overrides.stopSweeps ? overrides.stopSweeps(timeoutMs) : true;
       },
@@ -96,6 +106,7 @@ function harness(
     logs,
     errors,
     calls,
+    order,
     sweepTimeouts,
     drainTimeouts,
     settled: () =>
@@ -295,6 +306,36 @@ describe('the shutdown coordinator', () => {
     expect(h.logs.at(-1)).toMatchObject({ msg: 'server stopped', exitCode: 1 });
   });
 
+  test('sweeps are halted before the server drains, so a cron boundary inside the drain starts nothing', async () => {
+    // A request drain can take minutes (the longest route ceiling plus
+    // headroom). Halting the schedule only once it was over let a firing that
+    // fell inside it start a whole sweep, which the remaining budget could not
+    // drain: a forced exit with R2 work cut mid-pass.
+    const h = harness({ stopServer: () => Bun.sleep(50) });
+    await h.shutdown('SIGTERM');
+    await h.settled();
+
+    expect(h.order).toEqual(['haltSweeps', 'stopServer', 'stopSweeps']);
+    expect(h.exits).toEqual([0]);
+  });
+
+  test('a halt that throws is contained, still drains and closes, and exits 1', async () => {
+    const h = harness({
+      haltSweeps: () => {
+        throw new TypeError('cron handle gone');
+      },
+    });
+    await h.shutdown('SIGTERM');
+    await h.settled();
+
+    expect(h.order).toEqual(['haltSweeps', 'stopServer', 'stopSweeps']);
+    expect(h.calls.closeStores).toBe(1);
+    expect(h.errors).toEqual([
+      { msg: 'sweep halt failed', errorClass: 'TypeError' },
+    ]);
+    expect(h.exits).toEqual([1]);
+  });
+
   test('a second signal during shutdown does not restart the sequence', async () => {
     const h = harness();
     await Promise.all([h.shutdown('SIGTERM'), h.shutdown('SIGINT')]);
@@ -324,6 +365,7 @@ describe('the coordinator on the real after-response queue', () => {
     const shutdown = createShutdown(
       {
         stopServer: async () => {},
+        haltSweeps: () => {},
         stopSweeps: async () => true,
         drainAfterResponse,
         pendingAfterResponse,
@@ -411,6 +453,7 @@ describe('the coordinator on the real after-response queue', () => {
     const shutdown = createShutdown(
       {
         stopServer: async () => {},
+        haltSweeps: () => {},
         stopSweeps: async () => true,
         drainAfterResponse: async () => true,
         pendingAfterResponse: () => 0,
@@ -452,6 +495,7 @@ describe('the coordinator on the real after-response queue', () => {
     const shutdown = createShutdown(
       {
         stopServer: async () => {},
+        haltSweeps: () => {},
         stopSweeps: blockingSweeps,
         drainAfterResponse,
         pendingAfterResponse,

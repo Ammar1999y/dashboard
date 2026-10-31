@@ -33,7 +33,13 @@ import {
 } from '@app/shared/validation/auth';
 
 import { refusalsOf } from '../refusals';
-import { isJsonSchema, withNullInEnums, withRequiredKeys } from './json-schema';
+import {
+  isJsonSchema,
+  jsonBodySchema,
+  referencedComponents,
+  withNullInEnums,
+  withRequiredKeys,
+} from './json-schema';
 import { OPERATION_TAGS } from './tags';
 
 /** What the framework's generator returns. */
@@ -63,6 +69,11 @@ export const RESPONSE_HEADERS = {
     schema: { type: 'integer', minimum: 0 },
   },
 } satisfies Record<string, JsonSchema>;
+
+/** A success's own cookies; a session read's refresh is the scheme's to describe. */
+export const setCookieHeader = (description: string): JsonSchema => ({
+  'Set-Cookie': { description, schema: { type: 'string' } },
+});
 
 export const CAPTCHA_HEADER_PARAMETER: JsonSchema = {
   name: CAPTCHA_HEADER,
@@ -210,11 +221,7 @@ const DATA_KEYWORDS = new Map<EndpointResponse, JsonSchema>([
 ]);
 
 function successData(response: JsonSchema, binding: AnyBinding): JsonSchema {
-  const content = isJsonSchema(response.content)
-    ? response.content['application/json']
-    : undefined;
-  const schema = isJsonSchema(content) ? content.schema : undefined;
-  const properties = isJsonSchema(schema) ? schema.properties : undefined;
+  const { properties } = jsonBodySchema(response);
   const data = isJsonSchema(properties) ? properties.data : undefined;
   if (!isJsonSchema(data))
     throw new Error(`${binding.key} publishes no success data.`);
@@ -263,12 +270,7 @@ function finishOperation(operation: JsonSchema, binding: AnyBinding): void {
   const keywords = DATA_KEYWORDS.get(entry.response);
   if (keywords) Object.assign(successData(success, binding), keywords);
   if (detail.setCookie !== undefined)
-    success.headers = {
-      'Set-Cookie': {
-        description: detail.setCookie,
-        schema: { type: 'string' },
-      },
-    };
+    success.headers = setCookieHeader(detail.setCookie);
   const raw = isRawResponse(entry.response)
     ? (entry.response.refusals ?? {})
     : {};
@@ -277,29 +279,6 @@ function finishOperation(operation: JsonSchema, binding: AnyBinding): void {
     if (!Object.hasOwn(raw, status))
       response.content = problemContent(problemSchemaOf(entry, status));
   }
-}
-
-const SCHEMA_REF = /"#\/components\/schemas\/([^"]+)"/g;
-
-/** The component schemas `root` references, directly or through each other. */
-function referencedSchemas(root: unknown, schemas: JsonSchema): JsonSchema {
-  const kept = new Map<string, unknown>();
-  let frontier: unknown[] = [root];
-  while (frontier.length > 0) {
-    const names = frontier.flatMap((node) =>
-      JSON.stringify(node)
-        .matchAll(SCHEMA_REF)
-        .map(([, name = '']) => name)
-        .toArray()
-    );
-    frontier = [];
-    for (const name of names)
-      if (!kept.has(name) && Object.hasOwn(schemas, name)) {
-        kept.set(name, schemas[name]);
-        frontier.push(schemas[name]);
-      }
-  }
-  return Object.fromEntries(kept);
 }
 
 export function finalizeDocument(
@@ -348,7 +327,7 @@ export function finalizeDocument(
     tags: OPERATION_TAGS.map((tag) => ({ ...tag })),
     paths,
     components: {
-      schemas: referencedSchemas(paths, schemas),
+      schemas: referencedComponents(paths, schemas),
       securitySchemes: merged.securitySchemes,
     },
   };

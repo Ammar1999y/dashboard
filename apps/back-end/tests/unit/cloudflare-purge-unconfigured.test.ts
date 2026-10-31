@@ -9,7 +9,12 @@ import { egressCallsTo } from '../helpers/egress';
 
 delete process.env.CLOUDFLARE_ZONE_ID;
 delete process.env.CLOUDFLARE_CACHE_PURGE_TOKEN;
+delete process.env.CLOUDFLARE_PURGE_BATCH_SIZE;
 const purge = await import('@/lib/cloudflare/purge');
+
+test('unset, the batch size is the Free, Pro and Business ceiling', () => {
+  expect(purge.PURGE_BATCH_SIZE).toBe(100);
+});
 
 test('purgeUrls is a no-op with nothing failed, and nothing leaves the process', async () => {
   expect(purge.CACHE_PURGE_CONFIGURED).toBe(false);

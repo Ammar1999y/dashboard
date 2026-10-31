@@ -3,8 +3,8 @@ import type { BucketType } from '@app/shared/validation/enums';
 import type { SQL } from 'drizzle-orm';
 
 /**
- * ⚠️ No runtime `@/` import: `scripts/migrate.ts` imports this by relative path
- * and runs without the server's secrets, which `@/db` requires.
+ * ⚠️ `scripts/migrate.ts` imports this and runs without the server's secrets:
+ * nothing here may reach `@/db` or `@/lib/env.server`.
  *
  * Every table referencing `files.id` MUST be declared here
  * (`tests/integration/media-usages.test.ts` fails otherwise): the registry
