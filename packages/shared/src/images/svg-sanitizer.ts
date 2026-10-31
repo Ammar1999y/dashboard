@@ -19,8 +19,8 @@ import {
 } from './config';
 import {
   isAnimatedRaster,
-  matchesMagicBytes,
   rasterDimensions,
+  rasterWithoutMetadata,
 } from './raster-bytes';
 
 /**
@@ -37,9 +37,9 @@ const ALLOWED_FUNCTION =
 const URL_FUNCTION = /^url$/i;
 
 /**
- * Only the types uploadable in their own right (`ALLOWED_IMAGE_TYPES`), so an
- * SVG cannot store a format the upload route refuses; the decoded payload gets
- * the same byte checks.
+ * Only the raster types uploadable in their own right (`ALLOWED_MIME_TYPES`),
+ * so an SVG cannot store a format the upload route refuses; the decoded
+ * payload gets the same byte checks.
  */
 const SAFE_DATA_URI =
   /^data:(image\/(?:png|webp));base64,([\w+/=\t\n\f\r ]+)$/i;
@@ -109,30 +109,18 @@ function localReferenceId(reference: string): string | undefined {
     : undefined;
 }
 
-interface InlineRaster {
-  bytes: Uint8Array;
-  /** The reference with whitespace removed — what is written back. */
-  canonical: string;
-  height: number;
-  mimeType: string;
-  width: number;
-}
-
 /** The declared type and decoded bytes of an inline raster, or `null`. */
 function decodeInlineRaster(
   reference: string
-): { mimeType: string; bytes: Uint8Array; canonical: string } | null {
+): { mimeType: string; bytes: Uint8Array } | null {
   const match = SAFE_DATA_URI.exec(reference);
   if (!match) return null;
   const [, declared = '', rawPayload = ''] = match;
-  const payload = rawPayload.replaceAll(ASCII_WHITESPACE, '');
-  const mimeType = declared.toLowerCase();
 
   try {
-    const binary = atob(payload);
+    const binary = atob(rawPayload.replaceAll(ASCII_WHITESPACE, ''));
     return {
-      mimeType,
-      canonical: `data:${mimeType};base64,${payload}`,
+      mimeType: declared.toLowerCase(),
       bytes: Uint8Array.from(
         binary,
         (character) => character.codePointAt(0) ?? 0
@@ -143,26 +131,54 @@ function decodeInlineRaster(
   }
 }
 
-function analyzeInlineRaster(reference: string): InlineRaster | null {
-  const decoded = decodeInlineRaster(reference);
-  if (decoded === null || !matchesMagicBytes(decoded.bytes, decoded.mimeType))
-    return null;
-  const dimensions = rasterDimensions(decoded.bytes, decoded.mimeType);
-  return dimensions === null ? null : { ...decoded, ...dimensions };
+/** Chunked: spreading a whole raster into one call overflows the stack. */
+function base64Of(bytes: Uint8Array): string {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x80_00)
+    binary += String.fromCodePoint(...bytes.subarray(index, index + 0x80_00));
+  return btoa(binary);
 }
 
-type RasterLimitViolation = Extract<
-  SvgRejectionReason,
-  'edge-too-long' | 'too-many-pixels'
->;
-
-function rasterSizeViolation(
-  size: Pick<InlineRaster, 'width' | 'height'>
-): RasterLimitViolation | null {
+function rasterSizeViolation(size: {
+  width: number;
+  height: number;
+}): Extract<SvgRejectionReason, 'edge-too-long' | 'too-many-pixels'> | null {
   if (size.width * size.height > MAX_IMAGE_PIXELS) return 'too-many-pixels';
   if (size.width > MAX_IMAGE_EDGE || size.height > MAX_IMAGE_EDGE)
     return 'edge-too-long';
   return null;
+}
+
+interface AdmittedRaster {
+  mimeType: string;
+  pixels: number;
+  /** What is written back: the raster without its metadata. */
+  stored: Uint8Array;
+}
+
+/**
+ * The one policy for an inline raster wherever it is written, or the refusal
+ * it earns. Checked on the bytes as uploaded: the stripped copy has no APNG
+ * chunks left to read as animated.
+ */
+function admitInlineRaster(
+  reference: string
+): AdmittedRaster | SvgRejectionReason {
+  const decoded = decodeInlineRaster(reference);
+  if (decoded === null) return 'invalid-inline-raster';
+  const { bytes, mimeType } = decoded;
+  const dimensions = rasterDimensions(bytes, mimeType);
+  if (dimensions === null) return 'invalid-inline-raster';
+  if (isAnimatedRaster(bytes, mimeType)) return 'animated';
+  // An oversized inline raster is a decompression bomb, which the direct
+  // upload path answers with the pixel ceiling.
+  const violation = rasterSizeViolation(dimensions);
+  if (violation) return violation;
+
+  const stored = rasterWithoutMetadata(bytes, mimeType);
+  return stored === null
+    ? 'invalid-inline-raster'
+    : { mimeType, pixels: dimensions.width * dimensions.height, stored };
 }
 
 /**
@@ -592,11 +608,8 @@ function urlTargetRefusal(value: string): SvgRejectionReason | null {
 
     if (target.startsWith('#')) continue;
     if (!DATA_URI.test(target)) return 'external-reference';
-    const raster = analyzeInlineRaster(target);
-    if (raster === null) return 'invalid-inline-raster';
-    if (isAnimatedRaster(raster.bytes, raster.mimeType)) return 'animated';
-    const violation = rasterSizeViolation(raster);
-    if (violation) return violation;
+    const raster = admitInlineRaster(target);
+    if (typeof raster === 'string') return raster;
   }
   return null;
 }
@@ -1120,9 +1133,6 @@ export function sanitizeSvg(
   if (markup.declaration)
     return rejected('DOCTYPE and ENTITY declarations are not allowed');
 
-  if (!trimmed.includes('<svg'))
-    return rejected('content has no <svg> element');
-
   if (markup.tags > SVG_MAX_ELEMENTS)
     return rejected(
       `SVG has ${markup.tags} elements, over the limit of ${SVG_MAX_ELEMENTS}`
@@ -1172,7 +1182,7 @@ export function sanitizeSvg(
         }))
       );
     let embeddedRasterPixels = 0;
-    const canonicalRasters: [Element, string, string][] = [];
+    const storedRasters: [Element, string, AdmittedRaster][] = [];
     for (const { element, name, reference } of references) {
       // Another local spelling converts; `conversionCause` names it.
       if (localReferenceId(reference) !== undefined) continue;
@@ -1182,17 +1192,11 @@ export function sanitizeSvg(
           : refused('external-reference');
       const raster =
         element.localName?.toLowerCase() === 'image'
-          ? analyzeInlineRaster(reference)
-          : null;
-      if (raster === null) return refused('invalid-inline-raster');
-      if (isAnimatedRaster(raster.bytes, raster.mimeType))
-        return refused('animated');
-      // An oversized inline raster is a decompression bomb, which the direct
-      // upload path answers with the pixel ceiling.
-      const violation = rasterSizeViolation(raster);
-      if (violation) return refused(violation);
-      embeddedRasterPixels += raster.width * raster.height;
-      canonicalRasters.push([element, name, raster.canonical]);
+          ? admitInlineRaster(reference)
+          : 'invalid-inline-raster';
+      if (typeof raster === 'string') return refused(raster);
+      embeddedRasterPixels += raster.pixels;
+      storedRasters.push([element, name, raster]);
     }
     if (embeddedRasterPixels > MAX_IMAGE_PIXELS)
       return refused('too-many-pixels');
@@ -1221,8 +1225,8 @@ export function sanitizeSvg(
             'requires-conversion'
           );
 
-    for (const [element, name, canonical] of canonicalRasters)
-      element.setAttribute(name, canonical);
+    for (const [element, name, { mimeType, stored }] of storedRasters)
+      element.setAttribute(name, `data:${mimeType};base64,${base64Of(stored)}`);
     for (const element of elements) withPlainHref(element);
 
     const cleanedSvg = xmlSerializer.serializeToString(

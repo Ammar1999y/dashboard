@@ -166,9 +166,12 @@ interface RasterChunk {
  * ⚠️ A zero-length chunk is LEGAL (an empty `XMP `): stopping at one would let
  * an animated WebP pass the animation check.
  */
-function* webpChunks(bytes: Uint8Array): Generator<RasterChunk> {
+function* webpChunks(
+  bytes: Uint8Array,
+  end = bytes.length
+): Generator<RasterChunk> {
   let offset = 12;
-  while (offset + 8 <= bytes.length) {
+  while (offset + 8 <= end) {
     const length = readU32(bytes, offset + 4, true);
     if (length === null) return;
     yield { type: fourCC(bytes, offset), start: offset + 8, length };
@@ -269,4 +272,240 @@ const ANIMATION_CHECKS = new Map<string, (bytes: Uint8Array) => boolean>([
 
 export function isAnimatedRaster(bytes: Uint8Array, mimeType: string): boolean {
   return ANIMATION_CHECKS.get(mimeType)?.(bytes) ?? false;
+}
+
+/**
+ * What a decoder draws with. `iCCP` stays, as the direct path keeps the
+ * profile: dropping it shifts colour. APNG chunks go: an animated PNG is
+ * refused before this, and without a leading `acTL` a decoder ignores them.
+ */
+const PNG_RENDERING_CHUNKS: ReadonlySet<string> = new Set([
+  'IHDR',
+  'PLTE',
+  'IDAT',
+  'IEND',
+  'tRNS',
+  'gAMA',
+  'cHRM',
+  'sRGB',
+  'iCCP',
+  'sBIT',
+  'pHYs',
+  'cICP',
+  'mDCV',
+  'cLLI',
+]);
+
+const PNG_CHUNK_TYPE = /^[A-Za-z]{4}$/;
+
+/** A decoder must refuse a critical chunk it does not know. */
+const CRITICAL_PNG_CHUNK = /^[A-Z]/;
+
+const WEBP_IMAGE_CHUNKS: ReadonlySet<string> = new Set(['VP8 ', 'VP8L']);
+const WEBP_RENDERING_CHUNKS: ReadonlySet<string> = new Set([
+  'ICCP',
+  'ALPH',
+  ...WEBP_IMAGE_CHUNKS,
+]);
+
+const VP8X_PAYLOAD_LENGTH = 10;
+const WEBP_EXIF_FLAG = 0x08;
+const WEBP_XMP_FLAG = 0x04;
+
+const EXIF_ORIENTATION_TAG = 0x01_12;
+const TIFF_SHORT = 3;
+
+/** `Exif\0\0`, which some WebP writers put before the TIFF header. */
+const EXIF_PREAMBLE = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00];
+
+/**
+ * The one EXIF field a browser draws with. What it cannot read counts as 1,
+ * as a decoder treats it, so an unreadable block is dropped, not refused.
+ */
+function exifOrientation(payload: Uint8Array): number {
+  const tiff = matchesAt(payload, 0, EXIF_PREAMBLE)
+    ? payload.subarray(EXIF_PREAMBLE.length)
+    : payload;
+  const littleEndian = matchesAt(tiff, 0, [0x49, 0x49, 0x2a, 0x00]);
+  if (!littleEndian && !matchesAt(tiff, 0, [0x4d, 0x4d, 0x00, 0x2a])) return 1;
+
+  const view = dataViewOf(tiff);
+  const ifd = readU32(tiff, 4, littleEndian) ?? tiff.length;
+  if (ifd + 2 > tiff.length) return 1;
+  const entriesEnd = ifd + 2 + view.getUint16(ifd, littleEndian) * 12;
+  for (
+    let entry = ifd + 2;
+    entry < entriesEnd && entry + 12 <= tiff.length;
+    entry += 12
+  ) {
+    if (view.getUint16(entry, littleEndian) !== EXIF_ORIENTATION_TAG) continue;
+    const value = view.getUint16(entry + 8, littleEndian);
+    return view.getUint16(entry + 2, littleEndian) === TIFF_SHORT &&
+      value >= 1 &&
+      value <= 8
+      ? value
+      : 1;
+  }
+  return 1;
+}
+
+/** A big-endian TIFF whose IFD0 holds `Orientation` alone. */
+function orientationExif(orientation: number): Uint8Array {
+  const tiff = new Uint8Array(26);
+  const view = dataViewOf(tiff);
+  tiff.set([0x4d, 0x4d, 0x00, 0x2a]);
+  view.setUint32(4, 8);
+  view.setUint16(8, 1);
+  view.setUint16(10, EXIF_ORIENTATION_TAG);
+  view.setUint16(12, TIFF_SHORT);
+  view.setUint32(14, 1);
+  view.setUint16(18, orientation);
+  return tiff;
+}
+
+const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, index) => {
+  let crc = index;
+  for (let bit = 0; bit < 8; bit++)
+    crc = crc & 1 ? 0xed_b8_83_20 ^ (crc >>> 1) : crc >>> 1;
+  return crc;
+});
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xff_ff_ff_ff;
+  for (const byte of bytes)
+    crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
+  return (crc ^ 0xff_ff_ff_ff) >>> 0;
+}
+
+const asciiBytes = (text: string): Uint8Array =>
+  Uint8Array.from(text, (character) => character.codePointAt(0) ?? 0);
+
+function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(
+    parts.reduce((total, part) => total + part.length, 0)
+  );
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const chunk = new Uint8Array(12 + data.length);
+  const view = dataViewOf(chunk);
+  view.setUint32(0, data.length);
+  chunk.set(asciiBytes(type), 4);
+  chunk.set(data, 8);
+  view.setUint32(8 + data.length, crc32(chunk.subarray(4, 8 + data.length)));
+  return chunk;
+}
+
+/** Padded to an even length, which the size field leaves out. */
+function riffChunk(type: string, data: Uint8Array): Uint8Array {
+  const chunk = new Uint8Array(8 + data.length + (data.length % 2));
+  chunk.set(asciiBytes(type));
+  dataViewOf(chunk).setUint32(4, data.length, true);
+  chunk.set(data, 8);
+  return chunk;
+}
+
+/** Kept chunks are copied whole, CRC included, so none is re-encoded. */
+function pngWithoutMetadata(bytes: Uint8Array): Uint8Array | null {
+  const kept: Uint8Array[] = [bytes.subarray(0, 8)];
+  let exifSeen = false;
+  for (const chunk of pngChunks(bytes)) {
+    const end = chunk.start + chunk.length + 4;
+    // `IHDR` first, and only there.
+    if (
+      end > bytes.length ||
+      !PNG_CHUNK_TYPE.test(chunk.type) ||
+      (kept.length === 1) !== (chunk.type === 'IHDR')
+    )
+      return null;
+
+    if (!exifSeen && chunk.type === 'eXIf') {
+      // A decoder reads only the first; a later one is dropped below.
+      exifSeen = true;
+      const orientation = exifOrientation(
+        bytes.subarray(chunk.start, chunk.start + chunk.length)
+      );
+      if (orientation !== 1)
+        kept.push(pngChunk('eXIf', orientationExif(orientation)));
+    } else if (PNG_RENDERING_CHUNKS.has(chunk.type))
+      kept.push(bytes.subarray(chunk.start - 8, end));
+    else if (CRITICAL_PNG_CHUNK.test(chunk.type)) return null;
+
+    if (chunk.type === 'IEND') return concatBytes(kept);
+  }
+  return null;
+}
+
+/**
+ * Within the RIFF size: past it is not part of the file. A simple WebP (no
+ * `VP8X`) is its image chunk alone, and cannot carry EXIF.
+ */
+function webpWithoutMetadata(bytes: Uint8Array): Uint8Array | null {
+  const riffSize = readU32(bytes, 4, true);
+  if (riffSize === null || riffSize < 4 || 8 + riffSize > bytes.length)
+    return null;
+  const end = 8 + riffSize;
+
+  const kept: Uint8Array[] = [];
+  let header: Uint8Array | null = null;
+  let images = 0;
+  let exifSeen = false;
+  let exifKept = false;
+  for (const chunk of webpChunks(bytes, end)) {
+    if (chunk.start + chunk.length > end) return null;
+    const data = bytes.subarray(chunk.start, chunk.start + chunk.length);
+
+    if (kept.length === 0 && chunk.type === 'VP8X') {
+      if (chunk.length < VP8X_PAYLOAD_LENGTH) return null;
+      header = riffChunk(chunk.type, data);
+      kept.push(header);
+    } else if (kept.length === 0 && !WEBP_IMAGE_CHUNKS.has(chunk.type))
+      return null;
+    else if (!exifSeen && chunk.type === 'EXIF') {
+      // A decoder reads only the first; a later one is dropped below.
+      exifSeen = true;
+      const orientation = exifOrientation(data);
+      exifKept = orientation !== 1;
+      if (exifKept) kept.push(riffChunk('EXIF', orientationExif(orientation)));
+    } else if (WEBP_RENDERING_CHUNKS.has(chunk.type)) {
+      kept.push(riffChunk(chunk.type, data));
+      if (WEBP_IMAGE_CHUNKS.has(chunk.type)) images++;
+      if (!header) break;
+    }
+  }
+  if (images !== 1) return null;
+
+  // The flags byte is the first of the VP8X payload.
+  if (header)
+    header[8] =
+      ((header[8] ?? 0) & ~(WEBP_EXIF_FLAG | WEBP_XMP_FLAG)) |
+      (exifKept ? WEBP_EXIF_FLAG : 0);
+  const body = concatBytes(kept);
+  const out = new Uint8Array(12 + body.length);
+  out.set(asciiBytes('RIFF'));
+  dataViewOf(out).setUint32(4, 4 + body.length, true);
+  out.set(asciiBytes('WEBP'), 8);
+  out.set(body, 12);
+  return out;
+}
+
+/**
+ * The image rebuilt from what renders: EXIF (location included), XMP and text
+ * are dropped, and an EXIF orientation is kept alone. `null` is a container
+ * that does not parse, never the input passed through.
+ */
+export function rasterWithoutMetadata(
+  bytes: Uint8Array,
+  mimeType: string
+): Uint8Array | null {
+  if (!matchesMagicBytes(bytes, mimeType)) return null;
+  return mimeType === 'image/png'
+    ? pngWithoutMetadata(bytes)
+    : webpWithoutMetadata(bytes);
 }

@@ -4,6 +4,7 @@ import backEndConfig, {
   DOCS_BOUNDARY,
   FRAMEWORK_BOUNDARY,
   importBoundaries,
+  productionDependenciesOnly,
 } from '../../apps/back-end/eslint.config.mjs';
 
 const BOUNDARIES = [
@@ -75,6 +76,7 @@ const config = [
     files: ['src/**/*.ts'],
     rules: {
       'import-x/no-nodejs-modules': 'error',
+      ...productionDependenciesOnly(),
       ...browserBoundaries(),
       'no-restricted-globals': [
         'error',
