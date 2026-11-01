@@ -285,7 +285,7 @@ describe('each code allows three guesses and nothing outlives it', () => {
       // resend wait has passed.
       await db
         .update(otpChallenges)
-        .set({ nextAllowedAt: new Date() })
+        .set({ nextAllowedAt: new Date(Date.now() - 1000) })
         .where(eq(otpChallenges.requester, requesterKey(owner.requester)));
       await sendKnown(surface, user, owner.cookie);
       expect(

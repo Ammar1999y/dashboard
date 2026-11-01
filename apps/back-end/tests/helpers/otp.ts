@@ -78,7 +78,9 @@ async function bindChallenge(
     sessionId,
     requester: requesterKey(requester),
     ...liveCode(code),
-    nextAllowedAt: new Date(),
+    // In the past: the column keeps hundredths and rounds, so "now" can land
+    // a few milliseconds ahead and refuse an immediate resend.
+    nextAllowedAt: new Date(Date.now() - 1000),
   });
 }
 

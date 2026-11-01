@@ -76,7 +76,7 @@ const LIGHT_STYLES: ThemeStyleProps = {
 
   'font-mono': `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace`,
 
-  radius: '0.625rem',
+  radius: '0.5rem',
   spacing: '0.25rem',
 
   'shadow-color': '0 0% 0%',

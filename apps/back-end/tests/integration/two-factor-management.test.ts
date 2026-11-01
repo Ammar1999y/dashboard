@@ -1262,6 +1262,10 @@ describe('password recovery against a second factor', () => {
         statement.finalize();
       }
     };
+    // The budget is a fixed window on the clock minute: a boundary between
+    // these calls resets the count and lets the refused call through.
+    const minuteLeft = 60_000 - (Date.now() % 60_000);
+    if (minuteLeft < 15_000) await Bun.sleep(minuteLeft + 50);
     const before = hashBudgetSpent();
 
     for (let replay = 0; replay < 2; replay++) {
@@ -1293,7 +1297,7 @@ describe('password recovery against a second factor', () => {
       .from(verifications)
       .where(eq(verifications.identifier, `recovery-attempts-${grant}`));
     expect(attempts?.value).toBe('0');
-  }, 30_000);
+  }, 45_000);
 });
 
 describe('an administrative contact change against a second factor', () => {
