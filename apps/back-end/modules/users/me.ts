@@ -91,6 +91,10 @@ export const changePasswordBinding = bind(changePassword, {
 
     const auditMeta = getAuditMeta(meta);
 
+    // First: the verify below commits its attempt, so a busy refusal of this
+    // hash after it would answer 503 with the verification already recorded.
+    const hashedPassword = await hashPassword(input.newPassword);
+
     // Argon2 stays outside the mutation transaction; the proof is consumed with
     // a compare-and-swap condition under the account row lock.
     let passwordProof: VerifiedPasswordProof;
@@ -139,8 +143,6 @@ export const changePasswordBinding = bind(changePassword, {
     } catch (error) {
       throw asCurrentPasswordIncorrect(error);
     }
-
-    const hashedPassword = await hashPassword(input.newPassword);
 
     await withTransaction(async (tx) => {
       // Liveness rechecked after hashing, so a concurrent suspension cannot

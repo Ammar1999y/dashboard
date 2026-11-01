@@ -19,8 +19,8 @@ import { presentsSessionToken } from '@/lib/auth/session/read';
 import { captchaRefused, verifyTurnstileRequest } from '@/lib/captcha';
 import { insufficientPermissions } from '@/lib/permissions/checker';
 import {
+  enforceIpRateLimit,
   enforceRateLimit,
-  ipIdentifier,
   userIdentifier,
 } from '@/lib/rate-limit';
 
@@ -159,11 +159,12 @@ export async function chargeRateLimit(
 ): Promise<void> {
   if (!options.rateLimit) throw new Error(`${key} declares no limiter.`);
   const { by, deferred: _deferred, ...limit } = options.rateLimit;
-  await enforceRateLimit({
-    ...limit,
-    identifier:
-      by === 'ip' ? ipIdentifier(headers) : userIdentifier(userOf(actor)),
-  });
+  if (by === 'ip') await enforceIpRateLimit({ ...limit, headers });
+  else
+    await enforceRateLimit({
+      ...limit,
+      identifier: userIdentifier(userOf(actor)),
+    });
 }
 
 function userOf(actor: Actor) {

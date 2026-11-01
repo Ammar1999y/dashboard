@@ -29,7 +29,7 @@ import {
   VISIBILITY_DISABLED_CODE,
 } from '@app/shared/error-codes';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { mediaMsg } from '@app/shared/messages/media';
+import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
 
 import { sortedIds } from './ids';
 
@@ -200,3 +200,7 @@ export const imageNotCompressible = (message: string): CustomError =>
     HTTP_STATUS.UNPROCESSABLE,
     IMAGE_NOT_COMPRESSIBLE_CODE
   );
+
+/** An image or SVG job past its admission queue. */
+export const processingBusy = (): CustomError =>
+  new CustomError(uploadMsg.processingBusy, HTTP_STATUS.SERVICE_UNAVAILABLE);

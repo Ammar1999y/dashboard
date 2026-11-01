@@ -11,7 +11,7 @@
 import { beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, like, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db, withTransaction } from '@/db';
@@ -23,6 +23,7 @@ import {
   twoFactorCredentials,
   twoFactorMethods,
   users,
+  verifications,
 } from '@/db/schema';
 import { symmetricEncrypt } from 'better-auth/crypto';
 
@@ -32,6 +33,8 @@ import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
 import { NAME_MAX } from '@app/shared/validation/constants';
 
 import { advancePasskeyCounter } from '@/lib/auth/passkey-assertion';
+import { MAX_PASSKEYS_PER_USER } from '@/lib/auth/path-policy';
+import { reauthGrantKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { generateUuidV7 } from '@/lib/id';
 
@@ -191,6 +194,44 @@ describe('registering a passkey', () => {
       cookie: signedIn.cookie,
     };
   }
+
+  test('refuses a passkey past the per-account cap, writing nothing', async () => {
+    const user = await seedUser();
+    // Rows only: a user with an enabled second factor would be challenged at
+    // sign-in, and the cap counts credentials whatever the method state.
+    await db.insert(passkeys).values(
+      Array.from({ length: MAX_PASSKEYS_PER_USER }, (_, n) => ({
+        userId: user.userId,
+        credentialID: `cap-${user.userId}-${n}`,
+        publicKey: Buffer.from('not-a-real-key').toString('base64'),
+        counter: 0,
+        deviceType: 'singleDevice',
+        backedUp: false,
+      }))
+    );
+
+    const { verified, credentialId } = await register(user, true);
+    expect(verified.status).toBe(HTTP_STATUS.CONFLICT);
+    const rows = await db
+      .select({ id: passkeys.id })
+      .from(passkeys)
+      .where(eq(passkeys.credentialID, credentialId));
+    expect(rows).toHaveLength(0);
+    // Refused before the grant was spent: it is still there to retry with.
+    const grants = await db
+      .select({ id: verifications.id })
+      .from(verifications)
+      .where(
+        and(
+          like(
+            verifications.identifier,
+            `${reauthGrantKey('two_factor_enrolment', '')}%`
+          ),
+          eq(verifications.value, user.userId)
+        )
+      );
+    expect(grants).toHaveLength(1);
+  });
 
   test('refuses inputs this schema could not store', async () => {
     // ⚠️ The plugin's own bodies are an unbounded `name` and a plain `string`

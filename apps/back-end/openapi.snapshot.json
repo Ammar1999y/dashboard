@@ -546,7 +546,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -797,7 +797,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body is absent, empty, not parseable, not sent as the declared media type, or exceeds 1048576 bytes without declaring its length; answered with a fixed message. The operation violates a business rule."
+            "description": "The request body is absent, empty, not parseable, not sent as the declared media type, or exceeds 65536 bytes without declaring its length; answered with a fixed message. The operation violates a business rule."
           },
           "403": {
             "content": {
@@ -813,7 +813,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request declares a body over 1048576 bytes, refused before it is read."
+            "description": "The request declares a body over 65536 bytes, refused before it is read."
           },
           "422": {
             "content": {
@@ -952,7 +952,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -1132,7 +1132,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -1657,7 +1657,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "429": {
             "content": {
@@ -2040,7 +2040,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -2209,7 +2209,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body is absent, empty, not parseable, not sent as the declared media type, or exceeds 1048576 bytes without declaring its length; answered with a fixed message. The operation violates a business rule."
+            "description": "The request body is absent, empty, not parseable, not sent as the declared media type, or exceeds 65536 bytes without declaring its length; answered with a fixed message. The operation violates a business rule."
           },
           "403": {
             "content": {
@@ -2225,7 +2225,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request declares a body over 1048576 bytes, refused before it is read."
+            "description": "The request declares a body over 65536 bytes, refused before it is read."
           },
           "422": {
             "content": {
@@ -2375,7 +2375,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor."
+            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor, or registering a passkey past the per-account cap."
           },
           "413": {
             "content": {
@@ -2383,7 +2383,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -2764,7 +2764,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -2926,7 +2926,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor."
+            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor, or registering a passkey past the per-account cap."
           },
           "413": {
             "content": {
@@ -2934,7 +2934,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -3114,7 +3114,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -3428,7 +3428,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -3722,7 +3722,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "429": {
             "content": {
@@ -3861,7 +3861,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "429": {
             "content": {
@@ -4120,7 +4120,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -4232,7 +4232,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "429": {
             "content": {
@@ -4362,7 +4362,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor."
+            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor, or registering a passkey past the per-account cap."
           },
           "413": {
             "content": {
@@ -4370,7 +4370,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -4502,7 +4502,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -4651,7 +4651,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -4781,7 +4781,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -5091,7 +5091,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -5264,7 +5264,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor."
+            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor, or registering a passkey past the per-account cap."
           },
           "413": {
             "content": {
@@ -5272,7 +5272,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -5425,7 +5425,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -5600,7 +5600,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -5750,7 +5750,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -5936,7 +5936,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -6086,7 +6086,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -6230,7 +6230,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor."
+            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor, or registering a passkey past the per-account cap."
           },
           "413": {
             "content": {
@@ -6238,7 +6238,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -6384,7 +6384,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor."
+            "description": "The request would leave the account in a state this application refuses — removing the only enrolled second factor, or registering a passkey past the per-account cap."
           },
           "413": {
             "content": {
@@ -6392,7 +6392,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -6523,7 +6523,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -6802,7 +6802,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -6944,7 +6944,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -7086,7 +7086,7 @@
                 "schema": { "$ref": "#/components/schemas/AuthProblem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses before the route runs."
+            "description": "The request body exceeds 65536 bytes, which the server refuses before the route runs."
           },
           "422": {
             "content": {
@@ -7223,7 +7223,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "429": {
             "content": {
@@ -7421,7 +7421,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -7539,7 +7539,7 @@
             }
           },
           {
-            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `displayName` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; operators: iLike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `sizeBytes` (number; operators: eq, ne, lt, lte, gt, gte, isBetween, isEmpty, isNotEmpty). `mimeType` (select; one of image/png|image/webp|image/svg+xml|application/pdf|application/vnd.openxmlformats-officedocument.wordprocessingml.document|application/vnd.openxmlformats-officedocument.spreadsheetml.sheet|application/msword|application/vnd.ms-excel; operators: eq, ne, isEmpty, isNotEmpty). `kind` (select; one of image|document; operators: eq, ne, isEmpty, isNotEmpty). `bucketType` (select; one of public|private; operators: eq, ne, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
+            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does; at most 3 of them in one request, with folded values at most 200 characters together, or the request is a 422. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `displayName` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; operators: iLike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `sizeBytes` (number; operators: eq, ne, lt, lte, gt, gte, isBetween, isEmpty, isNotEmpty). `mimeType` (select; one of image/png|image/webp|image/svg+xml|application/pdf|application/vnd.openxmlformats-officedocument.wordprocessingml.document|application/vnd.openxmlformats-officedocument.spreadsheetml.sheet|application/msword|application/vnd.ms-excel; operators: eq, ne, isEmpty, isNotEmpty). `kind` (select; one of image|document; operators: eq, ne, isEmpty, isNotEmpty). `bucketType` (select; one of public|private; operators: eq, ne, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
             "in": "query",
             "name": "filters",
             "required": false,
@@ -8451,7 +8451,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -8677,7 +8677,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -8855,7 +8855,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -9276,7 +9276,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -9726,7 +9726,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -10356,7 +10356,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -10920,7 +10920,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -11121,7 +11121,7 @@
             }
           },
           {
-            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `roleName` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `description` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `isActive` (boolean; operators: eq, ne, inArray, notInArray, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
+            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does; at most 3 of them in one request, with folded values at most 200 characters together, or the request is a 422. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `roleName` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `description` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `isActive` (boolean; operators: eq, ne, inArray, notInArray, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
             "in": "query",
             "name": "filters",
             "required": false,
@@ -11549,7 +11549,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -12165,7 +12165,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -12372,7 +12372,7 @@
             }
           },
           {
-            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `name` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `email` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `isActive` (boolean; operators: eq, ne, inArray, notInArray, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
+            "description": "JSON array of { id, value, variant, operator, filterId } objects, at most 20; `id` and `filterId` at most 64 characters, each value at most 512, and at most 20 values in one filter. An unknown id, or an operator the column's type does not accept, is a 422. The substring operators (`iLike`, `notILike`, `startsWith`, `endsWith`) match the folded text, as `search` does; at most 3 of them in one request, with folded values at most 200 characters together, or the request is a 422. For `iLike`, `startsWith` and `endsWith`, a value whose fold in the database keys nothing (characters newer than the server's Unicode version) matches no rows; `notILike` matches every row that does not contain it. Columns: `name` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `email` (text; `iLike`, `startsWith`, `endsWith` need 3+ characters once folded, including letters or digits the trigram index can key on; `notILike` needs only 3+ characters once folded; operators: iLike, notILike, startsWith, endsWith, eq, ne, isEmpty, isNotEmpty). `isActive` (boolean; operators: eq, ne, inArray, notInArray, isEmpty, isNotEmpty). `createdAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty). `updatedAt` (date; operators: eq, ne, lt, gt, lte, gte, isBetween, isEmpty, isNotEmpty).",
             "in": "query",
             "name": "filters",
             "required": false,
@@ -12840,7 +12840,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -12990,7 +12990,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -13173,7 +13173,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -13345,7 +13345,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -13485,7 +13485,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -13665,7 +13665,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -13833,7 +13833,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -14120,7 +14120,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -14845,7 +14845,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {
@@ -15026,7 +15026,7 @@
                 "schema": { "$ref": "#/components/schemas/Problem" }
               }
             },
-            "description": "The request body exceeds 1048576 bytes, which the server refuses without reading the rest."
+            "description": "The request body exceeds 65536 bytes, which the server refuses without reading the rest."
           },
           "422": {
             "content": {

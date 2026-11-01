@@ -58,7 +58,7 @@ import {
 } from '@/lib/otp/requester';
 import { invalidOrExpiredCode } from '@/lib/otp/throttle';
 import { otpGuessWasEvaluated } from '@/lib/otp/verify';
-import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
+import { enforceIpRateLimit } from '@/lib/rate-limit';
 import {
   activeUserWithContact,
   contactIdentifier,
@@ -157,9 +157,9 @@ export const resetPasswordBinding = bind(resetPassword, {
 
     // Prices the HIBP call and hash below apart from admission, so cheap
     // refusals cannot spend the expensive allowance. Per IP: no existence oracle.
-    await enforceRateLimit({
+    await enforceIpRateLimit({
       scope: 'forgot.reset.work.ip',
-      identifier: ipIdentifier(meta.headers),
+      headers: meta.headers,
       limit: RESET_HASH_BUDGET_PER_MINUTE,
       failClosed: true,
     });
@@ -384,9 +384,9 @@ export const completePasswordResetBinding = bind(completePasswordReset, {
 
     // The reset route's allowance, shared: an attempt that compared nothing is
     // refunded below, so without it one grant replays this hash for free.
-    await enforceRateLimit({
+    await enforceIpRateLimit({
       scope: 'forgot.reset.work.ip',
-      identifier: ipIdentifier(meta.headers),
+      headers: meta.headers,
       limit: RESET_HASH_BUDGET_PER_MINUTE,
       failClosed: true,
     });

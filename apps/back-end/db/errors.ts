@@ -99,9 +99,17 @@ export class ConnectionTimeoutError extends Error {
   }
 }
 
-/** A fault a retry after `DATABASE_RETRY_AFTER_S` normally clears, answered 503. */
+/**
+ * A fault a retry after `DATABASE_RETRY_AFTER_S` normally clears, answered 503.
+ * A statement timeout reaching here is a list-pool statement past its default
+ * (`db/index.ts`); a transaction with a deadline maps its own first.
+ */
 export function isDatabaseContention(e: unknown): boolean {
-  return isDeadlock(e) || e instanceof ConnectionTimeoutError;
+  return (
+    isDeadlock(e) ||
+    e instanceof ConnectionTimeoutError ||
+    isStatementTimeout(e)
+  );
 }
 
 export function getConstraintName(e: unknown): string {

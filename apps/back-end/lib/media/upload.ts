@@ -18,6 +18,7 @@ import { CustomError } from '@app/shared/error-class';
 import { sanitizeFilename } from '@app/shared/filename';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { isAnimatedRaster } from '@app/shared/images/raster-bytes';
+import { MSG_TOO_MANY_REQUESTS } from '@app/shared/messages/common';
 import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
 import {
   MAX_DOCUMENT_SIZE_MB,
@@ -27,8 +28,9 @@ import {
 } from '@app/shared/validation/constants';
 import { normalizeMimeType } from '@app/shared/validation/media-types';
 
-import { MAX_REQUEST_BODY_BYTES } from '@/lib/http/request';
-import { serverFault } from '@/lib/http/response';
+import { createAdmission } from '@/lib/admission';
+import { MAX_REQUEST_BODY_BYTES, readWithin } from '@/lib/http/request';
+import { serverFault, serviceBusy } from '@/lib/http/response';
 import { generateUuidV7 } from '@/lib/id';
 import {
   headObjectInR2,
@@ -507,6 +509,65 @@ async function storeUpload(params: {
   });
 }
 
+/**
+ * Uploads in this process from the body read to the stored row. Each body is
+ * buffered whole and held through the R2 write, at about 4× its size in RSS
+ * (37–40 MiB per 10 MiB document measured), and the budgets above bound one
+ * account, not the process: twenty accounts with six documents each held
+ * about 1.2 GiB.
+ */
+export const UPLOAD_SLOTS = 4;
+export const UPLOAD_QUEUE = 8;
+const UPLOAD_MAX_WAIT_MS = 10_000;
+const UPLOAD_BUSY_RETRY_AFTER_S = 5;
+/**
+ * How long a slot waits for its body: a client deadline, just under the route's
+ * ceiling (`MEDIA_ROUTE_TIMEOUT_SECONDS`), so a slow uploader cannot keep a
+ * slot past it with a trickle that resets the idle timer. A 10 MiB document
+ * needs about 0.8 Mbit/s of upload to make it; Cloudflare's full request
+ * buffering (`reports/coolify-deployment.md` §5) takes the client's link out of it.
+ */
+const UPLOAD_BODY_DEADLINE_MS = 100_000;
+
+const acquireUploadSlot = createAdmission({
+  slots: UPLOAD_SLOTS,
+  queueLimit: UPLOAD_QUEUE,
+  maxWaitMs: UPLOAD_MAX_WAIT_MS,
+  refusal: () => serviceBusy(UPLOAD_BUSY_RETRY_AFTER_S),
+});
+
+/**
+ * One account's uploads in the slot or its queue at once. The front end sends
+ * two per tab; past that one account could hold every place, and the encoder
+ * behind them, while others got the busy 503.
+ */
+export const UPLOADS_PER_ACCOUNT = 2;
+const UPLOADS_PER_ACCOUNT_RETRY_AFTER_S = 5;
+const uploadsInFlight = new Map<EntityID, number>();
+
+function claimAccountUpload(userId: EntityID): () => void {
+  const held = uploadsInFlight.get(userId) ?? 0;
+  if (held >= UPLOADS_PER_ACCOUNT) {
+    const refusal = new CustomError(
+      MSG_TOO_MANY_REQUESTS,
+      HTTP_STATUS.TOO_MANY_REQUESTS
+    );
+    refusal.responseHeaders = {
+      'Retry-After': String(UPLOADS_PER_ACCOUNT_RETRY_AFTER_S),
+    };
+    throw refusal;
+  }
+  uploadsInFlight.set(userId, held + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (uploadsInFlight.get(userId) ?? 1) - 1;
+    if (left > 0) uploadsInFlight.set(userId, left);
+    else uploadsInFlight.delete(userId);
+  };
+}
+
 const unmetered = (): never => {
   throw new Error('An upload route must pass its admission limiter.');
 };
@@ -515,7 +576,8 @@ const unmetered = (): never => {
  * Every upload route's path from its own permission check to the stored row.
  * The publish grant a public target needs comes first, so a caller without it
  * is refused before `admit`, the route's admission limiter, charges it; the
- * charges come before `readFormData()`, which buffers the whole body.
+ * charges come before `readFormData()`, which buffers the whole body, and so
+ * does the process-wide slot, so a refused request spent no slot time.
  */
 export async function acceptUpload(
   ctx: Pick<HandlerInput, 'headers' | 'readFormData'>,
@@ -528,9 +590,24 @@ export async function acceptUpload(
   await admit();
   await chargeUploadBodyBudget(actor.userId, ctx.headers);
 
-  const entry = takeSingleFile(await ctx.readFormData(), target.field);
-  const admitted = await admitUpload(entry, target);
-  await chargeUploadBudget(actor.userId, admitted);
+  const releaseAccount = claimAccountUpload(actor.userId);
+  try {
+    const release = await acquireUploadSlot();
+    try {
+      const entry = takeSingleFile(
+        await readWithin(ctx.readFormData(), UPLOAD_BODY_DEADLINE_MS, () =>
+          serviceBusy(UPLOAD_BUSY_RETRY_AFTER_S)
+        ),
+        target.field
+      );
+      const admitted = await admitUpload(entry, target);
+      await chargeUploadBudget(actor.userId, admitted);
 
-  return storeUpload({ admitted, target, actor });
+      return await storeUpload({ admitted, target, actor });
+    } finally {
+      release();
+    }
+  } finally {
+    releaseAccount();
+  }
 }

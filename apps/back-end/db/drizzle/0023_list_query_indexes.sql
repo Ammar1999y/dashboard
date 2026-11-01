@@ -1,0 +1,3 @@
+-- Every statement drizzle-kit generated for this snapshot is in
+-- db/migrations/ (043 to 045): index builds and drops run concurrently, which
+-- this file's transaction refuses.

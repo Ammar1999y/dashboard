@@ -1,8 +1,9 @@
 import type { BucketType } from '@app/shared/validation/enums';
 
-import { and, eq, gt, inArray, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 
 import { db } from '@/db';
+import { inList } from '@/db/arrays';
 import { files } from '@/db/schema';
 
 import {
@@ -81,7 +82,7 @@ async function listBucket(
           transition: files.transition,
         })
         .from(files)
-        .where(inArray(files.r2Key, keys));
+        .where(inList(files.r2Key, keys));
       const byKey = new Map(rows.map((row) => [row.r2Key, row]));
       for (const key of keys) {
         const row = byKey.get(key);

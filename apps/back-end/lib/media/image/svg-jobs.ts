@@ -9,11 +9,12 @@ import * as z from 'zod';
 
 import { SVG_REFUSALS, uploadMsg } from '@app/shared/messages/media';
 
+import { createAdmission } from '@/lib/admission';
 import { serverFault } from '@/lib/http/response';
 
 import { logLine } from '@/utils/log';
 
-import { createAdmission } from './admission';
+import { processingBusy } from '../errors';
 import { SVG_WORKER_READY } from './svg-protocol';
 
 const rejectionReason = z.custom<SvgRejectionReason>(
@@ -85,6 +86,7 @@ export function createSvgWorker(options: SvgWorkerOptions) {
   const acquire = createAdmission({
     slots: 1,
     queueLimit: options.queueLimit,
+    refusal: processingBusy,
   });
   const state: { thread: Thread | null; nextId: number } = {
     thread: null,

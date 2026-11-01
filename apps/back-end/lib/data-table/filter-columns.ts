@@ -48,7 +48,13 @@ import {
   safeNumber,
   searchAnchorOf,
 } from '@app/shared/data-table/filter-rules';
+import {
+  MAX_SEARCH_FILTERS,
+  MAX_SEARCH_LENGTH,
+  searchTermLength,
+} from '@app/shared/data-table/parsers';
 import { MSG_OR_SEARCH_UNINDEXED } from '@app/shared/messages/data-table';
+import { searchFold } from '@app/shared/search-fold';
 
 /**
  * ⚠️ TEXT COLUMNS ONLY — see `isStringLike`. A bare boolean expression rather
@@ -268,6 +274,7 @@ export function filterColumns<T extends Table>({
   const conditions: SQL[] = [];
   let guardedSearch = false;
   let unindexed = false;
+  const searchSpend = { filters: 0, characters: 0 };
   for (const filter of filters) {
     const spec = requireFilterSpec(specs, filter.id);
 
@@ -282,6 +289,18 @@ export function filterColumns<T extends Table>({
       spec
     );
     if (decision === 'skip') continue;
+
+    if (isSearchOperator(filter.operator)) {
+      searchSpend.filters += 1;
+      searchSpend.characters += searchTermLength(
+        searchFold(filter.value as string)
+      );
+      if (
+        searchSpend.filters > MAX_SEARCH_FILTERS ||
+        searchSpend.characters > MAX_SEARCH_LENGTH
+      )
+        invalidFilter();
+    }
 
     const indexedSearch =
       isSearchOperator(filter.operator) && !isScanOnlyOperator(filter.operator);

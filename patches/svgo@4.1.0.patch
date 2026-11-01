@@ -1,0 +1,35 @@
+diff --git a/lib/path.js b/lib/path.js
+index 80dacbff5b4210fd4d4192a6077a282e1986d5b8..351190f09cdded7c6d58219865174cb86da41fd8 100644
+--- a/lib/path.js
++++ b/lib/path.js
+@@ -313,6 +313,9 @@ export const stringifyPathData = ({
+ 
+   let result = '';
+   let prev = { ...pathData[0] };
++  // Copied once per merged run, then appended to: re-spreading the whole run
++  // on every command made long paths quadratic.
++  let prevArgsOwned = false;
+ 
+   // match leading moveto with following lineto
+   if (pathData[1].command === 'L') {
+@@ -331,7 +334,11 @@ export const stringifyPathData = ({
+       (prev.command === 'M' && command === 'L') ||
+       (prev.command === 'm' && command === 'l')
+     ) {
+-      prev.args = [...prev.args, ...args];
++      if (!prevArgsOwned) {
++        prev.args = [...prev.args];
++        prevArgsOwned = true;
++      }
++      for (const arg of args) prev.args.push(arg);
+       if (i === pathData.length - 1) {
+         result +=
+           prev.command +
+@@ -358,6 +365,7 @@ export const stringifyPathData = ({
+           stringifyArgs(command, args, precision, disableSpaceAfterFlags);
+       } else {
+         prev = { command, args };
++        prevArgsOwned = false;
+       }
+     }
+   }

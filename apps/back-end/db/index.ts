@@ -74,14 +74,29 @@ export const withTransaction = transactionRunner(client);
  * Read-only for the session: unprepared, `bun:sql` types a parameter from its
  * JavaScript value, so the `jsonb` column type in `./schema.ts` would store an
  * object as `[object Object]`. A write here fails instead.
+ *
+ * The one pool with a default `statement_timeout`: its statements' cost follows
+ * the caller's filters and page, and a client that goes away does not stop
+ * them. Measured: realistic lists p99 about 0.2 s, the deepest sorted page at
+ * 200k users 1.2 s. No parallel workers: at these sizes they were slower and
+ * each statement took three backends.
  */
+export const DATA_TABLE_STATEMENT_TIMEOUT_MS = 5000;
 const dataTableClient = new SQL(DATABASE_URL, {
   max: DATA_TABLE_POOL_CONNECTIONS,
   prepare: false,
-  connection: { default_transaction_read_only: 'on' },
+  connection: {
+    default_transaction_read_only: 'on',
+    statement_timeout: String(DATA_TABLE_STATEMENT_TIMEOUT_MS),
+    max_parallel_workers_per_gather: '0',
+  },
 });
 
-/** The rows and count reads of a `parseDataTableParams` list, and nothing else. */
+/**
+ * Read-only statements whose cost the caller shapes: a `parseDataTableParams`
+ * list's rows and count, and the media aggregates beside them (folder figures,
+ * library totals). Nothing that writes or runs in a transaction.
+ */
 export const dataTableDb = drizzle({ client: dataTableClient });
 
 /**

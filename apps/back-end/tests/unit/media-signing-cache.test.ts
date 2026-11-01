@@ -6,6 +6,7 @@ import { afterEach, expect, spyOn, test } from 'bun:test';
 
 import {
   presignInWindow,
+  SIGNED_LINKS_MAX,
   SIGNING_WINDOW_S,
   signingWindow,
 } from '@/lib/media/signing';
@@ -79,4 +80,18 @@ test('a failed signature is not kept', async () => {
   const url = await presignInWindow({ ...link('d'), ...window });
 
   expect(url).toStartWith('signed:');
+});
+
+test('a full cache drops only its oldest link, so every other caller keeps theirs', async () => {
+  const window = signingWindow(start + 7 * WINDOW_MS);
+  for (let index = 0; index <= SIGNED_LINKS_MAX; index++)
+    await presignInWindow({ ...link(`full-${index}`), ...window });
+  expect(signatures()).toBe(SIGNED_LINKS_MAX + 1);
+
+  await presignInWindow({ ...link('full-1'), ...window });
+  await presignInWindow({ ...link(`full-${SIGNED_LINKS_MAX}`), ...window });
+  expect(signatures()).toBe(SIGNED_LINKS_MAX + 1);
+
+  await presignInWindow({ ...link('full-0'), ...window });
+  expect(signatures()).toBe(SIGNED_LINKS_MAX + 2);
 });

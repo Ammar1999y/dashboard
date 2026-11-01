@@ -1,3 +1,10 @@
+/**
+ * How much of the name is scanned. The upload field is caller-controlled and
+ * the passes below are linear but heavy (NFC, a spread per code point): an
+ * 11 MiB name held the event loop for half a second.
+ */
+const MAX_SCANNED_LENGTH = 1024;
+
 /** Whitespace the allow-list would delete, joining the words on either side. */
 const SEPARATORS = /[\t\n\v\f\r\u{85}\p{Zl}\p{Zp}]/gu;
 
@@ -16,7 +23,9 @@ export function sanitizeFilename(filename: string, maxLength = 50): string {
   const lastDot = filename.lastIndexOf('.');
   const nameWithoutExt = lastDot > 0 ? filename.slice(0, lastDot) : filename;
 
+  // A pair split by the cut leaves a lone surrogate, which the allow-list drops.
   const cleaned = nameWithoutExt
+    .slice(0, MAX_SCANNED_LENGTH)
     .replaceAll(SEPARATORS, ' ')
     .replaceAll(
       /[^\p{L}\p{M}\p{N}\p{Zs}_\-()]|\p{Default_Ignorable_Code_Point}/gu,

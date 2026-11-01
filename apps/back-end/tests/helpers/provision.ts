@@ -52,7 +52,10 @@ const MIGRATION_RUNNER_FILES = [
  */
 const CONNECTION_RESERVE = 25;
 
-/** A leaked database older than this is reclaimed at the next run's start. */
+/**
+ * A database whose run has not renewed its lease for this long is reclaimed at
+ * the next run's start.
+ */
 const STALE_AFTER_MS = 2 * 60 * 60 * 1000;
 
 /**
@@ -176,12 +179,17 @@ async function databaseExists(client: SQL, name: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/** The one `SQL` method the DDL steps use, so a test can stand in for it. */
+interface DdlClient {
+  unsafe: (query: string) => PromiseLike<unknown>;
+}
+
 /**
  * `WITH (FORCE)` because a worker that crashed mid-query leaves its backend
  * behind, and a plain `DROP DATABASE` then fails with "is being accessed by other
  * users" — turning cleanup into the thing that needs cleanup.
  */
-async function dropDatabase(client: SQL, name: string): Promise<void> {
+async function dropDatabase(client: DdlClient, name: string): Promise<void> {
   await client.unsafe(
     `drop database if exists ${quoteIdentifier(name)} with (force)`
   );
@@ -317,9 +325,14 @@ export async function ensureTemplate(client: SQL): Promise<void> {
  * Concurrent clones of one template are fine — the restriction is on connections
  * to the template, not on readers of it — and doing them in parallel is what
  * keeps provisioning at roughly one clone's latency instead of N.
+ *
+ * All or nothing: when one clone fails, the ones that succeeded are dropped
+ * once every attempt has settled, before the failure is thrown. The caller
+ * never learns their names, and a rejection that arrived while siblings were
+ * still cloning would leak whichever finished after it.
  */
 export async function createWorkerDatabases(
-  client: SQL,
+  client: DdlClient,
   runToken: string,
   workers: number
 ): Promise<string[]> {
@@ -327,20 +340,34 @@ export async function createWorkerDatabases(
     workerDatabaseName(runToken, index + 1)
   );
 
-  await Promise.all(
+  const results = await Promise.allSettled(
     names.map((name) =>
       client.unsafe(
         `create database ${quoteIdentifier(name)} template ${quoteIdentifier(TEMPLATE_DATABASE)}`
       )
     )
   );
+  const failures = results.flatMap((result) =>
+    result.status === 'rejected' ? [result.reason] : []
+  );
+  if (failures.length === 0) return names;
 
-  return names;
+  const created = names.filter(
+    (_, index) => results[index]?.status === 'fulfilled'
+  );
+  const leaked = await dropWorkerDatabases(client, created);
+  throw new AggregateError(
+    failures,
+    `${failures.length} of ${workers} worker database clone(s) failed` +
+      (leaked.length > 0
+        ? `; ${leaked.join(', ')} would not drop, \`bun run test:db:reset\` clears them`
+        : '')
+  );
 }
 
 /** Best-effort teardown: a name that will not drop must not fail the run. */
 export async function dropWorkerDatabases(
-  client: SQL,
+  client: DdlClient,
   names: readonly string[]
 ): Promise<string[]> {
   const failed: string[] = [];
@@ -356,28 +383,83 @@ export async function dropWorkerDatabases(
   return failed;
 }
 
+const LEASE_PREFIX = 'harness-lease:';
+
+/** Several renewals fit in `STALE_AFTER_MS`, so one missed beat reclaims nothing. */
+export const LEASE_RENEW_MS = STALE_AFTER_MS / 12;
+
+/**
+ * The database comment a run renews while it holds its databases.
+ *
+ * A comment, not a row: the admin connection sets it without opening a
+ * connection to each worker database, and the reclaimer reads it from
+ * `pg_database` the same way.
+ */
+export function leaseComment(nowMs: number): string {
+  if (!Number.isSafeInteger(nowMs) || nowMs <= 0)
+    throw new Error(`refusing ${nowMs} as a lease time`);
+  return `${LEASE_PREFIX}${nowMs}`;
+}
+
+/**
+ * How long the run that owns `name` has shown no sign of life: since its last
+ * lease renewal, or since its creation when it has never renewed one. `null`
+ * means "do not reclaim", for the reason `harnessDatabaseAgeMs` gives, and for
+ * a lease from the future (another machine's clock).
+ */
+export function harnessDatabaseIdleMs(
+  name: string,
+  comment: string | null,
+  nowMs: number
+): number | null {
+  const age = harnessDatabaseAgeMs(name, nowMs);
+  if (age === null) return null;
+  const renewedAt = comment?.startsWith(LEASE_PREFIX)
+    ? Number(comment.slice(LEASE_PREFIX.length))
+    : NaN;
+  if (!Number.isSafeInteger(renewedAt) || renewedAt <= 0) return age;
+  const idle = nowMs - renewedAt;
+  return idle >= 0 ? idle : null;
+}
+
+/** Marks `names` as held by a live run as of `nowMs`. */
+export async function renewLeases(
+  client: DdlClient,
+  names: readonly string[],
+  nowMs: number
+): Promise<void> {
+  const comment = leaseComment(nowMs);
+  await Promise.all(
+    names.map((name) =>
+      client.unsafe(
+        `comment on database ${quoteIdentifier(name)} is '${comment}'`
+      )
+    )
+  );
+}
+
 /**
  * Drops harness databases a crashed run left behind.
  *
- * Reclaim is by NAME, not by connecting to each candidate: the run token carries
- * its own creation time, so an abandoned database is identifiable without a
- * round trip and without a liveness check on a pid that may have been reused.
- * The template is exempt — reusing it is the point of it.
+ * Reclaim is by NAME and lease, not by connecting to each candidate or asking
+ * `pg_stat_activity`: a live run holds no connection between two configuration
+ * rows, and an orphaned worker keeps one open after its run is gone. The
+ * template is exempt — reusing it is the point of it.
  */
 export async function reclaimStale(
   client: SQL,
   nowMs: number
 ): Promise<string[]> {
   const rows =
-    await client`select datname from pg_database where datname like ${`${HARNESS_PREFIX}%${HARNESS_SUFFIX}`}`;
+    await client`select datname, shobj_description(oid, 'pg_database') as lease from pg_database where datname like ${`${HARNESS_PREFIX}%${HARNESS_SUFFIX}`}`;
   const reclaimed: string[] = [];
 
-  for (const row of rows as { datname: string }[]) {
+  for (const row of rows as { datname: string; lease: string | null }[]) {
     const name = row.datname;
     if (name === TEMPLATE_DATABASE || !isHarnessDatabase(name)) continue;
 
-    const age = harnessDatabaseAgeMs(name, nowMs);
-    if (age === null || age < STALE_AFTER_MS) continue;
+    const idle = harnessDatabaseIdleMs(name, row.lease, nowMs);
+    if (idle === null || idle < STALE_AFTER_MS) continue;
 
     try {
       await dropDatabase(client, name);

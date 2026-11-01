@@ -1,6 +1,6 @@
 import type { HandlerRequestMeta } from './contract';
 
-import { enforceRateLimit, ipIdentifier } from '@/lib/rate-limit';
+import { enforceIpRateLimit } from '@/lib/rate-limit';
 
 // Generous enough that a shared NAT egress is not punished, tight enough to cap
 // unauthenticated abuse of the session layer.
@@ -73,9 +73,9 @@ export function enforcePreAuthIpLimit(
   ctx: Pick<HandlerRequestMeta, 'apiPath' | 'headers'>,
   options: PreAuthLimitOptions = {}
 ): Promise<void> {
-  return enforceRateLimit({
+  return enforceIpRateLimit({
     scope: options.scope ?? preAuthScope(ctx.apiPath),
-    identifier: ipIdentifier(ctx.headers),
+    headers: ctx.headers,
     limit: options.limit ?? PRE_AUTH_LIMIT,
     window: PRE_AUTH_WINDOW_S,
     failClosed: true,

@@ -10,9 +10,10 @@ import type { Executor, Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { BetterAuthPlugin } from 'better-auth';
 
-import { and, desc, eq, gt } from 'drizzle-orm';
+import { and, asc, desc, eq, gt } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
+import { inList } from '@/db/arrays';
 import { trustedDevices } from '@/db/schema';
 import { createHMAC } from '@better-auth/utils/hmac';
 import { expireCookie } from 'better-auth/cookies';
@@ -44,6 +45,8 @@ const TRUST_COOKIE_NAME = 'trust_device';
 
 /** Refreshed on each use, so an active device stays trusted and an idle one lapses. */
 const TRUST_DEVICE_MAX_AGE_S = 30 * 24 * 60 * 60;
+/** Live trusted devices per account; each grant past it evicts the least used. */
+export const MAX_TRUSTED_DEVICES = 20;
 
 const IDENTIFIER_BYTES = 24;
 
@@ -205,6 +208,23 @@ async function grantDeviceTrust(
           )
           .returning({ id: trustedDevices.id })
       : [];
+    // Under the user lock, so concurrent grants cannot each see room. The
+    // least recently used goes; that device asks for its second factor again.
+    const live = await tx
+      .select({ id: trustedDevices.id })
+      .from(trustedDevices)
+      .where(
+        and(
+          eq(trustedDevices.userId, userId),
+          gt(trustedDevices.expiresAt, new Date())
+        )
+      )
+      .orderBy(asc(trustedDevices.lastUsedAt), asc(trustedDevices.id));
+    const evicted = live
+      .slice(0, Math.max(0, live.length - MAX_TRUSTED_DEVICES + 1))
+      .map((row) => row.id);
+    if (evicted.length > 0)
+      await tx.delete(trustedDevices).where(inList(trustedDevices.id, evicted));
     const [device] = await tx
       .insert(trustedDevices)
       .values({
@@ -226,6 +246,7 @@ async function grantDeviceTrust(
       newData: {
         deviceTrusted: true,
         ...(replaced && { replacedDeviceId: replaced.id }),
+        ...(evicted.length > 0 && { evictedDeviceIds: evicted }),
       },
       meta,
     });
@@ -251,7 +272,8 @@ async function listTrustedDevices(userId: EntityID) {
         gt(trustedDevices.expiresAt, new Date())
       )
     )
-    .orderBy(desc(trustedDevices.lastUsedAt));
+    .orderBy(desc(trustedDevices.lastUsedAt))
+    .limit(MAX_TRUSTED_DEVICES);
 }
 
 async function revokeTrustedDevice(

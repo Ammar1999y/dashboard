@@ -166,6 +166,16 @@ export function serverFault(message: string, cause: unknown): CustomError {
   return failure;
 }
 
+/** A refusal to start work the process has no capacity for now; retryable. */
+export function serviceBusy(retryAfterSeconds: number): CustomError {
+  const busy = new CustomError(
+    MSG_SERVICE_UNAVAILABLE,
+    HTTP_STATUS.SERVICE_UNAVAILABLE
+  );
+  busy.responseHeaders = { 'Retry-After': String(retryAfterSeconds) };
+  return busy;
+}
+
 export function notFoundError(): CustomError {
   return new CustomError(MSG_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 }

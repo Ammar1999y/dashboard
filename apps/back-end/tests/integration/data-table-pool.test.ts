@@ -11,10 +11,17 @@ import type { SignedInSession } from '../helpers/session';
 import { sql } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { dataTableDb, db } from '@/db';
-import { DATA_TABLE_POOL_CONNECTIONS, MAX_POOL_CONNECTIONS } from '@/db/limits';
+import { DATA_TABLE_STATEMENT_TIMEOUT_MS, dataTableDb, db } from '@/db';
+import { isStatementTimeout } from '@/db/errors';
+import {
+  DATA_TABLE_POOL_CONNECTIONS,
+  DATABASE_RETRY_AFTER_S,
+  MAX_POOL_CONNECTIONS,
+} from '@/db/limits';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
+
+import { handleApiError } from '@/lib/http/response';
 
 import { resetTables } from '../helpers/database';
 import { authedRequest, signedInUser } from '../helpers/session';
@@ -102,4 +109,43 @@ describe('data-table lists', () => {
       cause: { errno: '25006' },
     });
   });
+});
+
+describe('the list pool bounds what a caller-shaped statement can cost', () => {
+  test('every connection carries the statement timeout and no parallel workers', async () => {
+    type Settings = { timeout: string; workers: string; pid: number };
+    const probe = sql`select current_setting('statement_timeout') as timeout,
+      current_setting('max_parallel_workers_per_gather') as workers,
+      pg_backend_pid() as pid from pg_sleep(0.1)`;
+    const perConnection = await Promise.all(
+      Array.from({ length: DATA_TABLE_POOL_CONNECTIONS }, () =>
+        dataTableDb.execute<Settings>(probe)
+      )
+    );
+    const rows = perConnection.flat();
+    expect(new Set(rows.map((row) => row.pid)).size).toBe(
+      DATA_TABLE_POOL_CONNECTIONS
+    );
+    for (const row of rows) {
+      expect(row.timeout).toBe(`${DATA_TABLE_STATEMENT_TIMEOUT_MS / 1000}s`);
+      expect(row.workers).toBe('0');
+    }
+  });
+
+  test('a statement past the timeout is cancelled and answered as a retryable 503', async () => {
+    const cancelled = await dataTableDb
+      .execute(
+        sql`select pg_sleep(${DATA_TABLE_STATEMENT_TIMEOUT_MS / 1000 + 1})`
+      )
+      .then(
+        () => null,
+        (error: unknown) => error
+      );
+    expect(isStatementTimeout(cancelled)).toBe(true);
+    const answer = handleApiError(cancelled);
+    expect(answer.status).toBe(HTTP_STATUS.SERVICE_UNAVAILABLE);
+    expect(answer.headers?.['Retry-After']).toBe(
+      String(DATABASE_RETRY_AFTER_S)
+    );
+  }, 15_000);
 });

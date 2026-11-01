@@ -19,9 +19,10 @@ import type {
 import type { EntityID } from '@app/shared/types';
 import type { BucketType } from '@app/shared/validation/enums';
 
-import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
+import { anyUuid, inList } from '@/db/arrays';
 import { isForeignKeyViolation, isLockNotAvailable } from '@/db/errors';
 import { files, folders } from '@/db/schema';
 import * as z from 'zod';
@@ -54,7 +55,7 @@ import {
   lockTree,
   prepareFolderMove,
 } from './folders';
-import { anyUuid, distinctIds, idRowSchema, sortedIds } from './ids';
+import { distinctIds, idRowSchema, sortedIds } from './ids';
 import { finishDeleting } from './lifecycle';
 import { usageLabels, usedIds } from './usages';
 
@@ -176,7 +177,7 @@ export async function moveSelection(
           : await tx
               .update(folders)
               .set({ parentId: to })
-              .where(inArray(folders.id, selection.folderIds))
+              .where(inList(folders.id, selection.folderIds))
               .returning({ updatedAt: folders.updatedAt });
       const writtenFiles =
         to === null || lockedFiles.length === 0
@@ -184,7 +185,7 @@ export async function moveSelection(
           : await tx
               .update(files)
               .set(filedInto(to))
-              .where(inArray(files.id, ids(lockedFiles)))
+              .where(inList(files.id, ids(lockedFiles)))
               .returning({ updatedAt: files.updatedAt });
       const [written] = [...writtenFolders, ...writtenFiles];
       if (!written) throw new Error('moveSelection wrote no row');
@@ -344,7 +345,7 @@ async function surveyDelete(
       : await executor
           .select(SURVEY_FOLDER_COLUMNS)
           .from(folders)
-          .where(inArray(folders.id, [...folderIds]));
+          .where(inList(folders.id, folderIds));
   const selectedFiles =
     fileIds.length === 0
       ? []
@@ -357,7 +358,7 @@ async function surveyDelete(
             governed: sql<boolean>`(${mediaGoverned()} or ${files.status} = 'deleting')`,
           })
           .from(files)
-          .where(inArray(files.id, [...fileIds]));
+          .where(inList(files.id, fileIds));
 
   const roots = selectedFolders.map((folder) => folder.id);
   const below =
@@ -370,7 +371,7 @@ async function surveyDelete(
       : await executor
           .select(SURVEY_FOLDER_COLUMNS)
           .from(folders)
-          .where(inArray(folders.id, below));
+          .where(inList(folders.id, below));
   const occupied =
     !recursive && roots.length > 0
       ? await occupiedFolders(executor, roots)
@@ -385,7 +386,7 @@ async function surveyDelete(
           .from(files)
           .where(
             and(
-              inArray(files.folderId, tree),
+              inList(files.folderId, tree),
               recursive
                 ? ne(files.status, 'deleting')
                 : eq(files.status, 'pending')
@@ -523,7 +524,7 @@ async function lockFiles(tx: Tx, fileIds: readonly EntityID[]): Promise<void> {
   await tx
     .select({ id: files.id })
     .from(files)
-    .where(inArray(files.id, [...fileIds]))
+    .where(inList(files.id, fileIds))
     .orderBy(asc(files.id))
     .for('update');
 }
@@ -564,7 +565,7 @@ export async function deleteSelection(
         await tx
           .select({ id: folders.id })
           .from(folders)
-          .where(inArray(folders.id, folderIds))
+          .where(inList(folders.id, folderIds))
           .orderBy(asc(folders.id))
           .for('update');
 
@@ -582,7 +583,7 @@ export async function deleteSelection(
           await tx
             .select({ id: files.id })
             .from(files)
-            .where(inArray(files.id, newcomers))
+            .where(inList(files.id, newcomers))
             .orderBy(asc(files.id))
             .for('update', { noWait: true });
         } catch (error) {
@@ -602,7 +603,7 @@ export async function deleteSelection(
           marked = await tx
             .update(files)
             .set({ status: 'deleting', folderId: null })
-            .where(inArray(files.id, doomed.ids))
+            .where(inList(files.id, doomed.ids))
             .returning({
               id: files.id,
               r2Key: files.r2Key,
@@ -623,10 +624,10 @@ export async function deleteSelection(
           .update(files)
           .set({ folderId: null })
           .where(
-            and(inArray(files.folderId, treeIds), eq(files.status, 'deleting'))
+            and(inList(files.folderId, treeIds), eq(files.status, 'deleting'))
           );
         // One statement: `folders.parent_id` is NO ACTION, checked at its end.
-        await tx.delete(folders).where(inArray(folders.id, treeIds));
+        await tx.delete(folders).where(inList(folders.id, treeIds));
       }
 
       await auditManyAs(tx, actor, [

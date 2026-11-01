@@ -2,9 +2,10 @@ import type { Executor } from '@/db';
 import type { ActorPermissions } from '@app/shared/permissions/scope';
 import type { EntityID } from '@app/shared/types';
 
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
+import { inList } from '@/db/arrays';
 import { roles, sessions, users } from '@/db/schema';
 
 import { listUserSessions, revokeUserSessions } from '@app/shared/api/users';
@@ -184,7 +185,7 @@ export const revokeUserSessionsBinding = bind(revokeUserSessions, {
           // The acting session is always preserved: "revoke all except
           // current" must not log the operator out mid-remediation.
           currentSessionId ? ne(sessions.id, currentSessionId) : undefined,
-          revokeAll ? undefined : inArray(sessions.id, idsToDelete)
+          revokeAll ? undefined : inList(sessions.id, idsToDelete)
         )
       );
 

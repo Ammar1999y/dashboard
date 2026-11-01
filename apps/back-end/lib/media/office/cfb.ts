@@ -287,7 +287,9 @@ function readStream(
   limit: number
 ): Uint8Array | null {
   const { layout, fat } = parsed;
-  const size = Math.min(entry.size, limit);
+  // No stream holds more than the file: the claimed size allocates before the
+  // chain proves it, and a 2 KiB file claiming 4 GiB allocated 4 GiB.
+  const size = Math.min(entry.size, limit, layout.bytes.length);
   const out = new Uint8Array(size);
   if (size === 0) return out;
 

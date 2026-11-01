@@ -12,6 +12,8 @@ import {
 } from '@app/shared/data-table/filterable-columns';
 import {
   isTrigramIndexable,
+  MAX_SEARCH_FILTERS,
+  MAX_SEARCH_LENGTH,
   parseSearchParams,
 } from '@app/shared/data-table/parsers';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -692,5 +694,53 @@ describe('an OR cannot pair a guarded search with an unindexed filter', () => {
         specs: USERS_FILTER_COLUMNS,
       })
     ).not.toThrow();
+  });
+});
+
+describe('search-operator filters are bounded per request, not only per filter', () => {
+  const searches = (values: string[], operator: 'iLike' | 'notILike') =>
+    filterColumns({
+      table: users,
+      filters: values.map((value, index) => ({
+        filterId: `f${index}`,
+        id: index % 2 === 0 ? 'name' : 'email',
+        value,
+        operator,
+        variant: 'text',
+      })),
+      joinOperator: 'and',
+      specs: {
+        name: { type: 'text', allowScanOnly: true },
+        email: { type: 'text', allowScanOnly: true },
+      },
+    });
+
+  test(`${MAX_SEARCH_FILTERS} search filters are a filter`, () => {
+    expect(() =>
+      searches(
+        Array.from({ length: MAX_SEARCH_FILTERS }, () => 'ahmed'),
+        'notILike'
+      )
+    ).not.toThrow();
+  });
+
+  test.each(['iLike', 'notILike'] as const)(
+    'one %s filter past the count is a 422',
+    (operator) => {
+      expect(() =>
+        searches(
+          Array.from({ length: MAX_SEARCH_FILTERS + 1 }, () => 'ahmed'),
+          operator
+        )
+      ).toThrow(expect.objectContaining({ status: HTTP_STATUS.UNPROCESSABLE }));
+    }
+  );
+
+  test('folded values past the shared length are a 422', () => {
+    const half = 'a'.repeat(MAX_SEARCH_LENGTH / 2);
+    expect(() => searches([half, half], 'notILike')).not.toThrow();
+    expect(() => searches([half, `${half}b`], 'notILike')).toThrow(
+      expect.objectContaining({ status: HTTP_STATUS.UNPROCESSABLE })
+    );
   });
 });

@@ -47,6 +47,14 @@ export const OOXML_RELATIONSHIPS_MAX_BYTES = 4 * MIB;
 export const OOXML_RELATIONSHIPS_MAX_TOKENS =
   OOXML_RELATIONSHIPS_MAX_BYTES / 16;
 
+/**
+ * Tokens in `[Content_Types].xml`: one `Override` per part the entry cap
+ * admits, plus the `Default`s, at three tokens each, with room to spare. Past
+ * it the manifest is a parser bomb: 200 000 `<a/>` in a 4 KB zip held the event
+ * loop for 74 ms and 28 MiB.
+ */
+export const CONTENT_TYPES_MAX_TOKENS = (OOXML_MAX_ENTRIES + 64) * 4;
+
 const CONTENT_TYPES_PART = '[content_types].xml';
 
 export const WORD_MAIN_CONTENT_TYPE =
@@ -411,6 +419,13 @@ function walkElements(
   while (index < xml.length) {
     const open = xml.indexOf('<', index);
     if (open === -1) break;
+    // The constructs skipped below cost a token as start tags do: 4 MiB of
+    // `</a>` was otherwise free to walk.
+    const skipped =
+      xml.startsWith('<?', open) ||
+      xml.startsWith('<!--', open) ||
+      xml.startsWith('</', open);
+    if (skipped && !spend(budget, 1)) return null;
     if (xml.startsWith('<?', open)) {
       const close = xml.indexOf('?>', open);
       if (close === -1) return null;
@@ -447,7 +462,7 @@ function readElements(xml: string): XmlElement[] | null {
       elements.push(element);
       return true;
     },
-    { tokens: Infinity }
+    { tokens: CONTENT_TYPES_MAX_TOKENS }
   );
   return walked === null ? null : elements;
 }

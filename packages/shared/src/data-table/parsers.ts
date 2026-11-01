@@ -35,6 +35,13 @@ function isFilterOperator(value: string): value is FilterOperator {
 /** Trigram floor for quick search and the text filter operators. */
 export const MIN_SEARCH_LENGTH = 3;
 export const MAX_SEARCH_LENGTH = 200;
+/**
+ * Search-operator filters in one list request. Each costs rows × pattern
+ * length, and the scan-only one can never use an index: twenty 500-character
+ * `notILike`s held a list connection for 8 s at 200k users. Their folded terms
+ * also share one `MAX_SEARCH_LENGTH`.
+ */
+export const MAX_SEARCH_FILTERS = 3;
 
 /**
  * Unicode code points, not UTF-16 code units: the floor exists to keep

@@ -7,9 +7,10 @@ import type {
 } from '@app/shared/responses/media';
 import type { EntityID } from '@app/shared/types';
 
-import { asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { asc, eq, isNull, sql } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
+import { dataTableDb, db, withTransaction } from '@/db';
+import { anyUuid, inList } from '@/db/arrays';
 import { getConstraintName, isUniqueViolation } from '@/db/errors';
 import { folders } from '@/db/schema';
 import * as z from 'zod';
@@ -33,7 +34,7 @@ import {
   folderTooDeep,
   folderTooManyChildren,
 } from './errors';
-import { anyUuid, distinctIds, idRowSchema } from './ids';
+import { distinctIds, idRowSchema } from './ids';
 
 export interface FolderSummary {
   id: string;
@@ -260,7 +261,7 @@ async function toWireFolders<
 export async function listSubfolders(
   parentId: EntityID | null
 ): Promise<MediaFolder[]> {
-  const rows = await db
+  const rows = await dataTableDb
     .select({ ...FOLDER_COLUMNS, ...FOLDER_FIGURES })
     .from(folders)
     .where(childrenOf(parentId))
@@ -280,7 +281,7 @@ export async function searchFolders(
   term: string
 ): Promise<{ folders: FolderHit[]; truncated: boolean }> {
   const pattern = searchPattern(term, 'contains');
-  const rows = await db.execute(sql`
+  const rows = await dataTableDb.execute(sql`
     with recursive hits as (
       select id, name, parent_id, created_by, created_at, updated_at
       from folders
@@ -460,7 +461,7 @@ export async function prepareFolderMove(
   const locked = await tx
     .select(FOLDER_COLUMNS)
     .from(folders)
-    .where(inArray(folders.id, to === null ? ids : [...new Set([...ids, to])]))
+    .where(inList(folders.id, to === null ? ids : [...new Set([...ids, to])]))
     .orderBy(asc(folders.id))
     .for(STRUCTURE_LOCK);
   const byId = new Map(locked.map((folder) => [folder.id, folder]));

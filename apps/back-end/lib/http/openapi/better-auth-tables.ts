@@ -66,7 +66,7 @@ export const BETTER_AUTH_STATUS_DESCRIPTIONS = {
   '422':
     'The submitted fields failed this project’s own schema for the endpoint.',
   '409':
-    'The request would leave the account in a state this application refuses — removing the only enrolled second factor.',
+    'The request would leave the account in a state this application refuses — removing the only enrolled second factor, or registering a passkey past the per-account cap.',
 } as const;
 
 /**

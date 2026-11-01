@@ -53,6 +53,14 @@ const DOCUMENT: OpenApiDocument = {
             ...json({ $ref: '#/components/schemas/Thing' }),
           },
           '302': { description: 'Elsewhere.' },
+          '304': {
+            description: 'Unchanged, with a schema it never sends.',
+            ...json({ $ref: '#/components/schemas/Thing' }),
+          },
+          '307': {
+            description: 'Elsewhere, with an optional body.',
+            ...json({ $ref: '#/components/schemas/Thing' }),
+          },
           '404': { description: 'Missing.', content: { 'text/plain': {} } },
           '409': {
             description: 'No schema.',
@@ -67,6 +75,14 @@ const DOCUMENT: OpenApiDocument = {
     },
     '/api/things/mine': {
       put: { responses: { '204': { description: 'Saved.' } } },
+      delete: {
+        responses: {
+          '204': {
+            description: 'Gone, with a schema it never sends.',
+            ...json({ $ref: '#/components/schemas/Thing' }),
+          },
+        },
+      },
       post: {
         responses: {
           '204': {
@@ -114,6 +130,29 @@ describe('an answer the document describes', () => {
           status: 404,
           headers: { 'content-type': 'text/plain; charset=utf-8' },
         })
+      )
+    ).toEqual([]);
+  });
+
+  test('passes bodiless where its status or method never carries a body, whatever is published', async () => {
+    expect(
+      await ask(
+        `/api/things/${ID}`,
+        new Response(null, { status: 200 }),
+        'HEAD'
+      )
+    ).toEqual([]);
+    expect(
+      await ask('/api/things/x', new Response(null, { status: 304 }))
+    ).toEqual([]);
+    expect(
+      await ask('/api/things/x', new Response(null, { status: 307 }))
+    ).toEqual([]);
+    expect(
+      await ask(
+        '/api/things/mine',
+        new Response(null, { status: 204 }),
+        'DELETE'
       )
     ).toEqual([]);
   });
@@ -174,6 +213,25 @@ describe('an answer the document cannot describe fails', () => {
       )
     ).toEqual([
       'GET /api/things/{id} 401 (code NOPE): the operation does not publish this status',
+    ]);
+  });
+
+  test('no body where the document publishes one', async () => {
+    expect(
+      await ask(`/api/things/${ID}`, new Response(null, { status: 200 }))
+    ).toEqual([
+      'GET /api/things/{id} 200: no body, where the document publishes application/json',
+    ]);
+    expect(
+      await ask(
+        '/api/things/x',
+        new Response('', {
+          status: 422,
+          headers: { 'content-type': PROBLEM_MEDIA_TYPE },
+        })
+      )
+    ).toEqual([
+      'GET /api/things/{id} 422: no body, where the document publishes application/problem+json',
     ]);
   });
 

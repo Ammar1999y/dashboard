@@ -6,6 +6,7 @@ import type { BucketType } from '@app/shared/validation/enums';
 import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
+import { inList } from '@/db/arrays';
 import { isForeignKeyViolation } from '@/db/errors';
 import { files } from '@/db/schema';
 
@@ -33,7 +34,7 @@ import { unreferenced } from './usages';
  */
 const PENDING_FILE_TTL = '24 hours';
 
-const SWEEP_BATCH_SIZE = 1000;
+export const SWEEP_BATCH_SIZE = 1000;
 
 /**
  * Counted from the pass that first saw the file unfiled (`unfiled_at`), because
@@ -69,7 +70,7 @@ export async function claimFiles(
     .set({ status: 'active' })
     .where(
       and(
-        inArray(files.id, ids),
+        inList(files.id, ids),
         eq(files.status, 'pending'),
         eq(files.uploadedBy, actor.userId)
       )
@@ -179,7 +180,7 @@ export async function finishDeleting(
   // either way, and `deleting` never reverts, so it is removed all the same.
   await db
     .delete(files)
-    .where(and(inArray(files.id, removed), eq(files.status, 'deleting')));
+    .where(and(inList(files.id, removed), eq(files.status, 'deleting')));
   return { removed, retained };
 }
 
@@ -258,6 +259,10 @@ async function reapUnfiled(): Promise<{
 /**
  * `degraded` is only a retained row or a refused reap, so the job can tell a
  * store outage from an ordinary backlog (`hasMore`).
+ *
+ * ⚠️ `deleting` rows least recently touched first, and a retained one is
+ * restamped, as `sweepOrphanedObjects` does: otherwise one batch of persistent
+ * failures holds the batch against every row behind it.
  */
 export async function sweepFiles(
   stopping?: AbortSignal
@@ -309,9 +314,23 @@ export async function sweepFiles(
         })
         .from(files)
         .where(eq(files.status, 'deleting'))
+        .orderBy(files.updatedAt, files.id)
         .limit(SWEEP_BATCH_SIZE);
 
   const { removed, retained } = await finishDeleting(doomed, stopping);
+  // A shutdown retains every row without trying it. A row carrying a
+  // transition keeps its stamp: `retryTransitions` reads it as the marker's age.
+  if (retained.length > 0 && !stopping?.aborted)
+    await db
+      .update(files)
+      .set({ updatedAt: sql`now()` })
+      .where(
+        and(
+          inList(files.id, retained),
+          eq(files.status, 'deleting'),
+          isNull(files.transition)
+        )
+      );
   return {
     removed: removed.length,
     unfiled: { stamped, reaped: reap.reaped },

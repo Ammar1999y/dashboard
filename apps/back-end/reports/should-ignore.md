@@ -385,16 +385,21 @@
     statement to finish paid for the backlog (1.4 s measured). Guarded by
     `tests/unit/rate-limit-wal-frames.test.ts`. (Performance audit P-1.)
 
-81. **One Image Encoder Slot per Process** — `lib/media/image/admission.ts`,
-    `ENCODER_SLOTS` in `lib/media/image/optimize.ts` — one encode at a time
-    with four waiting, so a sixth concurrent image upload gets the busy 503
-    at once. The front end uploads two files at a time per tab
-    (`apps/front-end/lib/media/upload-queue.ts`), so that takes three tabs
-    uploading at once. A second slot doubles throughput and costs about
+81. **One Image Encoder Slot per Process** — `lib/admission.ts`,
+    `ENCODER_SLOTS` in `lib/media/image/optimize.ts` — one encode at a time.
+    Uploads reach it through the process-wide upload slot (`UPLOAD_SLOTS` in
+    `lib/media/upload.ts`: four in flight, eight waiting up to 10 s, two per
+    account), so a thirteenth concurrent upload gets the busy 503. The front
+    end uploads two files at a time per tab
+    (`apps/front-end/lib/media/upload-queue.ts`). A second slot doubles throughput and costs about
     240 MiB more peak memory at the 25 MP pixel cap (measured 239 MiB with one
     slot, 477 MiB with two). Kept at one; `ENCODER_SLOTS` is the one place to
     change it, after measuring RSS on the VPS (`reports/coolify-deployment.md`
-    §5, "Capacity floor for uploads"). (Performance audit P-4.)
+    §5, "Capacity floor for uploads"). Cores bound it too (measured
+    2026-11-01): an encode holds one thread of Bun's work pool, which has one
+    per core and also runs Argon2 and every session-cookie HMAC, so encoder
+    slots plus the one password slot must stay below the core count.
+    (Performance audit P-4.)
 
 82. **A Refused SVG Still Costs a Full Sanitise** — `admitUpload`
     (`lib/media/upload.ts`), `lib/media/image/svg-jobs.ts` — the SVG is
@@ -477,6 +482,34 @@
     `needsRehash` compares only the pepper generation. Revisit with a
     measurement at the VPS's real vCPU count if sign-in bursts become real
     load. (Performance audit P-25.)
+
+89. **An Upload Queued for the Encoder Is Not Re-Authorised** —
+    `admitUpload` / the pending-row insert (`lib/media/upload.ts`) — both
+    upload routes authorise in the gate, then wait for the encoder slot
+    (`createAdmission`, `lib/media/image/optimize.ts`) and write the pending
+    row and the R2 object with that earlier actor. A session revoked, a user
+    suspended or a grant removed during the wait does not stop that one
+    upload. Not an issue under the harmless-race rule: the actor held the
+    upload grant when it was checked, and the effect is additive and private,
+    one more library file per request already in flight, which any media editor
+    can delete. The wait is short in practice: the process-wide upload slot
+    (`lib/media/upload.ts`) queues for at most 10 s and reads the body for at
+    most 100 s, and the encoder queue behind it held about 10 s of 6 MP encodes
+    on 2026-10-31, though that queue has no deadline of its own. Raised by the
+    2026-10-31 load-test review. Revisit if `queueLimit` grows, an upload
+    purpose becomes public, or revocation must stop work already admitted.
+
+90. **Two Racing Passkey Registrations Can Pass the Per-Account Cap** —
+    `assertPasskeyRoom` (`lib/auth/path-policy.ts`) — the limit
+    (`MAX_PASSKEYS_PER_USER`, 20) is counted before the plugin inserts, outside
+    its transaction, so it is a best-effort threshold: N registrations that
+    overlap at 19 credentials leave 19 + N. Not an issue under the
+    harmless-race rule: each registration needs the account owner's own
+    re-authentication grant and a completed WebAuthn ceremony, so the overshoot
+    is whatever the owner runs in parallel, and the limit exists to stop
+    thousands accumulating over time, which it still does. Making it exact
+    means owning the plugin's insert transaction. Raised by the 2026-11-01
+    review.
 
 # Known Issues — Will Be Fixed Later
 

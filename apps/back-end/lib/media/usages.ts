@@ -5,16 +5,16 @@ import type { EntityID } from '@app/shared/types';
 import type { BucketType } from '@app/shared/validation/enums';
 import type { SQL } from 'drizzle-orm';
 
-import { and, inArray, not, sql } from 'drizzle-orm';
+import { and, not, sql } from 'drizzle-orm';
 
 import { db } from '@/db';
+import { anyUuid, inList } from '@/db/arrays';
 import { files } from '@/db/schema';
 import * as z from 'zod';
 
 import { DASHBOARD_PAGE_NAMES } from '@app/shared/permissions/constants';
 import { MEDIA_USAGE_LIST_MAX } from '@app/shared/validation/constants';
 
-import { anyUuid } from './ids';
 import { USAGE_SOURCES } from './usage-sources';
 
 interface Usage {
@@ -157,7 +157,7 @@ export async function usedIds(
   const rows = await executor
     .select({ id: files.id })
     .from(files)
-    .where(and(inArray(files.id, [...fileIds]), not(unreferenced())));
+    .where(and(inList(files.id, fileIds), not(unreferenced())));
   return new Set(rows.map((row) => row.id));
 }
 

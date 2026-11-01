@@ -61,6 +61,7 @@ import {
   describe,
   expect,
   setDefaultTimeout,
+  spyOn,
   test,
 } from 'bun:test';
 import crypto from 'node:crypto';
@@ -100,6 +101,11 @@ import {
   PHONE_OTP_AVAILABLE,
 } from '@app/shared/validation/otp';
 
+import * as passwordHash from '@/lib/auth/password/hash';
+import {
+  PASSWORD_WORK_QUEUE,
+  withPasswordSlot,
+} from '@/lib/auth/password/hash';
 import { MINIMUM_RESPONSE_MS } from '@/lib/http/timing-floor';
 import { generateUuidV7 } from '@/lib/id';
 
@@ -426,6 +432,57 @@ describe('the deployment configuration these assertions are written against', ()
 // ── 1. change-password ───────────────────────────────────────────────────────
 
 describe('POST /api/dash/users/me/change-password — refusals', () => {
+  test('a busy password slot refuses before the current password is verified', async () => {
+    const userId = subject('pwGuard').userId;
+    const before = await storedHash(userId);
+    const usersAudit = await auditRows(userId, 'users');
+    const gate = Promise.withResolvers<void>();
+    const holders = Array.from({ length: 1 + PASSWORD_WORK_QUEUE }, () =>
+      withPasswordSlot(() => gate.promise)
+    );
+    try {
+      const response = await app.handle(
+        authedPost(actor('pwGuard'), CHANGE_PASSWORD, {
+          currentPassword: subject('pwGuard').password,
+          newPassword: NEW_PASSWORD,
+        })
+      );
+      expect(response.status).toBe(HTTP_STATUS.SERVICE_UNAVAILABLE);
+    } finally {
+      gate.resolve();
+      await Promise.allSettled(holders);
+    }
+    expect(await storedHash(userId)).toBe(before);
+    const usersAuditAfter = await auditRows(userId, 'users');
+    expect(usersAuditAfter).toHaveLength(usersAudit.length);
+    expect(await failedAttempts(userId)).toBe(0);
+  });
+
+  test('a busy refusal of the replacement hash records no verification', async () => {
+    // The replacement is hashed before the current password is verified, so a
+    // refusal of either lands before the verify commits its attempt.
+    const userId = subject('pwGuard').userId;
+    const before = await storedHash(userId);
+    const usersAudit = await auditRows(userId, 'users');
+    const replacement = spyOn(passwordHash, 'hashPassword').mockImplementation(
+      () => Promise.reject(passwordHash.passwordWorkBusy())
+    );
+    try {
+      const response = await app.handle(
+        authedPost(actor('pwGuard'), CHANGE_PASSWORD, {
+          currentPassword: subject('pwGuard').password,
+          newPassword: NEW_PASSWORD,
+        })
+      );
+      expect(response.status).toBe(HTTP_STATUS.SERVICE_UNAVAILABLE);
+    } finally {
+      replacement.mockRestore();
+    }
+    expect(await storedHash(userId)).toBe(before);
+    const usersAuditAfter = await auditRows(userId, 'users');
+    expect(usersAuditAfter).toHaveLength(usersAudit.length);
+  });
+
   test('no cookie is 401, and the body names nothing', async () => {
     const before = await storedHash(subject('pwGuard').userId);
 

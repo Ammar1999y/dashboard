@@ -162,6 +162,13 @@
       "when": 1793426646380,
       "tag": "0022_folded_search_and_index_swaps",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793484226793,
+      "tag": "0023_list_query_indexes",
+      "breakpoints": true
     }
   ]
 }

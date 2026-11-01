@@ -28,14 +28,15 @@ export function signingWindow(nowMs: number): SigningWindow {
 
 type WindowedSigning = Parameters<typeof getPresignedUrl>[0] & SigningWindow;
 
-const SIGNED_LINKS_MAX = 5000;
+export const SIGNED_LINKS_MAX = 5000;
 const signedLinks = { windowStart: 0, byParams: new Map<string, string>() };
 
 /**
  * `getPresignedUrl`, reusing a link already signed in this window: a link signed
  * inside one window is byte-identical (`tests/unit/presign-window.test.ts`).
  * Keyed on every parameter but the date, so a parameter added later can only
- * miss, never return another link.
+ * miss, never return another link. Full, it drops its oldest entry: clearing
+ * it would make one caller paging through a large list re-sign everyone's.
  */
 export async function presignInWindow(
   params: WindowedSigning
@@ -54,9 +55,12 @@ export async function presignInWindow(
   const url = await getPresignedUrl(params);
   // The window may have turned while this one was signed.
   if (windowStart === signedLinks.windowStart) {
-    if (signedLinks.byParams.size >= SIGNED_LINKS_MAX)
-      signedLinks.byParams.clear();
-    signedLinks.byParams.set(id, url);
+    const { byParams } = signedLinks;
+    if (byParams.size >= SIGNED_LINKS_MAX && !byParams.has(id)) {
+      const oldest = byParams.keys().next();
+      if (!oldest.done) byParams.delete(oldest.value);
+    }
+    byParams.set(id, url);
   }
   return url;
 }

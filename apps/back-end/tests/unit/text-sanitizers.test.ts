@@ -242,3 +242,17 @@ test('an unavailable action is named in Arabic, with the page', () => {
     'الصلاحية "نشر" غير متاحة لصفحة "الرئيسية"'
   );
 });
+
+describe('an oversized uploaded file name', () => {
+  test('is scanned only up to a bound, so its cost does not grow with it', () => {
+    const name = `${'و'.repeat(10 * 1024 * 1024)}.pdf`;
+    const started = performance.now();
+    expect(sanitizeFilename(name)).toBe('و'.repeat(50));
+    // Measured 357 ms unbounded for 11 MiB of Arabic.
+    expect(performance.now() - started).toBeLessThan(50);
+  });
+
+  test('keeps the extension split on the whole name', () => {
+    expect(sanitizeFilename(`${'a'.repeat(5000)}.tar.gz`)).toBe('a'.repeat(50));
+  });
+});

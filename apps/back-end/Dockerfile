@@ -54,6 +54,10 @@ COPY --from=verify /verified /verified
 RUN install -d -o bun -g bun -m 0700 /app/data
 WORKDIR /app/apps/back-end
 ENV NODE_ENV=production
+# Bun's process-wide cap on `fetch`es in flight (default 256), one queue for
+# every provider. `lib/captcha.ts` caps siteverify at 64 of them; this keeps
+# the rest clear of a captcha flood however the per-caller caps move.
+ENV BUN_CONFIG_MAX_HTTP_REQUESTS=512
 EXPOSE 3000
 # `oven/bun` creates this user (uid 1000) but does not switch to it. Everything
 # above stays root-owned, so code run through an upload parser cannot rewrite

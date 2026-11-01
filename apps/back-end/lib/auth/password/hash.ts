@@ -1,8 +1,12 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import * as argon2 from 'argon2';
 
 import { normalizePasswordInput } from '@app/shared/validation/rules';
 
+import { createAdmission } from '@/lib/admission';
 import { KEY_ID_PATTERN } from '@/lib/crypto/keyring';
+import { serviceBusy } from '@/lib/http/response';
 
 import { errorClassOf, logLine } from '@/utils/log';
 
@@ -16,6 +20,63 @@ const ARGON2_OPTIONS = {
   hashLength: 32,
   version: 0x13,
 } satisfies argon2.HashOptions;
+
+/**
+ * Argon2 runs on Bun's process-wide work pool, which WebCrypto shares, so
+ * unbounded hashing queues every session-cookie HMAC behind it: 16 sign-in
+ * attempts a second took `get-session` from 10 ms to 1.7 s, and to 91 ms with
+ * one slot (`reports/performance-audit.md`). One job already uses
+ * `parallelism` threads.
+ */
+const PASSWORD_WORK_SLOTS = 1;
+/** Exported so tests fill the queue rather than restate it. */
+export const PASSWORD_WORK_QUEUE = 16;
+/** Above a full queue's drain at the measured 70–250 ms a hash. */
+const PASSWORD_WORK_MAX_WAIT_MS = 5000;
+const PASSWORD_WORK_RETRY_AFTER_S = 2;
+
+export const passwordWorkBusy = () => serviceBusy(PASSWORD_WORK_RETRY_AFTER_S);
+
+function passwordAdmission(slots: number) {
+  return createAdmission({
+    slots,
+    queueLimit: PASSWORD_WORK_QUEUE,
+    maxWaitMs: PASSWORD_WORK_MAX_WAIT_MS,
+    refusal: passwordWorkBusy,
+  });
+}
+const admission = { acquire: passwordAdmission(PASSWORD_WORK_SLOTS) };
+
+/**
+ * Runs the slot with `slots` places until the returned restore, so a test can
+ * overlap attempts the production slot serialises. Call with nothing held.
+ *
+ * @internal
+ */
+export function widenPasswordSlotForTest(slots: number): () => void {
+  admission.acquire = passwordAdmission(slots);
+  return () => {
+    admission.acquire = passwordAdmission(PASSWORD_WORK_SLOTS);
+  };
+}
+const slotHeld = new AsyncLocalStorage<true>();
+
+/**
+ * Runs `work` holding the process's password slot; every hash and verify
+ * inside it reuses the slot instead of queueing again, which with one slot
+ * would deadlock. Wrap a whole operation that hashes more than once, or whose
+ * admission must precede a write: a refusal between its steps would leave the
+ * first one done.
+ */
+export async function withPasswordSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (slotHeld.getStore()) return work();
+  const release = await admission.acquire();
+  try {
+    return await slotHeld.run(true, work);
+  } finally {
+    release();
+  }
+}
 
 const HASH_ENVELOPE_VERSION = 'p1';
 const ARGON2ID_PREFIX = '$argon2id$';
@@ -85,10 +146,12 @@ async function hashWithActivePepper(
   password: string
 ): Promise<{ pepperId: string; phc: string }> {
   const pepper = getActivePasswordPepper();
-  const phc = await argon2.hash(normalizePasswordInput(password), {
-    ...ARGON2_OPTIONS,
-    secret: pepper.secret,
-  });
+  const phc = await withPasswordSlot(() =>
+    argon2.hash(normalizePasswordInput(password), {
+      ...ARGON2_OPTIONS,
+      secret: pepper.secret,
+    })
+  );
   return { pepperId: pepper.id, phc };
 }
 
@@ -127,19 +190,24 @@ export async function verifyPasswordDetailed({
     return { valid: false, needsRehash: false, costPaid: false };
   }
 
-  let valid: boolean;
-  try {
-    valid = await argon2.verify(parsed.phc, normalizePasswordInput(password), {
-      secret: pepper.secret,
-    });
-  } catch (error) {
-    // No `detail`: the PHC parser can echo fragments of the stored value.
-    logLine('error', {
-      msg: 'auth.password.hash unevaluatable',
-      errorClass: errorClassOf(error),
-    });
+  // The slot is taken outside the catch: a busy refusal is not an
+  // unevaluatable hash, which would answer as a wrong password.
+  const valid = await withPasswordSlot(async () => {
+    try {
+      return await argon2.verify(parsed.phc, normalizePasswordInput(password), {
+        secret: pepper.secret,
+      });
+    } catch (error) {
+      // No `detail`: the PHC parser can echo fragments of the stored value.
+      logLine('error', {
+        msg: 'auth.password.hash unevaluatable',
+        errorClass: errorClassOf(error),
+      });
+      return null;
+    }
+  });
+  if (valid === null)
     return { valid: false, needsRehash: false, costPaid: false };
-  }
   if (!valid) return { valid: false, needsRehash: false, costPaid: true };
 
   const activePepper = getActivePasswordPepper();

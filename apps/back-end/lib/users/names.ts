@@ -1,9 +1,8 @@
 import type { Executor } from '@/db';
 import type { EntityID } from '@app/shared/types';
 
-import { inArray } from 'drizzle-orm';
-
 import { db } from '@/db';
+import { inList } from '@/db/arrays';
 import { users } from '@/db/schema';
 
 import { liveUser } from './filters';
@@ -23,7 +22,7 @@ export async function userNames(
   const rows = await executor
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(liveUser(inArray(users.id, wanted)));
+    .where(liveUser(inList(users.id, wanted)));
   const names = new Map(rows.map((row) => [row.id, row.name]));
   return (id) => (id === null ? null : (names.get(id) ?? null));
 }

@@ -426,20 +426,10 @@ describe('IPv4 is not bucketed', () => {
   });
 });
 
-describe('pinned defect: the bucket keys the SPELLING, not the address', () => {
+describe('the bucket keys the address, not its spelling', () => {
   // Every spelling below is the SAME /64 as `CANONICAL` and is accepted by
-  // `getClientIp`, yet each gets its own rate-limit key — so one host holds
-  // several per-IP budgets, which is exactly what the /64 collapse exists to
-  // prevent. `ipBucket` splits the string it was handed instead of parsing the
-  // address, and its comment ("Inputs already passed `getClientIp`'s ipv4/ipv6
-  // validator, so colon-form is a sufficient discriminator") is the assumption
-  // that fails: the validator accepts leading zeros, uppercase hex and the
-  // embedded-IPv4 form, and normalises none of them.
-  //
-  // Not exploitable while ingress is Cloudflare-only — Cloudflare emits the
-  // canonical lowercase compressed form — so this shares its exposure with the
-  // TODO(proxy-trust) already tracked on the header itself. Pinned, not fixed:
-  // `lib/rate-limit/index.ts` is not this file's to change.
+  // `getClientIp`, so each must share its key: otherwise one host holds several
+  // per-IP budgets, which is what the /64 collapse exists to prevent.
   const CANONICAL = '2001:db8:1:2::5';
 
   test('the canonical spelling buckets correctly', () => {
@@ -451,28 +441,45 @@ describe('pinned defect: the bucket keys the SPELLING, not the address', () => {
     ['uppercase hex', '2001:DB8:1:2::5'],
     ['an embedded IPv4 tail', '2001:db8:1:2:0:0:1.2.3.4'],
   ])(
-    '%s is one /64 with the canonical form, and gets its own key',
+    '%s is one /64 with the canonical form, and shares its key',
     (_label, spelling) => {
       expect(getClientIp(header(spelling))).toBe(spelling);
-      expect(keyFor(spelling)).not.toBe(keyFor(CANONICAL));
+      expect(keyFor(spelling)).toBe(keyFor(CANONICAL));
     }
   );
 
-  test('the embedded-IPv4 form escapes the /64 collapse entirely', () => {
-    // The widest case of the same defect: the `.` test treats any dotted address
-    // as IPv4-mapped and returns it whole, but the fully expanded form is legal
-    // for ANY prefix — so every host in one /64 can be spelled this way and each
-    // one is a fresh budget.
-    const first = keyFor('2001:db8:1:2:0:0:1.2.3.4');
-    const second = keyFor('2001:db8:1:2:0:0:1.2.3.5');
-
-    expect(first).not.toBe(second);
-    expect(first).not.toContain('/64');
+  test('two hosts of one /64 spelled with a dotted tail share it', () => {
+    expect(keyFor('2001:db8:1:2:0:0:1.2.3.4')).toBe(
+      keyFor('2001:db8:1:2:0:0:1.2.3.5')
+    );
   });
 
-  test('a NAT64 address is not collapsed either', () => {
-    // `64:ff9b::/96` is the well-known NAT64 prefix, and this spelling is what a
-    // NAT64 middlebox emits. Same root cause as above.
+  test('a NAT64 address keeps its whole IPv4 host, as a mapped one does', () => {
+    // `64:ff9b::/96` carries a whole IPv4 host: collapsing it to a /64 would
+    // pool every IPv4 host behind one budget.
     expect(keyFor('64:ff9b::1.2.3.4')).toBe('ip:64:ff9b::1.2.3.4');
   });
+
+  test.each([
+    [
+      '::ffff:1.2.3.4',
+      ['::FFFF:1.2.3.4', '::ffff:102:304', '0:0:0:0:0:ffff:0102:0304'],
+    ],
+    ['64:ff9b::1.2.3.4', ['64:FF9B::1.2.3.4', '64:ff9b::102:304']],
+  ])(
+    'every spelling of the IPv4 host %s keys as it does',
+    (canonical, spellings) => {
+      for (const spelling of spellings) {
+        expect(getClientIp(header(spelling))).toBe(spelling);
+        expect(keyFor(spelling)).toBe(keyFor(canonical));
+      }
+    }
+  );
+
+  test.each(['::ffff:', '64:ff9b::'])(
+    'two IPv4 hosts behind %s keep two budgets, however they are spelled',
+    (prefix) => {
+      expect(keyFor(`${prefix}102:304`)).not.toBe(keyFor(`${prefix}506:708`));
+    }
+  );
 });

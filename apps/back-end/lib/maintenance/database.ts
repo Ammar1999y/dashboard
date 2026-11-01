@@ -29,6 +29,7 @@ import type { SQL } from 'drizzle-orm';
 import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
+import { inList } from '@/db/arrays';
 import {
   otpChallenges,
   sessions,
@@ -348,7 +349,7 @@ function sweepVerificationSessions(
           .delete(verificationSessions)
           .where(
             and(
-              inArray(
+              inList(
                 verificationSessions.id,
                 doomed.map(({ id }) => id)
               ),

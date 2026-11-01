@@ -7,6 +7,7 @@ import { and, eq, sql } from 'drizzle-orm';
 
 import { withTransaction } from '@/db';
 import { accounts, users } from '@/db/schema';
+import { TransactionDeadlineError } from '@/db/transaction';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -20,8 +21,10 @@ import { errorClassOf, logLine } from '@/utils/log';
 import { credentialAccountOf } from './credential-account';
 import {
   hashPassword,
+  passwordWorkBusy,
   runPasswordTimingGuard,
   verifyPasswordDetailed,
+  withPasswordSlot,
 } from './password/hash';
 import { roleAllowsLoginFor } from './user-eligibility';
 
@@ -285,16 +288,6 @@ export function verifyLoginAttempt(
 export async function verifyLoginAttempt(
   options: VerifyAttemptOptions
 ): Promise<AcceptedPasswordHashes | VerifiedPasswordProof> {
-  type RejectedOutcome = 'reject_unknown_or_inactive' | 'reject_bad_password';
-  type AttemptResult =
-    | {
-        outcome: 'success';
-        passwordProof: VerifiedPasswordProof;
-        passwordUpgrade?: PendingPasswordUpgrade;
-      }
-    | { outcome: RejectedOutcome; passwordCostPaid: boolean }
-    | { outcome: 'reject_locked'; passwordCostPaid: false; lockedUntil: Date };
-
   const {
     password,
     email,
@@ -318,106 +311,139 @@ export async function verifyLoginAttempt(
   if (!identity)
     throw new Error('verifyLoginAttempt requires either email or userId');
 
-  const attempt = async (): Promise<AttemptResult> => {
-    const charge = await withTransaction((tx) =>
-      chargeAttempt(tx, identity, auditMeta)
-    );
-    if (charge.outcome === 'reject_locked')
-      return { ...charge, passwordCostPaid: false };
-    if (charge.outcome === 'reject_unknown_or_inactive')
-      return { outcome: charge.outcome, passwordCostPaid: false };
-
-    const charged = charge.attempt;
-    const verification = await verifyPasswordDetailed({
-      hash: charged.account?.password ?? '',
-      password,
-    });
-
-    if (!verification.valid)
-      return {
-        outcome: 'reject_bad_password',
-        passwordCostPaid: verification.costPaid,
+  type RefusedCharge = Exclude<ChargeResult, { outcome: 'charged' }>;
+  /** What the slot hands back: the charge's refusal, or one comparison. */
+  type Admitted =
+    | { refused: RefusedCharge }
+    | {
+        charged: ChargedAttempt;
+        verification: Awaited<ReturnType<typeof verifyPasswordDetailed>>;
       };
 
-    const account = charged.account;
-    if (!account?.password) {
-      throw new Error('Verified credential account is missing its hash');
-    }
-    const verifiedHash = account.password;
-
-    const settled = await withTransaction((tx) =>
-      settleVerifiedAttempt(
-        tx,
-        charged,
-        { accountId: account.id, hash: verifiedHash },
-        purpose,
-        auditMeta
-      )
-    );
-    if (settled !== 'verified')
-      return { outcome: settled, passwordCostPaid: true };
-
-    const passwordUpgrade = verification.needsRehash
-      ? {
-          accountId: account.id,
-          userId: charged.user.id,
-          userEmail: charged.user.email,
-          expectedHash: verifiedHash,
-          previousPepperId: verification.pepperId,
-          activePepperId: verification.activePepperId,
-        }
-      : undefined;
-
-    return {
-      outcome: 'success',
-      passwordProof: { accountId: account.id, expectedHash: verifiedHash },
-      passwordUpgrade,
-    };
-  };
-
-  const result = await attempt();
-
-  if (result.outcome === 'success') {
-    if (returnPasswordProof) return result.passwordProof;
-
-    const verifiedHash = result.passwordProof.expectedHash;
-
-    if (result.passwordUpgrade) {
-      try {
-        const upgradedHash = await upgradePasswordHash({
-          password,
-          upgrade: result.passwordUpgrade,
-          auditMeta,
-        });
-        if (upgradedHash) return [verifiedHash, upgradedHash];
-
-        // ⚠️ Accepted 401 on a correct password. Never mint from a re-read hash:
-        // the concurrent writer may be a password change.
-        logLine('error', {
-          msg: 'auth.passwordHashUpgrade raceLost',
-          effect:
-            'this login answers 401 on a correct password; a retry succeeds',
-          previousPepperId: result.passwordUpgrade.previousPepperId,
-          activePepperId: result.passwordUpgrade.activePepperId,
-        });
-      } catch (error) {
-        logLine('error', {
-          msg: 'auth.passwordHashUpgrade failed',
-          // Retried after the next successful verification; nothing is lost.
-          errorClass: errorClassOf(error),
-        });
+  // The slot covers the failed-attempt charge and the one Argon2 call after
+  // it, and nothing else. Taken before the charge, so a busy refusal never
+  // counts toward lockout and the known and unknown branches queue at the
+  // same point; the charge is held to a deadline, since a row-lock wait inside
+  // the slot would stall every password operation in the process.
+  const admitted: Admitted = await withPasswordSlot(async () => {
+    const charge = await chargeWithinSlot(identity, auditMeta);
+    if (charge.outcome !== 'charged') {
+      if (!skipTimingGuard && !refusesAsLocked(charge)) {
+        await runPasswordTimingGuard(password);
       }
+      return { refused: charge };
     }
-    return [verifiedHash];
+    const verification = await verifyPasswordDetailed({
+      hash: charge.attempt.account?.password ?? '',
+      password,
+    });
+    if (!skipTimingGuard && !verification.costPaid) {
+      await runPasswordTimingGuard(password);
+    }
+    return { charged: charge.attempt, verification };
+  });
+
+  if ('refused' in admitted) {
+    if (refusesAsLocked(admitted.refused))
+      throw accountTemporarilyLocked(admitted.refused.lockedUntil);
+    throw new LoginRejected();
   }
 
-  if (purpose && purpose !== 'sign_in' && result.outcome === 'reject_locked')
-    throw accountTemporarilyLocked(result.lockedUntil);
+  const { charged, verification } = admitted;
+  if (!verification.valid) throw new LoginRejected();
 
-  if (!skipTimingGuard && !result.passwordCostPaid) {
-    await runPasswordTimingGuard(password);
+  const account = charged.account;
+  if (!account?.password) {
+    throw new Error('Verified credential account is missing its hash');
   }
-  throw new LoginRejected();
+  const verifiedHash = account.password;
+
+  const settled = await withTransaction((tx) =>
+    settleVerifiedAttempt(
+      tx,
+      charged,
+      { accountId: account.id, hash: verifiedHash },
+      purpose,
+      auditMeta
+    )
+  );
+  if (settled !== 'verified') throw new LoginRejected();
+
+  if (returnPasswordProof)
+    return { accountId: account.id, expectedHash: verifiedHash };
+
+  if (verification.needsRehash) {
+    const upgrade = {
+      accountId: account.id,
+      userId: charged.user.id,
+      userEmail: charged.user.email,
+      expectedHash: verifiedHash,
+      previousPepperId: verification.pepperId,
+      activePepperId: verification.activePepperId,
+    };
+    try {
+      const upgradedHash = await upgradePasswordHash({
+        password,
+        upgrade,
+        auditMeta,
+      });
+      if (upgradedHash) return [verifiedHash, upgradedHash];
+
+      // ⚠️ Accepted 401 on a correct password. Never mint from a re-read hash:
+      // the concurrent writer may be a password change.
+      logLine('error', {
+        msg: 'auth.passwordHashUpgrade raceLost',
+        effect:
+          'this login answers 401 on a correct password; a retry succeeds',
+        previousPepperId: upgrade.previousPepperId,
+        activePepperId: upgrade.activePepperId,
+      });
+    } catch (error) {
+      logLine('error', {
+        msg: 'auth.passwordHashUpgrade failed',
+        // Retried after the next successful verification; nothing is lost, and
+        // a busy password slot lands here too.
+        errorClass: errorClassOf(error),
+      });
+    }
+  }
+  return [verifiedHash];
+
+  function refusesAsLocked(
+    charge: RefusedCharge
+  ): charge is Extract<ChargeResult, { outcome: 'reject_locked' }> {
+    return (
+      purpose !== undefined &&
+      purpose !== 'sign_in' &&
+      charge.outcome === 'reject_locked'
+    );
+  }
+}
+
+/**
+ * Longer than the longest user-row hold recorded (2 282 ms, an OTP send under
+ * SQLite contention, should-ignore Known #13), so a known contention source
+ * does not turn into refusals.
+ */
+const CHARGE_DEADLINE_MS = 3000;
+
+async function chargeWithinSlot(
+  identity: SQL,
+  auditMeta: AuditMeta | undefined
+): Promise<ChargeResult> {
+  try {
+    return await withTransaction(
+      (tx) => chargeAttempt(tx, identity, auditMeta),
+      undefined,
+      Date.now() + CHARGE_DEADLINE_MS
+    );
+  } catch (error) {
+    if (!(error instanceof TransactionDeadlineError)) throw error;
+    // Rolled back: the refusal charges nothing.
+    const busy = passwordWorkBusy();
+    busy.cause = error;
+    throw busy;
+  }
 }
 
 /** `null` when the compare-and-swap found the row already changed. */

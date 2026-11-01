@@ -81,6 +81,11 @@ import {
   ORPHAN_DRAIN_BATCH,
   sweepOrphanedObjects,
 } from '@/lib/media/orphaned-objects';
+import {
+  UPLOAD_QUEUE,
+  UPLOAD_SLOTS,
+  UPLOADS_PER_ACCOUNT,
+} from '@/lib/media/upload';
 import { retryTransitions, transitionFile } from '@/lib/media/visibility';
 import * as r2 from '@/lib/r2/client';
 
@@ -93,6 +98,7 @@ import {
   corruptNextCopy,
   failObjectStore,
   failObjectStoreKey,
+  holdPuts,
   preconditionFailNextPut,
   storedObject,
   storeHas,
@@ -3495,3 +3501,127 @@ function resetObjectStoreOps(): void {
   // touching the object map, which `resetObjectStore()` would also empty.
   (storeOps() as unknown as unknown[]).splice(0, kept);
 }
+
+/**
+ * Uploads in flight across the process (`acquireUploadSlot`,
+ * `lib/media/upload.ts`): each body is buffered whole and held through the R2
+ * write, so the per-account budgets alone let many accounts add up.
+ */
+describe('the process-wide upload slot', () => {
+  async function waitFor(condition: () => boolean): Promise<void> {
+    const giveUpAt = Date.now() + 5000;
+    while (!condition()) {
+      if (Date.now() > giveUpAt) throw new Error('condition not reached');
+      await Bun.sleep(5);
+    }
+  }
+
+  test('past its slots and queue, an upload is refused before its body is read and writes nothing', async () => {
+    const folderId = await createFolder(admin(), 'Upload slots');
+    // One account per share: an account holds at most `UPLOADS_PER_ACCOUNT`,
+    // and a body with no Content-Length is charged the whole ceiling.
+    const accounts = (UPLOAD_SLOTS + UPLOAD_QUEUE) / UPLOADS_PER_ACCOUNT;
+    const uploaders = await Promise.all(
+      Array.from({ length: accounts + 1 }, () =>
+        signedInUser({ permissions: { media: { view: true, create: true } } })
+      )
+    );
+    const uploader = (n: number): SignedInSession => {
+      const session = uploaders[n];
+      if (!session) throw new Error(`no uploader ${n}`);
+      return session;
+    };
+    const rowsBefore = await db.select({ id: files.id }).from(files);
+    const putsBefore = storeOpsOf('PutObject').length;
+    const release = holdPuts();
+    const admitted = Array.from(
+      { length: UPLOAD_SLOTS + UPLOAD_QUEUE },
+      (_, n) =>
+        call(
+          uploader(n % accounts),
+          'POST',
+          `/api/dash/media/files?folder=${folderId}`,
+          pdfForm(`held-${n}.pdf`)
+        )
+    );
+    try {
+      // The slots' uploads are parked in their R2 writes, the rest queued.
+      await waitFor(
+        () => storeOpsOf('PutObject').length - putsBefore === UPLOAD_SLOTS
+      );
+
+      const response = await app.handle(
+        authedRequest(
+          uploader(accounts),
+          `/api/dash/media/files?folder=${folderId}`,
+          {
+            method: 'POST',
+            body: pdfForm('refused.pdf'),
+          }
+        )
+      );
+      expect(response.status).toBe(HTTP_STATUS.SERVICE_UNAVAILABLE);
+      expect(response.headers.get('retry-after')).toBe('5');
+      expect(storeOpsOf('PutObject').length - putsBefore).toBe(UPLOAD_SLOTS);
+    } finally {
+      release();
+    }
+
+    const answers = await Promise.all(admitted);
+    expect(answers.map((answer) => answer.status)).toEqual(
+      answers.map(() => HTTP_STATUS.CREATED)
+    );
+    const rowsAfter = await db.select({ id: files.id }).from(files);
+    expect(rowsAfter.length - rowsBefore.length).toBe(
+      UPLOAD_SLOTS + UPLOAD_QUEUE
+    );
+  });
+
+  test('one account past its share is refused 429 and writes nothing, while others upload', async () => {
+    const folderId = await createFolder(admin(), 'Upload share');
+    const owner = await signedInUser({
+      permissions: { media: { view: true, create: true } },
+    });
+    const putsBefore = storeOpsOf('PutObject').length;
+    const release = holdPuts();
+    const held = Array.from({ length: UPLOADS_PER_ACCOUNT }, (_, n) =>
+      call(
+        owner,
+        'POST',
+        `/api/dash/media/files?folder=${folderId}`,
+        pdfForm(`own-${n}.pdf`)
+      )
+    );
+    try {
+      await waitFor(
+        () =>
+          storeOpsOf('PutObject').length - putsBefore === UPLOADS_PER_ACCOUNT
+      );
+      const refused = await app.handle(
+        authedRequest(owner, `/api/dash/media/files?folder=${folderId}`, {
+          method: 'POST',
+          body: pdfForm('third.pdf'),
+        })
+      );
+      expect(refused.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+      expect(refused.headers.get('retry-after')).toBe('5');
+      expect(storeOpsOf('PutObject').length - putsBefore).toBe(
+        UPLOADS_PER_ACCOUNT
+      );
+    } finally {
+      release();
+    }
+    const answers = await Promise.all(held);
+    expect(answers.map((answer) => answer.status)).toEqual(
+      answers.map(() => HTTP_STATUS.CREATED)
+    );
+    // The refused upload left no row of its own, pending or active.
+    const owned = await db
+      .select({ id: files.id })
+      .from(files)
+      .where(eq(files.uploadedBy, owner.user.userId));
+    expect(owned).toHaveLength(UPLOADS_PER_ACCOUNT);
+    // The share came back once they finished.
+    await upload(owner, folderId, pdfForm('after.pdf'));
+  });
+});

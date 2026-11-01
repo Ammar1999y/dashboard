@@ -25,7 +25,8 @@ import type { UsageSource } from '@/lib/media/usage-sources';
 import { eq, sql } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { db } from '@/db';
+import { dataTableDb, db } from '@/db';
+import { DATA_TABLE_POOL_CONNECTIONS } from '@/db/limits';
 import { files, folders, users } from '@/db/schema';
 
 import {
@@ -36,10 +37,12 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import { MEDIA_USAGE_LIST_MAX } from '@app/shared/validation/constants';
 
 import { generateUuidV7 } from '@/lib/id';
+import { libraryTotals } from '@/lib/media/files';
+import { listSubfolders, searchFolders } from '@/lib/media/folders';
 import * as rateLimit from '@/lib/rate-limit';
 import * as namesModule from '@/lib/users/names';
 
-import { resetTables } from '../helpers/database';
+import { holdUntilReleased, resetTables } from '../helpers/database';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { authedRequest, signedInUser } from '../helpers/session';
 import {
@@ -430,6 +433,60 @@ describe('folder figures', () => {
     );
     expect(malformed.status).toBe(HTTP_STATUS.NOT_FOUND);
     expect(malformed.body.code).toBe(FOLDER_NOT_FOUND_CODE);
+  });
+
+  test('the listing, search and library aggregates run on the list pool, not the one sign-in and every write share', async () => {
+    const folder = await seedFolder('Pooled figures');
+    await seedFile({ folderId: folder, sizeBytes: 7 });
+
+    type Backend = { pid: number };
+    const listBackends = await Promise.all(
+      Array.from({ length: DATA_TABLE_POOL_CONNECTIONS }, () =>
+        dataTableDb.execute<Backend>(
+          sql`select pg_backend_pid() as pid from pg_sleep(0.1)`
+        )
+      )
+    );
+    const listPids = new Set(listBackends.flat().map((row) => row.pid));
+    expect(listPids.size).toBe(DATA_TABLE_POOL_CONNECTIONS);
+
+    // Each aggregate reads `files`, so each waits on this lock where its
+    // backend can be seen.
+    const hold = holdUntilReleased((tx) =>
+      tx.execute(sql`lock table files in access exclusive mode`)
+    );
+    await hold.acquired;
+    const reads = Promise.all([
+      listSubfolders(null),
+      searchFolders('Pooled figures'),
+      libraryTotals(),
+    ]);
+    const blocked: number[] = [];
+    try {
+      const deadline = performance.now() + 5000;
+      while (blocked.length < 3 && performance.now() < deadline) {
+        const rows =
+          await db.execute<Backend>(sql`select pid from pg_stat_activity
+          where datname = current_database() and pid <> pg_backend_pid()
+            and cardinality(pg_blocking_pids(pid)) > 0`);
+        blocked.splice(0, blocked.length, ...rows.map((row) => row.pid));
+        await Bun.sleep(10);
+      }
+    } finally {
+      hold.release();
+    }
+    await hold.finished;
+    const [subfolders, hits, totals] = await reads;
+
+    expect(blocked).toHaveLength(3);
+    expect(blocked.filter((pid) => !listPids.has(pid))).toEqual([]);
+    expect(subfolders).toContainEqual(
+      expect.objectContaining({ id: folder, fileCount: 1 })
+    );
+    expect(hits.folders).toEqual([
+      expect.objectContaining({ id: folder, fileCount: 1 }),
+    ]);
+    expect(totals.bytes).toBeGreaterThanOrEqual(7);
   });
 });
 

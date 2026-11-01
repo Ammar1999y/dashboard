@@ -18,6 +18,13 @@ Updated: 2026-10-31
   connections (`db/limits.ts`).
 - **Rate limits:** local SQLite via `bun:sqlite` on a persistent volume.
 - **Ingress:** Cloudflare → Coolify/Traefik. Mandatory (§5).
+- **Host size: at least 4 vCPU.** Bun runs Argon2, image encoding and every
+  session-cookie HMAC on one work pool with a thread per core. The app bounds
+  the first two to one job each (`withPasswordSlot` in
+  `lib/auth/password/hash.ts`, `ENCODER_SLOTS` in
+  `lib/media/image/optimize.ts`); on 2 vCPU those two alone fill the pool, and
+  every signed-in request waits behind a sign-in plus an upload (measured: 8
+  encodes on 8 threads took an HMAC from 0.15 ms to 1.1 s).
 - **Process model:** one container, one `bun server.ts` process, one replica,
   one VPS. This is a hard constraint, not a default: the limiter's SQLite store
   allows one writer on one host, and a second writer is an authentication
@@ -66,7 +73,14 @@ Owner decisions and checks nothing in the repository can settle.
    code against the role's 10 s (§3.3). Which value the application runs with
    is open.
 4. **`--no-env-file`** (§2).
-5. **The SQLite checks against real data.** Migration, busy handling, crash
+5. **An edge rate-limiting rule on the authentication surface** (§5, Edge
+   rules). The application's limits are per IP (and per IPv6 /48) and per
+   account; a distributed flood is shed by its process-wide caps, which answer
+   503 to everyone until it stops.
+6. **Container log rotation** (§10, Container logs). Unrotated, a flood fills
+   the disk; rotated too tightly, it pushes the incident's error lines out.
+7. **Host size** (Topology): confirm at least 4 vCPU before launch.
+8. **The SQLite checks against real data.** Migration, busy handling, crash
    recovery and backup/restore were verified only against freshly created
    databases on a developer machine. Repeat them against a copy of the live
    volume once it holds data.
@@ -621,6 +635,19 @@ the Bun app share the box. Give PostgreSQL about half of RAM.
 | `random_page_cost`     | `1.1`                | `1.1`                | SSD/NVMe only. Check `lsblk -d -o name,rota` on the host: `0` = SSD. On spinning disk keep `4`.                                                                                                                                                                                                                                                                  |
 | `max_connections`      | `50`                 | `50`                 | 15 per app process + 1 per migration run + admin sessions: 17–18 for the single process this runbook deploys. PostgreSQL reserves 3 for superusers. Raise it with the process count, not before, and never to hide pool exhaustion: exhaustion here has been a code bug (a transaction asking the pool for a second connection), which more slots would not fix. |
 
+On a 2-vCPU host also set `max_parallel_workers_per_gather = 0`: a parallel
+statement occupies three backends, and on the measured data sizes it was
+slower than a serial one. The data-table list pool already sets it to 0 on its
+own connections (`db/index.ts`).
+
+Keep the visibility map fresh on the two tables whose counts are index-only
+(`idx_users_role_id_live`, `idx_files_folder_active`), once, as the owner:
+
+```sql
+ALTER TABLE users SET (autovacuum_vacuum_scale_factor = 0.02);
+ALTER TABLE files SET (autovacuum_vacuum_scale_factor = 0.02);
+```
+
 Leave the PostgreSQL 18 defaults for `io_method` (`worker`),
 `effective_io_concurrency` (`16`), `max_wal_size` (`1GB`) and
 `checkpoint_completion_target` (`0.9`).
@@ -635,9 +662,12 @@ shared_preload_libraries = 'pg_stat_statements'
 ```
 
 Then, once, as a superuser: `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;`.
-A default `statement_timeout` is deferred until p99 query durations are
-measured on this host (`reports/should-ignore.md`, Known #2), and this is how
-they are measured. `log_lock_waits` makes a writer that misses the users →
+The data-table list pool sets its own `statement_timeout` (5 s,
+`DATA_TABLE_STATEMENT_TIMEOUT_MS` in `db/index.ts`; measured p99 about 0.2 s
+on realistic data, 1.2 s for the deepest sorted page at 200k users), and a
+statement it cancels answers 503. The application pool's default is still
+deferred until p99 query durations are measured on this host
+(`reports/should-ignore.md`, Known #2), and this is how they are measured. `log_lock_waits` makes a writer that misses the users →
 roles lock order visible before it deadlocks (the app answers a detected
 deadlock 503).
 
@@ -854,6 +884,23 @@ repository can enforce them.
 - **`/api/health/storage`**: the container's own health check reaches it over
   loopback (§7), so nothing legitimate crosses the edge to it. Hardening on top
   of the token, which is the control.
+- **A rate-limiting rule on the authentication surface** (**Rules > Security
+  rules > Rate limiting rules**): `POST` with _URI Path starts with_
+  `/api/auth/`, counted per IP, for example 60 requests per 10 s, then block
+  for 60 s; tune it to the plan's periods and characteristics. Every captcha
+  route and every password check lives under it. Behind it the application
+  caps siteverify at 64 calls in flight (`lib/captcha.ts`) and password work
+  at one job (`lib/auth/password/hash.ts`); past those it answers 503 with
+  `Retry-After` to everyone, attacker and user alike, so a distributed flood
+  is best shed here. Not verified: whether the zone's plan can count IPv6 by
+  prefix; the application charges each IPv6 /48 as well as each /64.
+- **During an attack**, while the access log shows a sustained 503 rate on
+  `/api/auth/*` (§9), tighten that rule (a lower count, a longer block) and
+  loosen it once the rate falls. **Do not** put a Managed Challenge or Under
+  Attack mode on `/api/auth/*`: the dashboard calls it with `fetch`, which
+  cannot show or solve the challenge page, so every sign-in would fail.
+  Challenging the API needs Turnstile pre-clearance, which the front end does
+  not issue today.
 - **Optionally, a rate-limiting rule on `/openapi.json`.** The route already
   requires dashboard access (a live session whose role grants `view` on at
   least one page), sits behind the pre-auth IP limit, is built once per process
@@ -881,7 +928,7 @@ curl -sS -i -X POST "http://127.0.0.1:${PORT:-3000}/api/internal/x"
 | Any proxy body limit (Traefik, Cloudflare)                     | **≥ 25,165,824 bytes** (24 MiB), or none | Bun's own listener limit (`SERVER_BODY_LIMIT_BYTES`, `lib/http/request.ts`), twice the application's ceiling. Between 12 MiB and 24 MiB the **application** refuses with a 413 in the API envelope and its CORS headers, and drains the unread body so a browser still uploading can read it. A proxy that cuts at or below 12 MiB answers a bare 413 the dashboard cannot show. |
 | Cloudflare native upload ceiling                               | **Plan ceiling**                         | Not the application limit. The `max_upload` zone setting starts at 100 MB; an exact body-size WAF rule requires Enterprise, and then no lower than 25,165,824 bytes.                                                                                                                                                                                                             |
 | Application body ceiling                                       | **12 MiB, in code**                      | `MAX_REQUEST_BODY_BYTES` (`lib/http/request.ts`): one 10 MB document plus multipart framing, checked from `Content-Length` before any body byte is read and counted again as the body streams. It reaches the two multipart routes only; images are capped at 1 MiB per file. Nothing is needed at the proxy for it.                                                             |
-| JSON routes                                                    | **1 MiB, in code**                       | `MAX_JSON_BODY_BYTES` (`lib/http/request.ts`), enforced while the body streams. A route may raise its own with `maxJsonBodyBytes` on its binding; the published document states each route's bound. A 413 that carries the API envelope is the app's, not a proxy refusal.                                                                                                       |
+| JSON routes                                                    | **64 KiB, in code**                      | `MAX_JSON_BODY_BYTES` (`lib/http/request.ts`), enforced while the body streams, on the bindings and on `/api/auth/*` alike. The largest real body is a few KB. A route may raise its own with `maxJsonBodyBytes` on its binding; the published document states each route's bound. A 413 that carries the API envelope is the app's, not a proxy refusal.                        |
 
 A proxy body limit is optional: the application and Bun already bound every
 body. To refuse oversized uploads at Traefik, copy the generated
@@ -928,15 +975,26 @@ The seven, each of which calls R2 inside the request:
 Neither number is measured on the target VPS; they are deliberately generous.
 
 **Capacity floor for uploads**, measured off the target host: a 25 MP image
-costs ~230 MB resident. Image encoding is admitted one job at a time per
-process with four waiting (`lib/media/image/admission.ts`,
-`lib/media/image/optimize.ts`), so a sixth concurrent upload answers 503
+costs ~230 MB resident. Uploads are admitted four at a time per process with
+eight waiting up to 10 s and two per account (`lib/media/upload.ts`, built on
+`lib/admission.ts`), and image encoding one job at a time
+(`lib/media/image/optimize.ts`), so a thirteenth concurrent upload answers 503
 instead of queueing CPU work; SVG work runs in a Bun Worker
 (`lib/media/image/svg-jobs.ts`) with a 15 s per-job timeout and the same
 admission. Re-measure latency and peak RSS on the VPS before raising either:
 a second encoder slot (`ENCODER_SLOTS` in `lib/media/image/optimize.ts`)
 measured about 240 MiB more peak RSS at the pixel cap
-(`reports/should-ignore.md` #81).
+(`reports/should-ignore.md` #81), and it also takes a work-pool thread
+(Topology, Host size).
+
+**Other process-wide caps**, each answering 503 with `Retry-After` when full:
+password work, one Argon2 job with 16 waiting up to 5 s
+(`lib/auth/password/hash.ts`); Turnstile siteverify, 64 calls in flight with
+64 waiting up to 1 s (`lib/captcha.ts`). The image sets
+`BUN_CONFIG_MAX_HTTP_REQUESTS=512` (`apps/back-end/Dockerfile`): Bun runs at
+most that many `fetch`es at once, in one queue every provider shares, and
+the siteverify cap keeps a captcha flood to part of it. Keep the variable if
+the image is ever replaced.
 
 ### HTTP behaviours a WAF or uptime check will see
 
@@ -1462,6 +1520,15 @@ A run logs only `status`, `durationMs` and `hasMore`, not per-table counts.
   right one: the floor leaves a real verify too little time on this host
   (§8 d). Raise `KNOWN_BRANCH_WORK_MS` (`lib/http/timing-floor.ts`), which
   moves the floor and the cut together.
+- **`captcha.siteverify failed` with `errorCodes`**: alert on any occurrence.
+  `invalid-input-secret` or `missing-input-secret` means `TURNSTILE_SECRET_KEY`
+  is wrong, and every sign-in and OTP request is being refused.
+- **`captcha.siteverify failed` with `timedOut` or `status`**: alert on a
+  steady rate. Cloudflare's siteverify is slow or failing, and each such
+  request answers 403 to a real user.
+- **A sustained 503 rate in the access log** on `/api/auth/*` or the upload
+  routes: the password, siteverify or upload caps are full. A flood (§5, the
+  attack lever) or a host too small for the traffic (Topology).
 - **`hibp.degraded`**: an attempt of the breached-password check failed; after
   the last one the password is accepted unchecked (`reports/should-ignore.md`
   #52).
@@ -1518,6 +1585,24 @@ database is open.
 Enable Coolify notifications for deployment failure, container status and
 **server disk usage**.
 [Notifications](https://coolify.io/docs/knowledge-base/notifications/)
+
+### Container logs: rotation and retention
+
+The app writes one access line per request (about 85 bytes for a refusal,
+`lib/http/after-response.ts`) to stdout, which Docker's `json-file` driver
+keeps on the host. Unrotated, a flood at 1,000 requests a second writes about
+7 GB a day; rotated at the commonly installed 10 MB × 3, the same flood pushes
+the incident's error lines out within minutes. Check what applies, on the VPS:
+
+```sh
+docker inspect --format '{{json .HostConfig.LogConfig}}' <back-end container>
+cat /etc/docker/daemon.json
+```
+
+Set rotation large enough to hold an incident, for example
+`max-size=100m`, `max-file=5` for this container (Coolify's custom Docker
+options), or ship the logs off the host and keep local rotation small. Record
+the value applied here.
 
 ### Peak WAL size: `journal_size_limit` does not bound it
 
@@ -1770,6 +1855,16 @@ URL` in production and otherwise accepts it.
   object is always removed from the origin; an edge copy is evicted only when
   the purge below is configured, and a copy already in a browser stays readable
   until its lifetime elapses.
+- **Full request body buffering on the upload routes**, where the plan offers
+  it (**Rules > Configuration Rules**, _Request body buffering_: Full, for
+  `/api/dash/media/files` and `/api/upload/file`). The origin then reads an
+  upload at Cloudflare's speed rather than the client's, inside the app's 100 s
+  body deadline (`UPLOAD_BODY_DEADLINE_MS`, `lib/media/upload.ts`). Not verified
+  on this zone; without it a 10 MiB document needs about 0.8 Mbit/s of upload.
+- **Ignore the query string at the edge.** A random `?x=` misses the cache and
+  becomes an R2 read (billed per operation). No public URL the app issues
+  carries a query, so add a Cache Rule on the public host with _Cache key:
+  ignore query string_, and a rate-limiting rule on the same host for misses.
 
 ### Environment
 
@@ -2033,6 +2128,13 @@ email = email`, and the same for `roles` (`role_name`, `description`), `files`
       firewall**: the control that keeps `cf-connecting-ip` trustworthy (§5).
 - [ ] `/api/internal/*`, `/api/dev/*` and `/api/health/storage` blocked at
       Cloudflare or Traefik; `/openapi.json` optionally rate-limited (§5).
+- [ ] A rate-limiting rule on `POST /api/auth/*` in place, and how to tighten
+      it during an attack known to whoever is on call (§5).
+- [ ] At least 4 vCPU (Topology); on 2 vCPU, `max_parallel_workers_per_gather`
+      = 0 (§3.3). The `users`/`files` autovacuum settings applied (§3.3).
+- [ ] Container log rotation checked and sized for an incident, or logs
+      shipped off the host (§10).
+- [ ] On the public media host, a Cache Rule ignoring the query string (§11).
 - [ ] Proxy read timeout > 120 s. No proxy body limit, or one of at least
       25,165,824 bytes, never 12 MiB; a request just over 12 MiB answers the
       application's 413 JSON envelope through the domain (§5).

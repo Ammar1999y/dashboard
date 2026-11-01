@@ -236,6 +236,7 @@
     "unrs-resolver",
   ],
   "patchedDependencies": {
+    "svgo@4.1.0": "patches/svgo@4.1.0.patch",
     "@dnd-kit/core@6.3.1": "patches/@dnd-kit%2Fcore@6.3.1.patch",
   },
   "overrides": {

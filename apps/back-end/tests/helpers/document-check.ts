@@ -48,6 +48,17 @@ const pointerSegment = (segment: string) =>
 
 const isSuccess = (status: number) => status >= 200 && status < 300;
 
+/**
+ * Answers sent without a body whatever the document publishes for them: a
+ * HEAD reaches the check with its body already dropped, 204 and 304 never
+ * carry one, and a redirect's is optional.
+ */
+const answersBodiless = (method: string, status: number) =>
+  method === 'HEAD' ||
+  status === 204 ||
+  status === 304 ||
+  (status >= 300 && status < 400);
+
 const isJsonMediaType = (mediaType: string) =>
   mediaType === 'application/json' || mediaType.endsWith('+json');
 
@@ -142,13 +153,18 @@ export function documentCheck(
     status: string,
     published: JsonSchema,
     mediaType: string,
-    sent: Sent
+    sent: Sent,
+    bodiless: boolean
   ): string[] {
-    if (sent.text === '') return [];
     const content = isJsonSchema(published.content) ? published.content : {};
+    const mediaTypes = Object.keys(content);
+    if (sent.text === '')
+      return bodiless || mediaTypes.length === 0
+        ? []
+        : [`no body, where the document publishes ${mediaTypes.join(', ')}`];
     if (!mediaType || !Object.hasOwn(content, mediaType))
       return [
-        `a ${mediaType || 'untyped'} body, where the document publishes ${Object.keys(content).join(', ') || 'none'}`,
+        `a ${mediaType || 'untyped'} body, where the document publishes ${mediaTypes.join(', ') || 'none'}`,
       ];
     if (!isJsonMediaType(mediaType)) return [];
     if (!sent.parsed) return [`a body that is not ${mediaType}`];
@@ -184,7 +200,7 @@ export function documentCheck(
     if (request.method === 'OPTIONS') return [];
     const url = URL.parse(request.url);
     if (!url || !isRoutableHost(url)) return [];
-    // A HEAD is its GET's answer, seen here before the exit step drops the body.
+    // A HEAD is its GET's answer, seen here after the exit step dropped the body.
     const method =
       request.method === 'HEAD' ? 'get' : request.method.toLowerCase();
     const operation = operationOf(method, url.pathname);
@@ -205,7 +221,14 @@ export function documentCheck(
     const published = operation.responses[status];
     const problems = isJsonSchema(published)
       ? [
-          ...bodyProblems(operation, status, published, mediaType, sent),
+          ...bodyProblems(
+            operation,
+            status,
+            published,
+            mediaType,
+            sent,
+            answersBodiless(request.method, response.status)
+          ),
           ...cookieProblems(operation, published, response),
         ]
       : ['the operation does not publish this status'];

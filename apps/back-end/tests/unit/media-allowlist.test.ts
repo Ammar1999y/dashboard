@@ -41,6 +41,7 @@ import {
 } from '@/lib/media/allowlist';
 import { detectCompoundFile } from '@/lib/media/office/cfb';
 import {
+  CONTENT_TYPES_MAX_TOKENS,
   detectOoxml,
   EXCEL_MAIN_CONTENT_TYPE,
   OOXML_MAX_ENTRIES,
@@ -1437,6 +1438,32 @@ describe('Office Open XML relationships', () => {
 });
 
 describe('legacy compound files', () => {
+  test('a stream size claimed past the file allocates no more than the file', () => {
+    const file = excel();
+    // The Workbook entry: directory sector 1, entry 1, its size field at +120.
+    const sizeField = SECTOR + SECTOR * 1 + 128 + 120;
+    file.writeUInt32LE(0xff_ff_ff_f0, sizeField);
+
+    const realUint8Array = Uint8Array;
+    const largest = { bytes: 0 };
+    // eslint-disable-next-line unicorn/no-global-object-property-assignment -- the allocation under test is a bare `new Uint8Array` in the parser
+    globalThis.Uint8Array = new Proxy(realUint8Array, {
+      construct(target, args: unknown[], newTarget) {
+        const [first] = args;
+        if (typeof first === 'number')
+          largest.bytes = Math.max(largest.bytes, first);
+        return Reflect.construct(target, args, newTarget) as object;
+      },
+    });
+    try {
+      expect(detectCompoundFile(file, 'excel').ok).toBe(false);
+    } finally {
+      // eslint-disable-next-line unicorn/no-global-object-property-assignment -- restoring the global replaced above
+      globalThis.Uint8Array = realUint8Array;
+    }
+    expect(largest.bytes).toBeLessThanOrEqual(file.length);
+  });
+
   test('a plain .doc and a plain .xls are admitted, through the mini stream and through ordinary sectors', () => {
     // A 64-byte FIB lives in the mini stream; one padded past the cutoff does not.
     expect(detectCompoundFile(word(), 'word')).toEqual({ ok: true });
@@ -1647,5 +1674,36 @@ describe('legacy compound files', () => {
     // Generous, and still two orders of magnitude under what building the table
     // cost. The assertion is the SHAPE of the work, not a latency budget.
     expect((Bun.nanoseconds() - started) / 1e6).toBeLessThan(20);
+  });
+});
+
+describe('the [Content_Types].xml token budget', () => {
+  test('a manifest naming as many parts as the entry cap admits is read', () => {
+    const parts = Array.from(
+      { length: OOXML_MAX_ENTRIES },
+      (_, index) =>
+        [`/word/media/image${index}.png`, 'image/png'] as [string, string]
+    );
+    const xml = contentTypes([
+      ['/word/document.xml', WORD_MAIN_CONTENT_TYPE],
+      ...parts,
+    ]);
+    expect(detectOoxml(docx([], xml), 'word')).toEqual({ ok: true });
+  });
+
+  test.each([
+    ['elements', '<a/>'],
+    ['end tags', '</a>'],
+    ['comments', '<!---->'],
+  ])('a manifest flooded with %s is refused at the budget', (_label, unit) => {
+    const flood = `${TYPES_OPEN}${MAIN_OVERRIDE}${unit.repeat(
+      CONTENT_TYPES_MAX_TOKENS + 1
+    )}</Types>`;
+    const started = performance.now();
+    expect(detectOoxml(docx([], flood), 'word')).toEqual({
+      ok: false,
+      reason: 'container',
+    });
+    expect(performance.now() - started).toBeLessThan(250);
   });
 });

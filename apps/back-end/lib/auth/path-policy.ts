@@ -5,16 +5,19 @@ import type { EntityID } from '@app/shared/types';
 import type { TwoFactorMethod } from '@app/shared/validation/enums';
 import type { APIError } from 'better-auth/api';
 
-import { eq } from 'drizzle-orm';
+import { count, eq } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
-import { sessions } from '@/db/schema';
+import { passkeys, sessions } from '@/db/schema';
 import { formCsrfMiddleware } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
 
 import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_INVALID_CREDENTIALS } from '@app/shared/messages/auth';
+import {
+  MSG_INVALID_CREDENTIALS,
+  twoFactorMsg,
+} from '@app/shared/messages/auth';
 import {
   MSG_INVALID_INPUT,
   MSG_PAGE_NOT_FOUND,
@@ -242,6 +245,9 @@ async function enforceTwoFactorPathPolicy(
     const mode = await resolveRequestSession(ctx);
     if (mode) {
       await requireLiveSession(ctx, mode.sessionId, mode.userId);
+      // Before the grant is spent, so a refused registration costs none.
+      if (path === '/passkey/verify-registration')
+        await assertPasskeyRoom(mode.userId);
       if (
         needsGrant &&
         !(await consumeReauthGrant(ctx, {
@@ -388,6 +394,24 @@ function assertPasskeyInputBounds(ctx: HookContext, path: string): void {
 
   if (overlongName || malformedId)
     throw authError(HTTP_STATUS.UNPROCESSABLE, MSG_INVALID_INPUT);
+}
+
+/**
+ * Passkeys never expire and the authentication options list every one, so
+ * an unbounded collection grows each later options response; software
+ * authenticators make registering thousands scriptable. Cognito's number, as a
+ * threshold rather than an exact cap: registrations overlapping at it each
+ * pass this check, one grant apiece (should-ignore #90).
+ */
+export const MAX_PASSKEYS_PER_USER = 20;
+
+async function assertPasskeyRoom(userId: EntityID): Promise<void> {
+  const [row] = await db
+    .select({ held: count() })
+    .from(passkeys)
+    .where(eq(passkeys.userId, userId));
+  if ((row?.held ?? 0) >= MAX_PASSKEYS_PER_USER)
+    throw authError(HTTP_STATUS.CONFLICT, twoFactorMsg.passkeyLimitReached);
 }
 
 // The body wins. Registration also reads `?grant=`: the stock client's

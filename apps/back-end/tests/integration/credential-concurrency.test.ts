@@ -7,7 +7,7 @@
  * The assertions here are on the rows after the burst, because a status alone
  * cannot tell "serialised" from "raced and got lucky".
  */
-import { beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 
 import { and, eq } from 'drizzle-orm';
 
@@ -31,7 +31,10 @@ import {
   MAX_FAILED_ATTEMPTS,
   verifyLoginAttempt,
 } from '@/lib/auth/login-guard';
-import { hashPassword } from '@/lib/auth/password/hash';
+import {
+  hashPassword,
+  widenPasswordSlotForTest,
+} from '@/lib/auth/password/hash';
 import { verifyRequesterOtp } from '@/lib/otp/challenge';
 import { processOtpSend } from '@/lib/otp/send';
 
@@ -185,6 +188,13 @@ describe('two first sends for one identifier at once', () => {
 });
 
 describe('parallel wrong passwords', () => {
+  // The production slot runs one attempt at a time; these overlap attempts on
+  // purpose, because the lock design must hold whenever the slot is wider.
+  const restore: { slot: (() => void) | null } = { slot: null };
+  beforeAll(() => {
+    restore.slot = widenPasswordSlotForTest(64);
+  });
+  afterAll(() => restore.slot?.());
   test('are each counted exactly once, with no lost update', async () => {
     const user = await seedUser();
     const attempts = 3;
@@ -219,6 +229,13 @@ describe('parallel wrong passwords', () => {
 });
 
 describe('the failed-attempt counter while Argon2 runs', () => {
+  // The production slot runs one attempt at a time; these overlap attempts on
+  // purpose, because the lock design must hold whenever the slot is wider.
+  const restore: { slot: (() => void) | null } = { slot: null };
+  beforeAll(() => {
+    restore.slot = widenPasswordSlotForTest(64);
+  });
+  afterAll(() => restore.slot?.());
   const AUDIT_META = {
     ip: null,
     userAgent: null,

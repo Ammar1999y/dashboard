@@ -52,6 +52,7 @@ import {
   runVerificationSweep,
 } from '@/lib/maintenance/database';
 import { startSchedule } from '@/lib/maintenance/schedule';
+import { SWEEP_BATCH_SIZE } from '@/lib/media/lifecycle';
 import { ORPHAN_DRAIN_BATCH } from '@/lib/media/orphaned-objects';
 import { TRANSITION_RETRY_BATCH } from '@/lib/media/visibility';
 import { lockUser } from '@/lib/users/lock-order';
@@ -804,6 +805,71 @@ describe('a pass where one object fails and its sibling succeeds', () => {
       )
     );
     expect(deletedBuckets(partial().ops)).toEqual(BOTH_BUCKETS);
+  });
+});
+
+/**
+ * A full batch of `deleting` rows whose objects the store keeps refusing, and
+ * one row behind them whose delete would succeed. Taken in heap order, or by age
+ * without restamping, every run picks the same refused batch again and the row
+ * behind it is never reached.
+ */
+describe('a batch of persistently refused deletes', () => {
+  const behind = 'm/2026/09/sweep-behind-refused.webp';
+  const refused = Array.from(
+    { length: SWEEP_BATCH_SIZE },
+    (_, index) => `m/2026/09/sweep-refused-${index}.webp`
+  );
+  const runs: Pass[] = [];
+
+  beforeAll(async () => {
+    await resetTables();
+    const { userId } = await seedUser();
+    await db.insert(files).values(
+      refused.map((r2Key) => ({
+        ...IMAGE_ROW,
+        r2Key,
+        displayName: 'refused.webp',
+        status: 'deleting' as const,
+        uploadedBy: userId,
+        updatedAt: sql`now() - interval '2 days'`,
+      }))
+    );
+    await db.insert(files).values({
+      ...IMAGE_ROW,
+      r2Key: behind,
+      displayName: 'behind.webp',
+      status: 'deleting',
+      uploadedBy: userId,
+      updatedAt: sql`now() - interval '1 day'`,
+    });
+    for (const key of refused) failObjectStoreKey('DeleteObjects', key);
+    runs.push(await sweepAndRecord(), await sweepAndRecord());
+  }, 30_000);
+
+  test('the first run tries the refused batch, keeps every row, and moves them to the back', async () => {
+    const [first] = runs;
+    expect(first?.swept.removed.files).toMatchObject({
+      removed: 0,
+      hasMore: true,
+      degraded: true,
+    });
+    expect(deletedObjectKeys(first?.ops ?? [])).not.toContain(behind);
+    expect(
+      await db.$count(
+        files,
+        sql`${files.status} = 'deleting' and ${files.updatedAt} > now() - interval '1 hour'`
+      )
+    ).toBe(SWEEP_BATCH_SIZE);
+  });
+
+  test('the next run reaches the row behind them and removes it; the refused rows stay', async () => {
+    const [, second] = runs;
+    expect(deletedObjectKeys(second?.ops ?? [])).toContain(behind);
+    expect(second?.swept.removed.files.removed).toBe(1);
+    expect(await survivingFileKeys()).toEqual(
+      refused.toSorted(compareCodeUnits)
+    );
   });
 });
 

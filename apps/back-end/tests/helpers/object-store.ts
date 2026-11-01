@@ -105,11 +105,13 @@ const state: {
   failKeys: Map<StoreOpKind, Set<string>>;
   corruptNextCopy: boolean;
   preconditionNextPut: 'own' | 'foreign' | 'empty' | null;
+  heldPuts: Promise<void> | null;
 } = {
   failKinds: new Map(),
   failKeys: new Map(),
   corruptNextCopy: false,
   preconditionNextPut: null,
+  heldPuts: null,
 };
 
 /**
@@ -160,6 +162,20 @@ export function resetObjectStore(): void {
   state.failKeys.clear();
   state.corruptNextCopy = false;
   state.preconditionNextPut = null;
+  state.heldPuts = null;
+}
+
+/**
+ * Every `PutObject` from now waits until the returned release runs, as a
+ * stalled store would hold it; recorded on arrival.
+ */
+export function holdPuts(): () => void {
+  const gate = Promise.withResolvers<void>();
+  state.heldPuts = gate.promise;
+  return () => {
+    state.heldPuts = null;
+    gate.resolve();
+  };
 }
 
 /** Lifts every injected failure and keeps the objects: "the outage is over". */
@@ -321,6 +337,7 @@ export function s3ClientStub(): Record<string, unknown> {
   class S3Client {
     async send(cmd: Command): Promise<Record<string, unknown>> {
       record(cmd);
+      if (cmd.kind === 'PutObject' && state.heldPuts) await state.heldPuts;
       const { input } = cmd;
 
       if (state.failKinds.has(cmd.kind)) {

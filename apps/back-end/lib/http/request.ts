@@ -40,8 +40,12 @@ export const SERVER_BODY_LIMIT_BYTES = 2 * MAX_REQUEST_BODY_BYTES;
  * `JSON.parse` is synchronous and stalls every other in-flight request for as
  * long as it takes. A route that needs more sets `maxJsonBodyBytes` rather than
  * raising this.
+ *
+ * The largest real bodies are a few KB (a permission matrix, 50 ids, a passkey
+ * attestation). At 1 MiB a crafted body cost 20–65 ms of parse a request, and
+ * Better Auth parses before its session check, so anonymously.
  */
-export const MAX_JSON_BODY_BYTES = 1024 * 1024;
+export const MAX_JSON_BODY_BYTES = 64 * 1024;
 
 /** Builds the head-only part of the request context — no body byte is read. */
 export function buildRequestMeta(request: Request): HandlerRequestMeta {
@@ -68,6 +72,30 @@ export function buildRequestMeta(request: Request): HandlerRequestMeta {
  * The caller must hand over an unread body; on Elysia that means registering
  * the route with `parse: 'none'`.
  */
+/**
+ * `read`, or `refusal()` once `ms` pass first, so a caller holding a slot
+ * over the read can give the slot back: an idle timeout resets on every byte,
+ * and a trickled body would otherwise hold it for good. The read is only no
+ * longer waited for; Bun ends the request's body once the response is sent.
+ */
+export async function readWithin<T>(
+  read: Promise<T>,
+  ms: number,
+  refusal: () => Error
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(refusal()), ms);
+  });
+  // The read may still fail after the deadline answered for it.
+  void read.catch(() => null);
+  try {
+    return await Promise.race([read, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function lazyFormData(request: Request): () => Promise<FormData | null> {
   // ⚠️ Case-insensitive matching only agrees with `Request.formData()` at or
   // above the runtime floor `server.ts` asserts;

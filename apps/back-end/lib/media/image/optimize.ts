@@ -13,12 +13,17 @@ import {
   SERVER_MAX_IMAGE_SIZE,
 } from '@app/shared/validation/constants';
 
+import { createAdmission } from '@/lib/admission';
 import { serverFault } from '@/lib/http/response';
 
 import { logLine } from '@/utils/log';
 
-import { contentRefused, imageNotCompressible, imageTooLarge } from '../errors';
-import { createAdmission } from './admission';
+import {
+  contentRefused,
+  imageNotCompressible,
+  imageTooLarge,
+  processingBusy,
+} from '../errors';
 import { boundedImage } from './bounded';
 import { iccProfileFits, MAX_ICC_PROFILE_BYTES } from './icc';
 
@@ -374,12 +379,19 @@ async function optimizeImageWithinSlot(
 
 /**
  * Encodes at once in this process. Each slot is memory held together: one
- * encode at the pixel cap peaks near 240 MiB, so raise it only against the
- * host's free memory, not its core count.
+ * encode at the pixel cap peaks near 240 MiB. It is also a thread of Bun's
+ * work pool, one thread per core, which Argon2 (`withPasswordSlot`) and every
+ * session-cookie HMAC share: raise it only while slots here plus password
+ * slots stay below the host's core count, or every signed-in request queues
+ * behind them (8 encodes on 8 threads took an HMAC from 0.15 ms to 1.1 s).
  */
 const ENCODER_SLOTS = 1;
 
-const acquireEncoder = createAdmission({ slots: ENCODER_SLOTS, queueLimit: 4 });
+const acquireEncoder = createAdmission({
+  slots: ENCODER_SLOTS,
+  queueLimit: 4,
+  refusal: processingBusy,
+});
 
 /**
  * Requests are priced in pixels, yet a small PNG with a huge deflated profile

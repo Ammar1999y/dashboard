@@ -5,47 +5,91 @@ import { CustomError } from '@app/shared/error-class';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   MSG_MISSING_CLIENT_IP,
-  MSG_SERVICE_UNAVAILABLE,
   MSG_TOO_MANY_REQUESTS,
 } from '@app/shared/messages/common';
 import { contactKindOf } from '@app/shared/validation/enums';
 
 import { getClientIp } from '@/lib/http/client-ip';
+import { serviceBusy } from '@/lib/http/response';
 
 import { rateLimit } from './fixed-window';
 
+const DOTTED_TAIL = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
+
+/**
+ * The /96 prefixes that carry a whole IPv4 host, by their parsed hextets:
+ * mapped `::ffff:0:0/96` and NAT64's `64:ff9b::/96`.
+ */
+const IPV4_HOST_PREFIXES = new Map([
+  ['0:0:0:0:0:ffff', '::ffff:'],
+  ['64:ff9b:0:0:0:0', '64:ff9b::'],
+]);
+
 /**
  * IPv6 collapses to its /64: ISPs hand a whole /64 to one customer, so keying
- * on the full address lets one host rotate past per-IP caps. IPv4 and
- * IPv4-mapped IPv6 keep the full address.
+ * on the full address lets one host rotate past per-IP caps. IPv4, and an
+ * IPv4 host in IPv6 form, keep the whole host.
  *
- * Inputs already passed `getClientIp`'s ipv4/ipv6 validator, so a colon is a
- * sufficient discriminator.
+ * Inputs already passed `getClientIp`'s ipv4/ipv6 validator, which accepts
+ * every spelling of an address; the key is built from the parsed hextets, so
+ * leading zeros, case and a dotted or hex tail cannot mint a second budget.
  */
 function ipBucket(ip: string): string {
-  if (!ip.includes(':') || ip.includes('.')) return ip;
+  const hextets = ipv6Hextets(ip);
+  if (!hextets) return ip;
+  return ipv4HostKey(hextets) ?? `${hextets.slice(0, 4).join(':')}::/64`;
+}
 
-  // Expand "::" so exactly four hextets are taken from a compressed address.
-  const hasDoubleColon = ip.includes('::');
+/** The canonical dotted spelling of an IPv4 host in IPv6 form, else `null`. */
+function ipv4HostKey(hextets: readonly string[]): string | null {
+  const label = IPV4_HOST_PREFIXES.get(hextets.slice(0, 6).join(':'));
+  if (!label) return null;
+  const [high, low] = hextets
+    .slice(6)
+    .map((hextet) => Number.parseInt(hextet, 16));
+  if (high === undefined || low === undefined) return null;
+  return `${label}${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
+/**
+ * All eight hextets of an IPv6 address, each in its shortest lower-case form so
+ * `0DB8` and `db8` key one bucket; `null` for IPv4.
+ */
+function ipv6Hextets(ip: string): string[] | null {
+  const raw = rawIpv6Hextets(ip);
+  return raw?.map((hextet) => Number.parseInt(hextet, 16).toString(16)) ?? null;
+}
+
+function rawIpv6Hextets(address: string): string[] | null {
+  if (!address.includes(':')) return null;
+
+  // A dotted tail is the last two hextets, legal on any prefix: read as IPv4
+  // it would make each host of a /64 its own budget.
+  const ip = address.replace(
+    DOTTED_TAIL,
+    (_, a: string, b: string, c: string, d: string) =>
+      [Number(a) * 256 + Number(b), Number(c) * 256 + Number(d)]
+        .map((hextet) => hextet.toString(16))
+        .join(':')
+  );
+
+  // Expand "::" so the prefix hextets are taken from a compressed address.
   const segments = ip.split(':');
-  if (hasDoubleColon) {
-    const filled: string[] = [];
-    let used = false;
-    for (const seg of segments) {
-      if (seg === '' && !used) {
-        used = true;
-        const missing = 8 - segments.filter((s) => s !== '').length;
-        for (let i = 0; i < missing; i++) filled.push('0');
-        continue;
-      }
-      if (seg === '') continue;
-      filled.push(seg);
+  if (!ip.includes('::')) return segments;
+  const filled: string[] = [];
+  let used = false;
+  for (const seg of segments) {
+    if (seg === '' && !used) {
+      used = true;
+      const missing = 8 - segments.filter((s) => s !== '').length;
+      for (let i = 0; i < missing; i++) filled.push('0');
+      continue;
     }
-    while (filled.length < 8) filled.push('0');
-    return filled.slice(0, 4).join(':') + '::/64';
+    if (seg === '') continue;
+    filled.push(seg);
   }
-
-  return segments.slice(0, 4).join(':') + '::/64';
+  while (filled.length < 8) filled.push('0');
+  return filled;
 }
 
 /**
@@ -77,6 +121,34 @@ export function ipIdentifier(headers: Headers): string {
     throw refusal;
   }
   return `ip:${ipBucket(ip)}`;
+}
+
+/**
+ * How many /64 budgets one IPv6 /48 shares. A host can be routed a /48, which
+ * is 65 536 separate /64 budgets, so each per-IP limit is also charged on the
+ * /48 at this multiple; a site's many /64s rarely all spend at once.
+ */
+export const IPV6_PREFIX_LIMIT_MULTIPLIER = 8;
+
+/**
+ * A per-IP limit: the client's own bucket (`ipIdentifier`) and, for IPv6,
+ * also the /48 it sits in, so prefix rotation multiplies no budget.
+ */
+export async function enforceIpRateLimit(
+  opts: Omit<Parameters<typeof enforceRateLimit>[0], 'identifier'> & {
+    headers: Headers;
+  }
+): Promise<void> {
+  const { headers, ...limit } = opts;
+  const identifier = ipIdentifier(headers);
+  await enforceRateLimit({ ...limit, identifier });
+  const hextets = ipv6Hextets(getClientIp(headers) ?? '');
+  if (!hextets || ipv4HostKey(hextets)) return;
+  await enforceRateLimit({
+    ...limit,
+    identifier: `ip48:${hextets.slice(0, 3).join(':')}::/48`,
+    limit: limit.limit * IPV6_PREFIX_LIMIT_MULTIPLIER,
+  });
 }
 
 export function userIdentifier(userId: EntityID): string {
@@ -204,6 +276,8 @@ export async function enforceOtpVerifyQuota(opts: {
  * over the limit. `scope` keeps per-endpoint counters apart when two endpoints
  * share an identifier.
  */
+const LIMITER_STORE_RETRY_AFTER_S = 30;
+
 export async function enforceRateLimit(opts: {
   scope: string;
   identifier: string;
@@ -237,12 +311,8 @@ export async function enforceRateLimit(opts: {
   });
 
   if (result.storeFailure && opts.failClosed) {
-    const error = new CustomError(
-      MSG_SERVICE_UNAVAILABLE,
-      HTTP_STATUS.SERVICE_UNAVAILABLE
-    );
+    const error = serviceBusy(LIMITER_STORE_RETRY_AFTER_S);
     error.cause = result.storeFailure;
-    error.responseHeaders = { 'Retry-After': '30' };
     throw error;
   }
 

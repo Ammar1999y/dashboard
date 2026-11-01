@@ -18,8 +18,9 @@ export const MAX_POOL_CONNECTIONS = 10;
 
 /**
  * `dataTableDb`'s pool, on top of `MAX_POOL_CONNECTIONS`. A list request holds
- * two at once, its rows and its count; list requests beyond what it serves wait
- * for a connection without a bound.
+ * two to three at once (rows, count, and a media folder's subfolders); requests
+ * beyond what it serves wait for a connection, each statement then held to the
+ * pool's `statement_timeout`.
  */
 export const DATA_TABLE_POOL_CONNECTIONS = 4;
 

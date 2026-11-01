@@ -5,9 +5,10 @@ import type { Tx } from '@/db';
 import type { EntityID } from '@app/shared/types';
 import type { BucketType } from '@app/shared/validation/enums';
 
-import { and, asc, inArray, isNotNull } from 'drizzle-orm';
+import { and, asc, isNotNull } from 'drizzle-orm';
 
 import { db, withTransaction } from '@/db';
+import { inList } from '@/db/arrays';
 import { files } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -130,7 +131,7 @@ async function checkLinkable(params: LinkParams): Promise<LinkRow[]> {
   const rows = await db
     .select(LINK_COLUMNS)
     .from(files)
-    .where(inArray(files.id, ids));
+    .where(inList(files.id, ids));
   if (rows.length !== ids.length) throw fileNotFound(HTTP_STATUS.UNPROCESSABLE);
 
   assertLinkable(rows, { ...params, ids }, await usageVisibilities(ids), false);
@@ -202,7 +203,7 @@ export async function attachFiles(tx: Tx, params: LinkParams): Promise<void> {
   const rows = await tx
     .select(FILE_COLUMNS)
     .from(files)
-    .where(inArray(files.id, ids))
+    .where(inList(files.id, ids))
     .orderBy(asc(files.id))
     .for('update');
   if (rows.length !== ids.length) throw fileNotFound(HTTP_STATUS.UNPROCESSABLE);
@@ -220,7 +221,7 @@ export async function attachFiles(tx: Tx, params: LinkParams): Promise<void> {
   await tx
     .update(files)
     .set({ unfiledAt: null })
-    .where(and(inArray(files.id, ids), isNotNull(files.unfiledAt)));
+    .where(and(inList(files.id, ids), isNotNull(files.unfiledAt)));
 }
 
 export async function linkFiles(

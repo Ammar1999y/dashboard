@@ -34,6 +34,8 @@ export const twoFactorMsg = {
   lastMethod:
     'لا يمكن إزالة طريقة التحقق الوحيدة. قم بإلغاء تفعيل التحقق بخطوتين بدلاً من ذلك',
   verifySuccess: 'تم التحقق بنجاح',
+  passkeyLimitReached:
+    'وصلت إلى الحد الأقصى لعدد مفاتيح المرور. احذف مفتاحاً قبل إضافة مفتاح جديد',
   trustRequiresProof:
     'يجب إكمال التحقق بخطوتين على هذا الجهاز قبل حفظه كجهاز موثوق',
   totpEnrolmentExpired:

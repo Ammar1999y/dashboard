@@ -20,6 +20,7 @@ import {
   MAX_JSON_BODY_BYTES,
   MAX_REQUEST_BODY_BYTES,
   readJsonObject,
+  readWithin,
   SERVER_BODY_LIMIT_BYTES,
 } from '@/lib/http/request';
 
@@ -252,5 +253,23 @@ describe('a multipart route is bounded by its own count, not by the server limit
 
   test('the server limit stays above every ceiling the app answers itself', () => {
     expect(SERVER_BODY_LIMIT_BYTES).toBeGreaterThan(MAX_REQUEST_BODY_BYTES);
+  });
+});
+
+describe('readWithin', () => {
+  const late = () => new Error('late');
+
+  test('answers the read when it settles first', async () => {
+    expect(await readWithin(Promise.resolve('body'), 1000, late)).toBe('body');
+  });
+
+  test('answers the refusal once the deadline passes first, and leaves the read unawaited', async () => {
+    const read = Promise.withResolvers<string>();
+    const started = Date.now();
+    await expect(readWithin(read.promise, 20, late)).rejects.toThrow('late');
+    expect(Date.now() - started).toBeGreaterThanOrEqual(15);
+    // A read failing after the deadline answered is not an unhandled rejection.
+    read.reject(new Error('stream reset'));
+    await Bun.sleep(5);
   });
 });

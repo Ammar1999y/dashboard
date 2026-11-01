@@ -28,7 +28,7 @@ import type { SeededUser } from '../helpers/session';
 import { eq } from 'drizzle-orm';
 
 import { app } from '@/app';
-import { db } from '@/db';
+import { db, withTransaction } from '@/db';
 import { auditLogs, roles, sessions, users } from '@/db/schema';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
@@ -41,6 +41,10 @@ import {
   LOCK_DURATION_SECONDS,
   MAX_FAILED_ATTEMPTS,
 } from '@/lib/auth/login-guard';
+import {
+  PASSWORD_WORK_QUEUE,
+  withPasswordSlot,
+} from '@/lib/auth/password/hash';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { PRE_AUTH_LIMIT } from '@/lib/http/pre-auth';
 
@@ -465,8 +469,34 @@ describe('a refused or unavailable Turnstile verification', () => {
       otpMsg.captchaFailed
     );
     expect(response.headers.getSetCookie()).toEqual([]);
+    expect(await lockRow(actor().userId)).toEqual({
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    });
     expect(await sessionCount(actor().userId)).toBe(0);
     expect(egressCallsTo(TURNSTILE_HOST).length).toBe(1);
+  });
+
+  test('a 200 naming a wrong secret refuses before the credentials', async () => {
+    // How a misconfigured `TURNSTILE_SECRET_KEY` arrives: an HTTP success whose
+    // body carries the operator's error code.
+    scriptEgress(TURNSTILE_HOST, () =>
+      Response.json({ success: false, 'error-codes': ['invalid-input-secret'] })
+    );
+
+    const response = await attempt(actor().email, actor().password);
+
+    await expectAuthError(
+      response,
+      HTTP_STATUS.FORBIDDEN,
+      otpMsg.captchaFailed
+    );
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(await lockRow(actor().userId)).toEqual({
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    });
+    expect(await sessionCount(actor().userId)).toBe(0);
   });
 
   test('a siteverify that never answers is bounded, and refuses', async () => {
@@ -489,6 +519,10 @@ describe('a refused or unavailable Turnstile verification', () => {
 
     expect(response.status).toBe(HTTP_STATUS.FORBIDDEN);
     expect(response.headers.getSetCookie()).toEqual([]);
+    expect(await lockRow(actor().userId)).toEqual({
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    });
     expect(await sessionCount(actor().userId)).toBe(0);
 
     // Fail-closed is only half of it. The other half is the cost: one inbound
@@ -935,4 +969,106 @@ describe('the callbackURL a sign-in body may carry', () => {
       redirect: false,
     });
   });
+});
+
+/**
+ * The password slot full (`lib/auth/password/hash.ts`): the attempt is
+ * refused before its failed-attempt charge, the same way for a known and an
+ * unknown address, and leaves nothing behind.
+ */
+describe('a saturated password slot', () => {
+  const fixture: { user: SeededUser | null } = { user: null };
+
+  function actor(): SeededUser {
+    if (!fixture.user) throw new Error('fixture not seeded');
+    return fixture.user;
+  }
+
+  beforeAll(async () => {
+    fixture.user = await seedUser();
+  });
+
+  async function auditCount(userId: string): Promise<number> {
+    const rows = await db
+      .select({ id: auditLogs.id })
+      .from(auditLogs)
+      .where(eq(auditLogs.userId, userId));
+    return rows.length;
+  }
+
+  test('known and unknown addresses get one 503, and nothing is charged', async () => {
+    acceptCaptcha();
+    const auditsBefore = await auditCount(actor().userId);
+    const gate = Promise.withResolvers<void>();
+    const holders = Array.from({ length: 1 + PASSWORD_WORK_QUEUE }, () =>
+      withPasswordSlot(() => gate.promise)
+    );
+    try {
+      const known = await attempt(actor().email, actor().password);
+      const unknown = await attempt(UNKNOWN_EMAIL, WRONG_PASSWORD);
+
+      expect(known.status).toBe(HTTP_STATUS.SERVICE_UNAVAILABLE);
+      expect(unknown.status).toBe(HTTP_STATUS.SERVICE_UNAVAILABLE);
+      expect(known.headers.get('retry-after')).toBe('2');
+      expect(unknown.headers.get('retry-after')).toBe('2');
+      expect(await known.text()).toBe(await unknown.text());
+      expect(known.headers.getSetCookie()).toEqual([]);
+
+      // Refused ahead of the charge: a busy server must not walk a correct
+      // password toward lockout.
+      expect(await lockRow(actor().userId)).toEqual({
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+      expect(await sessionCount(actor().userId)).toBe(0);
+      expect(await auditCount(actor().userId)).toBe(auditsBefore);
+    } finally {
+      gate.resolve();
+      await Promise.allSettled(holders);
+    }
+
+    // The slot came back.
+    const after = await attempt(actor().email, actor().password);
+    expect(after.status).toBe(HTTP_STATUS.OK);
+  });
+
+  test('a sign-in stuck on a locked user row gives the slot back at its deadline', async () => {
+    acceptCaptcha();
+    const user = await seedUser();
+    const locked = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    // Another writer holding the user row, as an OTP send or an admin edit does.
+    const holder = withTransaction(async (tx) => {
+      await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.id, user.userId))
+        .for('update');
+      locked.resolve();
+      await held.promise;
+    });
+    await locked.promise;
+    try {
+      const started = Date.now();
+      const stuck = attempt(user.email, user.password);
+      await Bun.sleep(100);
+      // Queued behind the stuck charge for at most its deadline, never refused
+      // at the queue's 5 s limit as it was while the slot covered every wait.
+      const other = await attempt(UNKNOWN_EMAIL, WRONG_PASSWORD);
+      expect(other.status).toBe(HTTP_STATUS.UNAUTHORIZED);
+
+      const stuckResponse = await stuck;
+      expect(stuckResponse.status).toBe(HTTP_STATUS.SERVICE_UNAVAILABLE);
+      expect(Date.now() - started).toBeLessThan(5000);
+    } finally {
+      held.resolve();
+      await holder;
+    }
+    // The deadline rolled the charge back.
+    expect(await lockRow(user.userId)).toEqual({
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    });
+    expect(await sessionCount(user.userId)).toBe(0);
+  }, 30_000);
 });

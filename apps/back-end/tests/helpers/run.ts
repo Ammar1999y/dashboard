@@ -43,9 +43,12 @@ import {
   createWorkerDatabases,
   dropWorkerDatabases,
   ensureTemplate,
+  LEASE_RENEW_MS,
   maxWorkers,
   reclaimStale,
+  renewLeases,
 } from './provision';
+import { splitForwardedArguments } from './run-arguments';
 
 const REPO_ROOT = path.join(import.meta.dir, '..', '..');
 
@@ -331,10 +334,12 @@ if (!tier || !tierName) {
  * that exhausts memory or hangs takes the whole tier down with it and there is
  * no way to bisect.
  */
-const forwardedFlags = forwarded.filter((argument) => argument.startsWith('-'));
-const forwardedNames = forwarded.filter(
-  (argument) => !argument.startsWith('-')
-);
+const split = splitForwardedArguments(forwarded);
+if ('refused' in split) {
+  console.error(split.refused);
+  process.exit(2);
+}
+const { flags: forwardedFlags, names: forwardedNames } = split;
 if (forwardedNames.length > 1) {
   console.error(
     `expected at most one file name to narrow to, got: ${forwardedNames.join(', ')}`
@@ -376,12 +381,19 @@ const runToken = newRunToken(
  * does not know how far `provision` got. A crashed provision must still drop the
  * databases it had already created.
  */
-const run: { admin: SQL | null; created: string[] } = {
+const run: {
+  admin: SQL | null;
+  created: string[];
+  lease: Timer | null;
+  renewing: Promise<void> | null;
+} = {
   admin: null,
   created: [],
+  lease: null,
+  renewing: null,
 };
 
-async function provision(): Promise<string[]> {
+async function provision(): Promise<void> {
   const admin = new SQL(adminUrl(), { max: 1 });
   run.admin = admin;
 
@@ -400,10 +412,20 @@ async function provision(): Promise<string[]> {
       `capped at ${workers} worker(s): the server's max_connections leaves room for ${budget}`
     );
 
-  return createWorkerDatabases(admin, runToken, workers);
+  run.created = await createWorkerDatabases(admin, runToken, workers);
+  await renewLeases(admin, run.created, Date.now());
+  run.lease = setInterval(() => {
+    run.renewing = renewLeases(admin, run.created, Date.now()).catch(
+      (error: unknown) => {
+        console.warn('could not renew the harness database lease:', error);
+      }
+    );
+  }, LEASE_RENEW_MS);
 }
 
 async function teardown(): Promise<void> {
+  if (run.lease) clearInterval(run.lease);
+  await run.renewing;
   const { admin, created } = run;
   if (!admin) return;
   if (created.length > 0) {
@@ -416,6 +438,8 @@ async function teardown(): Promise<void> {
   await admin.close();
   run.admin = null;
   run.created = [];
+  run.lease = null;
+  run.renewing = null;
 }
 
 // A whole-tier run only: one narrowed file cannot be expected to reach every
@@ -436,7 +460,7 @@ const DATABASE_CASE_TIMEOUT_MS = 30_000;
 const startedAt = Date.now();
 let exitCode = 1;
 try {
-  if (tier.database) run.created = await provision();
+  if (tier.database) await provision();
 
   const flags = [...tier.flags];
   if (tier.database) {

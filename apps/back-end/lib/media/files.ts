@@ -9,9 +9,10 @@ import type { KnownMimeType } from '@app/shared/validation/media-types';
 import type { SQL } from 'drizzle-orm';
 import type * as z from 'zod';
 
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 
-import { db, withTransaction } from '@/db';
+import { dataTableDb, db, withTransaction } from '@/db';
+import { inList } from '@/db/arrays';
 import { files, folders } from '@/db/schema';
 
 import { normalizeMimeType } from '@app/shared/validation/media-types';
@@ -91,7 +92,7 @@ export async function governedIds(
   const rows = await tx
     .select({ id: files.id })
     .from(files)
-    .where(and(inArray(files.id, ids), mediaGoverned()));
+    .where(and(inList(files.id, ids), mediaGoverned()));
   return new Set(rows.map((row) => row.id));
 }
 
@@ -120,7 +121,7 @@ export async function lockFilesForEdit(
   const rows = await tx
     .select(FILE_COLUMNS)
     .from(files)
-    .where(inArray(files.id, wanted))
+    .where(inList(files.id, wanted))
     .orderBy(asc(files.id))
     .for('update');
   const governed = await governedIds(tx, wanted);
@@ -206,7 +207,7 @@ export async function libraryTotals(): Promise<{
   files: number;
   bytes: number;
 }> {
-  const [row] = await db
+  const [row] = await dataTableDb
     .select({
       folders: sql<number>`(select count(*)::int from ${folders})`,
       files: sql<number>`count(*)::int`,

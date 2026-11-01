@@ -252,6 +252,11 @@ export const users = pgTable(
     // Not partial: the `users_role_id_roles_id_fk` check on a role delete and
     // the role-member lock read every member, deleted or not.
     index('idx_users_role_id').on(t.roleId),
+    // The live-member counts per role (permissions list, users list), index-only:
+    // 132 ms to about 15 ms for a page of 100 roles at 200k users.
+    index('idx_users_role_id_live')
+      .on(t.roleId)
+      .where(sql`deleted_at IS NULL`),
     index('idx_users_name_folded_trgm')
       .using('gin', t.nameFolded.op('gin_trgm_ops'))
       .where(sql`deleted_at IS NULL`),
@@ -806,11 +811,11 @@ export const files = pgTable(
       .on(t.unfiledAt)
       .where(sql`unfiled_at IS NOT NULL`),
     index('idx_files_folder_created').on(t.folderId, t.createdAt, t.id),
-    index('idx_files_folder_name').on(
-      t.folderId,
-      sql`lower(${t.displayName})`,
-      t.id
-    ),
+    // The whole library's default order (`scope=all`), which the per-folder
+    // index cannot serve: without it every page read the whole table.
+    index('idx_files_active_created')
+      .on(t.createdAt, t.id)
+      .where(sql`status = 'active' AND folder_id IS NOT NULL`),
     // The sweep's two predicates: pending rows by age, deleting rows by age.
     index('idx_files_status_created')
       .on(t.status, t.createdAt)

@@ -1042,3 +1042,49 @@ describe('the trusted-device record', () => {
     expect(await deviceEvents(owner)).toHaveLength(0);
   });
 });
+
+describe('the per-account cap', () => {
+  test('a grant past it evicts the least recently used device, and audits it', async () => {
+    const user = await seedUser();
+    const enrolled = await enrolTotp(user, true);
+    const seeded = await db
+      .insert(trustedDevices)
+      .values(
+        Array.from({ length: trustedDevice.MAX_TRUSTED_DEVICES }, (_, n) => ({
+          userId: user.userId,
+          trustIdentifier: `seeded-${user.userId}-${n}`,
+          expiresAt: new Date(Date.now() + 86_400_000),
+          // The first seeded row is the least recently used.
+          lastUsedAt: new Date(Date.now() - (100 - n) * 60_000),
+        }))
+      )
+      .returning({ id: trustedDevices.id });
+    const oldest = seeded[0]?.id;
+
+    const granted = await request(
+      'POST',
+      '/api/auth/two-factor/trust-device',
+      {},
+      enrolled.jar
+    );
+    expect(granted.status).toBe(HTTP_STATUS.OK);
+
+    const live = await db
+      .select({ id: trustedDevices.id })
+      .from(trustedDevices)
+      .where(eq(trustedDevices.userId, user.userId));
+    expect(live).toHaveLength(trustedDevice.MAX_TRUSTED_DEVICES);
+    expect(live.map((row) => row.id)).not.toContain(oldest);
+
+    const [audit] = await db
+      .select({ newData: auditLogs.newData })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.userId, user.userId),
+          eq(auditLogs.tableName, 'trusted_devices')
+        )
+      );
+    expect(audit?.newData).toMatchObject({ evictedDeviceIds: [oldest] });
+  });
+});
