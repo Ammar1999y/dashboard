@@ -396,7 +396,8 @@ describe('the daily verify cap', () => {
     // Must not tell the user to request a new code.
     expect(error.message).toBe(otpMsg.dailyVerifyCapReached);
     expect(retryAfter(error)).toBeGreaterThan(REMAINING_S - 120);
-    expect(retryAfter(error)).toBeLessThanOrEqual(REMAINING_S);
+    // +1: the anchor is rounded to hundredths, and the wait is rounded up.
+    expect(retryAfter(error)).toBeLessThanOrEqual(REMAINING_S + 1);
   }
 
   test('refuses a send without a code, a delivery or a mutation', async () => {

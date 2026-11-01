@@ -183,7 +183,8 @@ describe('a locked account, re-authenticating with its correct password', () => 
       expect(response.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
       const retryAfter = Number(response.headers.get('retry-after'));
       expect(retryAfter).toBeGreaterThan(0);
-      expect(retryAfter).toBeLessThanOrEqual(LOCK_DURATION_SECONDS);
+      // +1: `lockedUntil` is rounded to hundredths, and the wait is rounded up.
+      expect(retryAfter).toBeLessThanOrEqual(LOCK_DURATION_SECONDS + 1);
       const expectLocked = binding ? expectError : expectAuthError;
       const problem = await expectLocked(
         response,
