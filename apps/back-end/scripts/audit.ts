@@ -36,6 +36,10 @@ const ACCEPTED_ADVISORIES = [
   // katex@0.16.22, low: `@platejs/math` pins it exactly and the front end
   // follows that pin. Needs a prototype pollution to exist already.
   'GHSA-238p-pmpm-9mq7',
+  // minimatch 3/10, moderate: only 11 is fixed, and every parent (ESLint and
+  // its plugins) pins ^3 or ^10. Lint-time only; the patterns come from our
+  // own config, not from input.
+  'GHSA-g3hv-75wg-m249',
 ];
 
 interface Advisory {

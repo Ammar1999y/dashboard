@@ -50,8 +50,6 @@ const admission = { acquire: passwordAdmission(PASSWORD_WORK_SLOTS) };
 /**
  * Runs the slot with `slots` places until the returned restore, so a test can
  * overlap attempts the production slot serialises. Call with nothing held.
- *
- * @internal
  */
 export function widenPasswordSlotForTest(slots: number): () => void {
   admission.acquire = passwordAdmission(slots);
