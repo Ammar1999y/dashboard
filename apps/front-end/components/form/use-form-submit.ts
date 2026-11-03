@@ -7,15 +7,22 @@ import type {
 
 import { useEffect, useMemo } from 'react';
 
+import { busyWaitMs } from '@/lib/api/fetch';
 import { toastError } from '@/lib/toast-error';
 
 import { flattenErrors, showFormErrors } from './form-errors';
-import { clearFormErrors, setFormErrors } from './store';
+import { clearFormErrors, setFormErrors, setSubmitHold } from './store';
 
 function reportInvalidForm(errors: FieldErrors) {
   const flat = flattenErrors(errors);
   showFormErrors(flat);
   setFormErrors(flat);
+}
+
+/** Holds the submit button for the wait a 503 states (`busyWaitMs`). */
+export function holdSubmit(error: unknown) {
+  const wait = busyWaitMs(error);
+  if (wait !== undefined) setSubmitHold(Date.now() + wait);
 }
 
 /**
@@ -24,8 +31,9 @@ function reportInvalidForm(errors: FieldErrors) {
  * unmount — or the next form mounts showing this one's errors against any
  * field that shares a path.
  *
- * A rejected request is toasted here, so `onValid` is written as the success
- * path. Catch only an error you handle differently, and rethrow the rest.
+ * A rejected request is toasted here, and a stated 503 wait holds the submit
+ * button (`holdSubmit`), so `onValid` is written as the success path. Catch
+ * only an error you handle differently, and rethrow the rest.
  *
  * `onValid` receives the schema's output: give `useForm` its
  * `<Input, unknown, Output>` parameters and the type follows through.
@@ -40,7 +48,13 @@ export function useFormSubmit<
 ) {
   const { handleSubmit } = methods;
 
-  useEffect(() => clearFormErrors, []);
+  useEffect(
+    () => () => {
+      clearFormErrors();
+      setSubmitHold(null);
+    },
+    []
+  );
 
   return useMemo(
     () =>
@@ -49,6 +63,7 @@ export function useFormSubmit<
         try {
           await onValid(data, event);
         } catch (error) {
+          holdSubmit(error);
           toastError(error);
         }
       }, reportInvalidForm),

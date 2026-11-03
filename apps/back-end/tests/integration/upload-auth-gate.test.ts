@@ -23,10 +23,10 @@
  * The last one is also what makes the positive case honest: a gate that rejects
  * everything passes every negative test in this file.
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { beforeAll, describe, expect, jest, test } from 'bun:test';
 import type { SignedInSession } from '../helpers/session';
 
-import { eq } from 'drizzle-orm';
+import { count, eq } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
@@ -43,7 +43,7 @@ import { mediaMsg, uploadMsg } from '@app/shared/messages/media';
 import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 
 import { buildRequestMeta, lazyFormData } from '@/lib/http/request';
-import { acceptUpload } from '@/lib/media/upload';
+import { acceptUpload, UPLOAD_BODY_DEADLINE_MS } from '@/lib/media/upload';
 
 import { resetTables } from '../helpers/database';
 import { storeOps, storeOpsOf } from '../helpers/object-store';
@@ -766,6 +766,32 @@ describe('the body policy on the way past the gate', () => {
     expect(result.text).not.toContain('boundary');
     expect(storeOps()).toEqual([]);
   });
+
+  test('a form of thousands of parts is refused while it streams, and stores nothing', async () => {
+    const boundary = '----gate-boundary';
+    const flood =
+      `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="a.svg"\r\n` +
+      'Content-Type: image/svg+xml\r\n\r\n<svg xmlns="http://www.w3.org/2000/svg"/>\r\n' +
+      `--${boundary}\r\nContent-Disposition: form-data; name="x"\r\n\r\n\r\n`.repeat(
+        5000
+      ) +
+      `--${boundary}--\r\n`;
+    const before = await db.select({ n: count() }).from(files);
+
+    const result = await attempt({
+      session: actor('create'),
+      contentType: `multipart/form-data; boundary=${boundary}`,
+      body: flood,
+    });
+
+    expect(result.status).toBe(HTTP_STATUS.BAD_REQUEST);
+    expect(result.body).toEqual(
+      failure(HTTP_STATUS.BAD_REQUEST, MSG_INVALID_INPUT)
+    );
+    expect(result.reads).toEqual(['body']);
+    expect(storeOps()).toEqual([]);
+    expect(await db.select({ n: count() }).from(files)).toEqual(before);
+  });
 });
 
 describe('a public upload target', () => {
@@ -802,5 +828,57 @@ describe('a public upload target', () => {
       )
     ).rejects.toMatchObject({ status: HTTP_STATUS.FORBIDDEN });
     expect(request.bodyUsed).toBe(false);
+  });
+});
+
+describe('a body that outlives its deadline', () => {
+  test('answers 408, not the retryable busy 503, and stores nothing', async () => {
+    const uploader = await signedInUser({
+      permissions: { media: { view: true, create: true } },
+    });
+    const request = authedRequest(uploader, '/api/upload/file', {
+      method: 'POST',
+      body: new FormData(),
+    });
+    // Faked only once the body is awaited, so everything before it runs on
+    // real time, and advanced once `readWithin` has armed its timer.
+    const input = {
+      ...buildRequestMeta(request),
+      readFormData: () => {
+        jest.useFakeTimers();
+        queueMicrotask(() => jest.advanceTimersByTime(UPLOAD_BODY_DEADLINE_MS));
+        return new Promise<FormData | null>(() => {});
+      },
+    };
+    const before = await db.select({ n: count() }).from(files);
+
+    try {
+      await expect(
+        acceptUpload(
+          input,
+          {
+            userId: uploader.user.userId,
+            email: uploader.user.email,
+            meta: { ip: null, userAgent: null, apiPath: '/api/upload/file' },
+          },
+          {
+            field: 'files',
+            visibility: 'private',
+            kinds: ['image'],
+            folderId: null,
+            activate: false,
+          },
+          () => Promise.resolve()
+        )
+      ).rejects.toMatchObject({
+        status: HTTP_STATUS.REQUEST_TIMEOUT,
+        message: mediaMsg.uploadTimedOut,
+        responseHeaders: undefined,
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+    expect(storeOps()).toEqual([]);
+    expect(await db.select({ n: count() }).from(files)).toEqual(before);
   });
 });

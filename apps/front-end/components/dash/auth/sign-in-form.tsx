@@ -21,6 +21,7 @@ import { Form } from '@/components/form/form';
 import FormInput from '@/components/form/form-input';
 import FormPassword from '@/components/form/form-password';
 import SubmitButton, { SubmitLabel } from '@/components/form/submit-button';
+import { holdSubmit } from '@/components/form/use-form-submit';
 
 import { RememberMeOption } from './checkbox-option';
 import { canVerifyContact } from './features';
@@ -82,7 +83,10 @@ const SignInForm = ({
         if (unverified !== null && canVerifyContact(unverified))
           onUnverified(unverified, data.email, errorMessage(error));
         else if (typeof unavailable === 'string') onUnavailable(unavailable);
-        else toastError(error, undefined, { duration: 8000 });
+        else {
+          holdSubmit(error);
+          toastError(error, undefined, { duration: 8000 });
+        }
       }
     },
     [rememberMe, onChallenge, onUnavailable, onUnverified]

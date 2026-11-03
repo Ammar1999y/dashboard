@@ -1,9 +1,15 @@
 import type { ButtonProps } from '@/components/ui/button';
 import type { ReactNode } from 'react';
 
-import { useFormState } from 'react-hook-form';
+import { useEffect } from 'react';
 
+import { useFormState } from 'react-hook-form';
+import { MSG_SUBMIT_AGAIN_IN } from '@/constants/messages';
+
+import { useResendCooldown } from '@/hooks/use-resend-cooldown';
 import { Button } from '@/components/ui/button';
+
+import { useSubmitHold } from './store';
 
 type SubmitButtonProps = Omit<ButtonProps, 'type'> & {
   children: ReactNode;
@@ -14,10 +20,20 @@ type SubmitButtonProps = Omit<ButtonProps, 'type'> & {
 // to re-render on `isSubmitting`, and `children` defeats a shallow compare.
 const SubmitButton = ({ children, disabled, ...rest }: SubmitButtonProps) => {
   const { isSubmitting } = useFormState();
+  const holdUntil = useSubmitHold();
+  const { secondsLeft, isCoolingDown, start } = useResendCooldown();
+
+  useEffect(() => {
+    if (holdUntil !== null) start((holdUntil - Date.now()) / 1000);
+  }, [holdUntil, start]);
 
   return (
-    <Button type='submit' disabled={disabled || isSubmitting} {...rest}>
-      {children}
+    <Button
+      type='submit'
+      disabled={disabled || isSubmitting || isCoolingDown}
+      {...rest}
+    >
+      {isCoolingDown ? MSG_SUBMIT_AGAIN_IN(secondsLeft) : children}
     </Button>
   );
 };

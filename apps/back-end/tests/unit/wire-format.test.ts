@@ -50,6 +50,7 @@ describe('HTTP_STATUS_TITLES', () => {
       403: 'Forbidden',
       404: 'Not Found',
       405: 'Method Not Allowed',
+      408: 'Request Timeout',
       409: 'Conflict',
       413: 'Content Too Large',
       422: 'Unprocessable Content',

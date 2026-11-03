@@ -32,7 +32,8 @@ export interface EndpointPolicy {
  * Refusal statuses an endpoint may declare beyond what its policy implies, or
  * to name the codes its handler raises at a status the policy already implies.
  */
-export type EndpointErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 503;
+export type EndpointErrorStatus =
+  400 | 401 | 403 | 404 | 408 | 409 | 422 | 429 | 503;
 
 export interface EndpointError {
   /** The `code`s a client can branch on; empty when the message is all there is. */

@@ -1,6 +1,6 @@
 # Coolify deployment: ElysiaJS, `bun:sql`, `bun:sqlite`
 
-Updated: 2026-10-31
+Updated: 2026-11-02
 
 > **The application has never been deployed.** This is the first-deploy
 > runbook and the operating manual after it: what to set, in order, and how to
@@ -844,7 +844,9 @@ Cloudflare is mandatory. The code trusts `cf-connecting-ip` and nothing else
 (`TRUSTED_IP_HEADERS`, `lib/http/client-ip.ts`); Traefik's `x-forwarded-for` is
 deliberately not accepted because a client controls it whenever the origin is
 reachable. Direct traffic makes every IP-protected route answer 503 and log
-`missing client ip headers`. The header is trusted on syntax alone, so it is
+`missing client ip headers`, about 630 B per request and unthrottled, so a gap
+in step 6 also fills the disk faster than §10 sizes for. The header is trusted
+on syntax alone, so it is
 trustworthy **only because** direct origin traffic is blocked (step 6). If
 Cloudflare is ever removed, change the trust boundary first; do not simply add
 `x-forwarded-for`. The sites carry a greppable `TODO(proxy-trust)`
@@ -985,7 +987,8 @@ admission. Re-measure latency and peak RSS on the VPS before raising either:
 a second encoder slot (`ENCODER_SLOTS` in `lib/media/image/optimize.ts`)
 measured about 240 MiB more peak RSS at the pixel cap
 (`reports/should-ignore.md` #81), and it also takes a work-pool thread
-(Topology, Host size).
+(Topology, Host size): encoder slots plus the one password slot must stay
+below the host's core count.
 
 **Other process-wide caps**, each answering 503 with `Retry-After` when full:
 password work, one Argon2 job with 16 waiting up to 5 s
@@ -1865,6 +1868,11 @@ URL` in production and otherwise accepts it.
   becomes an R2 read (billed per operation). No public URL the app issues
   carries a query, so add a Cache Rule on the public host with _Cache key:
   ignore query string_, and a rate-limiting rule on the same host for misses.
+- **No per-account storage quota.** Library files have no total per account,
+  so the buckets grow with whatever accounts keep. Watch each bucket's stored
+  size in its R2 metrics; whether Cloudflare can alert on a threshold is not
+  verified. A pending-upload backlog shows as the retention job's `hasMore` on
+  consecutive runs (§9).
 
 ### Environment
 

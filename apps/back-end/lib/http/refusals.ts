@@ -31,7 +31,7 @@ export const REAUTH_REQUIRED_REMEDY =
   'open the re-authentication window at `POST /api/dash/auth/reauth`, then retry.';
 
 /** Every operation's 500, a binding's or Better Auth's. */
-export const SERVER_FAILURE = `An unexpected server or dependency failure occurred. With code \`${INVALID_RESPONSE_CODE}\` the operation completed but its answer failed its own contract: a write has committed, so do not send it again.`;
+export const SERVER_FAILURE = `An unexpected server or dependency failure occurred. With code \`${INVALID_RESPONSE_CODE}\` the operation completed but its answer could not be built or failed its own contract: a write has committed, so do not send it again.`;
 
 /**
  * The request hook checks a declared length on every path before routing,
@@ -52,6 +52,10 @@ const DECLARED_ONLY: Readonly<
   404: {
     description:
       'The target does not exist, or is outside the caller’s visible scope.',
+  },
+  408: {
+    description:
+      'The request body did not arrive within the server’s deadline, so the operation never started.',
   },
   409: {
     description: 'The request conflicts with the target’s current state.',

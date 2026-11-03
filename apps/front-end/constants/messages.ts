@@ -74,6 +74,8 @@ export const MSG_TRUST_DEVICE_FAILED =
   'تم تسجيل الدخول، لكن تعذّر حفظ هذا الجهاز كجهاز موثوق';
 export const MSG_RESEND_IN = (seconds: number) =>
   `إعادة الإرسال بعد ${countOf(seconds, SECONDS)}`;
+export const MSG_SUBMIT_AGAIN_IN = (seconds: number) =>
+  `أعد المحاولة بعد ${countOf(seconds, SECONDS)}`;
 export const MSG_OAUTH_EXPIRED =
   'انتهت مهلة تسجيل الدخول بحساب Google، أو بدأت من متصفح آخر. ابدأ من جديد.';
 export const MSG_OAUTH_FAILED =
@@ -404,7 +406,7 @@ export const MSG_UPLOAD_CONVERTED_WEBP = (before: string, after: string) =>
 export const MSG_UPLOAD_STORED_PRIVATE = 'تم الرفع، والملف خاص';
 export const MSG_UPLOAD_SVG_CONVERTED = 'حُوّل ملف SVG إلى صورة';
 export const MSG_UPLOAD_WAITING = (seconds: number) =>
-  `تجاوزت حد الرفع، يُعاد الرفع بعد ${countOf(seconds, SECONDS)}`;
+  `يُعاد الرفع بعد ${countOf(seconds, SECONDS)}`;
 export const MSG_UPLOAD_BATCH_DONE = (done: number, failed: number) => {
   if (failed === 0)
     return `رُفع ${countOf(done, FILES_NOMINATIVE)}. الملفات المرفوعة خاصة إلى أن تُنشر.`;

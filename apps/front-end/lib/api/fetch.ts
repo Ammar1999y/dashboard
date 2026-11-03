@@ -11,7 +11,7 @@ import {
 } from '@app/shared/messages/common';
 import { MSG_OFFLINE, MSG_UNEXPECTED_ERROR } from '@/constants/messages';
 
-const RETRY_AFTER_HEADER = 'Retry-After';
+export const RETRY_AFTER_HEADER = 'Retry-After';
 
 const isAbort = (error: unknown, signal: AbortSignal | null | undefined) =>
   signal?.aborted === true ||
@@ -112,6 +112,17 @@ const DELAY_SECONDS = /^\d+$/;
 // Only the date form servers must send: `Date.parse` reads "-5" as a year.
 const HTTP_DATE =
   /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/**
+ * The wait a 503 states, when it states one. Shown, never waited out by a
+ * write itself: the client cannot tell a refusal before any work from one after
+ * a captcha, a code or a grant was spent.
+ */
+export function busyWaitMs(error: unknown): number | undefined {
+  if (!hasErrorStatus(error, HTTP_STATUS.SERVICE_UNAVAILABLE)) return undefined;
+  const wait = retryAfterMs(error);
+  return wait === 0 ? undefined : wait;
+}
 
 /** How long the failure's `Retry-After` asks to wait, when it has a readable one. */
 export function retryAfterMs(error: unknown): number | undefined {

@@ -52,6 +52,7 @@ import {
   FOLDER_BUSY_CODE,
   FOLDER_NOT_EMPTY_CODE,
   FOLDER_NOT_FOUND_CODE,
+  INVALID_RESPONSE_CODE,
   LINK_NOT_ALLOWED_CODE,
   LINK_VISIBILITY_MISMATCH_CODE,
   SELECTION_TOO_LARGE_CODE,
@@ -92,7 +93,7 @@ import * as r2 from '@/lib/r2/client';
 import { compareCodeUnits } from '@/utils/text';
 
 import { resetTables } from '../helpers/database';
-import { failTableWrites } from '../helpers/faults';
+import { driverError, failTableWrites } from '../helpers/faults';
 import {
   clearObjectStoreFailures,
   corruptNextCopy,
@@ -384,6 +385,35 @@ describe('upload into a folder', () => {
     expect(
       storedObject(PRIVATE_BUCKET, row?.r2Key ?? '')?.contentDisposition
     ).toContain('attachment');
+  });
+
+  // The front end sends a 503 again on its own; this one would store it twice.
+  test('a database fault building the answer of a live file is `invalid_response`, not the retryable 503', async () => {
+    const folderId = await createFolder(admin(), 'Answer fault');
+    const answerRead = spyOn(
+      mediaFilesModule,
+      'toMediaFile'
+    ).mockRejectedValueOnce(await driverError('57014'));
+    try {
+      const answer = await call(
+        admin(),
+        'POST',
+        `/api/dash/media/files?folder=${folderId}`,
+        svgForm('Late answer.svg')
+      );
+      expect(answerRead).toHaveBeenCalledTimes(1);
+      expect(answer).toMatchObject({
+        status: HTTP_STATUS.INTERNAL_ERROR,
+        body: { code: INVALID_RESPONSE_CODE },
+      });
+    } finally {
+      answerRead.mockRestore();
+    }
+    const stored = await db
+      .select({ status: files.status })
+      .from(files)
+      .where(eq(files.folderId, folderId));
+    expect(stored).toEqual([{ status: 'active' }]);
   });
 
   test('a document whose relationships pass the scan budget is refused as too complex, and nothing is written', async () => {

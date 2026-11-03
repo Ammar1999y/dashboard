@@ -336,7 +336,8 @@ describe('strangers cannot exhaust the proof row', () => {
         isBlocked: false,
       });
 
-      // The next hour's send quota; the stranger's spend of this one is C-002.
+      // The next hour's send quota; the stranger's spend of this one is
+      // accepted (should-ignore #92).
       resetRateLimits();
       const owner = await sendKnown(surface, user);
       expect(await surface.verify(user.email, RIGHT_CODE, owner.cookie)).toBe(

@@ -159,6 +159,20 @@ export const invalidResponse = (): HandlerError =>
     code: INVALID_RESPONSE_CODE,
   });
 
+/**
+ * A write that committed but whose answer could not be built: coded like
+ * `invalidResponse`, never as the retryable 503 a database fault would map to.
+ */
+export function committedUnanswered(cause: unknown): CustomError {
+  const failure = new CustomError(
+    MSG_INTERNAL_ERROR,
+    HTTP_STATUS.INTERNAL_ERROR,
+    INVALID_RESPONSE_CODE
+  );
+  failure.cause = cause;
+  return failure;
+}
+
 /** A 500 carrying the fault as `cause`, which `handleApiError` logs with it. */
 export function serverFault(message: string, cause: unknown): CustomError {
   const failure = new CustomError(message, HTTP_STATUS.INTERNAL_ERROR);

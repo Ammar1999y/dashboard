@@ -22,6 +22,18 @@ export const clearFormErrors = () =>
 export const useFieldError = (name: string): string | undefined =>
   useFormErrorsStore((s) => s.errors[name]);
 
+// When the server's stated wait after a refused submit ends, written only by
+// `useFormSubmit` and `holdSubmit`; one form at a time, like the errors.
+const useSubmitHoldStore = create<{ until: number | null }>(() => ({
+  until: null,
+}));
+
+export const setSubmitHold = (until: number | null) =>
+  useSubmitHoldStore.setState({ until });
+
+export const useSubmitHold = (): number | null =>
+  useSubmitHoldStore((s) => s.until);
+
 /** Changes only when the set of messages does, not on every failed run. */
 export const useFormErrors = (): FormErrors =>
   useFormErrorsStore(useShallow((s) => s.errors));

@@ -527,7 +527,7 @@ const UPLOAD_BUSY_RETRY_AFTER_S = 5;
  * needs about 0.8 Mbit/s of upload to make it; Cloudflare's full request
  * buffering (`reports/coolify-deployment.md` §5) takes the client's link out of it.
  */
-const UPLOAD_BODY_DEADLINE_MS = 100_000;
+export const UPLOAD_BODY_DEADLINE_MS = 100_000;
 
 const acquireUploadSlot = createAdmission({
   slots: UPLOAD_SLOTS,
@@ -595,8 +595,14 @@ export async function acceptUpload(
     const release = await acquireUploadSlot();
     try {
       const entry = takeSingleFile(
-        await readWithin(ctx.readFormData(), UPLOAD_BODY_DEADLINE_MS, () =>
-          serviceBusy(UPLOAD_BUSY_RETRY_AFTER_S)
+        await readWithin(
+          ctx.readFormData(),
+          UPLOAD_BODY_DEADLINE_MS,
+          () =>
+            new CustomError(
+              mediaMsg.uploadTimedOut,
+              HTTP_STATUS.REQUEST_TIMEOUT
+            )
         ),
         target.field
       );

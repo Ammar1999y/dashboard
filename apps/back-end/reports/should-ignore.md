@@ -1,89 +1,77 @@
 # Not Real Issues / Ignored
 
-<!-- 1: removed, fixed: `validateAssignableRole` reads the role `FOR SHARE` inside the caller's transaction (`lib/permissions/roles.ts`), and both callers repeat it there. The entries after it keep their numbers. -->
-
 2. **JSONB Permissions No DB-Level Shape Constraint** — `db/schema.ts` — The
    `permissions` JSONB column accepts any valid JSON; direct DB writes can
    insert malformed data
 3. **Session Token Stored Plaintext** — `db/schema.ts`
 
-<!-- 4: removed, fixed: `db/drizzle/0009_sudden_human_cannonball.sql` drops the column and the `file_context_table` type. -->
+4. **Only First Zod Error Returned** — All POST/PUT handlers
 
-5. **Only First Zod Error Returned** — All POST/PUT handlers
-
-<!-- 6: removed, fixed: `auditFields` no longer exists. -->
-
-7. **No API Versioning** — All endpoints at `/api/dash/*` with no version prefix
-8. **No Anonymous Health Check Endpoint** — the only health route,
+5. **No API Versioning** — All endpoints at `/api/dash/*` with no version prefix
+6. **No Anonymous Health Check Endpoint** — the only health route,
    `GET /api/health/storage` (`modules/health/storage.ts`), is a token-gated
    readiness check; there is no anonymous liveness route
-9. **User GET Exposes Role Permissions Without `permissions:view`**
-10. **Multi-Tenant Boundary Not Present** — Conditional, depends on future
-    requirements
-11. **Dont add any new checks for user email & password in the schema**
-12. **An Empty Permissions List Cannot Clear a Role** — By design; frontend
+7. **User GET Exposes Role Permissions Without `permissions:view`**
+8. **Multi-Tenant Boundary Not Present** — Conditional, depends on future
+   requirements
+9. **Dont add any new checks for user email & password in the schema**
+10. **An Empty Permissions List Cannot Clear a Role** — By design; frontend
     sends all permissions as `false`. An empty `permissions` array is still a 422. A PUT naming one page with no actions upserts that page and prunes
     every other one, which leaves the role with no grants
     (`modules/permissions/item.ts`, `writeRoleMatrix` in
     `lib/permissions/roles.ts`)
-13. **Permissions UPDATE Refuses an Empty Permissions Array** — see #12
+11. **Permissions UPDATE Refuses an Empty Permissions Array** — see #12
 
-<!-- 14: removed, fixed: `emailSchema` lowercases, `chk_email_lowercase` enforces it, and the email lookup passes the parsed value (`lib/auth/path-policy.ts`). -->
-
-15. **roleName Uniqueness Is Case-Sensitive**
-16. **TOCTOU: Permission Scope Validation Outside Transaction (POST Handlers)**
+12. **roleName Uniqueness Is Case-Sensitive**
+13. **TOCTOU: Permission Scope Validation Outside Transaction (POST Handlers)**
     — Low probability; no real harm
-17. **Missing DB-Level Minimum Length Constraints on Text Columns**
-18. **Search Input Over 200 Characters Silently Discarded** —
+14. **Missing DB-Level Minimum Length Constraints on Text Columns**
+15. **Search Input Over 200 Characters Silently Discarded** —
     `effectiveSearchTerm` (`packages/shared/src/data-table/parsers.ts`), applied
     in `lib/data-table/params.ts` — a term is discarded rather than truncated
     or refused; the same happens below 3 characters and to a term the trigram
     index cannot key on. Both bounds are measured on the folded term
 
-<!-- 19: removed, fixed: a custom role with missing or empty permissions is a 422 at `bind()` (`refineUserPayload`, `packages/shared/src/validation/users.ts`). -->
-
-20. **Role List User Count Grows With the Roles' Members** —
+16. **Role List User Count Grows With the Roles' Members** —
     `modules/permissions/collection.ts` — a correlated count per listed role,
     on `idx_users_role_id`. Not re-measured since that index replaced the
     partial `idx_users_role_active` (migrations 016–017)
-21. **Role Reactivation Bypasses `delete` Permission Gate** —
+17. **Role Reactivation Bypasses `delete` Permission Gate** —
     `modules/permissions/item.ts` (`updatePermissionBinding`)
-22. **`ROLE_NAME_MIN = 1` Is Extremely Permissive** —
+18. **`ROLE_NAME_MIN = 1` Is Extremely Permissive** —
     `packages/shared/src/validation/constants.ts`
-23. **`USER_UNIQUE_CONSTRAINTS` maps both user unique constraints** —
+19. **`USER_UNIQUE_CONSTRAINTS` maps both user unique constraints** —
     `lib/http/constraint-errors.ts` — the earlier note called `ux_users_phone_number`
     nonexistent; it does exist (`db/schema.ts`, a partial unique index on
     `phone_number WHERE deleted_at IS NULL AND phone_number IS NOT NULL`), so
     the mapping is live and correct, not dead code. Kept as a record that the
     question was asked and settled.
-24. **`chk_size_bytes_positive` Allows Zero-Byte Files** — `db/schema.ts`
+20. **`chk_size_bytes_positive` Allows Zero-Byte Files** — `db/schema.ts`
 
-<!-- 25: removed, fixed: both callers pass the gate's actor, so `checkMultiplePermissions` (`lib/permissions/checker.ts`) adds no statement. -->
-
-26. **Dynamic Configuration Coupling in Schema** — `db/schema.ts` —
+21. **Dynamic Configuration Coupling in Schema** — `db/schema.ts` —
     `chk_active_user_has_role` tied to runtime flag
-27. **`standardRoleFilter` Duplicated in Raw SQL** —
+22. **`standardRoleFilter` Duplicated in Raw SQL** —
     `modules/permissions/item.ts` (the role delete's raw `DELETE`)
-28. **`sessions.metadata` Has No DB-Level Type Constraint** — `db/schema.ts`
-29. **`count(*)` Bottleneck in Paginated Endpoints** — At scale only
-30. **Hardcoded Provider String in Schema Constraint** — `db/schema.ts` — Uses
+23. **`sessions.metadata` Has No DB-Level Type Constraint** — `db/schema.ts`
+24. **`count(*)` Bottleneck in Paginated Endpoints** — At scale only
+25. **Hardcoded Provider String in Schema Constraint** — `db/schema.ts` — Uses
     `'credential'` instead of `CREDENTIAL_PROVIDER_ID`
-31. **Custom Role Deletion Without Exclusivity Check** —
+26. **Custom Role Deletion Without Exclusivity Check** —
     `lib/users/delete.ts` (`softDeleteUser`, through `destroyCustomRole` in
     `lib/permissions/roles.ts`)
-32. **`chk_active_user_has_role` Enforces Stronger Invariant Than Documented** —
+27. **`chk_active_user_has_role` Enforces Stronger Invariant Than Documented** —
     `db/schema.ts`
-33. **`users.edit` Can Suspend/Reactivate Accounts Without `users.delete`** —
+28. **`users.edit` Can Suspend/Reactivate Accounts Without `users.delete`** —
     `modules/users/item.ts` (`updateUserBinding`), `editUserAsAdmin` in
     `lib/users/edit.ts`
-34. **`REQUIRE_ROLE_FOR_LOGIN` Flag Creates Silent Behavior Divergence** —
+29. **`REQUIRE_ROLE_FOR_LOGIN` Flag Creates Silent Behavior Divergence** —
     Controls 4 behaviors with no documentation
-35. **GIN Indexes Built Without `CONCURRENTLY`** —
+30. **GIN Indexes Built Without `CONCURRENTLY`** —
     `db/migrations/001_add_trgm_indexes.sql`
-36. **Roles Dropdown Has Silent 1000-Row Ceiling**
-37. **Missing Table Partitioning on `sessions` and `audit_logs`**
-38. **Audit Logs Missing `created_at` Index**
-39. **List Endpoints Skip the Role-Matrix Reachability Check** —
+31. **Roles Dropdown Has Silent 1000-Row Ceiling**
+32. **Missing Table Partitioning on `sessions` and `audit_logs`**
+33. **Audit Logs Missing `created_at` Index**
+34. **List Endpoints Skip the Role-Matrix Reachability Check** —
     `modules/users/collection.ts`, `modules/permissions/collection.ts` — both
     lists apply the `viewOwn` filter (`createdBy` is the caller when their
     scope is `own`) and leave out system roles and their users. What they
@@ -91,18 +79,18 @@
     (`validateRolePermissionScope(…, 'reachability')`,
     `lib/permissions/scope.ts`), so a list can show a user or role whose grants
     exceed the caller's own matrix
-40. **`editUserAsAdmin` Inner Join Hides Roleless Users** —
+35. **`editUserAsAdmin` Inner Join Hides Roleless Users** —
     `lib/users/edit.ts` — Not a real issue;
     roleless users are not dashboard users
-41. **Schema Does Not Enforce Custom Role Ownership** — Not a real issue; custom
+36. **Schema Does Not Enforce Custom Role Ownership** — Not a real issue; custom
     roles are inherently per-user
-42. **Final Administrator Lockout** — `modules/users/item.ts`,
+37. **Final Administrator Lockout** — `modules/users/item.ts`,
     `assertTargetUserVisible` in `lib/users/target-user.ts` —
     Dashboard owner has `system` role with full access; system role cannot be
     deleted
-43. **OFFSET Pagination Bottleneck** — `modules/users/collection.ts`,
+38. **OFFSET Pagination Bottleneck** — `modules/users/collection.ts`,
     `modules/permissions/collection.ts` — Acceptable at current scale
-44. **Repeated `validateRolePermissionScope` Calls** —
+39. **Repeated `validateRolePermissionScope` Calls** —
     `lib/users/edit.ts` (`editUserAsAdmin`) — every edit checks reachability of
     the target's current role; the grant check on the new role runs only when
     a different standard role is assigned; a password change adds one more
@@ -111,30 +99,26 @@
     Up to three role-matrix reads per admin edit; merging them is unnecessary
     optimization complexity
 
-<!-- 45: removed, no longer true: `argon2` 0.45 hashes on a native async worker; an event-loop probe across a 70 ms hash saw every tick. -->
-
-46. **`pageName` PostgreSQL Enum Blocks Schema Evolution** — `db/schema.ts` —
+40. **`pageName` PostgreSQL Enum Blocks Schema Evolution** — `db/schema.ts` —
     Acceptable trade-off for current page set
-47. **GDPR Email in Audit Logs** — `lib/users/delete.ts` (`softDeleteUser`) — Email in
+41. **GDPR Email in Audit Logs** — `lib/users/delete.ts` (`softDeleteUser`) — Email in
     `audit_logs.old_data` needed for investigation; not applicable yet
-48. **FK Violation Handler Falls Through to 500** —
+42. **FK Violation Handler Falls Through to 500** —
     `lib/http/constraint-errors.ts` — the expected ones are mapped: the role FK
     to 400 `roleNotFound` (`handleUserForeignKeyViolation`) and the folder FK to
     folder-not-found (`handleFolderForeignKeyViolation`). Any other FK
     violation is still a 500, which is correct; unexpected FK violations are
     code bugs that should be prioritized in monitoring
-49. **Destructive Soft-Delete Prevents Recovery** —
+43. **Destructive Soft-Delete Prevents Recovery** —
     `lib/users/delete.ts` (`softDeleteUser`) — Email preserved in
     `audit_logs.old_data`; practical emails < 100 chars; `accounts` hard-delete
     is a security feature
-50. **Session Revocation UUID Validation Gate** —
+44. **Session Revocation UUID Validation Gate** —
     `modules/users/sessions.ts` (`revokeUserSessionsBinding`), `deleteSessionsSchema`
     in `packages/shared/src/validation/sessions.ts` — Session ID type is fixed throughout the
     app; `validID` maintained to support current and future formats
 
-<!-- 51: removed, fixed: `PUT /users/:id` refuses the caller's own id (`notSelf`, `modules/users/item.ts`), self-update takes only `name`, and `changePassword` revokes other sessions and pending proofs (`modules/users/me.ts`). -->
-
-52. **HIBP check fails open silently** — `lib/auth/password/compromise.ts` —
+45. **HIBP check fails open silently** — `lib/auth/password/compromise.ts` —
     `checkPasswordCompromise` makes up to 3 attempts, logs `hibp.degraded` on
     every failed one, and on exhaustion ACCEPTS the password. Deliberate and documented in the
     function's own comment: a third party being down must not take account
@@ -145,20 +129,14 @@
     `AbortController` with `HIBP_ATTEMPT_TIMEOUT_MS = 1000` plus 75/150 ms
     backoff, so the worst case is ~3.2 s, not the 10–30 s stall recorded here.
 
-<!-- 53: removed, fixed: Better Auth's `verify` calls `consumePasswordProof` (`lib/auth/index.ts`, `lib/auth/password/proof.ts`): single use, expiring, bound to the hash, failing closed. -->
-
-<!-- 54: removed, fixed: change-password compares and swaps on the expected hash under the account lock (`modules/users/me.ts`); change-email is a two-step OTP flow whose commit locks the user (`lib/users/contact-change.ts`). -->
-
-55. **`audit_logs` Missing `user_id` Index** — `db/schema.ts` — "All actions by
+46. **`audit_logs` Missing `user_id` Index** — `db/schema.ts` — "All actions by
     user X" forensic query full-scans the table; slow only at 1M+ rows.
-56. **Phone-number CHECK Regex Hardcodes Saudi Format** — `db/schema.ts` —
+47. **Phone-number CHECK Regex Hardcodes Saudi Format** — `db/schema.ts` —
     `chk_phone_number_format` enforces `^9665[0-9]{8}$`; future international /
     non-mobile support would require a migration. Acceptable for current local
     launch (does not contradict #11, which is about email/password checks).
 
-<!-- 57: deleted at the owner's request; the entries after it keep their numbers. -->
-
-58. **OTP Send Collapses 429 to Generic 200 (by design)** —
+48. **OTP Send Collapses 429 to Generic 200 (by design)** —
     `lib/otp/anonymous-send.ts` (`sendAnonymousOtp`, shared by every anonymous
     send) — masking `TOO_MANY_REQUESTS` is a deliberate privacy contract: the
     endpoint returns an identical `200 + nextAllowedIn:30` for every case after
@@ -168,7 +146,7 @@
     and unknown addresses, so they reveal nothing either. The client already
     gets a constant `nextAllowedIn` for its countdown. Surfacing the hidden 429
     would break this contract — not worth the UX gain.
-59. **Explicit Empty Filter Array Treated As "No Filter"** —
+49. **Explicit Empty Filter Array Treated As "No Filter"** —
     `lib/data-table/filter-columns.ts` — chosen UI semantics, not a SQL
     identity: `col IN ()` matches nothing, so this is a deliberate reading of an
     empty selection as "chip not filled in yet" rather than "match nothing". The
@@ -177,26 +155,26 @@
     contract exists for — there a real condition vanished; here none was
     expressed, and the caller's base authorization predicate is untouched either
     way.
-60. **Filter `variant` Not Bound To The Column Descriptor** —
+50. **Filter `variant` Not Bound To The Column Descriptor** —
     `lib/data-table/column-specs.ts` — `variant` describes how the client
     renders a control; it is validated for membership then never read, so it
     reaches no SQL. Binding it would make the server an authority on UI
     rendering, and a boolean column rendered as a multiSelect is legitimate.
-61. **`OTP_AUTO_VERIFY` Has No Environment Guard** —
+51. **`OTP_AUTO_VERIFY` Has No Environment Guard** —
     `packages/shared/src/config.ts` — a code constant, `false` today, not an
     environment value; turning it on is a code change and a deploy. A
     development bypass for a deployment with no OTP provider. Never reaches
     `passwordless_login` / `forgot_password` (both always issue a real code), so
     the blast radius is contact-verification and the authenticated
     contact-change commits.
-62. **Session Pagination Has No Matching Index** — `db/schema.ts`,
+52. **Session Pagination Has No Matching Index** — `db/schema.ts`,
     `lib/users/session-page.ts`, `modules/users/sessions.ts` — the
     `(createdAt, id)` keyset cursor is correct; only the index shape is
     questioned. More than 50 live sessions per user is unrealistic for an admin
     dashboard, and the `database-retention-sweep` already deletes sessions 30
     days past expiry (`lib/maintenance/database.ts`). Add
     `(user_id, created_at, id)` only if a real query plan justifies it.
-63. **Trusted IP Header Is Not Yet Pinned To The Deployment** —
+53. **Trusted IP Header Is Not Yet Pinned To The Deployment** —
     `lib/http/client-ip.ts`, `lib/rate-limit/index.ts` — `TRUSTED_IP_HEADERS`
     is `cf-connecting-ip` alone, so the Vercel half of this entry is gone.
     Development falls back to `127.0.0.1` when the header is absent;
@@ -207,13 +185,13 @@
     enforcing the ingress boundary for the target deployment. Already flagged
     by the `TODO(proxy-trust)` above every such site; belongs on the
     pre-production checklist.
-64. **Custom IPv6 `/64` Bucketing in `ipBucket`** —
+54. **Custom IPv6 `/64` Bucketing in `ipBucket`** —
     `lib/rate-limit/index.ts` — manual `::` expansion; verified correct for
     all valid inputs and `getClientIp` blocks malformed ones upstream. The only
     proposed remedy adds the `ip-address` dependency — supply-chain/maintenance
     risk with no real defect fixed. Leave as-is.
 
-65. **`ipIdentifier`'s Failure Log Emits Present, IP-Bearing Headers** —
+55. **`ipIdentifier`'s Failure Log Emits Present, IP-Bearing Headers** —
     `lib/rate-limit/index.ts` — When `cf-connecting-ip` is absent or fails
     `IP_SCHEMA`, the 503 carries the VALUES of `x-forwarded-for`, `host`,
     `user-agent` and the invalid `cf-connecting-ip` as its `cause`, which the
@@ -226,7 +204,7 @@
     theoretical exposure. Revisit if logs ever leave the host — the same trigger
     as #8.
 
-66. **OPTIONS Requests Produce No Access-Log Line** — `app.ts`,
+56. **OPTIONS Requests Produce No Access-Log Line** — `app.ts`,
     `server/elysia/respond.ts` — an unknown path's preflight is answered in
     the `onRequest` hook in `app.ts` and a known path's by `@elysia/cors`; both
     are marked as preflights and skipped by the access log, so preflight volume
@@ -243,14 +221,14 @@
     to record requests that carry no application semantics is not a trade worth
     making at this size.
 
-67. **Benchmark Dependencies (`uuid`, `sharp`) Removed from Root Manifest** —
+57. **Benchmark Dependencies (`uuid`, `sharp`) Removed from Root Manifest** —
     `knip.jsonc` — Benchmark-only comparison packages were removed to avoid
     root dependency bloat, and the `bench/uuid/` and `bench/image/` harnesses
     are gone too. Key decision measurements are already recorded; if
     benchmarks need to be re-run, the harness and its dependencies can be
     recreated on demand and removed.
 
-68. **Sign-In Racing a Deactivation Keeps Read Access** —
+58. **Sign-In Racing a Deactivation Keeps Read Access** —
     `lib/auth/session/hooks.ts` (`session.create.before`),
     `modules/permissions/item.ts` (role deactivation) — a sign-in whose
     eligibility read lands a millisecond before an admin deactivates the user
@@ -259,45 +237,45 @@
     already held that read access, so keeping it longer costs nothing real.
     Writes are still refused. (Audit opus-5.5 #10.)
 
-69. **A Passkey Deleted Mid-Sign-In Still Completes the Second Factor** —
+59. **A Passkey Deleted Mid-Sign-In Still Completes the Second Factor** —
     `lib/auth/two-factor/passkey.ts` — an assertion in flight while the owner
     deletes that passkey can still mint a session. A millisecond race, and it
     gains nothing: a sign-in a moment earlier yields the same session, and
     deleting a passkey never revoked existing sessions. (Audit opus-5.5 #12.)
 
-70. **User Detail Shows Session IPs for Up to 5 Minutes After `users.edit` Is
+60. **User Detail Shows Session IPs for Up to 5 Minutes After `users.edit` Is
     Removed** — `modules/users/item.ts` (`getUser`) — the detail route reads
     grants from the cookie cache, so an admin who just lost `users.edit` keeps
     seeing other users' session IPs and user agents until the cache expires.
     They already had that view; another few minutes of it is no real exposure.
     Same reasoning as Known #5. (Audit opus-5.5 #13.)
 
-71. **Two Correct Second Factors Racing Can Make a "Don't Remember Me" Session
+61. **Two Correct Second Factors Racing Can Make a "Don't Remember Me" Session
     Persistent** — `lib/auth/two-factor/challenge.ts` (`invalidateChallenge`)
     — the losing request of two simultaneous correct completions clears the
     winner's `dont_remember` marker. Rare, and it only lengthens the
     legitimate owner's own session. (Audit opus-5.5 #16.)
 
-72. **Sign-Out Can Deadlock With an Admin 2FA Reset of the Same User** —
+62. **Sign-Out Can Deadlock With an Admin 2FA Reset of the Same User** —
     `lib/auth/path-policy.ts` (`revokeSignedOutSession`),
     `modules/users/two-factor.ts` — the two delete session rows and their
     artifacts in opposite orders. Needs both at the same millisecond; one side
     gets a retryable 503 and nothing is gained or lost. (Audit opus-5.5 #36.)
 
-73. **The SQLite Cache Module Has No Production Caller** — `lib/cache/`,
+63. **The SQLite Cache Module Has No Production Caller** — `lib/cache/`,
     `cache.db` — a deliberate scaffold, kept for later use: `cacheGet` and
     `cacheSet` are reached only from tests, and the store is closed at shutdown
     without being opened. Owner decision; audits do not report it as unused.
     (Audit opus-5.5 #78.)
 
-74. **Narrowing the Email-Provider List Later Would Lock Existing Users Out** —
+64. **Narrowing the Email-Provider List Later Would Lock Existing Users Out** —
     `emailSchema` (`packages/shared/src/validation/rules.ts`) — removing a
     provider would answer that provider's existing users 422 on sign-in,
     recovery and Google sign-in before any credential check. The provider
     allowlist on `emailSchema` stays as it is. Owner decision: never raise this
     again. (Audit opus-5.5 #106.)
 
-75. **No Index on `verifications.value`** — `lib/auth/session/rotation.ts`
+65. **No Index on `verifications.value`** — `lib/auth/session/rotation.ts`
     — credential rotation deletes a user's verification rows by `value` with a
     sequential scan. Measured: a hash index (a btree is unsafe on the passkey
     ceremony values) saves about 1 ms per rotation at realistic table sizes,
@@ -306,7 +284,7 @@
     minutes.
     (Audit opus-5.5 #99.)
 
-76. **The Forgot-Password Bindings Keep the Pre-Auth IP Write** — the
+66. **The Forgot-Password Bindings Keep the Pre-Auth IP Write** — the
     `forgot-password/send`, `reset`, `second-factor/send` and `complete`
     bindings — each request writes the pre-auth counter before its own limiter
     although the route makes no session lookup. Kept: their shared
@@ -317,7 +295,7 @@
     when the gate stopped charging requests to signed-in routes that carry no
     session-token cookie (performance audit P-16). (Audit opus-5.5 #94.)
 
-77. **A Password Sign-In Racing a Credential Rotation Can Still Get a
+67. **A Password Sign-In Racing a Credential Rotation Can Still Get a
     Session** — `/sign-in/email`, `twoFactorSignInGuard`
     (`lib/auth/two-factor/plugin.ts`) — Better Auth inserts the session after
     the password check and outside any user lock, so a sign-in that verified
@@ -338,7 +316,7 @@
     (`lib/auth/session/live.ts`) runs before a mutation's transaction, so it
     does not close this race either. (Audit opus-5.5 #11; formerly Known #1.)
 
-78. **A Junk `session_data` Cookie Makes Reads Use the Stored Permission
+68. **A Junk `session_data` Cookie Makes Reads Use the Stored Permission
     Snapshot** — `hasSessionCookieCache` (`lib/auth/session/read.ts`),
     `resolveGrants` (`lib/permissions/checker.ts`) — reads skip `liveGrants`
     whenever a cookie NAMED like the cache is present, whatever its value, and
@@ -353,7 +331,7 @@
     defect. Writes still check the database. The in-app race that can leave a
     stale snapshot is Known #15.
 
-79. **CodeQL, Snyk Code and SonarQube Are Not Run** —
+69. **CodeQL, Snyk Code and SonarQube Are Not Run** —
     `.github/workflows/security.yml` — excluded on purpose when the scanners
     were chosen; do not re-propose them. CodeQL is free only for public
     repositories (a private one needs GitHub Code Security, paid per active
@@ -511,9 +489,34 @@
     means owning the plugin's insert transaction. Raised by the 2026-11-01
     review.
 
-# Known Issues — Will Be Fixed Later
+91. **A Busy 503 on a Form or Re-authentication Is Not Sent Again by Itself**
+    — `holdSubmit` (`apps/front-end/components/form/use-form-submit.ts`),
+    `busyWaitMs` (`apps/front-end/lib/api/fetch.ts`). The submit button counts
+    down the stated `Retry-After` and the user sends again. By design: the
+    client cannot tell a refusal before any work from a database 503 after a
+    captcha token, an OTP code or a grant was spent, and some "busy" paths
+    commit work first (contact-change verifies the password, then its
+    destination limiter can refuse). An automatic re-send needs a server code
+    that promises the same payload is replayable, emitted only at audited
+    boundaries, plus fresh-token handling on captcha forms. Uploads are the
+    exception: their 503 never follows a live file, so `withStatedWaits`
+    (`apps/front-end/lib/api/stated-wait.ts`) re-sends them. Decided with GPT
+    on 2026-11-02.
 
-<!-- 1: moved to "Not Real Issues" #77 by owner decision (2026-10-31). The entries after it keep their numbers. -->
+92. **Known Addresses Can Drain the Daily OTP Delivery Budget** —
+    `enforceOtpGlobalSendBudget` (`lib/rate-limit/index.ts`), charged in
+    `processOtpSend` (`lib/otp/send.ts`). One pool per contact kind,
+    `OTP_GLOBAL_SEND_CAP_PER_DAY`, shared by every purpose. Charged only after
+    the account lookup, so it counts real deliveries to real accounts, never
+    requests naming unknown addresses. About nine known addresses, each sent
+    the per-surface hourly maximum on recovery and passwordless all day, can
+    exhaust it. Until the UTC day resets, recovery, passwordless and email
+    second-factor codes then deliver nothing, while anonymous routes keep
+    answering their generic success. Owner decision (2026-11-02): no per-purpose
+    pools. The cap is a cost breaker sized far above real traffic, so reaching
+    it already means deliberate abuse. Was TODO C-002.
+
+# Known Issues — Will Be Fixed Later
 
 2. **No Default Application-Pool `statement_timeout` Configured**
    - **Locations:** `db/index.ts`, `db/transaction.ts`, `lib/http/timing-floor.ts`

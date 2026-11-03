@@ -8,7 +8,9 @@ import {
   MSG_LOADING,
   MSG_REAUTH_DESCRIPTION,
   MSG_REAUTH_NO_METHODS,
+  MSG_SUBMIT_AGAIN_IN,
 } from '@/constants/messages';
+import { busyWaitMs } from '@/lib/api/fetch';
 import { markProving, reauthDialog, settleReauth } from '@/lib/auth/reauth';
 import {
   fetchReauthMethods,
@@ -17,6 +19,7 @@ import {
 } from '@/lib/auth/reauth-proof';
 
 import { useAsyncAction } from '@/hooks/use-async-action';
+import { useResendCooldown } from '@/hooks/use-resend-cooldown';
 import { Button } from '@/components/ui/button';
 import {
   DialogDescription,
@@ -40,10 +43,12 @@ const METHOD_LABELS = {
 
 interface ProofProps {
   disabled: boolean;
+  /** Seconds left of the wait a refused proof stated; 0 when none. */
+  waitSeconds: number;
   onProve: (run: () => Promise<void>) => void;
 }
 
-const PasswordProof = memo(({ disabled, onProve }: ProofProps) => {
+const PasswordProof = memo(({ disabled, waitSeconds, onProve }: ProofProps) => {
   const passwordId = useId();
   const [password, setPassword] = useState('');
 
@@ -75,21 +80,33 @@ const PasswordProof = memo(({ disabled, onProve }: ProofProps) => {
           onChange={handleChange}
         />
       </div>
-      <Button type='submit' disabled={disabled || !password}>
-        {disabled ? 'جاري التأكيد...' : 'تأكيد'}
+      <Button type='submit' disabled={disabled || waitSeconds > 0 || !password}>
+        {waitSeconds > 0
+          ? MSG_SUBMIT_AGAIN_IN(waitSeconds)
+          : disabled
+            ? 'جاري التأكيد...'
+            : 'تأكيد'}
       </Button>
     </form>
   );
 });
 PasswordProof.displayName = 'PasswordProof';
 
-const PasskeyProof = memo(({ disabled, onProve }: ProofProps) => {
+const PasskeyProof = memo(({ disabled, waitSeconds, onProve }: ProofProps) => {
   const handleClick = useCallback(() => onProve(proveWithPasskey), [onProve]);
 
   return (
-    <Button onClick={handleClick} disabled={disabled} className='w-full'>
+    <Button
+      onClick={handleClick}
+      disabled={disabled || waitSeconds > 0}
+      className='w-full'
+    >
       <Icon icon='solar:key-square-2-bold-duotone' className='size-5' />
-      {disabled ? 'بانتظار مفتاح المرور...' : 'التأكيد بمفتاح المرور'}
+      {waitSeconds > 0
+        ? MSG_SUBMIT_AGAIN_IN(waitSeconds)
+        : disabled
+          ? 'بانتظار مفتاح المرور...'
+          : 'التأكيد بمفتاح المرور'}
     </Button>
   );
 });
@@ -151,16 +168,21 @@ const ReauthBody = memo(({ request }: { request: ReauthRequest }) => {
     refetchOnWindowFocus: false,
   });
 
+  const { secondsLeft, start } = useResendCooldown();
   const prove = useCallback(
     async (run: () => Promise<void>) => {
       markProving(request, true);
       try {
         await run();
+      } catch (error) {
+        const wait = busyWaitMs(error);
+        if (wait !== undefined) start(wait / 1000);
+        throw error;
       } finally {
         markProving(request, false);
       }
     },
-    [request]
+    [request, start]
   );
   const { pending: proving, run: runProof } = useAsyncAction(prove);
 
@@ -193,7 +215,12 @@ const ReauthBody = memo(({ request }: { request: ReauthRequest }) => {
       {query.isError ? (
         <ErrorState error={query.error} refetch={query.refetch} />
       ) : (
-        <Proofs methods={query.data} disabled={proving} onProve={handleProve} />
+        <Proofs
+          methods={query.data}
+          disabled={proving}
+          waitSeconds={secondsLeft}
+          onProve={handleProve}
+        />
       )}
       <Button variant='ghost' onClick={handleCancel} disabled={proving}>
         إلغاء

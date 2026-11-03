@@ -13,6 +13,7 @@ import { LIBRARY_UPLOAD_FIELD } from '@app/shared/validation/media';
 
 import { bind, refusalOf } from '@/lib/http/binding';
 import { handleFolderForeignKeyViolation } from '@/lib/http/constraint-errors';
+import { committedUnanswered } from '@/lib/http/response';
 import { grantedActor, requestActor } from '@/lib/media/actor';
 import { fileNotFound } from '@/lib/media/errors';
 import {
@@ -80,7 +81,11 @@ export const uploadMediaFileBinding = bind(uploadMediaFile, {
       meta.chargeRateLimit
     );
 
-    return { message: mediaMsg.uploaded, data: await toMediaFile(row) };
+    // The file is live: a 503 from here would be retried and store it twice.
+    const data = await toMediaFile(row).catch((error: unknown) => {
+      throw committedUnanswered(error);
+    });
+    return { message: mediaMsg.uploaded, data };
   },
 });
 

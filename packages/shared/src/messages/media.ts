@@ -133,6 +133,8 @@ export const mediaMsg = {
     })[reason],
 
   uploadFailed: MSG_UPLOAD_FAILED,
+  uploadTimedOut:
+    'انتهت مهلة إرسال الملف قبل اكتماله. تحقق من اتصالك ثم حاول مرة أخرى',
   storeFailed: 'حدث خطأ في التخزين، حاول مرة أخرى بعد قليل',
   fetchError: MSG_FETCH_ERROR,
   updateError: MSG_UPDATE_ERROR,

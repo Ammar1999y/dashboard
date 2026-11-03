@@ -1,15 +1,7 @@
 /**
  * The two body readers — `lazyFormData` for a multipart route and
- * `readJsonObject` for the gate's JSON parse — and the only place their
- * media-type matching is exercised end to end against the runtime parser.
- *
- * The mixed-case multipart case is version-gated and that is why it is pinned
- * here rather than reasoned about: up to Bun 1.3.14 `Request.formData()` matched
- * `form-data` case-SENSITIVELY and threw on `Multipart/Form-Data`, so a
- * spec-valid request the matcher admitted was refused one layer down. Bun 1.4.0
- * made the parser case-insensitive, and 1.4.0 is the floor `server.ts` asserts —
- * so a regression below that floor breaks a real request, and this is what says
- * so instead of leaving it to be inferred from a comment.
+ * `readJsonObject` for the gate's JSON parse — exercised end to end against
+ * the runtime parsers they hand the body to.
  */
 import { describe, expect, test } from 'bun:test';
 
@@ -18,6 +10,7 @@ import { HTTP_STATUS } from '@app/shared/http-status';
 import {
   lazyFormData,
   MAX_JSON_BODY_BYTES,
+  MAX_MULTIPART_PARTS,
   MAX_REQUEST_BODY_BYTES,
   readJsonObject,
   readWithin,
@@ -253,6 +246,186 @@ describe('a multipart route is bounded by its own count, not by the server limit
 
   test('the server limit stays above every ceiling the app answers itself', () => {
     expect(SERVER_BODY_LIMIT_BYTES).toBeGreaterThan(MAX_REQUEST_BODY_BYTES);
+  });
+});
+
+describe('a form is refused past its part ceiling while it streams', () => {
+  const part = (name: string, value = '') =>
+    `--${BOUNDARY}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
+  const form = (parts: number) =>
+    Array.from({ length: parts }, (_, i) => part(`f${i}`)).join('') +
+    `--${BOUNDARY}--\r\n`;
+
+  /** `text` in `size`-byte chunks, recording how many the reader pulled. */
+  const streamed = (text: string, size: number) => {
+    const bytes = new TextEncoder().encode(text);
+    const pulled = { chunks: 0, of: Math.ceil(bytes.length / size) };
+    let at = 0;
+    const request = new Request('http://localhost/api/upload/file', {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${BOUNDARY}` },
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (at >= bytes.length) return controller.close();
+          pulled.chunks += 1;
+          controller.enqueue(bytes.slice(at, (at += size)));
+        },
+      }),
+      duplex: 'half',
+    } as RequestInit);
+    return { request, pulled };
+  };
+
+  const expectRefused400 = (promise: Promise<unknown>) =>
+    expect(promise).rejects.toMatchObject({
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+
+  test('a form at the ceiling parses', async () => {
+    const { request } = streamed(form(MAX_MULTIPART_PARTS), 1024);
+    const parsed = await lazyFormData(request)();
+    expect([...(parsed ?? [])]).toHaveLength(MAX_MULTIPART_PARTS);
+  });
+
+  test('one part past it is 400', async () => {
+    const { request } = streamed(form(MAX_MULTIPART_PARTS + 1), 1024);
+    await expectRefused400(lazyFormData(request)());
+  });
+
+  test('a flood of empty parts stops the upload instead of reading it to the end', async () => {
+    const { request, pulled } = streamed(form(100_000), 64 * 1024);
+    await expectRefused400(lazyFormData(request)());
+    // The refusing chunk and the one the pipe had already pulled ahead.
+    expect(pulled.chunks).toBeLessThanOrEqual(2);
+    expect(pulled.of).toBeGreaterThan(50);
+  });
+
+  // One byte a chunk cuts every opening, which only the carry counts.
+  test('an opening cut across chunks still counts', async () => {
+    const { request } = streamed(form(MAX_MULTIPART_PARTS + 1), 1);
+    await expectRefused400(lazyFormData(request)());
+  });
+
+  // Bun opens a part at `--boundary` + CRLF whether a CRLF precedes it or not,
+  // so a count of CRLF-led openings alone would be one a flood could walk past.
+  test('an opening with no CRLF before it counts, as the parser splits on it', async () => {
+    const glued = Array.from(
+      { length: MAX_MULTIPART_PARTS + 1 },
+      (_, i) =>
+        `--${BOUNDARY}\r\nContent-Disposition: form-data; name="f${i}"\r\n\r\nv`
+    ).join('');
+    const { request } = streamed(`${glued}--${BOUNDARY}--\r\n`, 1024);
+    await expectRefused400(lazyFormData(request)());
+  });
+
+  test('a file carrying the boundary text more often than the ceiling still parses as one', async () => {
+    const svg = `<svg><text>${`--${BOUNDARY}z`.repeat(MAX_MULTIPART_PARTS * 2)}</text></svg>`;
+    const { request } = streamed(
+      `--${BOUNDARY}\r\nContent-Disposition: form-data; name="files"; filename="a.svg"\r\n` +
+        `Content-Type: image/svg+xml\r\n\r\n${svg}\r\n--${BOUNDARY}--\r\n`,
+      1024
+    );
+    const parsed = await lazyFormData(request)();
+    expect([...(parsed ?? [])]).toHaveLength(1);
+    expect(await (parsed?.get('files') as File).text()).toBe(svg);
+  });
+
+  const headed = (contentType: string, body: string) =>
+    new Request('http://localhost/api/upload/file', {
+      method: 'POST',
+      headers: { 'content-type': contentType },
+      body,
+    });
+
+  test('a quoted boundary is the one counted', async () => {
+    const request = headed(
+      `multipart/form-data; boundary="${BOUNDARY}"`,
+      form(MAX_MULTIPART_PARTS + 1)
+    );
+    await expectRefused400(lazyFormData(request)());
+  });
+
+  /**
+   * `Request.formData()` reads the body as URL-encoded pairs when the media
+   * type appears anywhere in the header, the boundary included: 100,000 pairs
+   * from 300 KB, with no multipart opening for the count to see.
+   */
+  test.each([
+    ['multipart/form-data; boundary=application/x-www-form-urlencoded'],
+    [
+      `multipart/form-data; boundary=${BOUNDARY}; note=application/x-www-form-urlencoded`,
+    ],
+  ])('%p is never parsed as URL-encoded pairs', async (type) => {
+    expect(
+      await lazyFormData(headed(type, 'x=&'.repeat(100_000)))()
+    ).toBeNull();
+  });
+
+  test('a boundary spelling the URL-encoded type still bounds a real form', async () => {
+    const boundary = 'application/x-www-form-urlencoded';
+    const request = headed(
+      `multipart/form-data; boundary=${boundary}`,
+      form(MAX_MULTIPART_PARTS + 1).replaceAll(
+        `--${BOUNDARY}`,
+        () => `--${boundary}`
+      )
+    );
+    await expectRefused400(lazyFormData(request)());
+  });
+
+  test.each([
+    [`multipart/form-data; boundary=${BOUNDARY}; boundary=other`],
+    [`multipart/form-data; xboundary=other; boundary=${BOUNDARY}`],
+    [`multipart/form-data; note="boundary=other"; boundary=${BOUNDARY}`],
+    [`multipart/form-data; note="a;b"; boundary=${BOUNDARY}`],
+    [`multipart/form-data; charset=utf-8; boundary="${BOUNDARY}"`],
+    [`multipart/form-data; boundary=${BOUNDARY} ; charset=utf-8`],
+    [`multipart/form-data;boundary=${BOUNDARY}`],
+    [`multipart/form-data; boundary=${BOUNDARY};`],
+    [`multipart/form-data;; boundary=${BOUNDARY}`],
+    [`multipart/form-data; note="a\\\\b"; boundary=${BOUNDARY}`],
+    [`multipart/form-data; boundary="\\${BOUNDARY}"`],
+  ])('%p names its boundary and parses', async (type) => {
+    const parsed = await lazyFormData(headed(type, MULTIPART_BODY))();
+    expect(parsed?.get('files')).toBe('hello');
+  });
+
+  test('an all-hyphen boundary reaches the ceiling one part early, never late', async () => {
+    const hyphens = (parts: number) =>
+      headed(
+        'multipart/form-data; boundary=-',
+        form(parts).replaceAll(`--${BOUNDARY}`, '---')
+      );
+    const parsed = await lazyFormData(hyphens(MAX_MULTIPART_PARTS - 1))();
+    expect([...(parsed ?? [])]).toHaveLength(MAX_MULTIPART_PARTS - 1);
+    await expectRefused400(lazyFormData(hyphens(MAX_MULTIPART_PARTS))());
+  });
+
+  test('a quoted boundary with a space inside parses, as RFC 2046 allows', async () => {
+    const parsed = await lazyFormData(
+      headed(
+        'multipart/form-data; boundary="a b"',
+        MULTIPART_BODY.replaceAll(`--${BOUNDARY}`, '--a b')
+      )
+    )();
+    expect(parsed?.get('files')).toBe('hello');
+  });
+
+  test.each([
+    ['multipart/form-data'],
+    ['multipart/form-data; boundary='],
+    ['multipart/form-data; boundary=""'],
+    [`multipart/form-data; boundary= ${BOUNDARY}`],
+    [`multipart/form-data; boundary="${BOUNDARY}"x`],
+    [`multipart/form-data; boundary="${BOUNDARY}\\"x"`],
+    ['multipart/form-data; boundary="a "'],
+    ['multipart/form-data; boundary="a'],
+    [`multipart/form-data; flag; boundary=${BOUNDARY}`],
+    ['multipart/form-data; boundary=abé'],
+  ])('%p names no usable boundary, so it is no form, unread', async (type) => {
+    const request = headed(type, MULTIPART_BODY);
+    expect(await lazyFormData(request)()).toBeNull();
+    expect(request.bodyUsed).toBe(false);
   });
 });
 

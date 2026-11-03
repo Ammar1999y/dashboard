@@ -66,6 +66,7 @@ const UPLOAD_ERRORS = {
       FILE_CONTENT_REFUSED_CODE,
     ],
   },
+  408: {},
   422: {
     codes: [
       VISIBILITY_DISABLED_CODE,

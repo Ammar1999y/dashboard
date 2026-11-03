@@ -36,7 +36,7 @@ import { DocTile } from './thumb';
 const STATUS_TEXT: Readonly<Record<UploadStatus, string>> = {
   waiting: 'انتظار',
   uploading: 'جارٍ الرفع',
-  limited: 'انتظار حد الرفع',
+  limited: 'انتظار قبل إعادة المحاولة',
   done: 'تم',
   failed: 'فشل',
   cancelled: 'أُلغي',
