@@ -798,13 +798,26 @@ describe('a pass where one object fails and its sibling succeeds', () => {
     expect(partial().swept.removed.files.degraded).toBe(true);
   });
 
-  test('all three objects were addressed in one call, and nothing else was', () => {
-    expect(deletedObjectKeys(partial().ops)).toEqual(
-      [KEY.pastTtl, KEY.siblingPastTtl, KEY.orphanDeleting].toSorted(
-        compareCodeUnits
-      )
-    );
-    expect(deletedBuckets(partial().ops)).toEqual(BOTH_BUCKETS);
+  test('all three objects were addressed in one call per bucket, and nothing else was', () => {
+    const doomed = [
+      KEY.pastTtl,
+      KEY.siblingPastTtl,
+      KEY.orphanDeleting,
+    ].toSorted(compareCodeUnits);
+    const calls = partial().ops.filter((op) => op.kind === 'DeleteObjects');
+    const [first, second, ...retries] = calls;
+    expect(
+      [first, second].map((op) => op?.keys?.toSorted(compareCodeUnits))
+    ).toEqual([doomed, doomed]);
+    expect(deletedObjectKeys(partial().ops)).toEqual(doomed);
+    expect(deletedBuckets(calls.slice(0, 2))).toEqual(BOTH_BUCKETS);
+    // The run drains while a pass removes something, so the refused row, now
+    // alone in the queue, is tried once more; that try removes nothing and ends
+    // the run.
+    expect(retries.map((op) => op.keys)).toEqual([
+      [KEY.pastTtl],
+      [KEY.pastTtl],
+    ]);
   });
 });
 
@@ -870,6 +883,54 @@ describe('a batch of persistently refused deletes', () => {
     expect(await survivingFileKeys()).toEqual(
       refused.toSorted(compareCodeUnits)
     );
+  });
+});
+
+/**
+ * The record-upload route admits more pending uploads a day from one account
+ * than one file pass takes, and the job runs nightly: a run that stopped at one
+ * batch let that backlog grow without end.
+ */
+describe('an abandoned-upload backlog deeper than one batch', () => {
+  const fresh = 'm/2026/09/backlog-fresh.webp';
+  let pass: Pass;
+
+  beforeAll(async () => {
+    await resetTables();
+    const { userId } = await seedUser();
+    await db.insert(files).values([
+      ...Array.from({ length: SWEEP_BATCH_SIZE + 1 }, (_, index) => ({
+        ...IMAGE_ROW,
+        r2Key: `m/2026/09/abandoned-${index}.webp`,
+        displayName: 'abandoned.webp',
+        status: 'pending' as const,
+        uploadedBy: userId,
+        createdAt: sql`now() - interval '2 days'`,
+      })),
+      {
+        ...IMAGE_ROW,
+        r2Key: fresh,
+        displayName: 'fresh.webp',
+        status: 'pending',
+        uploadedBy: userId,
+      },
+    ]);
+    pass = await sweepAndRecord();
+  }, 30_000);
+
+  test('one run removes every expired upload and its object, and reports nothing left', async () => {
+    expect(pass.swept.removed.files).toMatchObject({
+      removed: SWEEP_BATCH_SIZE + 1,
+      hasMore: false,
+      degraded: false,
+    });
+    expect(pass.swept.status).toBe('ok');
+    expect(deletedObjectKeys(pass.ops)).toHaveLength(SWEEP_BATCH_SIZE + 1);
+    expect(await survivingFileKeys()).toEqual([fresh]);
+  });
+
+  test('the upload still inside its TTL keeps its object', () => {
+    expect(deletedObjectKeys(pass.ops)).not.toContain(fresh);
   });
 });
 

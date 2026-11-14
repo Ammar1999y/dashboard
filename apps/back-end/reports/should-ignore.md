@@ -516,6 +516,35 @@
     pools. The cap is a cost breaker sized far above real traffic, so reaching
     it already means deliberate abuse. Was TODO C-002.
 
+93. **The Unfiled Reaper Re-picks Rows a Foreign Key Refuses** —
+    `reapUnfiled` (`lib/media/lifecycle.ts`) — `due` has no order, so 100 rows
+    that keep failing the composite FK would fill every pass. A refusal needs
+    a referrer table missing from `USAGE_SOURCES`, which
+    `tests/integration/media-usages.test.ts` fails on and `scripts/migrate.ts`
+    refuses at deploy (the referrer-contract gate). If it happens anyway it
+    reaps less, never more, logs an error, marks the run degraded, and clears
+    once the table is registered. Restamping `unfiled_at` or `updated_at` on a
+    refusal would change timestamps users see. Inert while no usage source is
+    registered. Decided with Codex on 2026-11-03. (Performance audit.)
+
+94. **The Data-Table Pool Stays at Four Connections** —
+    `DATA_TABLE_POOL_CONNECTIONS` (`db/limits.ts`). Eight bought nothing,
+    back to back (lists p50 3.3 s against 3.5 s); the list cost was
+    PostgreSQL plans, since fixed. Revisit only with a measurement showing
+    pool waits. (Performance audit.)
+
+95. **Library Files Have No Per-Account Storage Quota** — `acceptUpload`
+    (`lib/media/upload.ts`). Uploads are bounded by rate only. Left out of the
+    kit: the library is shared by staff, every file is listed, attributed in
+    the audit log and deletable, and a quota's size is each project's product
+    choice. A project that adds one sums `size_bytes` of the uploader's
+    `pending` and `active` rows at upload, in one short transaction that locks
+    the uploader row and inserts the pending row before any R2 call; no running
+    counter to keep in step with deletes. Abandoned pending uploads are a
+    different matter and are drained by the nightly sweep (`drainFiles`,
+    `lib/maintenance/database.ts`). Decided with Codex on 2026-11-03.
+    (Performance audit.)
+
 # Known Issues — Will Be Fixed Later
 
 2. **No Default Application-Pool `statement_timeout` Configured**

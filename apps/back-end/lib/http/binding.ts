@@ -28,6 +28,8 @@ import type {
 
 import * as z from 'zod';
 
+import { SERVER_BODY_LIMIT_BYTES } from './request';
+
 type PermissionActor = Awaited<ReturnType<typeof requirePermission>>;
 type SessionActor = Awaited<ReturnType<typeof requireSession>>;
 export type Actor = PermissionActor | SessionActor | null;
@@ -220,7 +222,7 @@ interface BindingOptions {
      */
     unreadableBody?: FixedRefusal;
   };
-  /** Raises this request's idle timeout above the server-wide ceiling. */
+  /** This request's idle timeout, in place of the server-wide one. */
   timeoutSeconds?: number;
   /** `false` while the build-time feature behind the route is off. */
   enabled?: boolean;
@@ -237,7 +239,7 @@ interface BindingOptions {
   credential?: (headers: Headers) => AnyBindingResult | undefined;
   /** Holds every outcome after `startFloor` for `MINIMUM_RESPONSE_MS`. */
   timingFloor?: boolean;
-  /** Raises the JSON body ceiling above `MAX_JSON_BODY_BYTES`. */
+  /** This route's JSON body ceiling, in place of `MAX_JSON_BODY_BYTES`. */
   maxJsonBodyBytes?: number;
   permission?: PermissionOption;
   rateLimit?: RateLimitOption & { by: 'user' | 'ip' };
@@ -358,6 +360,18 @@ function assertAgrees(
     entry.bodyKind === 'json' || options.maxJsonBodyBytes === undefined
       ? null
       : 'a JSON ceiling only on a JSON body',
+    // A ceiling no count can cross (`NaN`) disables the check; one at or over
+    // the listener's limit gets Bun's bare 413 instead of the application's.
+    options.maxJsonBodyBytes === undefined ||
+    (isPositiveInteger(options.maxJsonBodyBytes) &&
+      options.maxJsonBodyBytes < SERVER_BODY_LIMIT_BYTES)
+      ? null
+      : 'a JSON ceiling of whole bytes below `SERVER_BODY_LIMIT_BYTES`',
+    // Bun reads 0 as no timeout at all.
+    options.timeoutSeconds === undefined ||
+    isPositiveInteger(options.timeoutSeconds)
+      ? null
+      : 'an idle timeout of whole seconds above zero',
     [options.permission?.orSelf, options.permission?.notSelf].every(
       (name) =>
         typeof name !== 'string' || entry.path.split('/').includes(`:${name}`)
@@ -389,6 +403,9 @@ function assertAgrees(
   if (problems.length > 0)
     throw new Error(`${key} needs ${problems.join('; ')}.`);
 }
+
+const isPositiveInteger = (value: number): boolean =>
+  Number.isSafeInteger(value) && value > 0;
 
 /** The keys a binding's query declares; `bind()` holds every query to an object. */
 export const queryKeysOf = ({ query }: AnyEndpoint): readonly string[] =>

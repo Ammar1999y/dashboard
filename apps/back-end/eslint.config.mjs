@@ -95,7 +95,8 @@ const compat = new FlatCompat({
 // config; the front-end has its own.
 const eslintConfig = [
   {
-    ignores: ['dist/**', 'out/**', 'build/**'],
+    // Session worktrees are full checkouts of this repository.
+    ignores: ['dist/**', 'out/**', 'build/**', '.claude/**'],
   },
   ...tseslintConfigs.recommended,
   eslintPluginUnicorn.configs.recommended,

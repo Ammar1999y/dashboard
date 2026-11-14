@@ -177,6 +177,34 @@ async function sweepBatched(
   return { removed, hasMore: true };
 }
 
+/**
+ * `sweepFiles` until it clears, the ceiling is hit, or a pass removes nothing.
+ * One pass takes `SWEEP_BATCH_SIZE` rows, fewer than the record-upload route
+ * admits from one account in a day. The no-progress stop is what keeps a total
+ * store outage to one pass per run.
+ */
+async function drainFiles(
+  stopping: AbortSignal | undefined
+): Promise<FileSweepCount> {
+  const total: FileSweepCount = {
+    removed: 0,
+    unfiled: { stamped: 0, reaped: 0 },
+    hasMore: true,
+    degraded: false,
+  };
+  for (let batch = 0; batch < MAX_BATCHES; batch++) {
+    const swept = await sweepFiles(stopping);
+    total.removed += swept.removed;
+    total.unfiled.stamped += swept.unfiled.stamped;
+    total.unfiled.reaped += swept.unfiled.reaped;
+    total.hasMore = swept.hasMore;
+    total.degraded ||= swept.degraded;
+    if (!swept.hasMore || swept.removed === 0) return total;
+    await yieldToEventLoop();
+  }
+  return total;
+}
+
 const clockRowSchema = z.object({ now: z.string() });
 
 /**
@@ -459,7 +487,7 @@ export async function runDatabaseSweep(
       runStart,
       stopping
     ),
-    files: await guarded('files', () => sweepFiles(stopping), {
+    files: await guarded('files', () => drainFiles(stopping), {
       removed: 0,
       unfiled: { stamped: 0, reaped: 0 },
       hasMore: true,

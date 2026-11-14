@@ -965,6 +965,36 @@ describe('a parse failure that names no cause', () => {
   });
 });
 
+test('a binding on a path Better Auth serves is refused at boot, whatever its method', async () => {
+  const { createApp } = await import('@/app');
+  const { BETTER_AUTH_ROUTE_PREFIX } = await import('@/lib/auth/allowed-paths');
+  const at = (path: string) =>
+    bind(
+      endpoint({
+        method: 'PUT',
+        path,
+        body: z.object({}),
+        status: 200,
+        response: { raw: z.object({}) },
+        policy: PUBLIC,
+      }),
+      {
+        failure: MSG_INTERNAL_ERROR,
+        preAuthIpLimit: false,
+        maxJsonBodyBytes: 1024 * 1024,
+        detail,
+        handler: async () => ({ raw: {} }),
+      }
+    );
+  const boot = (path: string) => () =>
+    createApp({ bindings: [at(path)], prefixes: [BETTER_AUTH_ROUTE_PREFIX] });
+
+  expect(boot('/api/auth/sign-in/email')).toThrow(
+    'A binding shares a path a prefix serves: /api/auth/sign-in/email.'
+  );
+  expect(boot('/api/auth/probe-not-native')).not.toThrow();
+});
+
 test('Elysia’s cookie error is a server fault: a logged 500, never a client’s 400', async () => {
   const { createApp } = await import('@/app');
   const app = createApp({

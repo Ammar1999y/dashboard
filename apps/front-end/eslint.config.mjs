@@ -29,6 +29,8 @@ const eslintConfig = [
       'read.tsx',
       'public/mockServiceWorker.js',
       'public/js/browser-image-compression.js',
+      // Session worktrees are full checkouts of this repository.
+      '.claude/**',
     ],
   },
   ...nextVitals,

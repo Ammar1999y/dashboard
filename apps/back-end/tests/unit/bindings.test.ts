@@ -11,7 +11,11 @@ import { BINDINGS } from '@/modules';
 import * as z from 'zod';
 
 import { ENDPOINTS } from '@app/shared/api/all';
-import { getPermission, listPermissions } from '@app/shared/api/permissions';
+import {
+  createPermission,
+  getPermission,
+  listPermissions,
+} from '@app/shared/api/permissions';
 import { DATA_TABLE_PARAMS } from '@app/shared/data-table/parsers';
 import { dataTableQuerySchema } from '@app/shared/data-table/query';
 
@@ -19,6 +23,7 @@ import { actorOf, GateSkipped } from '@/lib/http/admit';
 import { bind, createdBindings } from '@/lib/http/binding';
 import { isSafeMethod } from '@/lib/http/origin';
 import { refusalsOf } from '@/lib/http/refusals';
+import { SERVER_BODY_LIMIT_BYTES } from '@/lib/http/request';
 
 import { compareCodeUnits } from '@/utils/text';
 
@@ -276,6 +281,44 @@ describe('bind refuses a binding its policy contradicts', () => {
         ...extra,
       } as never)
     ).toThrow(`${listPermissions.method} ${listPermissions.path} needs`);
+  });
+
+  describe('a size or timeout no check can hold', () => {
+    const granted = {
+      failure: 'x',
+      detail,
+      handler,
+      permission: { resource: 'permissions', action: 'create' },
+      rateLimit: { scope: 's', limit: 1, by: 'user' },
+    } as const;
+    const bindWith = (extra: object) => () =>
+      bind(createPermission, { ...granted, ...extra } as never);
+
+    test.each([
+      ['maxJsonBodyBytes', NaN],
+      ['maxJsonBodyBytes', Infinity],
+      ['maxJsonBodyBytes', 0],
+      ['maxJsonBodyBytes', -1],
+      ['maxJsonBodyBytes', 1024.5],
+      ['maxJsonBodyBytes', SERVER_BODY_LIMIT_BYTES],
+      ['timeoutSeconds', 0],
+      ['timeoutSeconds', NaN],
+      ['timeoutSeconds', -5],
+      ['timeoutSeconds', 1.5],
+    ] as const)('%s: %p', (option, value) => {
+      expect(bindWith({ [option]: value })).toThrow(
+        `${createPermission.method} ${createPermission.path} needs`
+      );
+    });
+
+    test('binds a tighter or a looser ceiling and a whole timeout', () => {
+      for (const extra of [
+        { maxJsonBodyBytes: 1024 },
+        { maxJsonBodyBytes: SERVER_BODY_LIMIT_BYTES - 1 },
+        { timeoutSeconds: 30 },
+      ])
+        expect(bindWith(extra)).not.toThrow();
+    });
   });
 
   test('the caller both exempted and refused as its own target', () => {

@@ -34,7 +34,7 @@ export interface RouteShape {
   /** Framework-neutral path with `:name` params, e.g. `/api/dash/users/:id`. */
   path: string;
   body: BodyPolicy;
-  /** Raises the JSON body ceiling above `MAX_JSON_BODY_BYTES`. */
+  /** This route's JSON body ceiling, in place of `MAX_JSON_BODY_BYTES`. */
   maxJsonBodyBytes?: number;
 }
 
@@ -225,6 +225,19 @@ export function createRouting(
   routes: readonly RouteShape[],
   prefixes: readonly RoutePrefix[]
 ) {
+  const bindingMatchers = routes.map((route) => compile(route.path));
+
+  // The ceiling and the refusal shape are decided from the path alone, so a
+  // binding on a prefix's path, even on another method, would lend that path
+  // its ceiling and its envelope.
+  const shared = prefixes
+    .flatMap((entry) => entry.paths.map((sub) => `${entry.prefix}${sub.path}`))
+    .filter((path) => bindingMatchers.some((matcher) => matcher.test(path)));
+  if (shared.length > 0)
+    throw new Error(
+      `A binding shares a path a prefix serves: ${shared.join(', ')}.`
+    );
+
   const lookupMethods = createRouteLookup(routes, prefixes);
 
   /**
@@ -244,8 +257,6 @@ export function createRouting(
       headers: { Location: target + url.search },
     });
   }
-
-  const bindingMatchers = routes.map((route) => compile(route.path));
 
   /** Whether a prefix handler, not a binding, owns `pathname`. */
   function servedByPrefix(pathname: string): boolean {
