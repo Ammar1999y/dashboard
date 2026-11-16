@@ -347,11 +347,12 @@ function assertAgrees(
   options: BindingOptions
 ): void {
   const refusals = options.refusals ?? {};
+  const hasRateLimit = options.rateLimit !== undefined;
   const problems = [
     (entry.policy.auth === 'permission') === (options.permission !== undefined)
       ? null
       : 'a permission option exactly when the policy is `permission`',
-    entry.policy.rateLimited === (options.rateLimit !== undefined)
+    entry.policy.rateLimited === hasRateLimit
       ? null
       : 'a rate limit exactly when the policy says `rateLimited`',
     entry.policy.auth === 'public' && options.rateLimit?.by === 'user'

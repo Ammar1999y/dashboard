@@ -77,8 +77,10 @@ function randomSubPaths(count: number): string[] {
 
 function callAuth(
   subPath: string,
-  method: string = 'POST',
-  { captcha = true }: { captcha?: boolean } = {}
+  {
+    method = 'POST',
+    captcha = true,
+  }: { method?: string; captcha?: boolean } = {}
 ) {
   const headers = baseHeaders({ 'content-type': 'application/json' });
   if (!captcha) delete headers[CAPTCHA_HEADER];
@@ -151,7 +153,7 @@ describe('a sub-path outside the allowlist', () => {
   test('every allowlisted path still resolves, so 404 is not the whole answer', async () => {
     for (const endpoint of BETTER_AUTH_ENDPOINTS)
       for (const method of endpoint.methods) {
-        const response = await callAuth(endpoint.path, method);
+        const response = await callAuth(endpoint.path, { method });
         expect(
           response.status,
           `${method} ${endpoint.path} is declared and must reach Better Auth`
@@ -178,7 +180,7 @@ describe('a sub-path outside the allowlist', () => {
         (method) => !declared.has(method)
       );
       for (const method of undeclared) {
-        const response = await callAuth(endpoint.path, method);
+        const response = await callAuth(endpoint.path, { method });
         expect(
           response.status,
           `${method} ${endpoint.path} is not declared`
@@ -218,8 +220,8 @@ describe('a sub-path outside the allowlist', () => {
     expect(PROJECT_AUTH_ROUTES.length).toBeGreaterThan(0);
 
     for (const subPath of PROJECT_AUTH_ROUTES) {
-      const throughWildcard = await callAuth(subPath, 'GET');
-      const throughRouter = await callAuth(subPath, 'PUT');
+      const throughWildcard = await callAuth(subPath, { method: 'GET' });
+      const throughRouter = await callAuth(subPath, { method: 'PUT' });
 
       // A binding's own refusal: a plain problem, with no `message`.
       await expectError(
@@ -240,7 +242,7 @@ describe('a sub-path outside the allowlist', () => {
     );
     if (!postOnly) throw new Error('no POST-only Better Auth path');
 
-    const response = await callAuth(postOnly.path, 'GET');
+    const response = await callAuth(postOnly.path, { method: 'GET' });
 
     expect(
       await expectAuthError(response, HTTP_STATUS.METHOD_NOT_ALLOWED)
@@ -260,7 +262,7 @@ describe('a sub-path outside the allowlist', () => {
     // HEAD to the GET registration and Better Auth answers 404 to a HEAD it
     // reaches (measured on 1.7.1), so `app.ts` hands it a GET.
     for (const endpoint of BETTER_AUTH_ENDPOINTS) {
-      const response = await callAuth(endpoint.path, 'HEAD');
+      const response = await callAuth(endpoint.path, { method: 'HEAD' });
       const servesGet = endpoint.methods.includes('GET');
 
       if (servesGet) {
@@ -373,11 +375,11 @@ describe('the budget an allowlisted sub-path draws on', () => {
     expect(readBudget).toBeGreaterThan(writeBudget);
 
     for (let i = 0; i < readBudget; i++) {
-      const response = await callAuth(READ_PATH, 'GET');
+      const response = await callAuth(READ_PATH, { method: 'GET' });
       expect(response.status).not.toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
     }
     // One over its own budget: the counter exists and is being charged.
-    const overBudget = await callAuth(READ_PATH, 'GET');
+    const overBudget = await callAuth(READ_PATH, { method: 'GET' });
     expect(overBudget.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
 
     // Untouched, though the read has spent 61 requests on the same surface.
@@ -414,7 +416,7 @@ describe('Turnstile on an allowlisted sub-path', () => {
   test.each(routes(true))(
     '%s %s without a token is refused 403 before Better Auth',
     async (method, path) => {
-      const response = await callAuth(path, method, { captcha: false });
+      const response = await callAuth(path, { method, captcha: false });
       await expectAuthError(
         response,
         HTTP_STATUS.FORBIDDEN,
@@ -433,7 +435,7 @@ describe('Turnstile on an allowlisted sub-path', () => {
       scriptEgress(TURNSTILE_HOST, () =>
         Response.json({ success: (verified += 1) === 1 })
       );
-      const response = await callAuth(path, method);
+      const response = await callAuth(path, { method });
       const text = await response.text();
       expect(text).not.toContain(otpMsg.captchaFailed);
       expect(egressCallsTo(TURNSTILE_HOST)).toHaveLength(1);
@@ -443,7 +445,7 @@ describe('Turnstile on an allowlisted sub-path', () => {
   test.each(routes(false))(
     '%s %s without a token is not refused for it',
     async (method, path) => {
-      const response = await callAuth(path, method, { captcha: false });
+      const response = await callAuth(path, { method, captcha: false });
       const text = await response.text();
       expect(text).not.toContain(otpMsg.captchaFailed);
       expect(egressCallsTo(TURNSTILE_HOST)).toEqual([]);

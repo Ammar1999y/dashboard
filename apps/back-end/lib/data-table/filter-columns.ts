@@ -2,7 +2,10 @@ import type {
   FilterColumnSpec,
   FilterColumnSpecs,
 } from '@app/shared/data-table/column-specs';
-import type { SearchAnchor } from '@app/shared/data-table/parsers';
+import type {
+  FilterItemSchema,
+  SearchAnchor,
+} from '@app/shared/data-table/parsers';
 import type {
   ExtendedColumnFilter,
   JoinOperator,
@@ -33,28 +36,16 @@ import {
 import { files, folders, roles, users } from '@/db/schema';
 
 import {
-  isScanOnlyOperator,
-  isSearchOperator,
-} from '@app/shared/data-table/column-specs';
-import {
-  assertFilterAllowed,
+  admitFilters,
   dayBounds,
   dayRangeBounds,
   invalidFilter,
   isStringLike,
   numberRangeBounds,
   parseBoolean,
-  requireFilterSpec,
   safeNumber,
   searchAnchorOf,
 } from '@app/shared/data-table/filter-rules';
-import {
-  MAX_SEARCH_FILTERS,
-  MAX_SEARCH_LENGTH,
-  searchTermLength,
-} from '@app/shared/data-table/parsers';
-import { MSG_OR_SEARCH_UNINDEXED } from '@app/shared/messages/data-table';
-import { searchFold } from '@app/shared/search-fold';
 
 /**
  * ⚠️ TEXT COLUMNS ONLY — see `isStringLike`. A bare boolean expression rather
@@ -116,7 +107,7 @@ function scanPattern(term: string): SQL {
 // plainly describes it — absent from the rows and from `meta.total`.
 function buildCondition(
   column: Column,
-  filter: ExtendedColumnFilter<Table>,
+  filter: FilterItemSchema,
   spec: FilterColumnSpec
 ): SQL | undefined {
   const value = filter.value;
@@ -272,54 +263,16 @@ export function filterColumns<T extends Table>({
   const joinFn = joinOperator === 'and' ? and : or;
 
   const conditions: SQL[] = [];
-  let guardedSearch = false;
-  let unindexed = false;
-  const searchSpend = { filters: 0, characters: 0 };
-  for (const filter of filters) {
-    const spec = requireFilterSpec(specs, filter.id);
-
+  for (const { filter, spec } of admitFilters(filters, specs, joinOperator)) {
     const column = getColumn(table, filter.id);
     // A descriptor without a matching column is a server-side mismatch, not
     // something the client did — surface it as 500, not 422.
     if (!column)
       throw new Error(`Filterable column "${filter.id}" is not on the table`);
 
-    const decision = assertFilterAllowed(
-      filter as ExtendedColumnFilter<Table>,
-      spec
-    );
-    if (decision === 'skip') continue;
-
-    if (isSearchOperator(filter.operator)) {
-      searchSpend.filters += 1;
-      searchSpend.characters += searchTermLength(
-        searchFold(filter.value as string)
-      );
-      if (
-        searchSpend.filters > MAX_SEARCH_FILTERS ||
-        searchSpend.characters > MAX_SEARCH_LENGTH
-      )
-        invalidFilter();
-    }
-
-    const indexedSearch =
-      isSearchOperator(filter.operator) && !isScanOnlyOperator(filter.operator);
-    if (indexedSearch && !spec.allowScanOnly) guardedSearch = true;
-    if (!indexedSearch) unindexed = true;
-
-    const condition = buildCondition(
-      column,
-      filter as ExtendedColumnFilter<Table>,
-      spec
-    );
+    const condition = buildCondition(column, filter, spec);
     if (condition) conditions.push(condition);
   }
-
-  // ⚠️ One disjunct no index serves turns the whole OR into a sequential scan
-  // that folds every row once per search term: the full scan `allowScanOnly`
-  // keeps off a column, reached without its scan-only operator.
-  if (joinOperator === 'or' && guardedSearch && unindexed)
-    invalidFilter(MSG_OR_SEARCH_UNINDEXED);
 
   return conditions.length > 0 ? joinFn(...conditions) : undefined;
 }

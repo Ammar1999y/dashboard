@@ -16,7 +16,7 @@ export const validID = (val: unknown): string => {
  * @knipignore
  */
 export const extractIdFromUrl = (url: string): string | null => {
-  const match = url.match(/\/([0-9a-f-]{36}|\d+)$/i);
+  const match = /\/([0-9a-f-]{36}|\d+)$/i.exec(url);
   return match?.[1] ?? null;
 };
 

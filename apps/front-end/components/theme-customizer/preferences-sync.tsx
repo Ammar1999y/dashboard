@@ -95,7 +95,7 @@ export const PreferencesSync = memo(() => {
         api(updatePreferences, { body: preferences }, { signal }),
       onFailed: (error) => {
         target.current = null;
-        toastError(error, undefined, SAVE_TOAST);
+        toastError(error, { toastOptions: SAVE_TOAST });
       },
     })
   );
@@ -120,9 +120,11 @@ export const PreferencesSync = memo(() => {
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setLoadFailed(true);
-        toastError(error, undefined, {
-          ...LOAD_TOAST,
-          action: { label: MSG_RETRY, onClick: retryLoad },
+        toastError(error, {
+          toastOptions: {
+            ...LOAD_TOAST,
+            action: { label: MSG_RETRY, onClick: retryLoad },
+          },
         });
       });
 

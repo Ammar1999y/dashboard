@@ -40,6 +40,15 @@ export const PASSWORD_MAX = 128;
 export const EMAIL_MAX = 150;
 export const PHONE_NUMBER_MAX = 15;
 
+/**
+ * Passkeys never expire and the authentication options list every one, so
+ * an unbounded collection grows each later options response; software
+ * authenticators make registering thousands scriptable. Cognito's number, as a
+ * threshold rather than an exact cap: registrations overlapping at it each
+ * pass the server's check, one grant apiece (back-end should-ignore #90).
+ */
+export const MAX_PASSKEYS_PER_USER = 20;
+
 export const OTP_CODE_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 10;
 /** The first rung, and the whole ladder on the anonymous surfaces. */

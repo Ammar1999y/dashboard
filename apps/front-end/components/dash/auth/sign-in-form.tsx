@@ -85,7 +85,7 @@ const SignInForm = ({
         else if (typeof unavailable === 'string') onUnavailable(unavailable);
         else {
           holdSubmit(error);
-          toastError(error, undefined, { duration: 8000 });
+          toastError(error, { toastOptions: { duration: 8000 } });
         }
       }
     },

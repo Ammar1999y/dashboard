@@ -159,3 +159,12 @@ export const SESSIONS: CountForms = {
   many: '# جلسة',
   other: '# جلسة',
 };
+
+// Genitive: «أكثر من …».
+export const SEARCH_FILTERS: CountForms = {
+  one: 'تصفية بحث واحدة',
+  two: 'تصفيتَي بحث',
+  few: '# تصفيات بحث',
+  many: '# تصفية بحث',
+  other: '# تصفية بحث',
+};

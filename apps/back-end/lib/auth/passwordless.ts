@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { users } from '@/db/schema';
+import { setSessionCookie } from 'better-auth/cookies';
 import * as z from 'zod';
 
 import * as contract from '@app/shared/api/better-auth';
@@ -36,7 +37,6 @@ import { authAuditMeta, parseAuthBody, requestHeaders } from './context';
 import { asAuthError, authError } from './errors';
 import { pluginEndpoint } from './plugin-endpoint';
 import { authenticationStartedAt } from './session/authentication-time';
-import { deliverSessionCookie } from './session/cookie';
 import { submittedRememberMe } from './session/remember-me';
 import { rotatedSince } from './session/rotation';
 import { withAuthTransaction } from './transaction';
@@ -190,7 +190,7 @@ export const passwordless = () =>
             if (outcome.kind === 'challenge') return ctx.json(outcome.body);
 
             try {
-              await deliverSessionCookie(ctx, { session, user }, rememberMe);
+              await setSessionCookie(ctx, { session, user }, !rememberMe);
             } catch (cookieError) {
               await abandonFirstFactorSession(ctx, {
                 userId: userData.id,

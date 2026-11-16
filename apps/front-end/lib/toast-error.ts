@@ -8,12 +8,17 @@ import { MSG_GENERIC_ERROR } from '@/constants/messages';
  */
 export function toastError(
   error: unknown,
-  fallback: string = MSG_GENERIC_ERROR,
-  options?: Parameters<typeof toast.error>[1]
+  {
+    fallback = MSG_GENERIC_ERROR,
+    toastOptions,
+  }: {
+    fallback?: string;
+    toastOptions?: Parameters<typeof toast.error>[1];
+  } = {}
 ) {
   // Nothing in the toast says what went wrong, so the cause goes to the console.
   if (!(error instanceof CustomError)) console.error(error);
-  toast.error(errorMessage(error, fallback), options);
+  toast.error(errorMessage(error, fallback), toastOptions);
 }
 
 export const errorMessage = (

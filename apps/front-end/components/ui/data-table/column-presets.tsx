@@ -53,10 +53,13 @@ const STATUS_OPTIONS = [
 ];
 
 /** The `isActive` badge column, filterable by either state. */
-export function statusColumn<TData extends RowData>(
+export function statusColumn<TData extends RowData>({
   label = 'الحالة',
-  { size }: { size?: number } = {}
-): ColumnDef<DataTableFeatures, TData> {
+  size,
+}: { label?: string; size?: number } = {}): ColumnDef<
+  DataTableFeatures,
+  TData
+> {
   return {
     id: 'isActive',
     accessorKey: 'isActive',

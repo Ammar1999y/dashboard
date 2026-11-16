@@ -30,10 +30,12 @@ import { symmetricEncrypt } from 'better-auth/crypto';
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
 import { MSG_INVALID_INPUT } from '@app/shared/messages/common';
-import { NAME_MAX } from '@app/shared/validation/constants';
+import {
+  MAX_PASSKEYS_PER_USER,
+  NAME_MAX,
+} from '@app/shared/validation/constants';
 
 import { advancePasskeyCounter } from '@/lib/auth/passkey-assertion';
-import { MAX_PASSKEYS_PER_USER } from '@/lib/auth/path-policy';
 import { reauthGrantKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { generateUuidV7 } from '@/lib/id';

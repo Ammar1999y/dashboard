@@ -232,11 +232,22 @@ export interface MockProof {
   /** The code a mock send "delivered". */
   value: string;
   sends: number;
+  /** Wrong codes tried against an anonymous code; absent on every other proof. */
+  guesses?: number;
   sentAt: string;
   expiresAt: string;
 }
 
 export const proofs = table<MockProof>('proofs', () => []);
+
+/**
+ * The browser's `otp_requester` cookie: an anonymous code is redeemable only by
+ * the browser it was sent to. `null` until the first anonymous send.
+ */
+export const otpRequester = singleton<string | null>(
+  'otp-requester',
+  () => null
+);
 
 /** The captcha tokens the verifier has judged: it accepts each one once. */
 export const spentCaptchas = singleton<string[]>('spent-captchas', () => []);

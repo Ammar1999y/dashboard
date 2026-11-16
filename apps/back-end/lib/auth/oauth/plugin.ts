@@ -8,7 +8,11 @@ import { db } from '@/db';
 import { isDatabaseContention } from '@/db/errors';
 import { verifications } from '@/db/schema';
 import { isAPIError } from 'better-auth/api';
-import { deleteSessionCookie, expireCookie } from 'better-auth/cookies';
+import {
+  deleteSessionCookie,
+  expireCookie,
+  setSessionCookie,
+} from 'better-auth/cookies';
 import { generateState, parseState } from 'better-auth/oauth2';
 import { google } from 'better-auth/social-providers';
 import * as z from 'zod';
@@ -37,7 +41,6 @@ import {
 import { pluginEndpoint } from '../plugin-endpoint';
 import { recordAbandonedSession } from '../session/audit';
 import { authenticationStartedAt } from '../session/authentication-time';
-import { deliverSessionCookie } from '../session/cookie';
 import { assertLiveSession } from '../session/live';
 import { submittedRememberMe } from '../session/remember-me';
 import { withAuthTransaction } from '../transaction';
@@ -477,10 +480,10 @@ export const oauth = () =>
                 if (!user || user.email !== identity.email)
                   throw authenticationDenied();
                 stage = 'cookie_delivery';
-                await deliverSessionCookie(
+                await setSessionCookie(
                   ctx,
                   { session, user },
-                  flow.rememberMe
+                  !flow.rememberMe
                 );
                 stage = 'result_delivery';
                 return await completeResponse(

@@ -145,7 +145,7 @@ export const FileUpload = memo(
               );
             } catch (error) {
               if (signal.aborted) return;
-              toastError(error, MSG_PROCESSING_FAILED);
+              toastError(error, { fallback: MSG_PROCESSING_FAILED });
             }
           }
         } finally {

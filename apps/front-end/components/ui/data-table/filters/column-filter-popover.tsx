@@ -8,6 +8,7 @@ import type { Column, RowData } from '@tanstack/react-table';
 
 import { useCallback, useId, useState } from 'react';
 
+import { searchBudgetRefusal } from '@app/shared/data-table/filter-rules';
 import { cn } from '@/lib/utils';
 
 import { generateId } from '@/utils/generate-id';
@@ -33,7 +34,22 @@ import {
 import { stopDragStart } from '../utils/events';
 import { genericMemo } from '../utils/generic-memo';
 import { FilterInput } from './filter-inputs';
+import { FilterRefusal } from './filter-refusal';
 import { filterField } from './segments';
+
+const NO_FILTERS: FilterItemSchema[] = [];
+
+/** `filters` with `draft` in place of its column's filter, or added. */
+function withDraft(
+  filters: readonly FilterItemSchema[],
+  draft: FilterItemSchema
+): FilterItemSchema[] {
+  const next = [...filters];
+  const index = next.findIndex((filter) => filter.id === draft.id);
+  if (index === -1) next.push(draft);
+  else next[index] = draft;
+  return next;
+}
 
 interface ColumnFilterPopoverProps<TData extends RowData> {
   column: Column<DataTableFeatures, TData>;
@@ -99,26 +115,16 @@ function ColumnFilterPopoverInner<TData extends RowData>({
   }, []);
 
   const onApply = useCallback(() => {
-    const { setFilters } = useDataTableStore.getState().actions;
-    const filters = [...useDataTableStore.getState().filters];
-
-    const existingIndex = filters.findIndex((f) => f.id === columnId);
-
-    const newFilter: FilterItemSchema = {
-      id: columnId,
-      value: draftValue,
-      variant,
-      operator: draftOperator,
-      filterId: draftFilterId || generateId({ length: 8 }),
-    };
-
-    if (existingIndex === -1) {
-      filters.push(newFilter);
-    } else {
-      filters[existingIndex] = newFilter;
-    }
-
-    setFilters(filters);
+    const { filters, actions } = useDataTableStore.getState();
+    actions.setFilters(
+      withDraft(filters, {
+        id: columnId,
+        value: draftValue,
+        variant,
+        operator: draftOperator,
+        filterId: draftFilterId || generateId({ length: 8 }),
+      })
+    );
     setOpen(false);
   }, [columnId, variant, draftOperator, draftValue, draftFilterId]);
 
@@ -142,6 +148,14 @@ function ColumnFilterPopoverInner<TData extends RowData>({
     operator: draftOperator,
     filterId: draftFilterId || 'draft',
   };
+
+  // Read only while open, so a closed popover skips every filter change.
+  const appliedFilters = useDataTableStore((s) =>
+    open ? s.filters : NO_FILTERS
+  );
+  const refusal = open
+    ? searchBudgetRefusal(withDraft(appliedFilters, draftFilter))
+    : undefined;
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -192,6 +206,8 @@ function ColumnFilterPopoverInner<TData extends RowData>({
           setShowValueSelector={setShowValueSelector}
         />
 
+        <FilterRefusal message={refusal} />
+
         <div className='flex items-center justify-between gap-2 border-t pt-3'>
           <Button
             variant='outline'
@@ -201,7 +217,12 @@ function ColumnFilterPopoverInner<TData extends RowData>({
           >
             إعادة تعيين
           </Button>
-          <Button size='sm' className='rounded text-sm' onClick={onApply}>
+          <Button
+            size='sm'
+            className='rounded text-sm'
+            onClick={onApply}
+            disabled={refusal !== undefined}
+          >
             تطبيق
           </Button>
         </div>

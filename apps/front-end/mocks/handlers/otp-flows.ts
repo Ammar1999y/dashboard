@@ -25,6 +25,7 @@ import { mock } from '../lib/endpoint';
 import { parseOrThrow, readJson } from '../lib/http';
 import {
   beginRecoveryAttempt,
+  bindRequester,
   destinationOf,
   invalidOrExpiredCode,
   issueRecoveryGrant,
@@ -150,6 +151,7 @@ export const otpFlowHandlers = [
     requireServed(OTP_ENABLED);
     requireUnspentCaptcha(request);
     const contact = await body(ANY_BAD_BODY);
+    bindRequester();
     const user = userWithContact(contact);
     const kind = contactKindOf(contact.channel);
     const verified =
@@ -186,6 +188,7 @@ export const otpFlowHandlers = [
     requireServed(OTP_ENABLED && PASSWORDLESS_ENABLED);
     requireUnspentCaptcha(request);
     const contact = await body(ANY_BAD_BODY);
+    bindRequester();
     const user = userWithContact(contact);
     if (user)
       sendAnonymousCode(user, 'passwordless_login', destinationOf(contact));
@@ -196,6 +199,7 @@ export const otpFlowHandlers = [
     requireServed(OTP_ENABLED);
     requireUnspentCaptcha(request);
     const contact = await body(ANY_BAD_BODY);
+    bindRequester();
     const user = userWithContact(contact);
     if (user)
       sendAnonymousCode(user, 'forgot_password', destinationOf(contact));

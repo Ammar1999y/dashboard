@@ -63,7 +63,7 @@ export async function copyLink(ctx: MediaContext, file: LibraryFile) {
       isPublic ? MSG_LINK_COPIED_PERMANENT : MSG_LINK_COPIED_TEMPORARY
     );
   } catch (error) {
-    toastError(error, MSG_COPY_FAILED);
+    toastError(error, { fallback: MSG_COPY_FAILED });
   }
 }
 

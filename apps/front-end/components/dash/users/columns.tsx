@@ -40,18 +40,16 @@ export const columns: ColumnDef<DataTableFeatures, UserClient>[] = [
     ),
     size: 200,
   },
-  statusColumn('حالة المستخدم', { size: 220 }),
+  statusColumn({ label: 'حالة المستخدم', size: 220 }),
   dateColumn('createdAt', 'تاريخ الإنشاء'),
   dateColumn('updatedAt', 'تاريخ التحديث'),
-  rowActionsColumn(
-    userEntity,
-    (user) => user.name,
-    (queryClient, id) =>
+  rowActionsColumn(userEntity, (user) => user.name, {
+    afterDelete: (queryClient, id) =>
       cacheRoleUsersCount(
         queryClient,
         findCached<UserClient>(queryClient, userEntity.keys, id)?.roleId,
         -1
       ),
-    { ownAccountHref: accountPath }
-  ),
+    ownAccountHref: accountPath,
+  }),
 ];

@@ -11,6 +11,7 @@ import type { ComponentProps, KeyboardEvent } from 'react';
 import { memo, useCallback, useId, useMemo, useRef, useState } from 'react';
 
 import { dataTableConfig } from '@app/shared/data-table/config';
+import { searchBudgetRefusal } from '@app/shared/data-table/filter-rules';
 import {
   MSG_EDIT_FILTERS,
   MSG_FIND_FIELD,
@@ -64,6 +65,7 @@ import {
 } from '../utils/data-table';
 import { genericMemo } from '../utils/generic-memo';
 import { FilterInput } from './filter-inputs';
+import { FilterRefusal } from './filter-refusal';
 import { filterField, filterSegments, filterTrigger } from './segments';
 
 const FILTER_SHORTCUT_KEY = 'f';
@@ -203,6 +205,11 @@ export function DataTableFilterList<TData extends RowData>({
     }
     setOpen(nextOpen);
   }, []);
+
+  const refusal = useMemo(
+    () => searchBudgetRefusal(draftFilters),
+    [draftFilters]
+  );
 
   const onApply = useCallback(() => {
     useDataTableStore
@@ -387,6 +394,7 @@ export function DataTableFilterList<TData extends RowData>({
               </div>
             </>
           ) : null}
+          <FilterRefusal message={refusal} className='px-3' />
           <div className='flex w-full items-center justify-between gap-2 border-t px-3 pt-3'>
             {draftFilters.length > 0 ? (
               <Button
@@ -409,7 +417,12 @@ export function DataTableFilterList<TData extends RowData>({
                 <Icon icon='solar:add-linear' className='size-4' />
                 <span>إضافة تصفية</span>
               </Button>
-              <Button size='sm' className='rounded text-sm' onClick={onApply}>
+              <Button
+                size='sm'
+                className='rounded text-sm'
+                onClick={onApply}
+                disabled={refusal !== undefined}
+              >
                 تطبيق
               </Button>
             </div>

@@ -13,7 +13,10 @@ import {
 import { MSG_INVALID_INPUT, MSG_NOT_FOUND } from '@app/shared/messages/common';
 import { otpMsg } from '@app/shared/messages/otp';
 import { validID } from '@app/shared/utils';
-import { NAME_MAX } from '@app/shared/validation/constants';
+import {
+  MAX_PASSKEYS_PER_USER,
+  NAME_MAX,
+} from '@app/shared/validation/constants';
 import { contactKindOf } from '@app/shared/validation/enums';
 import {
   isTwoFactorMethodEnabled,
@@ -529,6 +532,12 @@ export const twoFactorHandlers = [
         [...body.name.trim()].length > NAME_MAX
       )
         throw new CustomError(MSG_INVALID_INPUT, HTTP_STATUS.UNPROCESSABLE);
+      // Before the grant is spent, as the server checks it.
+      if (twoFactorOf(user.id).passkeys.length >= MAX_PASSKEYS_PER_USER)
+        throw new CustomError(
+          twoFactorMsg.passkeyLimitReached,
+          HTTP_STATUS.CONFLICT
+        );
       const grant =
         body.grant ?? new URL(request.url).searchParams.get('grant');
       consumePasskeyGrant(user, grant);

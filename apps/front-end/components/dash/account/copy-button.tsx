@@ -27,7 +27,7 @@ export const CopyButton = memo(({ value, label }: CopyButtonProps) => {
       await navigator.clipboard.writeText(value);
       setCopied(true);
     } catch (error) {
-      toastError(error, MSG_COPY_FAILED);
+      toastError(error, { fallback: MSG_COPY_FAILED });
     }
   }, [value]);
 

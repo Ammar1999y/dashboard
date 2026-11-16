@@ -12,11 +12,11 @@
 import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
-import { eq } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 
 import { app } from '@/app';
 import { db } from '@/db';
-import { passkeys, twoFactorCredentials } from '@/db/schema';
+import { passkeys, twoFactorCredentials, verifications } from '@/db/schema';
 import { passkey } from '@better-auth/passkey';
 import { createOTP } from '@better-auth/utils/otp';
 import { symmetricDecrypt } from 'better-auth/crypto';
@@ -29,6 +29,7 @@ import { MSG_NOT_FOUND } from '@app/shared/messages/common';
 import { MSG_INSUFFICIENT_PERMISSIONS } from '@app/shared/messages/permissions';
 import { userMsg } from '@app/shared/messages/users';
 
+import { reauthGrantKey } from '@/lib/auth/verifications';
 import { PUBLIC_ORIGIN } from '@/lib/env';
 import { generateUuidV7 } from '@/lib/id';
 
@@ -298,7 +299,13 @@ describe('the passkey endpoints answer a refusal in Arabic', () => {
   });
 
   /** A registration that reaches the plugin: signed in, with a grant spent. */
-  async function registration(user: SeededUser, issueOptions: boolean) {
+  async function registration(
+    user: SeededUser,
+    {
+      issueOptions,
+      userVerified = true,
+    }: { issueOptions: boolean; userVerified?: boolean }
+  ) {
     const cookie = await signIn(user);
     const granted = await call(
       'POST',
@@ -328,7 +335,7 @@ describe('the passkey endpoints answer a refusal in Arabic', () => {
       challenge: 'a-challenge-the-server-did-not-issue',
       origin: PUBLIC_ORIGIN,
       rpId: RP_ID,
-      userVerified: true,
+      userVerified,
     });
     return call(
       'POST',
@@ -340,19 +347,45 @@ describe('the passkey endpoints answer a refusal in Arabic', () => {
 
   test('CHALLENGE_NOT_FOUND: a ceremony nobody asked options for', async () => {
     await expectAnswer(
-      await registration(await seedUser(), false),
+      await registration(await seedUser(), { issueOptions: false }),
       HTTP_STATUS.BAD_REQUEST,
       twoFactorMsg.passkeyNotSaved
     );
   });
 
   test('FAILED_TO_VERIFY_REGISTRATION: a ceremony signed for another challenge', async () => {
-    const answer = await registration(await seedUser(), true);
+    const answer = await registration(await seedUser(), {
+      issueOptions: true,
+    });
     expect(answer.status).toBeOneOf([
       HTTP_STATUS.BAD_REQUEST,
       HTTP_STATUS.INTERNAL_ERROR,
     ]);
     await expectAnswer(answer, answer.status, twoFactorMsg.passkeyNotSaved);
+  });
+
+  test('an authenticator that did not verify the user is named, and nothing is spent or saved', async () => {
+    // Refused before the plugin, which would answer only `passkeyNotSaved`, and
+    // before the grant is spent, so the user need not re-enter the password.
+    const user = await seedUser();
+    const unspentGrants = () =>
+      db.$count(
+        verifications,
+        and(
+          like(
+            verifications.identifier,
+            `${reauthGrantKey('two_factor_enrolment', '')}%`
+          ),
+          eq(verifications.value, user.userId)
+        )
+      );
+    await expectAnswer(
+      await registration(user, { issueOptions: true, userVerified: false }),
+      HTTP_STATUS.BAD_REQUEST,
+      twoFactorMsg.passkeyNotUserVerifying
+    );
+    expect(await db.$count(passkeys, eq(passkeys.userId, user.userId))).toBe(0);
+    expect(await unspentGrants()).toBe(1);
   });
 });
 
@@ -383,6 +416,7 @@ const UNREACHABLE: Readonly<Record<string, string>> = {
     'registration requires a session; `resolveUser` is unset',
   RESOLVED_USER_INVALID:
     'registration requires a session; `resolveUser` is unset',
+  ORIGIN_NOT_CONFIGURED: '`passkeyManagement()` pins `origin`',
 };
 
 describe('every code the second-factor plugins declare is accounted for', () => {

@@ -24,7 +24,11 @@ import {
 } from '@app/shared/messages/common';
 import { validID } from '@app/shared/utils';
 import { loginSchema } from '@app/shared/validation/auth';
-import { NAME_MAX, PASSWORD_MAX } from '@app/shared/validation/constants';
+import {
+  MAX_PASSKEYS_PER_USER,
+  NAME_MAX,
+  PASSWORD_MAX,
+} from '@app/shared/validation/constants';
 import { normalizePasswordInput } from '@app/shared/validation/rules';
 
 import {
@@ -42,6 +46,7 @@ import { authAuditMeta, bodyRecord } from './context';
 import { credentialAccountOf } from './credential-account';
 import { authError, reauthenticationRequired, sessionRequired } from './errors';
 import { LoginRejected, verifyLoginAttempt } from './login-guard';
+import { assertUserVerifyingRegistration } from './passkey-assertion';
 import { mintPasswordProof } from './password/proof';
 import { consumeReauthGrant } from './reauth/grant';
 import { verifyReauthPassword } from './reauth/password';
@@ -153,12 +158,10 @@ export async function enforcePathPolicy(
 }
 
 /**
- * ⚠️ Better Auth replaces a before hook's response headers with the endpoint's
- * once the endpoint runs, and answers a hook's throw with the error's own
- * headers alone. The session read here memoises, so the endpoint's own read
- * sets nothing. The read's cookies (the sliding refresh, a re-minted cache) go
- * to the response's exit queue instead, refusals included, where a cookie the
- * response sets itself wins its name.
+ * ⚠️ Better Auth answers a before hook's throw with the error's own headers
+ * alone, so the session read's cookies (the sliding refresh, a re-minted cache)
+ * also go to the response's exit queue. A cookie the response sets itself wins
+ * its name, so on success the library's merged copy suppresses the queued one.
  */
 function queueSessionReadCookies(ctx: HookContext): void {
   const cookies = ctx.responseHeaders?.getSetCookie() ?? [];
@@ -246,8 +249,10 @@ async function enforceTwoFactorPathPolicy(
     if (mode) {
       await requireLiveSession(ctx, mode.sessionId, mode.userId);
       // Before the grant is spent, so a refused registration costs none.
-      if (path === '/passkey/verify-registration')
+      if (path === '/passkey/verify-registration') {
+        assertUserVerifyingRegistration(ctx.body);
         await assertPasskeyRoom(mode.userId);
+      }
       if (
         needsGrant &&
         !(await consumeReauthGrant(ctx, {
@@ -395,15 +400,6 @@ function assertPasskeyInputBounds(ctx: HookContext, path: string): void {
   if (overlongName || malformedId)
     throw authError(HTTP_STATUS.UNPROCESSABLE, MSG_INVALID_INPUT);
 }
-
-/**
- * Passkeys never expire and the authentication options list every one, so
- * an unbounded collection grows each later options response; software
- * authenticators make registering thousands scriptable. Cognito's number, as a
- * threshold rather than an exact cap: registrations overlapping at it each
- * pass this check, one grant apiece (should-ignore #90).
- */
-export const MAX_PASSKEYS_PER_USER = 20;
 
 async function assertPasskeyRoom(userId: EntityID): Promise<void> {
   const [row] = await db

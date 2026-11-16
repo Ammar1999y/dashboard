@@ -12,6 +12,6 @@ test('development serves the reference page, which carries no path of the API', 
   const response = await app.handle(new Request('http://localhost/openapi'));
   expect(response.status).toBe(200);
   const html = await response.text();
-  expect(html).toContain('"url":"/openapi.json"');
+  expect(html).toContain('&quot;url&quot;:&quot;/openapi.json&quot;');
   expect(html).not.toContain('/api/dash');
 });

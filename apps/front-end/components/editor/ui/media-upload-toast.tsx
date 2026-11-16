@@ -27,7 +27,7 @@ function toastRefusal(file: File) {
   try {
     admitFile(file);
   } catch (error) {
-    toastError(error, rejectedMessage(file));
+    toastError(error, { fallback: rejectedMessage(file) });
     return;
   }
   toast.error(rejectedMessage(file));

@@ -11,14 +11,13 @@ import type { FilterVariant } from '@app/shared/types/data-table';
 
 import { isNoValueOperator } from '@app/shared/data-table/column-specs';
 import {
-  assertFilterAllowed,
+  admitFilters,
   dayBounds,
   dayRangeBounds,
   invalidFilter,
   isStringLike,
   numberRangeBounds,
   parseBoolean,
-  requireFilterSpec,
   safeNumber,
 } from '@app/shared/data-table/filter-rules';
 import { effectiveSearchTerm } from '@app/shared/data-table/parsers';
@@ -280,19 +279,19 @@ export function queryRows<T extends object>(
   { page, perPage, sort, filters, joinOperator, search }: TableQuery,
   { searchableColumns, filterableColumns }: TableQueryOptions
 ): { data: T[]; meta: PaginationMeta } {
-  const predicates: { id: string; holds: Predicate }[] = [];
-  for (const filter of filters) {
-    if (filterableColumns) {
-      const spec = requireFilterSpec(filterableColumns, filter.id);
-      if (assertFilterAllowed(filter, spec) === 'skip') continue;
-      predicates.push({ id: filter.id, holds: toPredicate(filter, spec.type) });
-    } else if (!isUnexpressed(filter)) {
-      predicates.push({
-        id: filter.id,
-        holds: toPredicate(filter, TYPE_OF_VARIANT[filter.variant]),
-      });
-    }
-  }
+  const predicates = filterableColumns
+    ? admitFilters(filters, filterableColumns, joinOperator).map(
+        ({ filter, spec }) => ({
+          id: filter.id,
+          holds: toPredicate(filter, spec.type),
+        })
+      )
+    : filters
+        .filter((filter) => !isUnexpressed(filter))
+        .map((filter) => ({
+          id: filter.id,
+          holds: toPredicate(filter, TYPE_OF_VARIANT[filter.variant]),
+        }));
 
   let result = rows;
 

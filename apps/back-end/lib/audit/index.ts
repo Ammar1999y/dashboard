@@ -188,8 +188,13 @@ function stripSensitive<T extends Record<string, unknown>>(
 function computeChangedFields(
   oldData: Record<string, unknown>,
   newData: Record<string, unknown>,
-  metadataFields?: readonly string[],
-  safeFields?: ReadonlySet<string>
+  {
+    metadataFields,
+    safeFields,
+  }: {
+    metadataFields?: readonly string[];
+    safeFields?: ReadonlySet<string>;
+  } = {}
 ): string[] {
   const skip = new Set(metadataFields);
   const changed: string[] = [];
@@ -263,12 +268,10 @@ function auditRow(params: AuditLogParams) {
 
   const changedFields =
     action === 'UPDATE' && oldData && newData
-      ? computeChangedFields(
-          oldData,
-          newData,
-          params.metadataFields,
-          safeFields
-        )
+      ? computeChangedFields(oldData, newData, {
+          metadataFields: params.metadataFields,
+          safeFields,
+        })
       : null;
 
   // Only when both sides were supplied — `changedFields` is null (not empty)

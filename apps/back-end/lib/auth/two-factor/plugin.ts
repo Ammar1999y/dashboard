@@ -38,7 +38,6 @@ import { logSanitized } from '@/utils/log';
 import { authAuditMeta, bodyRecord, recordingFaults } from '../context';
 import { authError, sessionRequired } from '../errors';
 import { RP_ID } from '../passkey-assertion';
-import { expireDontRememberMarker } from '../session/cookie';
 import { submittedRememberMe } from '../session/remember-me';
 import { resolveRequestSession } from '../session/request';
 import { transactionBoundContext } from '../transaction';
@@ -228,13 +227,7 @@ const twoFactorSignInGuard = () =>
             }
 
             if (outcome.kind === 'refused') throw twoFactorUnavailableError();
-            if (outcome.kind === 'proceed') {
-              // The library's own `setSessionCookie` never clears a marker an
-              // earlier "do not remember" login left in this browser.
-              if (rememberMe)
-                expireDontRememberMarker(ctx, { onlyIfSent: true });
-              return;
-            }
+            if (outcome.kind === 'proceed') return;
 
             return ctx.json(outcome.body);
           }),
@@ -414,20 +407,10 @@ const passkeyManagement = () => {
     origin: PUBLIC_ORIGIN,
     rpID: RP_ID,
     schema: { passkey: { modelName: 'passkeys' } },
-    // Only a client hint: the plugin verifies registration with
-    // `requireUserVerification: false`. `afterVerification` is the gate.
+    // ⚠️ Also the server's gate: `'required'` is what makes the plugin require
+    // UV at registration. The assertion path requires UV, so a non-UV
+    // credential would be a factor that can never complete.
     authenticatorSelection: { userVerification: 'required' },
-    registration: {
-      // The signed UV bit: the assertion path requires UV, so a non-UV
-      // credential would be a factor that can never complete.
-      afterVerification: ({ verification }) => {
-        if (verification.registrationInfo?.userVerified !== true)
-          throw authError(
-            HTTP_STATUS.BAD_REQUEST,
-            twoFactorMsg.passkeyNotUserVerifying
-          );
-      },
-    },
   });
   const {
     deletePasskey: _deletePasskey,

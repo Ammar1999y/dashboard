@@ -11,27 +11,32 @@ export function showFormErrors(messages: Record<string, string>) {
   toast.error(shown.length > 0 ? shown.join('\n') : MSG_INVALID_INPUT);
 }
 
-export function flattenErrors(
+export function flattenErrors(data: unknown): Record<string, string> {
+  const result: Record<string, string> = {};
+  collectErrors(data, '', result);
+  return result;
+}
+
+function collectErrors(
   data: unknown,
-  path = '',
-  result: Record<string, string> = {}
-): Record<string, string> {
+  path: string,
+  result: Record<string, string>
+): void {
   if (Array.isArray(data)) {
     data.forEach((item, index) => {
-      flattenErrors(item, path ? `${path}.${index}` : String(index), result);
+      collectErrors(item, path ? `${path}.${index}` : String(index), result);
     });
-    return result;
+    return;
   }
-  if (!data || typeof data !== 'object') return result;
+  if (!data || typeof data !== 'object') return;
 
   if ('message' in data && typeof data.message === 'string') {
     result[path] = data.message;
-    return result;
+    return;
   }
   for (const [key, value] of Object.entries(data)) {
     // A field error's `ref` is the DOM node — walking it reaches React's fiber.
     if (key === 'ref') continue;
-    flattenErrors(value, path ? `${path}.${key}` : key, result);
+    collectErrors(value, path ? `${path}.${key}` : key, result);
   }
-  return result;
 }

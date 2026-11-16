@@ -98,8 +98,8 @@ describe('the private formats mirrored in two-factor-challenge.ts', () => {
   });
 
   test('the mode discriminator is still SESSION-first', async () => {
-    // `resolveRequestSession` reproduces this order by calling the library's own
-    // `getSessionFromCtx`. If the branch ever reads the cookie first, a caller
+    // `resolveRequestSession` reproduces this order with the library's own
+    // session read. If the branch ever reads the cookie first, a caller
     // holding both would take a different branch there than here — which is how
     // an enrolment came to be treated as a sign-in and left an account 2FA-on
     // with no intent row.
@@ -108,7 +108,7 @@ describe('the private formats mirrored in two-factor-challenge.ts', () => {
       'plugins/two-factor/verify-two-factor.mjs'
     );
     const sessionAt = verify.indexOf(
-      'const session = await getSessionFromCtx(ctx)'
+      'await getAuthoritativeSessionFromCtx(ctx)'
     );
     const cookieAt = verify.indexOf('signedTwoFactorCookie');
     expect(sessionAt).toBeGreaterThan(-1);
@@ -177,14 +177,24 @@ describe('the passkey endpoints this deployment REMOVES from the plugin map', ()
 });
 
 describe('the two verification defaults this deployment compensates for', () => {
-  test('passkey REGISTRATION still hardcodes `requireUserVerification: false`', async () => {
-    // The whole reason `registration.afterVerification` refuses a credential
-    // whose signed UV bit is unset: `authenticatorSelection` is a client hint,
-    // and this is the server's answer. If upstream ever tightens it, the gate
-    // becomes belt-and-braces rather than the only control — which is worth
-    // knowing, and is why this asserts the value rather than merely its presence.
+  test('passkey REGISTRATION still derives `requireUserVerification` from `authenticatorSelection`', async () => {
+    // The only UV requirement at registration: `passkeyManagement()` sets
+    // `userVerification: 'required'` for it, and `assertUserVerifyingRegistration`
+    // reads the flag only to name the refusal. Hardcoded `false` again, a non-UV
+    // credential would be saved. Sliced to registration: authentication carries
+    // the same expression.
     const source_ = await source(PASSKEY_ROOT, 'index.mjs');
-    expect(source_).toContain('requireUserVerification: false');
+    const start = source_.indexOf(
+      'createAuthEndpoint("/passkey/verify-registration"'
+    );
+    const end = source_.indexOf(
+      'createAuthEndpoint("/passkey/verify-authentication"'
+    );
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(source_.slice(start, end)).toContain(
+      'requireUserVerification: options.authenticatorSelection?.userVerification === "required"'
+    );
   });
 
   test('the plugin resolves its own options through `getPlugin("two-factor")`', async () => {

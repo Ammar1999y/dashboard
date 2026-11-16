@@ -262,6 +262,7 @@ const send = <T>(entry: ClientEndpoint, input: unknown, options: unknown) =>
  */
 export function readEndpoint<E extends ClientEndpoint, N = DataOf<E>>(
   entry: E,
+  // eslint-disable-next-line unicorn/prefer-options-parameter -- `input` is the request's data, not an option; `send`'s own shape
   input?: CallInput<E>,
   options?: ReadOptions<N>
 ): Promise<Answer<E, N>> {
@@ -275,6 +276,7 @@ const dataOf = (entry: ClientEndpoint, answer: unknown) =>
 /** `readEndpoint`, resolving to what a query caches: `data`, or a raw entry's body. */
 export async function readData<E extends ClientEndpoint, N = DataOf<E>>(
   entry: E,
+  // eslint-disable-next-line unicorn/prefer-options-parameter -- `input` is the request's data, not an option; `send`'s own shape
   input?: CallInput<E>,
   options?: ReadOptions<N>
 ): Promise<N> {

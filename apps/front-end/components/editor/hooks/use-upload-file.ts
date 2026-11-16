@@ -79,7 +79,7 @@ export function useUploadFile({ onUploadComplete }: UseUploadFileOptions = {}) {
         });
       } catch (error) {
         if (signal.aborted) return;
-        toastError(error, MSG_UPLOAD_FAILED);
+        toastError(error, { fallback: MSG_UPLOAD_FAILED });
         return;
       } finally {
         clearInterval(progressTimer);

@@ -1,10 +1,19 @@
 import type { FilterOperator, SortOrder } from '../data-table/config';
 
-import { CHARACTERS_OR_DIGITS, countOf } from './count';
+import {
+  CHARACTERS,
+  CHARACTERS_OR_DIGITS,
+  countOf,
+  SEARCH_FILTERS,
+} from './count';
 
 export const MSG_INVALID_FILTER = 'أحد عوامل التصفية غير صالح، أعد ضبط التصفية';
 export const MSG_OR_SEARCH_UNINDEXED =
   'لا يُجمع البحث في النص بـ«أو» إلا مع بحث آخر في النص، اختر «و» أو احذف التصفية الأخرى';
+export const MSG_TOO_MANY_SEARCH_FILTERS = (max: number) =>
+  `لا يمكن الجمع بين أكثر من ${countOf(max, SEARCH_FILTERS)} في النص، احذف إحداها`;
+export const MSG_SEARCH_FILTERS_TOO_LONG = (max: number) =>
+  `نصوص البحث في التصفيات معاً يجب ألا تتجاوز ${countOf(max, CHARACTERS)}، اختصر أحدها`;
 export const MSG_SHORT_SEARCH = (min: number) =>
   `نص البحث في التصفية يجب أن يتضمن ${countOf(min, CHARACTERS_OR_DIGITS)} على الأقل`;
 

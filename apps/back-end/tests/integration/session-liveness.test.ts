@@ -184,7 +184,7 @@ describe('the per-user session cap', () => {
       .where(eq(sessions.userId, userId));
 
   const tokenOf = (cookie: string) =>
-    cookie.match(/session_token=([^.;]+)/)?.[1];
+    /session_token=([^.;]+)/.exec(cookie)?.[1];
 
   test('a sign-in past the cap evicts the oldest rows, never the new one', async () => {
     // Unbounded, one account's rows grew every revocation's work without limit,

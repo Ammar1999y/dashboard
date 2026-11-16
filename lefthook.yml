@@ -74,62 +74,78 @@ pre-commit:
     - name: secrets
       run: mise exec -- gitleaks git --staged --redact --verbose --no-banner
 
-# Two stages, not one parallel group. `tests/unit/lint-security-gate.test.ts`
-# writes a deliberately rule-violating probe into the back-end tree while it
-# runs, and every gate in the group reads the whole tree, so running them
-# concurrently fails naming a file that no longer exists by the time the
-# developer looks — the classic reason a gate gets disabled.
-pre-push: &full_verify
-  jobs:
+# Three stages, not one parallel group.
+#
+# - `tests/unit/lint-security-gate.test.ts` writes a deliberately rule-violating
+#   probe into the back-end tree while it runs, and every gate reads the whole
+#   tree, so running them concurrently fails naming a file that no longer exists
+#   by the time the developer looks — the classic reason a gate gets disabled.
+# - Memory, measured alone: front-end ESLint peaks at 2.6 GB, back-end ESLint at
+#   2.1 GB, each semgrep scan at 0.5 GB. All of it at once swapped an 8 GB
+#   machine for 7-15 minutes; the two lints side by side take 190 s.
+#
+# `piped`: a failed stage stops the next; the jobs inside a stage still run in
+# parallel.
+#
+# The slow jobs are skipped when no pushed file is in their scope. Each one
+# leaves out the OTHER app, so a change to the lockfile, a root config or
+# `packages/shared` still runs both sides. No pre-push job takes a `root:`:
+# lefthook narrows the pushed files to it, and skipped `apps/back-end` typecheck
+# on a push touching only `packages/shared`.
+#
+# Lefthook 2.2.2 builds the pushed files from `git diff HEAD @{push}`, else from
+# the remote default branch's merge-base, else every file, and drops each path
+# that no longer exists; a `files:` command does not replace that list. So a
+# push that only DELETES files runs no job, and a deletion pushed beside a
+# change elsewhere skips the deleted file's jobs. After deleting files, run
+# `bun run verify` (in apps/back-end) before pushing: a hook lefthook does not
+# know filters nothing, so it runs every job.
+pre-push:
+  piped: true
+  jobs: &full_verify
     - name: gates
       group:
         parallel: true
         jobs:
           - name: front-end typecheck
-            root: 'apps/front-end/'
-            run: bun run typecheck
+            run: cd apps/front-end && bun run typecheck
           - name: front-end lint
-            root: 'apps/front-end/'
-            run: bun scripts/lint.mjs .
-          # Part of the front-end's `lint` script, which CI runs; the job above
-          # calls ESLint alone.
-          - name: front-end css audit
-            root: 'apps/front-end/'
-            run: bun run audit:css
+            exclude: &front_end_scope
+              - 'apps/back-end/**'
+              - 'docs/**'
+              - 'design-prototypes/**'
+              - '.claude/**'
+            run: cd apps/front-end && bun scripts/lint.mjs .
           - name: front-end format
-            root: 'apps/front-end/'
-            run: bun run format:check
+            run: cd apps/front-end && bun run format:check
           - name: front-end icons
-            root: 'apps/front-end/'
-            run: bun scripts/build-icons.ts --check
+            run: cd apps/front-end && bun scripts/build-icons.ts --check
             fail_text:
               'lib/icons-bundle.generated.ts does not match the icon names in
               the source (run `bun scripts/build-icons.ts` inside apps/front-end)'
           - name: back-end typecheck
-            root: 'apps/back-end/'
-            run: bun run typecheck
+            run: cd apps/back-end && bun run typecheck
           - name: back-end lint
-            root: 'apps/back-end/'
-            run: bunx eslint . --max-warnings 0
+            exclude: &back_end_scope
+              - 'apps/front-end/**'
+              - 'docs/**'
+              - 'design-prototypes/**'
+              - '.claude/**'
+            run: cd apps/back-end && bunx eslint . --max-warnings 0
           - name: back-end format
-            root: 'apps/back-end/'
-            run: bun run format:check
+            run: cd apps/back-end && bun run format:check
           - name: shared typecheck
-            root: 'packages/shared/'
-            run: bun run typecheck
+            run: cd packages/shared && bun run typecheck
           - name: shared lint
-            root: 'packages/shared/'
-            run: bunx eslint . --max-warnings 0
+            run: cd packages/shared && bunx eslint . --max-warnings 0
           - name: shared format
-            root: 'packages/shared/'
-            run: bun run format:check
+            run: cd packages/shared && bun run format:check
           - name: root lint
             run: bun run lint:root
           - name: root format
             run: bun run format:check:root
           - name: audit
-            root: 'apps/back-end/'
-            run: bun run audit
+            run: cd apps/back-end && bun run audit
             fail_text:
               'a vulnerable dependency, or the advisories registry is down (the
               script retries a 5xx three times before giving up)'
@@ -142,24 +158,20 @@ pre-push: &full_verify
               'wrong package manager, an outdated Bun, a foreign lockfile, or a
               workspace whose packageManager pin disagrees with the root'
           - name: unused-files
-            root: 'apps/back-end/'
-            run: bun run find:unused-files
+            run: cd apps/back-end && bun run find:unused-files
             fail_text: 'an unreachable file, or a knip finding'
           - name: schema-drift
-            root: 'apps/back-end/'
-            run: bun run check:schema-drift
+            run: cd apps/back-end && bun run check:schema-drift
             fail_text:
               'db/schema.ts has changes db/drizzle/ does not carry (run `bun run
               db:generate` inside apps/back-end)'
           - name: migration-lint
-            root: 'apps/back-end/'
-            run: bun run lint:migrations
+            run: cd apps/back-end && bun run lint:migrations
             fail_text:
               'a new migration would break the release still serving, or tools
               not installed (mise install)'
           - name: doc-references
-            root: 'apps/back-end/'
-            run: bun run check:doc-refs
+            run: cd apps/back-end && bun run check:doc-refs
             fail_text:
               'a document or comment cites a path that no longer exists, or a
               line past the end of its file (cite where it went, or list a
@@ -167,8 +179,7 @@ pre-push: &full_verify
           # Ten seconds in a parallel group, and the alternative is learning of a
           # contract change from CI after the push.
           - name: openapi-drift
-            root: 'apps/back-end/'
-            run: bun run check:openapi-drift
+            run: cd apps/back-end && bun run check:openapi-drift
             fail_text:
               'the served OpenAPI document differs from openapi.snapshot.json
               (run `bun run openapi:snapshot` inside apps/back-end, review it,
@@ -192,27 +203,6 @@ pre-push: &full_verify
           - name: secrets
             run: mise exec -- gitleaks git . --redact --verbose --no-banner
             fail_text: 'leaked secret, or tools not installed (mise install)'
-          - name: back-end sast
-            root: 'apps/back-end/'
-            run: mise exec -- semgrep scan --config=p/typescript
-              --config=p/secrets --config=p/nodejs --error --metrics=off
-            fail_text: 'semgrep findings, or tools not installed (mise install)'
-          - name: shared sast
-            root: 'packages/shared/'
-            run: mise exec -- semgrep scan --config=p/typescript
-              --config=p/secrets --config=p/nodejs --error --metrics=off
-            fail_text: 'semgrep findings, or tools not installed (mise install)'
-          - name: root sast
-            root: 'scripts/'
-            run: mise exec -- semgrep scan --config=p/typescript
-              --config=p/secrets --config=p/nodejs --error --metrics=off
-            fail_text: 'semgrep findings, or tools not installed (mise install)'
-          - name: front-end sast
-            root: 'apps/front-end/'
-            run: mise exec -- semgrep scan --config=p/typescript
-              --config=p/secrets --config=p/react --config=p/nextjs --error
-              --metrics=off
-            fail_text: 'semgrep findings, or tools not installed (mise install)'
           - name: workflows
             run: mise exec -- actionlint
             fail_text: 'workflow errors, or tools not installed (mise install)'
@@ -221,14 +211,40 @@ pre-push: &full_verify
           - name: workflow security
             run: mise exec -- zizmor --offline --no-progress .github/workflows
             fail_text: 'workflow security findings, or tools not installed (mise install)'
-    # AFTER the group above, because this tier writes into the back-end tree.
+    - name: scans
+      group:
+        parallel: true
+        jobs:
+          # One scan for the three trees that share a ruleset: each run spends
+          # about 18 s loading rules whatever it scans. Semgrep still reads
+          # `apps/back-end/.semgrepignore` from here. It also scans untracked
+          # files that git does not ignore; the lint probes are ignored.
+          - name: sast
+            exclude: *back_end_scope
+            run: mise exec -- semgrep scan --config=p/typescript
+              --config=p/secrets --config=p/nodejs --error --metrics=off
+              apps/back-end packages/shared scripts
+            fail_text: 'semgrep findings, or tools not installed (mise install)'
+          - name: front-end sast
+            exclude: *front_end_scope
+            run: cd apps/front-end && mise exec -- semgrep scan
+              --config=p/typescript --config=p/secrets --config=p/react
+              --config=p/nextjs --error --metrics=off
+            fail_text: 'semgrep findings, or tools not installed (mise install)'
+          # Part of the front-end's `lint` script, which CI runs; the lint job
+          # calls ESLint alone.
+          - name: front-end css audit
+            exclude: *front_end_scope
+            run: cd apps/front-end && bun run audit:css
     # The cheap tier only: the database tiers are `bun run test:all` by hand, or
     # the `tests` CI job.
     - name: test
-      root: 'apps/back-end/'
-      run: bun run test
+      exclude: *back_end_scope
+      run: cd apps/back-end && bun run test
 
-verify: *full_verify
+verify:
+  piped: true
+  jobs: *full_verify
 
 fix:
   # Sequential: the pairs rewrite the same files.

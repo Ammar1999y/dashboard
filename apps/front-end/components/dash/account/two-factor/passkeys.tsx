@@ -1,8 +1,10 @@
 import type { Passkey } from '@/lib/account/schemas';
 
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useId } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
+import { twoFactorMsg } from '@app/shared/messages/auth';
+import { MAX_PASSKEYS_PER_USER } from '@app/shared/validation/constants';
 import {
   MSG_NO_PASSKEYS,
   MSG_PASSKEY_DELETE_EFFECT,
@@ -68,6 +70,10 @@ const handleAdd = () => passkeyDialog.open();
 /** The account's passkeys, which stay in the list when two-factor is switched off. */
 export const PasskeysCard = memo(() => {
   const { data, isPending, error, refetch } = usePasskeys();
+  // The server refuses only after the browser has made the credential, which
+  // would then sit on the authenticator with no account behind it.
+  const full = (data?.length ?? 0) >= MAX_PASSKEYS_PER_USER;
+  const limitId = useId();
 
   let list;
   if (isPending) list = <InlineLoading />;
@@ -85,11 +91,22 @@ export const PasskeysCard = memo(() => {
 
   return (
     <SectionCard title='مفاتيح المرور' description={MSG_PASSKEYS_INTRO}>
-      <div>
-        <Button variant='outline' size='sm' onClick={handleAdd}>
+      <div className='flex flex-col items-start gap-1.5'>
+        <Button
+          variant='outline'
+          size='sm'
+          onClick={handleAdd}
+          disabled={full}
+          aria-describedby={full ? limitId : undefined}
+        >
           <Icon icon='solar:add-linear' className='size-4' />
           إضافة مفتاح مرور
         </Button>
+        {full && (
+          <p id={limitId} className='text-sm text-muted-foreground'>
+            {twoFactorMsg.passkeyLimitReached}
+          </p>
+        )}
       </div>
       {list}
     </SectionCard>

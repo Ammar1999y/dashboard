@@ -44,10 +44,8 @@ export const columns: ColumnDef<DataTableFeatures, PermissionClient>[] = [
   statusColumn(),
   dateColumn('createdAt', 'تاريخ الإنشاء'),
   dateColumn('updatedAt', 'تاريخ التحديث'),
-  rowActionsColumn(
-    permissionEntity,
-    (permission) => permission.roleName,
-    removeRoleOption,
-    { ownRole: true }
-  ),
+  rowActionsColumn(permissionEntity, (permission) => permission.roleName, {
+    afterDelete: removeRoleOption,
+    ownRole: true,
+  }),
 ];

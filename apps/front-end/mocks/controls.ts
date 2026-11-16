@@ -5,6 +5,7 @@ import { MSG_INTERNAL_ERROR } from '@app/shared/messages/common';
 
 import { clearMockData } from './lib/db';
 import { api, fail, withApiErrors } from './lib/http';
+import { otpRequester } from './store';
 
 let latencyMs: number | undefined;
 
@@ -27,14 +28,12 @@ function createControls(worker: SetupWorker) {
       worker.use(
         withApiErrors(
           http.all(api(path), () =>
-            fail(
-              status,
-              message,
-              undefined,
-              retryAfter === undefined
-                ? undefined
-                : { 'Retry-After': String(retryAfter) }
-            )
+            fail(status, message, {
+              headers:
+                retryAfter === undefined
+                  ? undefined
+                  : { 'Retry-After': String(retryAfter) },
+            })
           )
         )
       );
@@ -51,6 +50,13 @@ function createControls(worker: SetupWorker) {
     restore: () => {
       worker.resetHandlers();
       latencyMs = undefined;
+    },
+    /**
+     * Drops the anonymous-code cookie, as another browser would lack it: a code
+     * sent before stops verifying here, and the next send issues a new one.
+     */
+    otherBrowser: () => {
+      otpRequester.set(null);
     },
     /** Back to the seed data, signed out. */
     reset: () => {

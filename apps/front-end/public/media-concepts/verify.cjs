@@ -115,10 +115,10 @@ const folderRecord = (id, parentId = null, name = id) => ({
   parentId,
   name,
 });
-const fileRecord = (id, folderId = 'origin', overrides = {}) => ({
+const fileRecord = (id, overrides = {}) => ({
   ...sample.files[0],
   id,
-  folderId,
+  folderId: 'origin',
   displayName: `${id}.svg`,
   usedBy: [],
   hiddenUsages: 0,
@@ -230,7 +230,7 @@ check('Files cannot be moved or uploaded to the library root', () => {
     model.moveFiles(['one', 'two'], null)
   );
   rejects(model, 'filesNeedFolder', () =>
-    model.addFile(fileRecord('new', null))
+    model.addFile(fileRecord('new', { folderId: null }))
   );
   rejects(model, 'filesNeedFolder', () =>
     model.moveFiles(['one'], 'missing-folder')
@@ -295,7 +295,7 @@ check('A transitioning member rejects the entire bulk move or deletion', () => {
   const model = createModel(
     fixture([
       fileRecord('one'),
-      fileRecord('busy', 'origin', { transition: 'to_public' }),
+      fileRecord('busy', { folderId: 'origin', transition: 'to_public' }),
     ])
   );
   rejects(model, 'busy', () => model.moveFiles(['one', 'busy'], 'destination'));
@@ -314,7 +314,7 @@ check(
       const model = createModel(
         fixture([
           fileRecord('one'),
-          fileRecord('referenced', 'origin', usage),
+          fileRecord('referenced', usage),
           fileRecord('two'),
         ])
       );
@@ -332,7 +332,7 @@ check(
       fixture([
         fileRecord('one'),
         fileRecord('two'),
-        fileRecord('keep', 'destination'),
+        fileRecord('keep', { folderId: 'destination' }),
       ])
     );
     model.deleteFiles(['one', 'two']);
@@ -352,8 +352,8 @@ check(
   () => {
     const initial = fixture([
       fileRecord('one'),
-      fileRecord('referenced', 'nested', { hiddenUsages: 1 }),
-      fileRecord('keep', 'destination'),
+      fileRecord('referenced', { folderId: 'nested', hiddenUsages: 1 }),
+      fileRecord('keep', { folderId: 'destination' }),
     ]);
     initial.folders.push(
       folderRecord('nested', 'origin'),
@@ -369,7 +369,7 @@ check(
   () => {
     const initial = fixture([
       fileRecord('one'),
-      fileRecord('busy', 'nested', { transition: 'cleanup' }),
+      fileRecord('busy', { folderId: 'nested', transition: 'cleanup' }),
     ]);
     initial.folders.push(folderRecord('nested', 'origin'));
     const model = createModel(initial);
@@ -382,8 +382,8 @@ check(
   () => {
     const initial = fixture([
       fileRecord('one'),
-      fileRecord('child-file', 'nested'),
-      fileRecord('keep', 'destination'),
+      fileRecord('child-file', { folderId: 'nested' }),
+      fileRecord('keep', { folderId: 'destination' }),
     ]);
     initial.folders.push(folderRecord('nested', 'origin'));
     const model = createModel(initial);
@@ -405,7 +405,7 @@ check(
   () => {
     for (const count of [199, 200]) {
       const files = Array.from({ length: count }, (_, index) =>
-        fileRecord(`file-${index}`, 'nested')
+        fileRecord(`file-${index}`, { folderId: 'nested' })
       );
       const initial = fixture(files);
       initial.folders.push(folderRecord('nested', 'origin'));
@@ -476,7 +476,7 @@ check(
   () => {
     const initial = fixture([
       fileRecord('image'),
-      fileRecord('document', 'origin', {
+      fileRecord('document', {
         kind: 'document',
         mimeType: 'application/pdf',
         displayName: 'brief.pdf',
@@ -500,11 +500,11 @@ check(
   () => {
     const model = createModel(
       fixture([
-        fileRecord('public-file', 'origin', {
+        fileRecord('public-file', {
           bucketType: 'public',
           hasPublicUsage: true,
         }),
-        fileRecord('private-file', 'origin', {
+        fileRecord('private-file', {
           bucketType: 'private',
           hasPublicUsage: true,
         }),
@@ -524,7 +524,8 @@ check(
     const model = createModel(
       fixture([
         fileRecord('one'),
-        fileRecord('record-held', null, {
+        fileRecord('record-held', {
+          folderId: null,
           usedBy: [
             { label: 'Content record', resource: 'page', recordId: 'page-1' },
           ],
@@ -545,10 +546,12 @@ check(
 
 check('Newly added files always start private', () => {
   const model = createModel(fixture([]));
-  model.addFile(fileRecord('new', 'origin', { bucketType: 'public' }));
+  model.addFile(
+    fileRecord('new', { folderId: 'origin', bucketType: 'public' })
+  );
   assert.equal(model.file('new').bucketType, 'private');
   rejects(model, 'duplicateId', () =>
-    model.addFile(fileRecord('new', 'destination'))
+    model.addFile(fileRecord('new', { folderId: 'destination' }))
   );
 });
 
@@ -556,7 +559,7 @@ check(
   'Adopting a dormant unfiled fixture clears its retention clock and preserves file identity',
   () => {
     for (const stamp of ['2026-10-01T08:00:00Z', null]) {
-      const orphan = fileRecord('orphan', null, { unfiledAt: stamp });
+      const orphan = fileRecord('orphan', { folderId: null, unfiledAt: stamp });
       const model = createModel(fixture([orphan]));
       model.moveFiles(['orphan'], 'destination');
       const adopted = model.file('orphan');

@@ -6,7 +6,7 @@
  * Each is asserted with its opposite, which is what proves it is a rule rather
  * than a blanket refusal.
  */
-import { beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { SeededUser } from '../helpers/session';
 
 import { and, eq } from 'drizzle-orm';
@@ -1250,48 +1250,61 @@ describe('password recovery against a second factor', () => {
     const grant = ((await started.json()) as { data?: { grant?: string } }).data
       ?.grant;
     expect(grant).toBeDefined();
+    // The current window only: a row's count rolls over at its next admission.
     const hashBudgetSpent = (): number => {
       const statement = getRateLimitStore().db.prepare(
-        'SELECT count FROM rate_limit WHERE key LIKE ?'
+        'SELECT count FROM rate_limit WHERE key LIKE ? AND window_start = ?'
       );
+      const now = Date.now();
       try {
         return statement
-          .all<{ count: number }>('%forgot.reset.work.ip%')
+          .all<{
+            count: number;
+          }>('%forgot.reset.work.ip%', now - (now % 60_000))
           .reduce((total, row) => total + row.count, 0);
       } finally {
         statement.finalize();
       }
     };
-    // The budget is a fixed window on the clock minute: a boundary between
-    // these calls resets the count and lets the refused call through.
-    const minuteLeft = 60_000 - (Date.now() % 60_000);
-    if (minuteLeft < 15_000) await Bun.sleep(minuteLeft + 50);
-    const before = hashBudgetSpent();
+    // The budget is a fixed window on the clock minute, and a boundary inside
+    // this section resets the count. The clock keeps running but stops short of
+    // the next window. ⚠️ Once it stops, a deadline polled through `Date.now()`
+    // never fires: nothing this section reaches may depend on one.
+    const realNow = Date.now;
+    const windowEnd = realNow() - (realNow() % 60_000) + 60_000;
+    const clock = spyOn(Date, 'now').mockImplementation(() =>
+      Math.min(realNow(), windowEnd - 1)
+    );
+    try {
+      const before = hashBudgetSpent();
 
-    for (let replay = 0; replay < 2; replay++) {
-      const early = await call('POST', '/api/auth/forgot-password/complete', {
+      for (let replay = 0; replay < 2; replay++) {
+        const early = await call('POST', '/api/auth/forgot-password/complete', {
+          grant,
+          option: 'otp:phone',
+          code: RIGHT_CODE,
+          newPassword: NEW_PASSWORD,
+        });
+        expect(early.status).not.toBe(HTTP_STATUS.OK);
+      }
+      expect(hashBudgetSpent()).toBe(before + 2);
+
+      // Spent: refused before the breach lookup and the hash, with nothing written.
+      getRateLimitStore().db.exec(
+        "UPDATE rate_limit SET count = 1000 WHERE key LIKE '%forgot.reset.work.ip%'"
+      );
+      const lookups = egressCallsTo('api.pwnedpasswords.com').length;
+      const refused = await call('POST', '/api/auth/forgot-password/complete', {
         grant,
         option: 'otp:phone',
         code: RIGHT_CODE,
         newPassword: NEW_PASSWORD,
       });
-      expect(early.status).not.toBe(HTTP_STATUS.OK);
+      expect(refused.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
+      expect(egressCallsTo('api.pwnedpasswords.com')).toHaveLength(lookups);
+    } finally {
+      clock.mockRestore();
     }
-    expect(hashBudgetSpent()).toBe(before + 2);
-
-    // Spent: refused before the breach lookup and the hash, with nothing written.
-    getRateLimitStore().db.exec(
-      "UPDATE rate_limit SET count = 1000 WHERE key LIKE '%forgot.reset.work.ip%'"
-    );
-    const lookups = egressCallsTo('api.pwnedpasswords.com').length;
-    const refused = await call('POST', '/api/auth/forgot-password/complete', {
-      grant,
-      option: 'otp:phone',
-      code: RIGHT_CODE,
-      newPassword: NEW_PASSWORD,
-    });
-    expect(refused.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
-    expect(egressCallsTo('api.pwnedpasswords.com')).toHaveLength(lookups);
     const [attempts] = await db
       .select({ value: verifications.value })
       .from(verifications)

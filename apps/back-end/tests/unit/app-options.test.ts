@@ -24,6 +24,7 @@ describe('the application', () => {
 });
 
 describe('the reference page, where it is mounted', () => {
+  // eslint-disable-next-line unicorn/prefer-options-parameter -- `fetch`'s own (input, init) shape
   const page = (path = '/openapi', init: RequestInit = {}) =>
     createApp({
       bindings: [],
@@ -45,7 +46,7 @@ describe('the reference page, where it is mounted', () => {
       '<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.72.1/dist/browser/standalone.js" integrity="sha384-U11tb2XnKvmwt8RlTvnwUnYgrN+ur4Xyh9htLhjajWNR/Oyl5AX5DEz00qRmlrmK" crossorigin>'
     );
     expect(html).not.toContain('@latest');
-    expect(html).toContain('"url":"/openapi.json"');
+    expect(html).toContain('&quot;url&quot;:&quot;/openapi.json&quot;');
   });
 
   test('carries its own CSP, which admits that script alone; every other answer keeps the API’s', async () => {

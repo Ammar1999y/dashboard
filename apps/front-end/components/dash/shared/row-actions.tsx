@@ -56,8 +56,11 @@ interface RowActionsOptions {
 export function rowActionsColumn<TRow extends { id: EntityID }>(
   entity: Entity,
   getName: (row: TRow) => string,
-  afterDelete?: AfterDelete,
-  { ownAccountHref, ownRole }: RowActionsOptions = {}
+  {
+    afterDelete,
+    ownAccountHref,
+    ownRole,
+  }: RowActionsOptions & Pick<RowActionsProps, 'afterDelete'> = {}
 ): ColumnDef<DataTableFeatures, TRow> {
   return actionsColumn<TRow>((row) => (
     <RowActions

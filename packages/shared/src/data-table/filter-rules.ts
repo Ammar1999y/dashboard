@@ -1,10 +1,16 @@
-import type { FilterOperator } from '../types/data-table';
+import type { FilterOperator, JoinOperator } from '../types/data-table';
 import type { FilterColumnSpec, FilterColumnSpecs } from './column-specs';
 import type { FilterItemSchema, SearchAnchor } from './parsers';
 
 import { CustomError } from '../error-class';
 import { HTTP_STATUS } from '../http-status';
-import { MSG_INVALID_FILTER, MSG_SHORT_SEARCH } from '../messages/data-table';
+import {
+  MSG_INVALID_FILTER,
+  MSG_OR_SEARCH_UNINDEXED,
+  MSG_SEARCH_FILTERS_TOO_LONG,
+  MSG_SHORT_SEARCH,
+  MSG_TOO_MANY_SEARCH_FILTERS,
+} from '../messages/data-table';
 import { searchFold } from '../search-fold';
 import { toCalendarDate, zonedDayStart, zonedNextDayStart } from '../time';
 import {
@@ -15,8 +21,11 @@ import {
   operatorAllowedForType,
 } from './column-specs';
 import {
+  cleanSearchTerm,
   DATA_TABLE_PARAMS,
   isTrigramIndexable,
+  MAX_SEARCH_FILTERS,
+  MAX_SEARCH_LENGTH,
   MIN_SEARCH_LENGTH,
   searchTermLength,
 } from './parsers';
@@ -230,4 +239,74 @@ export function assertFilterAllowed(
   }
 
   return 'apply';
+}
+
+/**
+ * Why the search filters of one request are refused together, or `undefined`.
+ * Counted on the fold, as each one is matched. A filter whose fold is empty
+ * counts nothing: it is no condition yet, and `assertFilterAllowed` refuses it
+ * on its own.
+ */
+export function searchBudgetRefusal(
+  filters: readonly FilterItemSchema[]
+): string | undefined {
+  let count = 0;
+  let characters = 0;
+  for (const { operator, value } of filters) {
+    if (typeof value !== 'string' || !isSearchOperator(operator)) continue;
+    // Cleaned as the parser cleans it, so a draft measures what will be sent.
+    const length = searchTermLength(searchFold(cleanSearchTerm(value)));
+    if (length === 0) continue;
+    count += 1;
+    characters += length;
+  }
+  if (count > MAX_SEARCH_FILTERS)
+    return MSG_TOO_MANY_SEARCH_FILTERS(MAX_SEARCH_FILTERS);
+  if (characters > MAX_SEARCH_LENGTH)
+    return MSG_SEARCH_FILTERS_TOO_LONG(MAX_SEARCH_LENGTH);
+  return undefined;
+}
+
+/**
+ * ⚠️ One disjunct no index serves turns the whole OR into a sequential scan
+ * that folds every row once per search term: the full scan `allowScanOnly`
+ * keeps off a column, reached without its scan-only operator.
+ */
+function isUnindexedOr(
+  admitted: readonly { filter: FilterItemSchema; spec: FilterColumnSpec }[]
+): boolean {
+  let guardedSearch = false;
+  let unindexed = false;
+  for (const { filter, spec } of admitted) {
+    const indexedSearch =
+      isSearchOperator(filter.operator) && !isScanOnlyOperator(filter.operator);
+    if (indexedSearch && !spec.allowScanOnly) guardedSearch = true;
+    if (!indexedSearch) unindexed = true;
+  }
+  return guardedSearch && unindexed;
+}
+
+/**
+ * The filters one list request applies, each with its descriptor: every rule
+ * a single filter must meet (`assertFilterAllowed`), then the rules over the
+ * whole list. Throws the 422 of the first rule broken.
+ */
+export function admitFilters<F extends FilterItemSchema>(
+  filters: readonly F[],
+  specs: FilterColumnSpecs,
+  joinOperator: JoinOperator
+): { filter: F; spec: FilterColumnSpec }[] {
+  const admitted: { filter: F; spec: FilterColumnSpec }[] = [];
+  for (const filter of filters) {
+    const spec = requireFilterSpec(specs, filter.id);
+    if (assertFilterAllowed(filter, spec) === 'skip') continue;
+    admitted.push({ filter, spec });
+  }
+
+  const overBudget = searchBudgetRefusal(admitted.map(({ filter }) => filter));
+  if (overBudget) invalidFilter(overBudget);
+  if (joinOperator === 'or' && isUnindexedOr(admitted))
+    invalidFilter(MSG_OR_SEARCH_UNINDEXED);
+
+  return admitted;
 }

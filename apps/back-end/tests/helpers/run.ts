@@ -137,15 +137,19 @@ const TWO_FACTOR_TEST_ENV: Readonly<Record<string, string>> = {
 
 const TIERS: Record<string, Tier> = {
   /**
-   * `--isolate` on the unit tier and nowhere else. It gives each file a fresh
-   * module registry, which is the only thing that contains a `mock.module` — the
-   * mocks live here, and `mock.restore()` does not undo one (measured on Bun
-   * 1.4.0). It costs a preload run per file, which is free without a database and
-   * would be a clone per file with one.
+   * Isolated per file, on the unit tier and nowhere else: a fresh module
+   * registry is the only thing that contains a `mock.module` — the mocks live
+   * here, and `mock.restore()` does not undo one (measured on Bun 1.4.0). It
+   * costs a preload run per file, which is free without a database and would be
+   * a clone per file with one.
+   *
+   * `--parallel` implies `--isolate`. Four workers took the tier from 195 s to
+   * 110 s, peaking at 2.5 GB; eight were no faster, because
+   * `lint-security-gate.test.ts` alone takes about 100 s.
    */
   unit: {
     database: false,
-    flags: ['--isolate'],
+    flags: [`--parallel=${Math.min(4, os.availableParallelism())}`],
     workers: 1,
     nodeEnv: 'test',
     // Same reason as the integration tier: read at module load, so it cannot be

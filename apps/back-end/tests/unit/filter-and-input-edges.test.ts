@@ -17,7 +17,11 @@ import {
   parseSearchParams,
 } from '@app/shared/data-table/parsers';
 import { HTTP_STATUS } from '@app/shared/http-status';
-import { MSG_OR_SEARCH_UNINDEXED } from '@app/shared/messages/data-table';
+import {
+  MSG_OR_SEARCH_UNINDEXED,
+  MSG_SEARCH_FILTERS_TOO_LONG,
+  MSG_TOO_MANY_SEARCH_FILTERS,
+} from '@app/shared/messages/data-table';
 import { toCalendarDate } from '@app/shared/time';
 import {
   normalizeArabicDigits,
@@ -732,7 +736,12 @@ describe('search-operator filters are bounded per request, not only per filter',
           Array.from({ length: MAX_SEARCH_FILTERS + 1 }, () => 'ahmed'),
           operator
         )
-      ).toThrow(expect.objectContaining({ status: HTTP_STATUS.UNPROCESSABLE }));
+      ).toThrow(
+        expect.objectContaining({
+          status: HTTP_STATUS.UNPROCESSABLE,
+          message: MSG_TOO_MANY_SEARCH_FILTERS(MAX_SEARCH_FILTERS),
+        })
+      );
     }
   );
 
@@ -740,7 +749,10 @@ describe('search-operator filters are bounded per request, not only per filter',
     const half = 'a'.repeat(MAX_SEARCH_LENGTH / 2);
     expect(() => searches([half, half], 'notILike')).not.toThrow();
     expect(() => searches([half, `${half}b`], 'notILike')).toThrow(
-      expect.objectContaining({ status: HTTP_STATUS.UNPROCESSABLE })
+      expect.objectContaining({
+        status: HTTP_STATUS.UNPROCESSABLE,
+        message: MSG_SEARCH_FILTERS_TOO_LONG(MAX_SEARCH_LENGTH),
+      })
     );
   });
 });

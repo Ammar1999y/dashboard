@@ -15,7 +15,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 import { APIError } from 'better-auth/api';
-import { expireCookie } from 'better-auth/cookies';
+import { expireCookie, setSessionCookie } from 'better-auth/cookies';
 
 import { HTTP_STATUS } from '@app/shared/http-status';
 import { twoFactorMsg } from '@app/shared/messages/auth';
@@ -29,10 +29,7 @@ import { contactOf } from '@/lib/users/contact';
 import { bestEffort } from '@/utils/log';
 
 import { authError } from '../errors';
-import {
-  deliverSessionCookie,
-  expireDontRememberMarker,
-} from '../session/cookie';
+import { expireDontRememberMarker } from '../session/cookie';
 import { resolveRequestSession } from '../session/request';
 import { withAuthTransaction } from '../transaction';
 import { lockEligibleAuthUser } from '../user-eligibility';
@@ -290,7 +287,7 @@ async function invalidateChallenge(
   );
   await dropCompanionRows(ctx, challengeId);
   expireCookie(ctx, ctx.context.createAuthCookie(TWO_FACTOR_COOKIE_NAME));
-  // Or a later `rememberMe: true` in this browser inherits this `false`.
+  // The plugin's verifiers read this apart from the challenge cookie; both go.
   expireDontRememberMarker(ctx);
 }
 
@@ -363,7 +360,7 @@ export async function completeTwoFactorChallenge(
   }
   const { user, session } = created;
 
-  await deliverSessionCookie(ctx, { session, user }, challenge.rememberMe);
+  await setSessionCookie(ctx, { session, user }, !challenge.rememberMe);
   expireCookie(ctx, ctx.context.createAuthCookie(TWO_FACTOR_COOKIE_NAME));
 
   await recordCompletionEvent({

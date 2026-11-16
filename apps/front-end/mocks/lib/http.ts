@@ -42,9 +42,11 @@ const asProblem = (body: object, status: number, headers?: HeadersInit) => {
 export const fail = (
   status: number,
   message: string,
-  code?: string,
-  headers?: HeadersInit,
-  data?: MediaRefusalData
+  {
+    code,
+    headers,
+    data,
+  }: { code?: string; headers?: HeadersInit; data?: MediaRefusalData } = {}
 ) => asProblem(problemBody(status, message, code, data), status, headers);
 
 export const notFoundError = () =>
@@ -130,13 +132,11 @@ function errorResponse(
     const status = error.status ?? HTTP_STATUS.INTERNAL_ERROR;
     if (status >= HTTP_STATUS.INTERNAL_ERROR)
       console.error('[mock api] server error response', error);
-    return fail(
-      status,
-      error.message,
-      error.code,
-      error.responseHeaders,
-      error.data
-    );
+    return fail(status, error.message, {
+      code: error.code,
+      headers: error.responseHeaders,
+      data: error.data,
+    });
   }
   console.error('[mock api] handler failed', error);
   return fail(HTTP_STATUS.INTERNAL_ERROR, fallbackMessage);

@@ -16,8 +16,9 @@ export interface RequestSession {
 
 /**
  * ⚠️ The one enrolment-vs-sign-in discriminator: the plugin reads a session
- * FIRST, so a caller holding both is an enrolment. `getSessionFromCtx` memoises,
- * so the plugin reuses this answer.
+ * FIRST, so a caller holding both is an enrolment. Its verifiers re-read the
+ * session store; the sign-in-only guards ahead of them refuse any session this
+ * cache-aware read resolves, a row revoked behind the cookie cache included.
  *
  * A fault reading the session is rethrown: `getSessionFromCtx` answers it as no
  * session, which would refuse a signed-in caller or route it to sign-in.

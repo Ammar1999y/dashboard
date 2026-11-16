@@ -17,16 +17,54 @@ import {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } from '@simplewebauthn/server';
+import {
+  decodeAttestationObject,
+  isoBase64URL,
+  parseAuthenticatorData,
+} from '@simplewebauthn/server/helpers';
 import * as z from 'zod';
+
+import { HTTP_STATUS } from '@app/shared/http-status';
+import { twoFactorMsg } from '@app/shared/messages/auth';
 
 import { PUBLIC_ORIGIN } from '@/lib/env';
 
 import { logSanitized } from '@/utils/log';
 
-import { authenticationDenied } from './errors';
+import { authenticationDenied, authError } from './errors';
 
 // Shared with registration (`two-factor/plugin.ts`), so both halves use one RP identity.
 export const RP_ID = new URL(PUBLIC_ORIGIN).hostname;
+
+const registrationBodySchema = z.object({
+  response: z.object({
+    response: z.object({ attestationObject: z.string() }),
+  }),
+});
+
+/**
+ * Names a missing UV flag ahead of the plugin's generic failure. The plugin
+ * stays the verifier (`userVerification: 'required'` makes it require UV), so
+ * this may only refuse; a body it cannot read is left to it.
+ */
+export function assertUserVerifyingRegistration(body: unknown): void {
+  const parsed = registrationBodySchema.safeParse(body);
+  if (!parsed.success) return;
+  let userVerified: boolean;
+  try {
+    const attestation = decodeAttestationObject(
+      isoBase64URL.toBuffer(parsed.data.response.response.attestationObject)
+    );
+    userVerified = parseAuthenticatorData(attestation.get('authData')).flags.uv;
+  } catch {
+    return;
+  }
+  if (!userVerified)
+    throw authError(
+      HTTP_STATUS.BAD_REQUEST,
+      twoFactorMsg.passkeyNotUserVerifying
+    );
+}
 
 const transportSchema: z.ZodType<AuthenticatorTransportFuture> = z.enum([
   'ble',

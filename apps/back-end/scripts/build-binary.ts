@@ -7,7 +7,7 @@
  * An evaluation build: production still runs `bun --bun server.ts`. The CI
  * `binary` job boots what this writes; nothing deploys it.
  *
- * Bundling breaks five spots in dependencies, each patched at load below. A
+ * Bundling breaks four spots in dependencies, each patched at load below. A
  * patch that stops matching fails the build, and an unminified pass refuses
  * output that still names a build-machine path or binds `createRequire` to the
  * bundle's URL: either works on the machine that built it and nowhere else.
@@ -129,31 +129,6 @@ const compileCompat: BunPlugin = {
       })
     );
 
-    build.onLoad(
-      {
-        filter:
-          /[\\/]node_modules[\\/]jsdom[\\/]lib[\\/]jsdom[\\/]living[\\/]css[\\/]helpers[\\/]computed-style\.js$/,
-      },
-      async (args) => {
-        const stylesheet = await Bun.file(
-          path.resolve(
-            path.dirname(args.path),
-            '../../../browser/default-stylesheet.css'
-          )
-        ).text();
-        return {
-          contents: replaceOnce(
-            'jsdom default stylesheet',
-            args.path,
-            await Bun.file(args.path).text(),
-            /fs\.readFileSync\(\s*path\.resolve\(__dirname, "\.\.\/\.\.\/\.\.\/browser\/default-stylesheet\.css"\),\s*\{ encoding: "utf-8" \}\s*\)/g,
-            JSON.stringify(stylesheet)
-          ),
-          loader: 'js',
-        };
-      }
-    );
-
     // Synchronous XHR is unreachable from the sanitizer; this only names the
     // reason if that ever changes.
     build.onLoad(
@@ -179,7 +154,6 @@ const PATCHES = [
   'x509 commonjs build',
   'argon2 prebuild',
   'createRequire(import.meta.url)',
-  'jsdom default stylesheet',
   'jsdom sync XHR worker',
 ];
 
