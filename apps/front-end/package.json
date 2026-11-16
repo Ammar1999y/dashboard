@@ -21,7 +21,7 @@
     "lint": "bun run typecheck && bun scripts/lint.mjs . && bun run audit:css",
     "test": "bun test tests scripts/lib/tweakcn-community.test.ts scripts/lib/theme-contrast.test.ts scripts/lib/tailwind-conventions.test.mjs",
     "themes:sync": "bun scripts/sync-community-themes.ts",
-    "audit": "bun scripts/audit.ts",
+    "audit": "bun ../back-end/scripts/audit.ts",
     "audit:css": "bun scripts/css-support.ts --app",
     "format": "bun fmt --no-script .",
     "format:check": "bun fmt --no-script --check .",
