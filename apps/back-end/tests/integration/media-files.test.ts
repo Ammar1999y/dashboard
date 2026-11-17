@@ -263,7 +263,9 @@ async function auditActions(id: string): Promise<string[]> {
     .select({ action: auditLogs.action })
     .from(auditLogs)
     .where(and(eq(auditLogs.tableName, 'files'), eq(auditLogs.recordId, id)))
-    .orderBy(auditLogs.createdAt);
+    // `created_at` keeps hundredths, so two writes can tie; the UUIDv7 id is
+    // generated in order.
+    .orderBy(auditLogs.createdAt, auditLogs.id);
   return rows.map((row) => row.action);
 }
 
@@ -3483,7 +3485,7 @@ async function folderAuditActions(id: string): Promise<string[]> {
     .select({ action: auditLogs.action })
     .from(auditLogs)
     .where(and(eq(auditLogs.tableName, 'folders'), eq(auditLogs.recordId, id)))
-    .orderBy(auditLogs.createdAt);
+    .orderBy(auditLogs.createdAt, auditLogs.id);
   return rows.map((row) => row.action);
 }
 
