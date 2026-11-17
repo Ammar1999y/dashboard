@@ -313,7 +313,8 @@ describe('future timestamps remain future outside UTC', () => {
 
     expect(error.status).toBe(HTTP_STATUS.TOO_MANY_REQUESTS);
     expect(retryAfter(error)).toBeGreaterThan(FIVE_MINUTES / 1000 - 5);
-    expect(retryAfter(error)).toBeLessThanOrEqual(FIVE_MINUTES / 1000);
+    // +1: `nextAllowedAt` is rounded to hundredths, and the wait is rounded up.
+    expect(retryAfter(error)).toBeLessThanOrEqual(FIVE_MINUTES / 1000 + 1);
     expect(await otpState(session.id)).toEqual(before);
     await settleDelivery();
     expect(sentMail()).toEqual([]);
